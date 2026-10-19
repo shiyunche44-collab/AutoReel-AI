@@ -334,18 +334,36 @@ def test_prose_is_structured_by_llm(tmp_path, search_stub, describe_stub, no_net
     assert any("海豹 07" in r for r in report["rejected_reasons"])
 
 
-def test_only_prose_answers_go_to_llm(tmp_path, search_stub, describe_stub, no_network):
+def test_vision_json_is_not_trusted_when_llm_is_available(tmp_path, search_stub,
+                                                           describe_stub, no_network):
+    """视觉模型自己的 JSON 比我们的规则严得多:实测把"汉 DM"判成不是"汉 EV 2026",
+    一次剔掉 8/10。有 LLM 时必须按 LLM 的保守规则来。"""
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
                              _ref("https://xchuxing.com/b.jpg")]
     describe_stub["result"] = _per_image(no_network, {
-        "https://xchuxing.com/a.jpg": '{"is_target_model": true, "problem": ""}',
+        "https://xchuxing.com/a.jpg":
+            '{"is_target_model": false, "problem": "not_target_model"} 车尾是"汉 DM"。',
         "https://xchuxing.com/b.jpg": "一台白色 SUV,看不出车标。",
     })
-    llm = _FakeLLM({"verdicts": [{"index": 2, "is_target_model": "unknown", "problem": ""}]})
+    llm = _FakeLLM({"verdicts": [
+        {"index": 1, "is_target_model": True, "problem": "", "reason": "汉 DM 同车系"},
+        {"index": 2, "is_target_model": "unknown", "problem": ""},
+    ]})
     refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
     assert len(refs) == 2
-    assert "### 图 2" in llm.calls[0]["user"]
-    assert "### 图 1" not in llm.calls[0]["user"]
+    assert "### 图 1" in llm.calls[0]["user"] and "### 图 2" in llm.calls[0]["user"]
+    assert report["verify_sources"] == {"json": 0, "llm": 2, "none": 0}
+
+
+def test_vision_json_is_the_fallback_when_llm_fails(tmp_path, search_stub, describe_stub,
+                                                    no_network):
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
+    describe_stub["result"] = ('{"is_target_model": false, "problem": "not_target_model"}'
+                               " 车尾字样是\"秦 PLUS\"。")
+    refs, report = _build(tmp_path, search_stub, describe_stub,
+                          llm=_FakeLLM(RuntimeError("down")))
+    assert refs == []
+    assert report["verify_sources"]["json"] == 1
 
 
 def test_llm_failure_keeps_everything(tmp_path, search_stub, describe_stub, no_network):
@@ -500,3 +518,27 @@ def test_search_failure_degrades_to_empty_set(tmp_path, search_stub, describe_st
     assert refs == []
     assert report["searched"] == 0
     assert any("检索失败" in e for e in report["errors"])
+
+
+def test_bare_vision_json_is_stripped_and_kept(tmp_path, search_stub, describe_stub,
+                                                no_network):
+    """回答只有一段 JSON 结论、没有描述 → 没有依据,保留;LLM 看不到它的结论。"""
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
+                             _ref("https://xchuxing.com/b.jpg")]
+    describe_stub["result"] = _per_image(no_network, {
+        "https://xchuxing.com/a.jpg":
+            '```json\n{"is_target_model": false, "problem": "not_target_model"}\n```',
+        "https://xchuxing.com/b.jpg":
+            '```json\n{"is_target_model": false, "problem": "not_target_model"}\n```\n'
+            "车尾字样是\"秦 PLUS\"。",
+    })
+    llm = _FakeLLM({"verdicts": [
+        {"index": 2, "is_target_model": False, "problem": "not_target_model"},
+    ]})
+    refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
+
+    assert [r.url for r in refs] == ["https://xchuxing.com/a.jpg"]
+    sent = llm.calls[0]["user"]
+    assert "### 图 1" not in sent and "秦 PLUS" in sent
+    assert "is_target_model" not in sent
+
