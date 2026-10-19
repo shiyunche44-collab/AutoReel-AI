@@ -19,9 +19,9 @@ H3 走 account credits(不吃套餐额度),每个成片镜头 $0.48 + 15–30 �
   (`tests/probe_clip_sources.py` 探到 2/14),而且余下的多是 YouTube / B 站
   iframe,拿不到直链。所以 V2 是**补充**不是主力,取不到就安静地少几个镜头。
 
-⚠️ 为什么不用 yt-dlp:它能拿下 YouTube,但要装第三方包,而且 ToS 边界模糊。
-这里的需求是"个人学习、不商用",大可不必把平台默认路径押在它上面。
-需要时再单独装,不必成为运行前提。
+B 站 / YouTube / 抖音这类平台视频走 `platform_video.py`(yt-dlp)。这里的
+V2 抓到的 iframe 也不再丢弃:`page_media()` 会把嵌入的 B 站 / YouTube 播放器
+还原成视频页地址,交给 yt-dlp 去下。
 
 拉流一律走 ffmpeg —— 它原生支持 HLS(m3u8)、webm 转码与定长裁剪,
 所以 V1/V2 两条路都收敛到同一个函数,不需要额外依赖。
@@ -67,6 +67,16 @@ _UNREACHABLE_HOSTS = (
 
 _HTTP_TIMEOUT = 25
 
+#: 横屏素材 → 9:16:完整前景 + 模糊铺底。与静图镜头(render.still_filter)同一套构图
+VERTICAL_FILTER = (
+    f"split[a][b];"
+    f"[a]scale={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
+    f"crop={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT},boxblur=24:2,setsar=1[bg];"
+    f"[b]scale={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT}:force_original_aspect_ratio=decrease,"
+    f"setsar=1[fg];"
+    f"[bg][fg]overlay=(W-w)/2:(H-h)/2,fps=24,format=yuv420p"
+)
+
 
 class ClipError(RuntimeError):
     """抓取或转码片段失败。调用方应降级而不是中断流水线。"""
@@ -89,6 +99,17 @@ class ClipCandidate:
     view: str = ""
     #: 下载/转码后的本地路径
     local_path: str = ""
+    #: 素材形态:video = 视频片段;still = 静态图片(落地时做成推拉动效镜头)
+    kind: str = "video"
+    #: 平台视频的截取起点(秒)。同一条长视频按不同起点切给多个镜头
+    start: float = 0.0
+    #: 平台名(bilibili / youtube / douyin)。非空表示 `url` 是**视频页**而不是
+    #: 直链,落地要走 yt-dlp
+    platform: str = ""
+    #: 是否来自官方渠道(品牌官方号 / 车企官网 / 官图库)
+    official: bool = False
+    #: 上传者 / 频道名,用于判定官方号与报告追溯
+    uploader: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -196,23 +217,65 @@ def page_video_urls(page_url: str, *, timeout: int = _HTTP_TIMEOUT) -> list[str]
     这一层是"尽力而为":车媒页面里嵌 YouTube 是常态,实测直链命中率很低。
     拿不到不是错误,是正常结果 —— 调用方据此少排几个镜头,其余回退生成。
     """
+    return page_media(page_url, timeout=timeout)[0]
+
+
+def page_media(page_url: str, *, timeout: int = _HTTP_TIMEOUT) -> tuple[list[str], list[str]]:
+    """抓一次页面,同时返回 (视频直链, 嵌入的平台视频页地址)。
+
+    嵌入的 B 站 / YouTube 播放器过去被当成"拿不到"直接丢掉;现在有 yt-dlp,
+    把它们还原成视频页地址就能下。
+    """
+    body = fetch_page(page_url, timeout=timeout)
+    if not body:
+        return [], []
+    return extract_direct_links(body), extract_embeds(body)
+
+
+def fetch_page(page_url: str, *, timeout: int = _HTTP_TIMEOUT) -> str:
+    """抓页面 HTML;平台页本身(iframe 宿主)和任何失败都返回空串。"""
     if not page_url or _is_unreachable(page_url):
-        return []
+        return ""
     try:
         import httpx
 
         resp = httpx.get(page_url, headers={"User-Agent": BROWSER_UA},
                          timeout=timeout, follow_redirects=True)
-        body = resp.text
+        return resp.text
     except Exception:  # noqa: BLE001 - 任何抓取失败都只是"这个源没有"
-        return []
+        return ""
 
+
+def extract_direct_links(body: str) -> list[str]:
     urls: list[str] = []
     for raw in (*DIRECT_LINK_RE.findall(body), *_TAG_SRC_RE.findall(body)):
         link = _normalise_link(raw)
         if link and link not in urls:
             urls.append(link)
     return urls
+
+
+#: 嵌入播放器 → 视频页。只认能还原出唯一视频 ID 的写法。
+_EMBED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"player\.bilibili\.com/player\.html\?[^\"'\s<>]*?bvid=(BV[0-9A-Za-z]{10})"),
+     "https://www.bilibili.com/video/{}"),
+    (re.compile(r"bilibili\.com/video/(BV[0-9A-Za-z]{10})"),
+     "https://www.bilibili.com/video/{}"),
+    (re.compile(r"youtube(?:-nocookie)?\.com/embed/([0-9A-Za-z_-]{11})"),
+     "https://www.youtube.com/watch?v={}"),
+    (re.compile(r"youtu\.be/([0-9A-Za-z_-]{11})"),
+     "https://www.youtube.com/watch?v={}"),
+)
+
+
+def extract_embeds(body: str) -> list[str]:
+    out: list[str] = []
+    for pattern, template in _EMBED_PATTERNS:
+        for vid in pattern.findall(body):
+            url = template.format(vid)
+            if url not in out:
+                out.append(url)
+    return out
 
 
 def _is_unreachable(url: str) -> bool:
@@ -259,20 +322,24 @@ def fetch_clip(url: str, dest: str | Path, *, seconds: float | None = None,
     dest.parent.mkdir(parents=True, exist_ok=True)
     length = seconds if seconds and seconds > 0 else config.SHOT_GRID_SECONDS
 
-    args: list[str] = [
-        _ffmpeg(), "-hide_banner", "-nostdin", "-y", "-v", "error",
-        "-user_agent", BROWSER_UA,
-    ]
-    if referer:
-        args += ["-headers", f"Referer: {referer}\r\n"]
+    args: list[str] = [_ffmpeg(), "-hide_banner", "-nostdin", "-y", "-v", "error"]
+    # UA / Referer 是 http 协议的输入选项。本地文件(yt-dlp 先落地的分段)
+    # 带上它们 ffmpeg 会直接报 "Option not found" 拒绝打开
+    if str(url).startswith(("http://", "https://")):
+        args += ["-user_agent", BROWSER_UA]
+        if referer:
+            args += ["-headers", f"Referer: {referer}\r\n"]
     if loop:
         args += ["-stream_loop", "-1"]
     args += [
         "-i", url,
         "-t", str(length),
-        # 只压高度、不裁剪:画幅统一交给渲染层的 normalise_clip,
-        # 这里再裁一遍会把车切掉(16:9 裁 9:16 会丢掉左右两侧)。
-        "-vf", "scale=-2:1080,fps=24,setsar=1",
+        # 直接排成 9:16,但**不裁画面**:B 站 / YouTube 的车视频几乎都是 16:9,
+        # 交给渲染层 normalise_clip 居中裁 9:16 只剩三分之一宽,车头车尾全被切掉,
+        # 质检随即判 cropped 弃用 —— 真实素材通路会大面积空转。所以这里把完整
+        # 画面放中间、上下用同一画面放大模糊铺满;竖屏源则正好铺满,不受影响。
+        # 输出已是 1080×1920,后面 normalise_clip 的 scale+crop 等于空操作。
+        "-vf", VERTICAL_FILTER,
         "-an",
         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",

@@ -119,6 +119,10 @@ class CategoryProfile:
     forbidden_terms: tuple[str, ...] = ()
     required_disclaimers: tuple[str, ...] = ()
     music_prompt: str = "instrumental background music, steady tempo, no vocals"
+    #: 官方素材渠道:品牌键 -> {aliases: [...], sites: [域名...], media: [媒体中心域名...]}。
+    #: 只声明**域名**,不写死车型页地址 —— 车型页靠 `site:域名 车型` 站内检索定位,
+    #: 官网改版不会让配置失效。新增品牌只改 YAML,不改代码。
+    official_sites: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
     script_style: str = ""
     #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
     skeleton: bool = False
@@ -376,6 +380,13 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             raw.get("reference_query_template", "{subject} 实拍 {angle}")
         ),
         angle_queries={str(k): str(v) for k, v in (raw.get("angle_queries") or {}).items()},
+        official_sites={
+            str(brand): {
+                key: tuple(str(x) for x in (spec or {}).get(key) or ())
+                for key in ("aliases", "sites", "media")
+            }
+            for brand, spec in (raw.get("official_sites") or {}).items()
+        },
         forbidden_terms=tuple(raw.get("forbidden_terms") or ()),
         required_disclaimers=tuple(raw.get("required_disclaimers") or ()),
         music_prompt=str(

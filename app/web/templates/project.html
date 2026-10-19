@@ -106,12 +106,16 @@
   <section class="card">
     <div class="card-head">
       <h2>真实素材</h2>
-      <span class="muted">{{ p.clip_report.get('applied', 0) }} / {{ p.shot_count }} 个镜头用真实视频</span>
+      <span class="muted">{{ p.clip_report.get('selected', {}) | length }} / {{ p.shot_count }} 个镜头用真实素材{% if p.clip_report.get('official_count') %},其中官方 {{ p.clip_report.official_count }} 个{% endif %}</span>
     </div>
+    {% if p.clip_report.summary %}<p class="muted">{{ p.clip_report.summary }}</p>{% endif %}
+    {% if p.clip_report.origin_counts %}
+    <p class="muted">来源:{% for origin, n in p.clip_report.origin_counts.items() %}<code>{{ origin }}</code> × {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
     {% if p.clip_report.get('savings_estimate') %}
     <div class="banner banner-ok">
       本片约省下 <strong>${{ '%.2f' | format(p.clip_report.savings_estimate) }}</strong> 等效用量
-      —— 真实片段跳过了成片档的模型生成(每个镜头 $0.48 + 15–30 分钟等待)。
+      —— 真实素材跳过了草稿与成片的模型生成(成片每镜 $0.48 + 15–30 分钟等待)。
     </div>
     {% endif %}
     {% if p.clip_report.selected %}
@@ -119,10 +123,11 @@
       {% for idx, c in p.clip_report.selected.items() %}
       <div class="fact conf-high scope-product">
         <div class="fact-claim">
-          <span class="scope-chip scope-product">镜头 {{ idx }}</span>{{ c.title or c.origin }}
+          <span class="scope-chip scope-product">镜头 {{ idx }}</span>{% if c.official %}<span class="scope-chip scope-company">官方</span>{% endif %}{{ c.title or c.origin }}
         </div>
         <div class="fact-src">
-          <code>{{ c.origin }}</code>
+          <code>{{ c.origin }}</code>{% if c.kind == 'still' %} <span class="muted">图片动效</span>{% endif %}
+          {% if c.page_url %}<a href="{{ c.page_url }}" target="_blank" rel="noopener">来源页</a>{% endif %}
           {% if c.license %}<span class="muted">{{ c.license }}</span>{% endif %}
         </div>
       </div>
@@ -130,7 +135,8 @@
     </div>
     {% endif %}
     {% if p.clip_report.errors %}
-    <p class="hint">{% for e in p.clip_report.errors[:5] %}{{ e }}<br>{% endfor %}</p>
+    <details><summary class="muted">取材日志({{ p.clip_report.errors | length }} 条)</summary>
+    <p class="hint">{% for e in p.clip_report.errors[:30] %}{{ e }}<br>{% endfor %}</p></details>
     {% endif %}
   </section>
   {% endif %}

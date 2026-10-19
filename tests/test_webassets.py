@@ -192,3 +192,41 @@ def test_collect_respects_limit(monkeypatch, tmp_path):
     )
     refs, _ = webassets.collect("BYD Han", limit=3)
     assert len(refs) == 3
+
+
+# ==========================================================================
+# Bing 图片 / 网页检索解析
+# ==========================================================================
+BING_IMG_HTML = (
+    '<a class="iusc" style="x" m="{&quot;murl&quot;:&quot;https://img.x.com/han.jpg&quot;,'
+    '&quot;purl&quot;:&quot;https://news.x.com/a&quot;,&quot;t&quot;:&quot;比亚迪汉 实拍&quot;}" h="ID">'
+    '<a class="iusc" m="{&quot;murl&quot;:&quot;https://img.x.com/chart.png&quot;,'
+    '&quot;t&quot;:&quot;sales chart&quot;}">'
+    '<a class="iusc" m="{&quot;murl&quot;:&quot;https://img.x.com/han.jpg&quot;}">'
+    '<a class="iusc" m="not-json">'
+)
+
+
+def test_parse_bing_images():
+    refs = webassets.parse_bing_images(BING_IMG_HTML, "比亚迪汉")
+    assert [r.url for r in refs] == ["https://img.x.com/han.jpg"]
+    assert refs[0].source_page == "https://news.x.com/a"
+    assert refs[0].origin == "bing"
+
+
+BING_WEB_HTML = """
+<ol id="b_results">
+<li class="b_algo"><div><h2><a href="https://car.autohome.com.cn/pic/series/5713.html" h="x">【比亚迪汉】图片</a></h2></div></li>
+<li class="b_algo"><h2 class="t"><a target="_blank" href="https://www.douyin.com/video/730&amp;x=1">抖音</a></h2></li>
+<li class="b_ad"><h2><a href="https://ad.example.com">广告</a></h2></li>
+</ol>
+"""
+
+
+def test_parse_bing_web():
+    refs = webassets.parse_bing_web(BING_WEB_HTML)
+    assert [r.url for r in refs] == [
+        "https://car.autohome.com.cn/pic/series/5713.html",
+        "https://www.douyin.com/video/730&x=1",
+    ]
+    assert refs[0].note == "【比亚迪汉】图片"

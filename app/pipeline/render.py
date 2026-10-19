@@ -110,6 +110,64 @@ def normalise_clip(src: str | Path, dest: str | Path) -> bool:
     return proc.returncode == 0 and Path(dest).is_file() and Path(dest).stat().st_size > 0
 
 
+#: 静图镜头的动效,按镜头序号轮换,避免满屏都是同一种推近
+STILL_MOTIONS: tuple[str, ...] = ("zoom_in", "pan_right", "zoom_out", "pan_left")
+
+
+def still_filter(motion: str, seconds: float) -> str:
+    """静图 → 9:16 动效镜头的滤镜图。
+
+    两步:
+    1. **模糊铺底 + 完整前景**:横图直接裁 9:16 会把车头车尾切掉(和横屏视频
+       同样的问题),所以前景按"完整放进画幅"缩放,空出的上下用同一张图
+       放大模糊铺满。
+    2. **zoompan 推拉 / 平移**:先放大到 2 倍再 zoompan,否则逐帧取整会抖。
+    """
+    w, h = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+    frames = max(1, int(round(seconds * FPS)))
+    center_x, center_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+    if motion == "zoom_out":
+        z, x, y = f"1.15-0.15*on/{frames}", center_x, center_y
+    elif motion == "pan_left":
+        z, x, y = "1.12", f"(iw-iw/zoom)*on/{frames}", center_y
+    elif motion == "pan_right":
+        z, x, y = "1.12", f"(iw-iw/zoom)*(1-on/{frames})", center_y
+    else:  # zoom_in
+        z, x, y = f"1+0.15*on/{frames}", center_x, center_y
+    return (
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+        f"boxblur=24:2,setsar=1[bg];"
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,scale={w * 2}:{h * 2},"
+        f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={w}x{h}:fps={FPS},"
+        f"format=yuv420p[v]"
+    )
+
+
+def still_to_clip(image: str | Path, dest: str | Path, *, seconds: float | None = None,
+                  motion: str = "zoom_in") -> Path:
+    """把一张图片做成定长 9:16 动效镜头。失败抛 RenderError。"""
+    seconds = float(seconds or config.SHOT_GRID_SECONDS)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    proc = _run(
+        [
+            "-y", "-v", "error",
+            "-i", str(image),
+            "-filter_complex", still_filter(motion, seconds),
+            "-map", "[v]",
+            "-t", f"{seconds:.3f}", "-r", str(FPS),
+            "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(dest),
+        ],
+        timeout=600,
+    )
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        raise RenderError(f"静图转镜头失败({Path(image).name}):{(proc.stderr or '')[-300:]}")
+    return dest
+
+
 def normalise_all(shot_paths: Sequence[Path], work_dir: Path) -> tuple[list[Path], list[str]]:
     """归一化全部镜头。返回 (成功列表, 警告列表)。"""
     work_dir.mkdir(parents=True, exist_ok=True)

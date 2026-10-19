@@ -53,6 +53,19 @@ def _sample_contexts() -> dict[str, dict]:
         shots=[shot],
         refs=[{"url": "http://x/1.jpg", "angle": "exterior_45", "origin": "search"}],
         prompt_errors={"3": ["时间戳超出片长"]},
+        clip_report={
+            "status": "ok", "summary": "2/10 个镜头用真实素材", "official_count": 1,
+            "savings_estimate": 0.96,
+            "origin_counts": {"official:bilibili": 1, "official:autohome": 1},
+            "selected": {
+                "0": {"origin": "official:bilibili", "kind": "video", "official": True,
+                      "title": "比亚迪汉 官方宣传片", "license": "bilibili:比亚迪汽车",
+                      "page_url": "https://www.bilibili.com/video/BV1"},
+                "3": {"origin": "official:autohome", "kind": "still", "official": True,
+                      "title": "汽车之家官图", "license": "", "page_url": ""},
+            },
+            "errors": ["youtube 搜索失败(比亚迪汉):timeout"],
+        },
     )
     summary = {
         "id": "p_test", "title": "测试项目", "subject": "比亚迪汉 EV",

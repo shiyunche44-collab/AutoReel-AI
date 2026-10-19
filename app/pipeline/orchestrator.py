@@ -25,6 +25,7 @@ from . import (  # noqa: F401 - 显式列出便于阅读依赖
     clip_resolver,
     generate,
     intake,
+    media_query,
     narration,
     prompt_compiler,
     qa,
@@ -37,11 +38,6 @@ from . import (  # noqa: F401 - 显式列出便于阅读依赖
 LLM_REQUIRED_HINT = (
     "未配置 DEEPSEEK_API_KEY。请复制 .env.example 为 .env 并填入 Key 后重启服务。"
 )
-
-#: 真实素材采集最多重试几次。第一次没生效通常是因为本批没有已批准的外观镜头,
-#: 值得在下一批再试一次;再多就没必要了,一集视频里反复抓网络不值得。
-_CLIP_RETRY_LIMIT = 2
-
 
 class PipelineError(RuntimeError):
     """流水线无法继续。"""
@@ -338,6 +334,8 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
 
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
+        # 真实镜头也照常编译提示词:门禁 B 不满意某个真实镜头时要能"重试"
+        # 回退生成,缺提示词就退不回去。几十次 LLM 调用比这条退路便宜。
         compiled, errors = compile_all_prompts(
             project_id, profile=profile, subject=subject,
             narration_mode=project["narration_mode"], llm=llm, stage="draft",
@@ -345,12 +343,17 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         db.write_json(project_id, "prompt_errors.json", errors)
         generate.initialise_shots(project_id, _specs(project_id), stage="draft",
                                   ref_limit=len(refs))
+        # 逐镜头取材:必须在 initialise_shots 之后 —— 命中的镜头靠写成
+        # succeeded 来"顶掉"草稿生成,shot 行要先存在。
+        real_shots = _collect_media(project_id, subject, profile, _specs(project_id),
+                                    refs, llm)
         _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
-                   reason=f"编译 {compiled} 条提示词,校验失败 {len(errors)} 条")
+                   reason=f"编译 {compiled} 条提示词,校验失败 {len(errors)} 条"
+                          + (f",{real_shots} 个镜头用真实素材" if real_shots else ""))
         _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
                    reason=f"开始草稿生成({config.DRAFT_MODEL})")
         return {"state": str(State.DRAFT_RENDERING), "prompts": compiled,
-                "prompt_errors": len(errors)}
+                "prompt_errors": len(errors), "real_clips": real_shots}
 
     if state == State.PROMPTS_READY:
         generate.initialise_shots(project_id, _specs(project_id), stage="draft")
@@ -388,7 +391,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         db.write_json(project_id, "prompt_errors_final.json", errors)
         generate.initialise_shots(project_id, specs, stage="final", ref_limit=len(refs))
 
-        # 真实素材:外观镜头能用网上真实片段就用,省一次成片生成 + 一堆墙钟。
+        # 真实素材:门禁 A 之后取好的素材,按批应用到成片档,省掉成片生成。
         # 必须在 initialise_shots 之后 —— 它靠把镜头写成 succeeded 来"顶掉"
         # 那次生成,而 initialise_shots 之前 shot 行还不存在。
         real_shots = _inject_clips(project_id, subject, profile, specs, approved, refs)
@@ -610,65 +613,116 @@ def _merge_approved(project_id: str, shot_count: int,
     return current
 
 
-def _inject_clips(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
-                  approved: set[int], refs: Sequence[Any]) -> int:
-    """给已批准的镜头注入真实视频片段。返回生效的镜头数。
+def _real_ref_images(refs: Sequence[Any]) -> list:
+    """参考图集里的**真实**图片(去掉 AI 兜底图),供静图镜头使用。
 
-    四条自我约束:
-    1. **失败不阻断** —— 这一层是补充,任何异常都记进 clip_report.json 后
-       静默退回全量生成,不能因为"抓不到视频"卡住整条流水线;
-    2. **只碰已批准的镜头** —— 还没审的镜头不该提前被定死画面;
-    3. **不反复抓取** —— 每批门禁都会走到这里,不去重就会重复下载;
-    4. **允许重试一次** —— 但只在"上次没生效"的情况下:外观镜头常常落在
-       第二、三批,第一次跑的时候还没有已批准的外观镜头可用。硬失败则
-       永不重试,否则每一批都要把网络重新打穿一遍。
+    门禁 A 拿到的是 `ImageRef` 对象,门禁 B 从 refs.json 读回的是 dict,两种都要认。
+    """
+    ImageRef = asset_resolver.images.ImageRef
+    out: list = []
+    for r in refs:
+        if isinstance(r, dict):
+            r = ImageRef(**{k: v for k, v in r.items() if k in ImageRef.__dataclass_fields__})
+        if isinstance(r, ImageRef) and r.origin != "generate":
+            out.append(r)
+    return out
+
+
+def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
+                   refs: Sequence[Any], llm=None) -> int:
+    """门禁 A 之后:逐镜头取材,命中的镜头直接顶掉草稿生成。返回生效的镜头数。
+
+    取材结果存成 `clips.json`(取材计划),门禁 B 复用它,不再重抓网络。
+    失败不阻断:任何异常都记进 clip_report.json,全片照常走生成。
     """
     if not config.USE_REAL_CLIPS:
         return 0
-
-    previous = clip_resolver.load_report(project_id)
-    if previous:
-        status = previous.get("status")
-        runs = int(previous.get("runs", 1))
-        if status == "failed":
-            return 0                      # 硬失败:不重试
-        if int(previous.get("applied", 0)) > 0:
-            return 0                      # 已经生效:不重复抓取
-        if runs >= _CLIP_RETRY_LIMIT:
-            return 0                      # 重试机会已用完
-    runs = int(previous.get("runs", 0)) + 1 if previous else 1
-
     try:
-        page_urls = clips_mod.page_urls_from(refs)
+        errors: list[str] = []
+        queries, brand = media_query.build(subject, profile, specs, llm=llm, errors=errors)
+        db.write_json(project_id, "media_queries.json",
+                      {"brand": brand, "shots": media_query.to_json(queries)})
+        ref_images = _real_ref_images(refs)
         assignment, report = clip_resolver.collect(
             subject=subject, profile=profile, specs=specs,
-            project_dir=config.project_dir(project_id), page_urls=page_urls,
-            limit=config.REAL_CLIP_LIMIT,
+            project_dir=config.project_dir(project_id),
+            page_urls=clips_mod.page_urls_from(ref_images),
+            limit=config.REAL_CLIP_LIMIT, queries=queries, brand=brand,
+            ref_images=ref_images,
         )
-        assignment = {i: c for i, c in assignment.items() if i in approved}
-        applied = clip_resolver.apply_clips(project_id, assignment)
-        report.update({
-            "status": "ok",
-            "runs": runs,
-            "applied": applied,
-            "summary": (
-                f"{len(assignment)} 个已批准镜头改用真实视频片段"
-                f"(候选 {report.get('candidates', 0)} 条)"
-            ),
-        })
+        report["errors"] = errors + report.get("errors", [])
+        applied = clip_resolver.apply_clips(project_id, assignment, stage="draft")
+        report.update({"status": "ok", "runs": 1, "applied_draft": applied, "applied": 0})
         clip_resolver.persist(project_id, report, assignment)
-        if applied:
-            db.add_event(project_id, "assets", reason=report["summary"])
+        db.add_event(project_id, "assets", reason=report.get("summary", ""))
         return applied
     except Exception as exc:  # noqa: BLE001 - 补充通路,失败不影响主流程
         clip_resolver.persist(project_id, {
             "enabled": False,
             "status": "failed",
-            "runs": runs,
+            "runs": 1,
             "applied": 0,
             "errors": [f"真实素材采集异常:{type(exc).__name__}: {exc}"],
             "summary": "真实素材采集异常,已全部退回生成",
         }, {})
+        db.add_event(project_id, "assets", reason="真实素材采集异常,已全部退回生成")
+        return 0
+
+
+def _inject_clips(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
+                  approved: set[int], refs: Sequence[Any]) -> int:
+    """给已批准的镜头应用真实素材(成片档)。返回本次生效的镜头数。
+
+    三条自我约束:
+    1. **失败不阻断** —— 这一层是补充,任何异常都记进 clip_report.json 后
+       静默退回生成,不能因为"抓不到视频"卡住整条流水线;
+    2. **只碰已批准的镜头** —— 还没审的镜头不该提前被定死画面;
+    3. **不重复抓取** —— 门禁 A 之后已经取好素材(`clips.json`),每批门禁
+       只是把同一份计划应用到这一批;硬失败过的项目也不再重试。
+       只有门禁 A 时还没有这套逻辑的老项目,才在这里补抓一次。
+    """
+    if not config.USE_REAL_CLIPS:
+        return 0
+
+    previous = clip_resolver.load_report(project_id)
+    if previous.get("status") == "failed":
+        return 0
+
+    try:
+        if previous:
+            plan = clip_resolver.load_plan(project_id)
+            report = previous
+        else:
+            ref_images = _real_ref_images(refs)
+            plan, report = clip_resolver.collect(
+                subject=subject, profile=profile, specs=specs,
+                project_dir=config.project_dir(project_id),
+                page_urls=clips_mod.page_urls_from(ref_images),
+                limit=config.REAL_CLIP_LIMIT, ref_images=ref_images,
+            )
+            report.update({"status": "ok", "runs": 1})
+
+        done = {r["idx"] for r in db.get_shots(project_id, "final")
+                if r["status"] == "succeeded" and r.get("consistency") == "real"}
+        todo = {i: c for i, c in plan.items() if i in approved and i not in done}
+        applied = clip_resolver.apply_clips(project_id, todo, stage="final")
+        report["applied"] = int(report.get("applied", 0)) + applied
+        clip_resolver.persist(project_id, report, plan)
+        if applied:
+            db.add_event(project_id, "assets",
+                         reason=f"本批 {applied} 个已批准镜头使用真实素材")
+        return applied
+    except Exception as exc:  # noqa: BLE001 - 补充通路,失败不影响主流程
+        # 只写报告、不动 clips.json:取材计划可能是好的,坏的只是这一次应用
+        db.write_json(project_id, "clip_report.json", {
+            **previous,
+            "enabled": False,
+            "status": "failed",
+            "runs": int(previous.get("runs", 0)) + 1,
+            "errors": [*previous.get("errors", []),
+                       f"真实素材应用异常:{type(exc).__name__}: {exc}"],
+            "summary": "真实素材应用异常,其余镜头退回生成",
+        })
         db.add_event(project_id, "assets", reason="真实素材采集异常,已全部退回生成")
         return 0
 

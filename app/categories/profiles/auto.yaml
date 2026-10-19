@@ -363,6 +363,81 @@ angle_queries:
   screen_spec: 仪表盘 数据界面 屏幕
   industry: 车展 发布会 展台
 
+# --------------------------------------------------------------------------
+# 官方素材渠道
+#
+# 车辆镜头的取材顺序里排在最前:品牌官方号视频 → 车企官网 / 媒体中心 → 官图库。
+# aliases:主体名 / 上传者名里出现任一别名即认作该品牌(判定官方号也靠它)。
+# sites:  官网域名,用 `site:域名 车型` 站内检索找车型页,抓页面里的视频与大图。
+# media:  新闻 / 媒体中心域名,官方宣传片与高清官图常在这里。
+# 只写域名不写车型页地址:官网改版换路径很常见,站内检索不受影响。
+# --------------------------------------------------------------------------
+official_sites:
+  byd:
+    aliases: [比亚迪, BYD, 海豹, 海豚, 海狮, 腾势, 仰望, 方程豹]
+    sites: [bydauto.com.cn, byd.com]
+    media: [byd.com/cn/news]
+  tesla:
+    aliases: [特斯拉, Tesla, Model 3, Model Y, Model S, Model X, Cybertruck]
+    sites: [tesla.cn, tesla.com]
+    media: [tesla.com/presskit]
+  lixiang:
+    aliases: [理想, Li Auto, LiAuto]
+    sites: [lixiang.com]
+    media: []
+  nio:
+    aliases: [蔚来, NIO, 乐道, 萤火虫]
+    sites: [nio.cn, nio.com]
+    media: []
+  xpeng:
+    aliases: [小鹏, XPENG, Xpeng]
+    sites: [xiaopeng.com, heyxpeng.com]
+    media: []
+  xiaomi:
+    aliases: [小米汽车, 小米SU7, 小米YU7, Xiaomi SU7, Xiaomi YU7, Xiaomi EV]
+    sites: [xiaomiev.com]
+    media: []
+  aito:
+    aliases: [问界, AITO, 赛力斯, 鸿蒙智行, 智界, 享界, 尊界]
+    sites: [aito.auto, seres.cn]
+    media: []
+  geely:
+    aliases: [吉利, Geely, 银河, 领克, Lynk, 极氪, Zeekr, ZEEKR]
+    sites: [geely.com, zeekrlife.com, lynkco.com.cn]
+    media: []
+  gwm:
+    aliases: [长城, 哈弗, 魏牌, 坦克, 欧拉, 长城炮, GWM, Haval, TANK]
+    sites: [gwm.com.cn]
+    media: []
+  chery:
+    aliases: [奇瑞, Chery, 星途, 捷途]
+    sites: [chery.cn]
+    media: []
+  volkswagen:
+    aliases: [大众, Volkswagen, VW, ID.3, ID.4, ID.7, 帕萨特, 迈腾, 朗逸]
+    sites: [vw.com.cn, faw-vw.com, svw-volkswagen.com]
+    media: [volkswagen-newsroom.com]
+  toyota:
+    aliases: [丰田, Toyota, 凯美瑞, 卡罗拉, RAV4, 汉兰达, 雷克萨斯, Lexus]
+    sites: [toyota.com.cn, gac-toyota.com.cn, ftms.com.cn]
+    media: [pressroom.toyota.com, global.toyota]
+  honda:
+    aliases: [本田, Honda, 雅阁, 思域, CR-V]
+    sites: [honda.com.cn, ghac.cn, dongfeng-honda.com]
+    media: [hondanews.com]
+  bmw:
+    aliases: [宝马, BMW, MINI]
+    sites: [bmw.com.cn]
+    media: [press.bmwgroup.com]
+  mercedes:
+    aliases: [奔驰, Mercedes, Benz, 迈巴赫, Maybach, AMG]
+    sites: [mercedes-benz.com.cn]
+    media: [group-media.mercedes-benz.com]
+  audi:
+    aliases: [奥迪, Audi]
+    sites: [audi.cn]
+    media: [audi-mediacenter.com]
+
 # 合规:广告法绝对化用语
 forbidden_terms: [最强, 第一, 顶级, 永久, 国家级, 唯一, 最先进, 100%安全, 无敌, 秒杀]
 required_disclaimers: ["数据来源:公开信息与官方渠道,仅供参考,实际以购车时为准"]
