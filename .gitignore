@@ -14,3 +14,7 @@ venv/
 # 编辑器
 .idea/
 .vscode/
+
+# 浏览器导出的登录 cookies,含账号凭证,绝不能进仓库
+cookies/
+*cookies*.txt

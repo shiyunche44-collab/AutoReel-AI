@@ -207,3 +207,27 @@ def test_ffmpeg_dir_is_put_on_path(monkeypatch, tmp_path):
     pv._base_opts()
     parts = pv.os.environ["PATH"].split(pv.os.pathsep)
     assert parts.count(str(tmp_path)) == 1
+
+
+def test_cookie_folder_is_merged_into_one_file(monkeypatch, tmp_path):
+    """B 站、YouTube 各导出一份放进同一个文件夹,两边都要生效。"""
+    folder = tmp_path / "cookies"
+    folder.mkdir()
+    (folder / "bilibili.txt").write_text(
+        "# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tb\n",
+        encoding="utf-8")
+    (folder / "youtube.txt").write_text(
+        "# Netscape HTTP Cookie File\n#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ty\n",
+        encoding="utf-8")
+    monkeypatch.setattr(pv.config, "YTDLP_COOKIES", str(folder))
+    monkeypatch.setattr(pv.config, "DATA_DIR", tmp_path / "data")
+    path = pv._base_opts()["cookiefile"]
+    text = open(path, encoding="utf-8").read()
+    assert text.count("# Netscape HTTP Cookie File") == 1
+    assert "SESSDATA" in text and "#HttpOnly_.youtube.com" in text
+    assert not path.startswith(str(folder)), "yt-dlp 会写回 cookiefile,不能指向原件"
+
+
+def test_empty_cookie_folder_means_no_cookies(monkeypatch, tmp_path):
+    monkeypatch.setattr(pv.config, "YTDLP_COOKIES", str(tmp_path))
+    assert "cookiefile" not in pv._base_opts()

@@ -334,12 +334,42 @@ def _base_opts() -> dict[str, Any]:
     }
     if config.YTDLP_PROXY:
         opts["proxy"] = config.YTDLP_PROXY
-    if config.YTDLP_COOKIES and Path(config.YTDLP_COOKIES).is_file():
-        opts["cookiefile"] = config.YTDLP_COOKIES
+    cookiefile = _cookie_file()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
     if config.FFMPEG_PATH:
         opts["ffmpeg_location"] = str(Path(config.FFMPEG_PATH).parent)
         _ffmpeg_on_path(Path(config.FFMPEG_PATH).parent)
     return opts
+
+
+def _cookie_file() -> str | None:
+    """`YTDLP_COOKIES` 可以是一个 cookies.txt,也可以是放了多份的文件夹
+    (B 站、YouTube 各导出一份)。文件夹时合并成一份交给 yt-dlp。
+
+    合并文件写在 data/ 下而不是原文件夹:yt-dlp 退出时会把 cookie **写回**
+    cookiefile,不能让它覆盖用户导出的原件。
+    """
+    raw = config.YTDLP_COOKIES
+    if not raw:
+        return None
+    src = Path(raw)
+    if src.is_file():
+        return str(src)
+    if not src.is_dir():
+        return None
+    files = sorted(p for p in src.iterdir() if p.is_file() and p.suffix.lower() == ".txt")
+    if not files:
+        return None
+    lines = ["# Netscape HTTP Cookie File"]
+    for f in files:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip() and not line.startswith("# "):
+                lines.append(line)
+    merged = config.DATA_DIR / "_cookies_merged.txt"
+    merged.parent.mkdir(parents=True, exist_ok=True)
+    merged.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(merged)
 
 
 def _ffmpeg_on_path(ffmpeg_dir: Path) -> None:
