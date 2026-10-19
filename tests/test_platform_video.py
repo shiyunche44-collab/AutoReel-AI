@@ -136,6 +136,8 @@ def test_search_failure_raises_so_it_is_not_cached(monkeypatch):
 
     monkeypatch.setattr(pv, "_ytdlp_extract", _boom)
     monkeypatch.setattr(httpx, "get", _boom)
+    # 提示只在没配代理时出现;本机 .env 配了代理也要能跑
+    monkeypatch.setattr(pv.config, "YTDLP_PROXY", "")
     with pytest.raises(pv.PlatformError, match="YTDLP_PROXY"):
         pv.search_youtube("BYD Han")
     with pytest.raises(pv.PlatformError):
