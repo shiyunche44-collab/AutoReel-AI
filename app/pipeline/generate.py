@@ -77,6 +77,10 @@ def _retry_cap(stage: str) -> int:
 # --------------------------------------------------------------------------
 # 初始化
 # --------------------------------------------------------------------------
+#: 重新初始化时保留的状态:已完成的,以及已提交、还在跑的(task_id 在,重置会丢)
+_KEEP_ON_REINIT = ("succeeded", "submitted", "queued", "running")
+
+
 def initialise_shots(
     project_id: str,
     specs: Sequence[ShotSpec],
@@ -84,11 +88,23 @@ def initialise_shots(
     stage: str = "draft",
     ref_limit: int = 0,
 ) -> list[dict[str, Any]]:
-    """把分镜表写入 shots 表(运行态)。已存在的记录保留其生成状态。"""
+    """把分镜表写入 shots 表(运行态)。已存在的记录保留其生成状态。
+
+    ⚠️ "保留"必须在这里显式做:`upsert_shots` 的冲突分支会用新值覆盖 status。
+    门禁 B 每放行一批都会调用本函数,不保留的话前几批已经生成好的镜头
+    (以及换成真实素材的镜头)会被打回 pending 再提交一遍,白烧额度。
+    """
     shot_chains = chains_mod.build_chains(len(specs))
     mapping = chains_mod.assign_to_shots(shot_chains)
+    existing = {r["idx"]: r for r in db.get_shots(project_id, stage)}
     rows: list[dict[str, Any]] = []
     for spec in specs:
+        old = existing.get(spec.idx)
+        # 失败的镜头照旧重置 —— 重新初始化本来就隐含"再试一次"的语义
+        if old is not None and old.get("status") in _KEEP_ON_REINIT:
+            chain_id, chain_pos = mapping.get(spec.idx, (0, 0))
+            rows.append({**old, "chain_id": chain_id, "chain_pos": chain_pos})
+            continue
         chain_id, chain_pos = mapping.get(spec.idx, (0, 0))
         est = costs.estimate_shot(
             stage=stage, duration=spec.duration, ref_image_count=ref_limit

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import ssl
@@ -320,3 +321,113 @@ def collect(subject: str, *, limit: int = 8) -> tuple[list[ImageRef], list[str]]
             seen.add(ref.url)
             refs.append(ref)
     return refs, errors
+
+
+# --------------------------------------------------------------------------
+# Bing:图片检索与站内网页检索
+#
+# 走 cn.bing.com 而不是 www.bing.com:国内直连、免密钥。两个用途:
+# - `bing_images` 直接拿真实图片(做参考图,也做静图镜头);
+# - `bing_web` 拿网页链接 —— 汽车之家 / 懂车帝官图页、车企官网车型页、
+#   抖音/西瓜视频页都靠 `site:` 站内检索定位,不必逐站对接各家的搜索接口。
+# 页面结构一改解析就会失效,所以一律"解析不出来 = 没结果",不抛异常。
+# --------------------------------------------------------------------------
+BING_BASE = "https://cn.bing.com"
+
+#: 图片结果里每张图的元数据挂在 `<a class="iusc" m="{...}">` 上(HTML 转义过的 JSON)
+_BING_IMG_META_RE = re.compile(r'class="iusc"[^>]*?\sm="([^"]+)"', re.IGNORECASE)
+#: 网页结果:`<li class="b_algo"> ... <h2><a href="...">标题</a></h2>`
+_BING_WEB_RE = re.compile(
+    r'<li class="b_algo".*?<h2[^>]*>\s*<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _http_text(url: str, *, timeout: int = _TIMEOUT, referer: str | None = None) -> str:
+    """抓网页文本。用浏览器 UA:Bing 和车媒站会给匿名 UA 返回空壳页。"""
+    import httpx
+
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+    }
+    if referer:
+        headers["Referer"] = referer
+    try:
+        resp = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+    except Exception as exc:  # noqa: BLE001
+        raise WebAssetError(f"{type(exc).__name__}: {exc}") from exc
+    if resp.status_code >= 400:
+        raise WebAssetError(f"HTTP {resp.status_code}")
+    return resp.text
+
+
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+)
+
+
+def parse_bing_images(body: str, query: str = "") -> list[ImageRef]:
+    """解析 Bing 图片结果页。纯函数,便于用样例 HTML 测。"""
+    refs: list[ImageRef] = []
+    seen: set[str] = set()
+    for raw in _BING_IMG_META_RE.findall(body):
+        try:
+            meta = json.loads(html.unescape(raw))
+        except (ValueError, TypeError):
+            continue
+        url = str(meta.get("murl") or "")
+        if not url.startswith(("http://", "https://")) or url in seen:
+            continue
+        title = str(meta.get("t") or "")
+        if any(bad in title.lower() for bad in _NOT_A_PRODUCT_PHOTO):
+            continue
+        seen.add(url)
+        page = str(meta.get("purl") or "")
+        refs.append(ImageRef(
+            url=url,
+            origin="bing",
+            note=title[:120] or query,
+            license=f"检索命中:{page or '未知来源页'}",
+            source_page=page,
+        ))
+    return refs
+
+
+def bing_images(query: str, *, limit: int = 20) -> list[ImageRef]:
+    """Bing 图片检索。只取大图(`qft=+filterui:imagesize-large`),小图做不了镜头。"""
+    params = {
+        "q": query, "first": "0", "count": str(max(limit, 35)),
+        "qft": "+filterui:imagesize-large", "mmasync": "1",
+    }
+    body = _http_text(f"{BING_BASE}/images/async?{urllib.parse.urlencode(params)}")
+    return parse_bing_images(body, query)[:limit]
+
+
+def bing_images_cached(query: str, *, limit: int = 20) -> list[ImageRef]:
+    return _cached("bing_img", query, limit, lambda: bing_images(query, limit=limit))
+
+
+def parse_bing_web(body: str) -> list[ImageRef]:
+    """解析 Bing 网页结果。复用 ImageRef 只是为了走同一套磁盘缓存:
+    `url` 放网页地址,`note` 放标题。"""
+    out: list[ImageRef] = []
+    seen: set[str] = set()
+    for url, title in _BING_WEB_RE.findall(body):
+        url = html.unescape(url)
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(ImageRef(url=url, origin="bing_web",
+                            note=re.sub(r"<[^>]+>", "", html.unescape(title)).strip()[:120]))
+    return out
+
+
+def bing_web(query: str, *, limit: int = 10) -> list[str]:
+    """Bing 网页检索,返回结果页地址列表。常配合 `site:` 使用。"""
+    def _fetch() -> list[ImageRef]:
+        params = {"q": query, "count": str(max(limit, 10)), "setlang": "zh-Hans"}
+        return parse_bing_web(_http_text(f"{BING_BASE}/search?{urllib.parse.urlencode(params)}"))
+
+    return [r.url for r in _cached("bing_web", query, limit, _fetch)]

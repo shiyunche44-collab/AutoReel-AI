@@ -51,8 +51,37 @@ CATEGORY_REF_LIMIT = 5
 #: 关掉时整条流水线行为与引入本特性之前完全一致。
 USE_REAL_CLIPS = os.getenv("USE_REAL_CLIPS", "1") not in ("0", "false", "False")
 
-#: 每个项目最多用多少条真实片段。
-REAL_CLIP_LIMIT = int(os.getenv("REAL_CLIP_LIMIT", "4"))
+#: 每个项目最多用多少个真实素材镜头。0 = 不设上限:能用真实就用真实,
+#: 找不到的镜头才回退 AI 生成。
+REAL_CLIP_LIMIT = int(os.getenv("REAL_CLIP_LIMIT", "0"))
+
+#: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin。
+#: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接再下载,
+#: 而且多半要 cookie 才下得动 —— 属于**实验性**来源,失败就安静跳过。
+MEDIA_PLATFORMS: tuple[str, ...] = tuple(
+    p.strip().lower()
+    for p in os.getenv("MEDIA_PLATFORMS", "bilibili,youtube,douyin").split(",")
+    if p.strip()
+)
+
+#: yt-dlp 走的代理(国内访问 YouTube 需要),如 http://127.0.0.1:7890 。
+#: 只给 yt-dlp 用:B 站、车媒站点直连更快,不该被代理拖慢。
+YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
+
+#: Netscape 格式 cookie 文件(浏览器插件导出)。B 站高清、抖音下载需要。
+YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "").strip()
+
+#: 免费图库 API Key。没填的那一路自动跳过。
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
+PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
+
+#: 逐镜头取材的总时长预算(秒)。取材在门禁 A 确认时同步执行,网络慢时
+#: 不能无限拖住确认请求 —— 超出预算后剩余镜头直接走生成。
+MEDIA_TIME_BUDGET = int(os.getenv("MEDIA_TIME_BUDGET", "900"))
+
+#: 是否允许把网上的静态图片做成推拉动效镜头(Ken Burns)。
+#: 视频片段找不到时,真实图片动起来仍比 AI 编的车可信。
+USE_STILL_SHOTS = os.getenv("USE_STILL_SHOTS", "1") not in ("0", "false", "False")
 
 #: 一致性链分组大小:每链 N 个镜头,链内串行、链间并行。
 CHAIN_GROUP_SIZE = 3

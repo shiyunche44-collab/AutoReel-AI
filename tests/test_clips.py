@@ -167,7 +167,7 @@ def test_derivative_empty_list():
 
 
 # ==========================================================================
-# 选片规则
+# 逐镜头取材梯子
 # ==========================================================================
 def _specs(count: int = 10) -> list[ShotSpec]:
     angles = ["exterior_45", "interior", "rear", "detail", "industry"]
@@ -178,41 +178,180 @@ def _specs(count: int = 10) -> list[ShotSpec]:
     ]
 
 
-def _cand(url: str, page: str = "") -> clips_mod.ClipCandidate:
-    return clips_mod.ClipCandidate(url=url, page_url=page, title=page, local_path="/tmp/x.mp4")
+def _cand(url: str, page: str = "", **kw) -> clips_mod.ClipCandidate:
+    return clips_mod.ClipCandidate(url=url, page_url=page, title=page,
+                                   local_path="/tmp/x.mp4", **kw)
 
 
-def test_only_exterior_angles_get_real_clips():
-    """外观镜头才值得动用真实素材 —— 氛围镜头画错了也看不出来。"""
-    # 角度按 exterior_45 / interior / rear / detail / industry 轮转,
-    # 所以符合条件的镜头序号是 0(外观)、2(尾部)、3(细节)
-    assignment = cr._assign(_specs(), [_cand("a"), _cand("b")])
-    assert set(assignment) == {0, 2}
+@pytest.fixture
+def offline(monkeypatch):
+    """把所有联网来源都换成空 —— 单测里绝不能真的去打 B 站 / Bing。
+    返回一个 dict,用例往里塞某一级的候选即可。"""
+    from app.providers import official, platform_video, stock, webassets
+
+    box: dict = {}
+    monkeypatch.setattr(platform_video, "search",
+                        lambda q, **k: list(box.get("platform", [])))
+    monkeypatch.setattr(official, "platform_official",
+                        lambda *a, **k: list(box.get("official_platform", [])))
+    monkeypatch.setattr(official, "gallery_images",
+                        lambda *a, **k: list(box.get("gallery", [])))
+    monkeypatch.setattr(official, "site_media", lambda *a, **k: ([], []))
+    monkeypatch.setattr(webassets, "bing_images_cached",
+                        lambda *a, **k: list(box.get("bing", [])))
+    monkeypatch.setattr(stock, "search_videos", lambda *a, **k: list(box.get("stock_v", [])))
+    monkeypatch.setattr(stock, "search_photos", lambda *a, **k: list(box.get("stock_p", [])))
+    monkeypatch.setattr(cr.clips_mod, "commons_search_videos_cached",
+                        lambda *a, **k: list(box.get("commons", [])))
+    monkeypatch.setattr(cr.clips_mod, "page_media", lambda *a, **k: ([], []))
+    monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k: clipped)
+    box["materialised"] = []
+
+    def _fake_materialise(cand, dest, secs):
+        if "bad" in cand.url:
+            raise clips_mod.ClipError("boom")
+        cand.local_path = str(dest)
+        box["materialised"].append(cand.url)
+        return cand
+
+    monkeypatch.setattr(cr, "_materialise", _fake_materialise)
+    return box
 
 
-def test_assignment_is_ordered_and_capped_by_candidates():
+def _hit(url: str, *, title: str = "比亚迪汉 EV 实拍", uploader: str = "某UP主",
+         duration: float = 120.0, platform: str = "bilibili", official: bool = False):
+    from app.providers import platform_video
+
+    return platform_video.PlatformHit(platform=platform, url=url, title=title,
+                                      uploader=uploader, duration=duration, official=official)
+
+
+def _collect(tmp_path, specs, **kw):
+    return cr.collect(subject="比亚迪汉 EV", profile=load_profile("auto"),
+                      specs=specs, project_dir=tmp_path, **kw)
+
+
+def test_official_video_beats_platform_video(offline, tmp_path):
+    """车辆镜头先找官方素材:官方号拍的一定是这台车。"""
+    offline["official_platform"] = [_hit("https://b/official", uploader="比亚迪汽车",
+                                          official=True)]
+    offline["platform"] = [_hit("https://b/up")]
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].url == "https://b/official"
+    assert assignment[0].official
+    assert report["selected"]["0"]["tier"] == "official_video"
+    assert report["official_count"] == 1
+
+
+def test_official_gallery_still_beats_platform_video(offline, tmp_path):
+    from app.providers.images import ImageRef
+
+    offline["gallery"] = [ImageRef(url="https://img/a.jpg", origin="official:autohome",
+                                   angle="exterior_45")]
+    offline["platform"] = [_hit("https://b/up")]
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].kind == "still"
+    assert report["selected"]["0"]["tier"] == "official_still"
+
+
+def test_car_shot_falls_back_to_platform_then_web_still(offline, tmp_path):
+    from app.providers.images import ImageRef
+
+    offline["bing"] = [ImageRef(url="https://img/b.jpg", origin="bing")]
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].kind == "still" and assignment[0].origin == "bing"
+    assert report["selected"]["0"]["tier"] == "web_still"
+
+
+def test_platform_titles_must_mention_subject_for_car_shots(offline, tmp_path):
+    """车辆镜头不能配一条讲别的车的视频。"""
+    offline["platform"] = [_hit("https://b/other", title="特斯拉 Model 3 试驾")]
+    assignment, _ = _collect(tmp_path, _specs(1))
+    assert assignment == {}
+
+
+def test_other_shot_uses_platform_then_stock(offline, tmp_path):
+    """非车画面:平台视频优先,图库兜底,不要求标题里有车型。"""
+    specs = [ShotSpec(idx=0, duration=6.0, visual_zh="车展人流", angle="industry")]
+    offline["stock_v"] = [clips_mod.ClipCandidate(url="https://pexels/v.mp4",
+                                                  origin="stock:pexels")]
+    assignment, report = _collect(tmp_path, specs)
+    assert assignment[0].origin == "stock:pexels"
+    assert report["selected"]["0"]["tier"] == "stock_video"
+
+    offline["platform"] = [_hit("https://b/expo", title="上海车展现场")]
+    assignment, _ = _collect(tmp_path / "2", specs)
+    assert assignment[0].url == "https://b/expo"
+
+
+def test_other_shot_never_uses_car_official_sources(offline, tmp_path):
+    specs = [ShotSpec(idx=0, duration=6.0, visual_zh="车展", angle="industry")]
+    offline["official_platform"] = [_hit("https://b/official", official=True)]
+    assignment, _ = _collect(tmp_path, specs)
+    assert assignment == {}
+
+
+def test_long_video_is_split_across_adjacent_shots(offline, tmp_path):
+    """同一条视频的不同起点切给相邻镜头 —— 同源连用就是免费的强一致性。"""
+    offline["platform"] = [_hit("https://b/long", duration=300.0)]
     specs = [ShotSpec(idx=i, duration=6.0, visual_zh="x", angle="exterior_45")
-             for i in range(10)]
-    assignment = cr._assign(specs, [_cand("a"), _cand("b")])
-    assert list(assignment) == [0, 1]
+             for i in range(3)]
+    assignment, _ = _collect(tmp_path, specs)
+    assert [c.url for c in assignment.values()] == ["https://b/long"] * 3
+    starts = [c.start for c in assignment.values()]
+    assert len(set(starts)) == 3, starts
 
 
-def test_same_source_clips_stay_together():
-    """同一篇文章里的片段拍的是同一台车,连着用就是免费的强一致性。"""
+def test_failed_candidate_falls_through_to_next(offline, tmp_path):
+    offline["platform"] = [_hit("https://b/bad1"), _hit("https://b/ok")]
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].url == "https://b/ok"
+    assert any("素材落地失败" in e for e in report["errors"])
+
+
+def test_limit_caps_real_shots(offline, tmp_path):
+    offline["platform"] = [_hit(f"https://b/{i}", duration=300.0) for i in range(5)]
     specs = [ShotSpec(idx=i, duration=6.0, visual_zh="x", angle="exterior_45")
-             for i in range(4)]
-    pool = [
-        _cand("p1a", page="P1"),
-        _cand("p2a", page="P2"),
-        _cand("p1b", page="P1"),
-    ]
-    assignment = cr._assign(specs, pool)
-    pages = [c.page_url for c in assignment.values()]
-    assert pages[0] == "P1" and pages[1] == "P1", pages
+             for i in range(6)]
+    assignment, report = _collect(tmp_path, specs, limit=2)
+    assert len(assignment) == 2
+    assert report["fallback"] == [2, 3, 4, 5]
 
 
-def test_no_candidates_means_no_assignment():
-    assert cr._assign(_specs(), []) == {}
+def test_no_candidates_means_everything_generates(offline, tmp_path):
+    assignment, report = _collect(tmp_path, _specs())
+    assert assignment == {}
+    assert report["fallback"] == list(range(10))
+    assert report["enabled"] is False
+
+
+def test_still_shots_can_be_switched_off(offline, tmp_path, monkeypatch):
+    from app.providers.images import ImageRef
+
+    monkeypatch.setattr(config, "USE_STILL_SHOTS", False)
+    offline["bing"] = [ImageRef(url="https://img/b.jpg", origin="bing")]
+    assignment, _ = _collect(tmp_path, _specs(1))
+    assert assignment == {}
+
+
+def test_qc_rejection_sends_shot_back_to_generation(offline, tmp_path, monkeypatch):
+    offline["platform"] = [_hit("https://b/cropped")]
+    monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k: [])
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment == {}
+    assert report["qc_rejected"] == 1
+
+
+def test_time_budget_stops_collection(offline, tmp_path, monkeypatch):
+    offline["platform"] = [_hit("https://b/x", duration=300.0)]
+    monkeypatch.setattr(config, "MEDIA_TIME_BUDGET", 1)
+    ticks = iter([0.0, 0.0, 5.0, 5.0, 5.0])
+    monkeypatch.setattr(cr.time, "monotonic", lambda: next(ticks, 5.0))
+    specs = [ShotSpec(idx=i, duration=6.0, visual_zh="x", angle="exterior_45")
+             for i in range(3)]
+    assignment, report = _collect(tmp_path, specs)
+    assert list(assignment) == [0]
+    assert any("时长预算" in e for e in report["errors"])
 
 
 # ==========================================================================
@@ -376,9 +515,7 @@ def test_stage_complete_sees_real_clips(live_project, tmp_path):
 # ==========================================================================
 # 降级安全
 # ==========================================================================
-def test_collect_with_no_sources_degrades_gracefully(tmp_path, monkeypatch):
-    monkeypatch.setattr(cr.clips_mod, "commons_search_videos_cached", lambda *a, **k: [])
-    monkeypatch.setattr(cr.clips_mod, "page_video_urls", lambda *a, **k: [])
+def test_collect_with_no_sources_degrades_gracefully(offline, tmp_path):
     assignment, report = cr.collect(
         subject="比亚迪汉 EV", profile=load_profile("auto"),
         specs=_specs(), project_dir=tmp_path,
@@ -388,13 +525,20 @@ def test_collect_with_no_sources_degrades_gracefully(tmp_path, monkeypatch):
     assert "生成" in report["summary"]
 
 
-def test_every_source_failing_does_not_raise(tmp_path, monkeypatch):
+def test_every_source_failing_does_not_raise(offline, tmp_path, monkeypatch):
     """全部来源抛异常时也必须安静退回生成,而不是把流水线带崩。"""
+    from app.providers import official, platform_video, stock, webassets
+
     def _boom(*a, **k):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(cr.clips_mod, "commons_search_videos_cached", _boom)
-    monkeypatch.setattr(cr.clips_mod, "page_video_urls", _boom)
+    for mod, name in ((platform_video, "search"), (official, "platform_official"),
+                      (official, "gallery_images"), (official, "site_media"),
+                      (webassets, "bing_images_cached"), (stock, "search_videos"),
+                      (stock, "search_photos"),
+                      (cr.clips_mod, "commons_search_videos_cached"),
+                      (cr.clips_mod, "page_media")):
+        monkeypatch.setattr(mod, name, _boom)
     assignment, report = cr.collect(
         subject="比亚迪汉 EV", profile=load_profile("auto"),
         specs=_specs(), project_dir=tmp_path, page_urls=["https://xchuxing.com/a"],
@@ -403,7 +547,7 @@ def test_every_source_failing_does_not_raise(tmp_path, monkeypatch):
     assert report["errors"]
 
 
-def test_fetch_failure_keeps_going(tmp_path, monkeypatch):
+def test_fetch_failure_keeps_going(offline, tmp_path, monkeypatch):
     """一条片段抓失败不影响其余候选 —— 素材层永远降级而不是阻断。"""
     monkeypatch.setattr(
         cr.clips_mod, "commons_search_videos_cached",
@@ -422,7 +566,7 @@ def test_fetch_failure_keeps_going(tmp_path, monkeypatch):
     )
     assert len(assignment) == 1, "抓到的那条应该仍然可用"
     assert report["fetched"] == 1
-    assert any("片段抓取失败" in e for e in report["errors"])
+    assert any("素材落地失败" in e for e in report["errors"])
 
 
 def _apply_local(cand, tmp_path):
@@ -524,27 +668,34 @@ def test_inject_runs_only_once_after_it_worked(wired, tmp_path):
     assert box["calls"] == 1
 
 
-def test_inject_retries_when_previous_run_applied_nothing(wired, tmp_path):
-    """外观镜头常落在第二、三批:第一次跑时没有已批准的外观镜头可用,
-    死守"只跑一次"会让后面所有批次永远拿不到真实素材。"""
+def test_inject_reuses_plan_for_later_batches(wired, tmp_path):
+    """取材计划只抓一次:后面的批次把同一份计划应用到新批准的镜头上,
+    不再重新打网络 —— 外观镜头落在第二、三批也照样能用上真实素材。"""
     orchestrator, specs, box = wired
     box["assignment"] = {0: _mk(_clip_file(tmp_path))}
 
-    # 第一批:镜头 0 是 interior,不在分配范围里 → 没生效
+    # 第一批:镜头 0 还没批准 → 不生效,但计划已经落盘
     assert orchestrator._inject_clips("p_clip_test", "BYD Han", None, specs, {1, 2}, []) == 0
-    # 第二批:镜头 0 已批准 → 这次生效
+    # 第二批:镜头 0 已批准 → 从计划里应用
     assert orchestrator._inject_clips("p_clip_test", "BYD Han", None, specs,
                                       {0, 1}, []) == 1
-    assert box["calls"] == 2
+    assert box["calls"] == 1
 
 
-def test_inject_retries_are_bounded(wired, tmp_path):
+def test_inject_never_refetches(wired, tmp_path):
     """反复没生效也不能每批都把网络重打一遍。"""
     orchestrator, specs, box = wired
     box["assignment"] = {0: _mk(_clip_file(tmp_path))}
     for _ in range(5):
         orchestrator._inject_clips("p_clip_test", "BYD Han", None, specs, {1, 2}, [])
-    assert box["calls"] == orchestrator._CLIP_RETRY_LIMIT
+    assert box["calls"] == 1
+
+
+def test_inject_does_not_reapply_done_shots(wired, tmp_path):
+    orchestrator, specs, box = wired
+    box["assignment"] = {0: _mk(_clip_file(tmp_path))}
+    assert orchestrator._inject_clips("p_clip_test", "BYD Han", None, specs, {0}, []) == 1
+    assert orchestrator._inject_clips("p_clip_test", "BYD Han", None, specs, {0, 1}, []) == 0
 
 
 def test_inject_hard_failure_is_never_retried(wired, tmp_path, monkeypatch):
@@ -637,3 +788,195 @@ def test_project_estimate_with_clip_ratio():
 def test_clip_ratio_is_clamped():
     assert costs.estimate_project(60, real_clip_ratio=9.0)["real_clip_ratio"] == 1.0
     assert costs.estimate_project(60, real_clip_ratio=-1.0)["real_clip_ratio"] == 0.0
+
+
+# ==========================================================================
+# 新通路:嵌入播放器、静图镜头、草稿档注入、取材计划复用
+# ==========================================================================
+def test_extracts_embedded_players():
+    html = (
+        '<iframe src="//player.bilibili.com/player.html?aid=1&bvid=BV1xx411c7mD&page=1">'
+        '<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ?rel=0">'
+        '<a href="https://youtu.be/dQw4w9WgXcQ">'
+    )
+    assert clips_mod.extract_embeds(html) == [
+        "https://www.bilibili.com/video/BV1xx411c7mD",
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    ]
+
+
+def test_article_embeds_become_platform_candidates(monkeypatch):
+    """车媒页嵌的 B 站播放器过去被丢掉,现在交给 yt-dlp。"""
+    monkeypatch.setattr(cr.clips_mod, "commons_search_videos_cached", lambda *a, **k: [])
+    monkeypatch.setattr(cr.clips_mod, "page_media", lambda page, **k: (
+        ["https://cdn/a.mp4"], ["https://www.bilibili.com/video/BV1xx411c7mD"]))
+    pool, errors = cr._candidate_pool("比亚迪汉", page_urls=["https://news/1"])
+    assert pool[0].url == "https://cdn/a.mp4" and not pool[0].platform
+    assert pool[1].platform == "bilibili" and pool[1].origin == "clip_media:bilibili"
+    assert errors == []
+
+
+def test_fetch_clip_local_input_has_no_http_options(monkeypatch, tmp_path):
+    """yt-dlp 落地的分段是本地文件,带 -user_agent 会被 ffmpeg 拒绝打开。"""
+    seen: dict = {}
+
+    def _run(args, **k):
+        seen["args"] = args
+        out = Path(args[-1])
+        out.write_bytes(b"x")
+
+        class P:
+            returncode = 0
+            stderr = ""
+        return P()
+
+    monkeypatch.setattr(clips_mod, "_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(clips_mod.subprocess, "run", _run)
+    clips_mod.fetch_clip(str(tmp_path / "in.mp4"), tmp_path / "out.mp4", referer="https://r/")
+    assert "-user_agent" not in seen["args"] and "-headers" not in seen["args"]
+    clips_mod.fetch_clip("https://cdn/a.mp4", tmp_path / "out2.mp4", referer="https://r/")
+    assert "-user_agent" in seen["args"] and "-headers" in seen["args"]
+
+
+def test_still_filter_keeps_whole_subject_and_moves():
+    from app.pipeline import render
+
+    f = render.still_filter("zoom_in", 6)
+    assert "force_original_aspect_ratio=decrease" in f, "前景必须完整放进画幅,不能裁车"
+    assert "boxblur" in f and "zoompan" in f and "d=144" in f
+    assert render.still_filter("pan_left", 6) != render.still_filter("pan_right", 6)
+
+
+def test_materialise_still_goes_through_ken_burns(monkeypatch, tmp_path):
+    from app.pipeline import render
+
+    calls: dict = {}
+    monkeypatch.setattr(cr.images, "download",
+                        lambda url, dest, **k: calls.setdefault("headers", k.get("headers")))
+    monkeypatch.setattr(render, "still_to_clip",
+                        lambda img, dest, **k: calls.setdefault("motion", k["motion"]))
+    cand = clips_mod.ClipCandidate(url="https://img/a.jpg", page_url="https://car.autohome.com.cn/pic/1",
+                                   kind="still")
+    out = cr._materialise(cand, tmp_path / "shot_002.mp4", 6.0)
+    assert out.local_path.endswith("shot_002.mp4")
+    assert calls["headers"]["Referer"] == "https://car.autohome.com.cn/"
+    assert calls["motion"] == render.STILL_MOTIONS[2]
+
+
+def test_materialise_platform_downloads_only_a_segment(monkeypatch, tmp_path):
+    seen: dict = {}
+
+    def _dl(url, dest, *, start, seconds):
+        seen.update(url=url, start=start, seconds=seconds)
+        p = Path(dest)
+        p.write_bytes(b"x")
+        return p
+
+    monkeypatch.setattr(cr.platform_video, "download_segment", _dl)
+    monkeypatch.setattr(cr.clips_mod, "probe_duration", lambda p: 7.0)
+    monkeypatch.setattr(cr.clips_mod, "fetch_clip",
+                        lambda src, dest, **k: seen.setdefault("loop", k["loop"]) and dest or dest)
+    cand = clips_mod.ClipCandidate(url="https://www.bilibili.com/video/BV1", platform="bilibili",
+                                   start=42.0)
+    cr._materialise(cand, tmp_path / "shot_000.mp4", 6.0)
+    assert seen["start"] == 42.0 and seen["seconds"] == 6.0
+    assert seen["loop"] is False
+
+
+def test_apply_clips_to_draft_stage(live_project, tmp_path):
+    """门禁 A 之后真实镜头直接顶掉草稿生成,门禁 B 审到的就是真实素材。"""
+    from app import db
+    from app.pipeline import generate
+
+    specs = [ShotSpec(idx=i, duration=6.0, visual_zh="x") for i in range(3)]
+    generate.initialise_shots(live_project, specs, stage="draft")
+    cand = _cand("https://cdn/a.mp4", kind="still")
+    cand.local_path = str(_clip_file(tmp_path))
+    assert cr.apply_clips(live_project, {1: cand}, stage="draft") == 1
+    rows = {r["idx"]: r for r in db.get_shots(live_project, "draft")}
+    assert rows[1]["status"] == "succeeded" and rows[1]["consistency"] == "real"
+    assert "drafts" in rows[1]["draft_path"]
+    assert rows[1]["final_path"] in (None, "")
+    assert db.get_shots(live_project, "final") == []
+
+
+def test_plan_round_trips(live_project, tmp_path):
+    cand = _cand("https://www.bilibili.com/video/BV1", page="P", platform="bilibili",
+                 start=12.5, official=True)
+    cr.persist(live_project, {"status": "ok"}, {3: cand})
+    plan = cr.load_plan(live_project)
+    assert plan[3].start == 12.5 and plan[3].official and plan[3].platform == "bilibili"
+
+
+def test_reinitialise_keeps_finished_shots(live_project, tmp_path):
+    """门禁 B 每批都会重新 initialise_shots —— 不能把前几批做好的镜头打回 pending。"""
+    from app import db
+    from app.pipeline import generate
+
+    specs = _init_final(live_project, count=3)
+    cand = _cand("https://cdn/a.mp4")
+    cand.local_path = str(_clip_file(tmp_path))
+    cr.apply_clips(live_project, {0: cand})
+    db.update_shot(live_project, 1, "final", status="failed", error="boom")
+    generate.initialise_shots(live_project, specs, stage="final", ref_limit=5)
+    rows = {r["idx"]: r for r in db.get_shots(live_project, "final")}
+    assert rows[0]["status"] == "succeeded" and rows[0]["consistency"] == "real"
+    assert rows[1]["status"] == "pending", "失败的镜头照旧重置,隐含再试一次"
+
+
+def test_collect_media_applies_to_drafts(live_project, tmp_path, monkeypatch):
+    from app import db
+    from app.pipeline import generate, orchestrator
+
+    specs = [ShotSpec(idx=i, duration=6.0, visual_zh="x", angle="exterior_45")
+             for i in range(3)]
+    generate.initialise_shots(live_project, specs, stage="draft")
+    cand = _cand("https://b/1", page="https://b/1", platform="bilibili")
+    cand.local_path = str(_clip_file(tmp_path))
+    seen: dict = {}
+
+    def _collect(**kw):
+        seen.update(kw)
+        return {0: cand}, {"errors": [], "summary": "1/3"}
+
+    monkeypatch.setattr(cr, "collect", _collect)
+    refs = [{"url": "https://img/a.jpg", "origin": "search", "source_page": "https://news/1"},
+            {"url": "https://ai/x.png", "origin": "generate"}]
+    assert orchestrator._collect_media(live_project, "比亚迪汉", load_profile("auto"),
+                                       specs, refs, llm=None) == 1
+    assert [r.url for r in seen["ref_images"]] == ["https://img/a.jpg"], "AI 兜底图不能当真实图片"
+    assert seen["page_urls"] == ["https://news/1"]
+
+    # 门禁 A 实际传进来的是 ImageRef 对象,不是 dict
+    from app.providers.images import ImageRef
+
+    seen.clear()
+    obj_refs = [ImageRef(url="https://img/b.jpg", origin="commons", source_page="https://w/1"),
+                ImageRef(url="https://ai/y.png", origin="generate")]
+    orchestrator._collect_media(live_project, "比亚迪汉", load_profile("auto"),
+                                specs, obj_refs, llm=None)
+    assert [r.url for r in seen["ref_images"]] == ["https://img/b.jpg"]
+    rows = {r["idx"]: r for r in db.get_shots(live_project, "draft")}
+    assert rows[0]["status"] == "succeeded"
+    assert cr.load_report(live_project)["applied_draft"] == 1
+    assert 0 in cr.load_plan(live_project)
+
+
+def test_collect_media_respects_master_switch(live_project, monkeypatch):
+    from app.pipeline import orchestrator
+
+    monkeypatch.setattr(config, "USE_REAL_CLIPS", False)
+    monkeypatch.setattr(cr, "collect", lambda **kw: (_ for _ in ()).throw(AssertionError()))
+    assert orchestrator._collect_media(live_project, "x", load_profile("auto"), [], []) == 0
+
+
+def test_collect_media_failure_does_not_raise(live_project, monkeypatch):
+    from app.pipeline import orchestrator
+
+    def _boom(**kw):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(cr, "collect", _boom)
+    assert orchestrator._collect_media(live_project, "x", load_profile("auto"),
+                                       _specs(2), []) == 0
+    assert cr.load_report(live_project)["status"] == "failed"
