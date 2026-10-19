@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aimovice · 解说视频自动化平台</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="4" width="14" height="16" rx="2"/><path d="M22 8l-6 4 6 4V8z"/>
+    </svg>
+    <span>aimovice</span>
+  </div>
+  <div class="topbar-right">
+    <span class="pill" title="M Plan 套餐到期日">套餐到期 {{ plan_expires_on }}</span>
+    <a class="btn btn-ghost" href="/api/health" target="_blank">健康状态</a>
+  </div>
+</header>
+
+<main class="wrap">
+  {% if not health.ffmpeg.ok or not health.connector.ok or not health.llm.active %}
+  <section class="banner banner-error">
+    <strong>环境未就绪,部分功能不可用</strong>
+    <ul>
+      {% if not health.ffmpeg.ok %}<li>ffmpeg:{{ health.ffmpeg.message }}</li>{% endif %}
+      {% if not health.connector.ok %}<li>生成通道:{{ health.connector.message }}</li>{% endif %}
+      {% if not health.llm.active %}<li>LLM:未配置 DEEPSEEK_API_KEY,脚本生成与提示词编译无法工作</li>{% endif %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2>新建项目</h2>
+    <form id="create-form" class="form-grid">
+      <label>
+        <span>选题 / 车型</span>
+        <input name="subject" required placeholder="例:比亚迪汉 EV 2026 款">
+      </label>
+      <label>
+        <span>品类</span>
+        <select name="category" id="category-select">
+          {% for c in categories %}
+          <option value="{{ c.name }}" {% if c.skeleton %}disabled{% endif %}>
+            {{ c.label }}{% if c.skeleton %}(骨架,未实现){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      <label id="theme-field">
+        <span>内容方向</span>
+        <select name="theme" id="theme-select">
+          {% for t in themes %}
+          <option value="{{ t.name }}" title="{{ t.intent }}">{{ t.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>时长</span>
+        <select name="duration" id="duration-select">
+          {% for d in durations %}<option value="{{ d }}">{{ d }} 秒</option>{% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>旁白方式</span>
+        <select name="narration_mode">
+          <option value="tts">独立 TTS 音轨(推荐,发音准确)</option>
+          <option value="native">H3 原生音频(画面自带人声)</option>
+        </select>
+      </label>
+      <label>
+        <span>配额节流上限(等效美元,留空自动)</span>
+        <input name="quota_budget" type="number" step="0.01" placeholder="自动">
+      </label>
+      <div class="form-actions">
+        <button class="btn btn-primary" type="submit">创建并开始采集</button>
+        <span id="estimate-hint" class="hint"></span>
+      </div>
+    </form>
+    <p class="note">
+      创建后会自动完成「事实采集 → 脚本 → 分镜」,然后停在
+      <strong>门禁 A</strong> 等待你确认。草稿与成片生成必须手动推进,避免在错误分镜上消耗额度。
+    </p>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>项目列表</h2>
+      <span class="muted">{{ projects | length }} 个项目</span>
+    </div>
+    {% if not projects %}
+      <p class="empty">还没有项目。从上面新建一个开始吧。</p>
+    {% else %}
+    <div class="project-grid">
+      {% for p in projects %}
+      <a class="project-card" href="/project/{{ p.id }}">
+        <div class="pc-head">
+          <strong>{{ p.title }}</strong>
+          <span class="state state-{{ p.state }}">{{ p.state }}</span>
+        </div>
+        <div class="pc-meta">
+          <span>{{ p.subject }}</span>
+          {% if p.theme %}<span class="pc-theme">{{ p.theme_label or p.theme }}</span>{% endif %}
+          <span>{{ p.duration }}s · {{ p.shot_count }} 镜头</span>
+        </div>
+        <div class="pc-bar" title="已用 / 上限">
+          <div class="pc-bar-fill"
+               style="width: {{ (100 * p.spent_cost / p.quota_budget) if p.quota_budget else 0 }}%"></div>
+        </div>
+        <div class="pc-foot">
+          <span>等效用量 {{ '%.2f' % p.spent_cost }} / {{ '%.2f' % p.quota_budget }}</span>
+          {% if p.has_output %}<span class="ok">已出片</span>{% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+<script>
+  const DUR = {{ durations | tojson }};
+  const CATS = {{ categories | tojson }};
+
+  function catInfo(name) {
+    return CATS.find(c => c.name === name) || { themes: [], default_theme: '' };
+  }
+
+  // 方向下拉必须跟着品类走:不同品类的方向词表完全不同(auto 有 7 个,
+  // beauty 只有一个合成的 overview)。不联动的话,选了美妆再带上 auto
+  // 的方向名,建项目时会被 400 拒绝。
+  function syncThemeField() {
+    const field = document.getElementById('theme-field');
+    const sel = document.getElementById('theme-select');
+    const cat = catInfo(document.getElementById('category-select').value);
+    const themes = cat.themes || [];
+    const keep = sel.value;
+    sel.innerHTML = '';
+    for (const t of themes) {
+      const opt = document.createElement('option');
+      opt.value = t.name;
+      opt.textContent = t.label;
+      opt.title = t.intent || '';
+      sel.appendChild(opt);
+    }
+    // 只有一个隐式默认方向时,单独展示一个下拉框没有意义
+    field.style.display = themes.length <= 1 ? 'none' : '';
+    if (keep && themes.some(t => t.name === keep)) sel.value = keep;
+  }
+
+  async function refreshEstimate() {
+    const d = document.getElementById('duration-select').value;
+    const res = await fetch('/api/estimate?duration=' + d);
+    if (!res.ok) return;
+    const data = await res.json();
+    const wc = data.wall_clock;
+    const rc = data.real_clips || {};
+    const clipText = rc.enabled
+      ? ` · 若 ${rc.max_shots} 个外观镜头取到真实素材,最多省 $${rc.max_savings.toFixed(2)}`
+      : '';
+    document.getElementById('estimate-hint').textContent =
+      `${data.shot_count} 个镜头 · 预计等效用量 ${data.cost.with_retry.toFixed(2)} · ` +
+      `成片档约 ${wc.final_minutes_low}-${wc.final_minutes_high} 分钟` +
+      `(${wc.chains} 条一致性链 / ${wc.waves} 个波次,上界)` +
+      clipText;
+  }
+  document.getElementById('duration-select').addEventListener('change', refreshEstimate);
+  document.getElementById('category-select').addEventListener('change', syncThemeField);
+  syncThemeField();
+  refreshEstimate();
+
+  document.getElementById('create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = '创建中…';
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: fd.get('subject'),
+          category: fd.get('category'),
+          theme: fd.get('theme') || null,
+          duration: parseInt(fd.get('duration'), 10),
+          narration_mode: fd.get('narration_mode'),
+          quota_budget: fd.get('quota_budget') ? parseFloat(fd.get('quota_budget')) : null
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '创建失败');
+      location.href = '/project/' + data.id;
+    } catch (err) {
+      alert(err.message);
+      btn.disabled = false; btn.textContent = '创建并开始采集';
+    }
+  });
+</script>
+</body>
+</html>

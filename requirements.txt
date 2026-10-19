@@ -1,0 +1,6 @@
+# aimovice 依赖
+# 已在系统 Python 3.12.10 中预装,无需重复安装:
+#   fastapi, uvicorn, pydantic, httpx, Pillow, PyYAML, python-dotenv
+# 以下为按需补装的轻量包:
+jinja2>=3.1          # 服务端模板渲染
+pytest>=8.0          # 单元测试

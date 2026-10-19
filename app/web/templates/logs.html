@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>日志 · aimovice</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><a class="brand-link" href="/"><span>aimovice</span></a></div>
+  <div class="topbar-right"><a class="btn btn-ghost" href="/project/{{ project_id }}">← 返回工作台</a></div>
+</header>
+<main class="wrap">
+  <section class="card">
+    <h2>事件流</h2>
+    <div class="events">
+      {% for e in events %}
+      <div class="event">
+        <span class="muted">#{{ e.id }}</span>
+        <span>{{ e.src or '—' }} → <strong>{{ e.dst }}</strong></span>
+        <span class="muted">{{ e.reason }}</span>
+        {% if e.cost %}<span class="badge">{{ '%.3f' % e.cost }}</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ p.title }} · aimovice</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <a href="/" class="brand-link">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="4" width="14" height="16" rx="2"/><path d="M22 8l-6 4 6 4V8z"/>
+      </svg>
+      <span>aimovice</span>
+    </a>
+  </div>
+  <div class="topbar-right">
+    <span class="state state-{{ p.state }}" id="state-badge">{{ p.state }}</span>
+    <a class="btn btn-ghost" href="/project/{{ p.id }}/logs" target="_blank">日志</a>
+    <a class="btn btn-ghost" href="/api/projects/{{ p.id }}/download">下载成片</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="card project-head">
+    <div>
+      <h2>{{ p.title }}</h2>
+      <p class="muted">{{ p.subject }} · {{ p.duration }} 秒 · {{ p.shot_count }} 镜头 ·
+        {{ p.category }}
+        {%- if p.theme_label %} · 方向:{{ p.theme_label }}{% elif p.theme %} · 方向:{{ p.theme }}{% endif %}
+        · 旁白:{{ '独立 TTS' if p.narration_mode == 'tts' else 'H3 原生' }}</p>
+    </div>
+    <div class="usage">
+      <div class="usage-num">等效用量 {{ '%.2f' % p.spent_cost }} <span class="muted">/ {{ '%.2f' % p.quota_budget }}</span></div>
+      <div class="pc-bar"><div class="pc-bar-fill" style="width:{{ (100 * p.spent_cost / p.quota_budget) if p.quota_budget else 0 }}%"></div></div>
+      <p class="hint">预计总额 {{ '%.2f' % estimate.with_retry }} ·
+        草稿档约 {{ wall_clock.draft_minutes }} 分钟 ·
+        成片档约 {{ wall_clock.final_minutes_low }}–{{ wall_clock.final_minutes_high }} 分钟</p>
+    </div>
+  </section>
+
+  {% if p.state_reason %}
+  <section class="banner banner-info"><strong>当前状态说明</strong>{{ p.state_reason }}</section>
+  {% endif %}
+
+  <!-- 操作条 -->
+  <section class="card action-bar">
+    <div id="gate-hint" class="muted">—</div>
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-advance">推进下一步</button>
+      {% if p.state == 'GATE_A' %}
+      <button class="btn btn-ok" id="btn-gate-a">✓ 确认脚本与分镜,开始生成</button>
+      {% endif %}
+      {% if p.state == 'GATE_B' %}
+      <button class="btn btn-ok" id="btn-gate-b">✓ 批准本批,开始成片生成</button>
+      {% endif %}
+      <span id="action-feedback" class="hint"></span>
+    </div>
+  </section>
+
+  <!-- 事实 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>① 事实(<span class="muted">每条都带来源</span>)</h2>
+      <span class="muted">{{ p.facts | length }} 条</span>
+    </div>
+    {% if facts_report and facts_report.scope_counts %}
+    <div class="scope-bar">
+      <span class="scope-chip scope-product">产品级 {{ facts_report.scope_counts.product }}</span>
+      <span class="scope-chip scope-company">公司级 {{ facts_report.scope_counts.company }}</span>
+      <span class="scope-chip scope-industry">行业级 {{ facts_report.scope_counts.industry }}</span>
+      <span class="muted">来源成功 {{ facts_report.sources_ok | length }} 个 · 原始素材 {{ facts_report.raw_chars }} 字</span>
+    </div>
+    {% endif %}
+    {% if facts_report and facts_report.product_gap %}
+    <div class="banner banner-error">
+      <strong>产品级事实不足</strong>{{ facts_report.product_gap }}
+    </div>
+    {% endif %}
+    {% if not p.facts %}
+      <p class="empty">尚未采集事实,或采集失败。</p>
+    {% else %}
+    <div class="fact-list">
+      {% for f in p.facts %}
+      <div class="fact conf-{{ f.confidence }} scope-{{ f.scope }}">
+        <div class="fact-claim">
+          <span class="scope-chip scope-{{ f.scope }}">{{ f.scope }}</span>{{ f.claim }}
+        </div>
+        <div class="fact-src">
+          <code>{{ f.source_tool }}</code>
+          {% if f.source_query %}<span class="muted">{{ f.source_query }}</span>{% endif %}
+          <span class="muted">取数 {{ f.retrieved_at }}</span>
+          <span class="badge">{{ f.confidence }}</span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- 真实素材 -->
+  {% if p.clip_report %}
+  <section class="card">
+    <div class="card-head">
+      <h2>真实素材</h2>
+      <span class="muted">{{ p.clip_report.get('applied', 0) }} / {{ p.shot_count }} 个镜头用真实视频</span>
+    </div>
+    {% if p.clip_report.get('savings_estimate') %}
+    <div class="banner banner-ok">
+      本片约省下 <strong>${{ '%.2f' | format(p.clip_report.savings_estimate) }}</strong> 等效用量
+      —— 真实片段跳过了成片档的模型生成(每个镜头 $0.48 + 15–30 分钟等待)。
+    </div>
+    {% endif %}
+    {% if p.clip_report.selected %}
+    <div class="fact-list">
+      {% for idx, c in p.clip_report.selected.items() %}
+      <div class="fact conf-high scope-product">
+        <div class="fact-claim">
+          <span class="scope-chip scope-product">镜头 {{ idx }}</span>{{ c.title or c.origin }}
+        </div>
+        <div class="fact-src">
+          <code>{{ c.origin }}</code>
+          {% if c.license %}<span class="muted">{{ c.license }}</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if p.clip_report.errors %}
+    <p class="hint">{% for e in p.clip_report.errors[:5] %}{{ e }}<br>{% endfor %}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <!-- 脚本 -->
+  <section class="card">
+    <div class="card-head"><h2>② 解说脚本</h2><span class="muted">{{ p.script | length }} 段</span></div>
+    {% if not p.script %}
+      <p class="empty">尚未生成。</p>
+    {% else %}
+    <div id="script-list" class="script-list">
+      {% for s in p.script %}
+      <div class="script-row" data-idx="{{ s.idx }}">
+        <div class="script-section">{{ s.section }}</div>
+        <textarea class="script-text" rows="2">{{ s.text }}</textarea>
+        <div class="script-refs muted">
+          事实引用:{% if s.fact_refs %}{% for r in s.fact_refs %}<code>{{ r }}</code> {% endfor %}
+          {% else %}<span class="warn">无</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="form-actions">
+      <button class="btn" id="btn-save-script" {% if p.state not in ('GATE_A','STORYBOARD_READY') %}disabled{% endif %}>保存脚本</button>
+      <span class="hint">数字型陈述必须有事实引用,保存时会重新校验。</span>
+    </div>
+  </section>
+
+  {% if lint %}
+  <section class="card">
+    <div class="card-head"><h2>合规检查</h2><span class="muted">{{ lint | length }} 条</span></div>
+    <div class="lint-list">
+      {% for i in lint %}
+      <div class="lint sev-{{ i.severity }}">
+        <span class="badge">{{ i.severity }}</span>
+        段落 {{ i.segment_idx }}:{{ i.message }}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- 分镜 -->
+  <section class="card">
+    <div class="card-head">
+      <h2>③ 分镜表</h2>
+      <span class="muted">{{ p.shots | length }} 个镜头 · {{ p.shots | length }} 条提示词</span>
+    </div>
+    {% if p.prompt_errors %}
+    <div class="banner banner-error">
+      <strong>提示词校验未通过 {{ p.prompt_errors | length }} 个镜头</strong>
+      <ul>
+        {% for idx, errs in p.prompt_errors.items() %}
+        <li>镜头 {{ idx }}:{{ errs | join('; ') }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    <div class="storyboard">
+      {% for s in p.shots %}
+      <div class="sb-row" data-idx="{{ s.idx }}">
+        <div class="sb-no">#{{ '%02d' % s.idx }}</div>
+        <div class="sb-visual">{{ s.spec.visual_zh }}</div>
+        <div class="sb-meta">
+          <span class="tag">{{ s.spec.section }}</span>
+          <span class="tag">{{ s.spec.camera_zh }}</span>
+          <span class="tag">{{ s.spec.angle }}</span>
+          <span class="tag">链 {{ s.chain_id }}-{{ s.chain_pos }}</span>
+          {% if s.consistency == 'degraded' %}<span class="tag warn">一致性降级</span>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- 生成看板 -->
+  <section class="card">
+    <div class="card-head"><h2>④ 生成看板</h2><span class="muted" id="gen-summary">—</span></div>
+    <div class="shot-grid">
+      {% for s in p.shots %}
+      <div class="shot-card status-{{ s.status }}">
+        <div class="shot-head">
+          <span>#{{ '%02d' % s.idx }}</span>
+          <span class="shot-status">{{ s.status }}</span>
+        </div>
+        {% if s.final_path %}
+          <video src="/media/{{ p.id }}/shots/{{ s.final_path | basename }}" muted loop autoplay playsinline></video>
+        {% elif s.draft_path %}
+          <video src="/media/{{ p.id }}/drafts/{{ s.draft_path | basename }}" muted loop autoplay playsinline></video>
+        {% else %}
+          <div class="shot-placeholder">等待生成</div>
+        {% endif %}
+        <div class="shot-foot">
+          <span class="muted">{{ s.model or '—' }}</span>
+          <span class="muted">{{ '%.2f' % s.est_cost }}</span>
+        </div>
+        {% if s.error %}<div class="shot-error">{{ s.error }}</div>{% endif %}
+        {% if s.status not in ('succeeded','pending') or p.state == 'FINAL_RENDERING' %}
+        <button class="btn btn-tiny js-retry" data-idx="{{ s.idx }}">重拍</button>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- 质检 -->
+  {% if qa and qa.shots %}
+  <section class="card">
+    <div class="card-head">
+      <h2>⑤ 质检</h2>
+      <span class="muted">通过 {{ qa.pass_count }} · 不通过 {{ qa.fail_count }} · 未判定 {{ qa.unknown_count }}</span>
+    </div>
+    {% if qa.cross_shot_consistency %}
+    <div class="banner {{ 'banner-ok' if qa.cross_shot_consistency.consistent else 'banner-error' }}">
+      <strong>跨镜头一致性:{{ '一致' if qa.cross_shot_consistency.consistent else '不一致' }}</strong>
+      抽检了 {{ qa.cross_shot_consistency.checked }} 个镜头。
+    </div>
+    {% endif %}
+    <div class="qa-list">
+      {% for s in qa.shots %}
+      <div class="qa-row verdict-{{ s.verdict }}">
+        <span class="badge">{{ s.verdict }}</span>
+        <strong>镜头 {{ s.idx }}</strong>
+        <span class="muted">{{ s.findings | join(' / ') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- 成片 -->
+  {% if p.has_output %}
+  <section class="card">
+    <div class="card-head"><h2>⑥ 成片</h2><span class="muted">1080×1920</span></div>
+    <div class="output-wrap">
+      <video src="/api/projects/{{ p.id }}/download" controls playsinline class="output-video"></video>
+      <div class="output-side">
+        {% if render.cover_path %}
+        <img src="/api/projects/{{ p.id }}/cover" alt="封面">
+        {% endif %}
+        <a class="btn btn-primary" href="/api/projects/{{ p.id }}/download">下载 MP4</a>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- 事件 -->
+  <section class="card">
+    <div class="card-head"><h2>事件流</h2><a class="btn btn-ghost btn-tiny" href="/project/{{ p.id }}/logs" target="_blank">查看全部</a></div>
+    <div class="events">
+      {% for e in events[:15] %}
+      <div class="event">
+        <span class="muted">{{ e.created_at | hhmmss }}</span>
+        <span>{{ e.src or '—' }} → <strong>{{ e.dst }}</strong></span>
+        <span class="muted">{{ e.reason }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</main>
+
+<script>
+  const PID = "{{ p.id }}";
+  window.PID = PID;
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

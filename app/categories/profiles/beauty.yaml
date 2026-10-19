@@ -1,0 +1,116 @@
+# 美妆产品 —— v2 骨架(可加载;合规要求最严,需补行业逻辑)
+name: beauty
+label: 美妆
+aspect_ratio: "9:16"
+duration_grid: 6
+skeleton: true
+todo:
+  - 接入化妆品备案信息查询(化妆品监督管理平台)
+  - 接入产品抽检与召回记录作为合规事实
+  - 校准功效宣称词表:医疗术语与绝对化用语双重红线
+  - 补充成分/肤质视觉参考图检索模板
+  - 增加"达人背书"类表述的合规审查
+
+fact_sources:
+  - qcc.profile
+  - qcc.product_recall
+  - qcc.product_spot_check
+  - ifind.news
+
+script_style: 面向日常通勤女性,真实感优先,弱化营销腔,强调使用感受与适用肤质。
+
+section_plan:
+  60: [开场钩子, 使用场景, 使用场景, 核心成分, 核心成分, 上脸效果,
+       上脸效果, 竞品对比, 注意事项, 购买建议]
+  90: [开场钩子, 使用场景, 使用场景, 使用场景, 核心成分, 核心成分,
+       核心成分, 上脸效果, 上脸效果, 上脸效果, 上脸效果,
+       竞品对比, 竞品对比, 注意事项, 购买建议]
+  120: [开场钩子, 开场钩子, 使用场景, 使用场景, 使用场景, 使用场景,
+        核心成分, 核心成分, 核心成分, 核心成分,
+        上脸效果, 上脸效果, 上脸效果, 上脸效果,
+        竞品对比, 竞品对比, 注意事项, 注意事项, 购买建议, 购买建议]
+
+sections:
+  开场钩子:
+    beat: 产品在柔光下的质地特写
+    camera: Push In
+    angle: texture
+    narration_style: 描述质地,不提功效
+  使用场景:
+    beat: 日常通勤与生活场景中的使用
+    camera: Tracking Shot
+    angle: lifestyle
+    narration_style: 场景化描述
+  核心成分:
+    beat: 成分质地与延展性特写
+    camera: Static Shot
+    angle: texture
+    narration_style: 客观陈述成分表内容
+    requires_fact: true
+  上脸效果:
+    beat: 妆效与持妆表现
+    camera: Truck Left
+    angle: result
+    narration_style: 描述即时使用观感,禁止承诺长期功效
+  竞品对比:
+    beat: 同品类产品质地并列
+    camera: Pan Left
+    angle: comparison
+    narration_style: 客观差异,不做优劣贬低
+  注意事项:
+    beat: 配方与使用提示的信息图示
+    camera: Static Shot
+    angle: screen_spec
+    narration_style: 客观陈述注意事项与适用肤质
+  购买建议:
+    beat: 产品静置收尾
+    camera: Pull Out
+    angle: product_hero
+    narration_style: 按肤质与预算给出建议
+
+visual_keywords: [美妆, 护肤, 彩妆, 质地, 妆效]
+reference_query_template: "{subject} 产品图 {angle}"
+angle_queries:
+  texture: 质地 涂抹 特写
+  lifestyle: 使用场景
+  result: 上脸 妆效
+  comparison: 对比
+  product_hero: 产品 45度 主图
+  screen_spec: 成分表 包装
+
+# 合规红线:医疗术语 + 绝对化用语。违反即阻断导出。
+# ⚠️ 必须写成真正的 YAML 列表项,不能写成逗号串 ——
+#    否则整行会变成一个字符串,lint 完全匹配不到任何禁用词。
+forbidden_terms:
+  # 医疗/药械宣称
+  - "治疗"
+  - "根治"
+  - "治愈"
+  - "疗效"
+  - "药用"
+  - "医学级"
+  - "械字号"
+  # 绝对化功效
+  - "100%有效"
+  - "立即见效"
+  - "永久"
+  - "无副作用"
+  - "零刺激"
+  # 需备案的特殊功效宣称
+  - "祛痘印"
+  - "祛斑"
+  - "美白"
+  - "瘦脸"
+  - "丰胸"
+  # 广告法绝对化用语
+  - "最强"
+  - "第一"
+  - "顶级"
+  - "国家级"
+  - "唯一"
+  - "无敌"
+required_disclaimers:
+  - "化妆品功效宣称需以备案信息为准,个体使用感受存在差异"
+  - "敏感肌使用前请先做局部试用"
+
+music_prompt: soft instrumental background music, gentle tempo, no vocals

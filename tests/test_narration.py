@@ -1,0 +1,137 @@
+"""旁白拼接的回归测试。
+
+这一段曾经"永远失败但没人知道":滤镜链里出现了一条没有输入标签的
+`apad=pad_dur=…[apN]`,ffmpeg 直接拒绝,错误又被 `except: return False`
+吞掉,于是成片照常产出、界面照样显示成功 —— 只是没有一句人声。
+配音是这套系统的核心,这种静默失败代价太大,所以这里真跑 ffmpeg 验证。
+"""
+from __future__ import annotations
+
+import subprocess
+import wave
+from pathlib import Path
+
+import pytest
+
+from app import config
+from app.pipeline import narration
+
+
+def _make_tone(path: Path, seconds: float = 0.4, freq: int = 440) -> Path:
+    """生成一段单声道 wav 正弦音,作为合成的输入素材。"""
+    import math
+    import struct
+
+    rate = 16000
+    n = int(rate * seconds)
+    frames = b"".join(
+        struct.pack("<h", int(12000 * math.sin(2 * math.pi * freq * i / rate)))
+        for i in range(n)
+    )
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(frames)
+    return path
+
+
+def _wav_duration(path: Path) -> float:
+    with wave.open(str(path), "rb") as w:
+        return w.getnframes() / float(w.getframerate())
+
+
+pytestmark = pytest.mark.skipif(
+    not config.FFMPEG_PATH or not Path(config.FFMPEG_PATH).is_file(),
+    reason="需要本机 ffmpeg",
+)
+
+
+def test_concat_audio_produces_single_track(tmp_path):
+    """两句音频必须拼成一条,并在句间插入静音。"""
+    a = _make_tone(tmp_path / "a.wav", 0.4)
+    b = _make_tone(tmp_path / "b.wav", 0.4)
+    dest = tmp_path / "narration.wav"
+
+    ok, err = narration._concat_audio([a, b], dest)
+    assert ok, f"拼接应成功:{err}"
+    assert dest.is_file() and dest.stat().st_size > 0
+
+    total = _wav_duration(dest)
+    gap = config.SENTENCE_GAP_MS / 1000.0
+    # 两句各 0.4s,句间各留一段静音 → 总长必须明显大于 0.8s
+    assert total > 0.8 + gap, f"总时长 {total:.2f}s 未包含句间停顿"
+    assert total < 0.8 + gap * 6, f"总时长 {total:.2f}s 远超预期,静音可能被重复叠加"
+
+
+def test_concat_audio_output_is_stereo_48k(tmp_path):
+    """输出必须是 48kHz 立体声 —— 混音与字幕时间轴都依赖这个前提。"""
+    a = _make_tone(tmp_path / "a.wav", 0.3)
+    b = _make_tone(tmp_path / "b.wav", 0.3)
+    dest = tmp_path / "n.wav"
+    ok, err = narration._concat_audio([a, b], dest)
+    assert ok, err
+
+    probe = Path(str(config.FFMPEG_PATH)).with_name("ffprobe.exe")
+    if not probe.is_file():
+        probe = Path(str(config.FFMPEG_PATH)).with_name("ffprobe")
+    out = subprocess.run(
+        [str(probe), "-v", "error", "-show_entries",
+         "stream=channels,sample_rate,codec_name", "-of", "csv=p=0", str(dest)],
+        capture_output=True, text=True,
+    )
+    # csv 输出形如 "pcm_s16le,48000,2" —— 依次是编码 / 采样率 / 声道数
+    fields = [f for f in out.stdout.strip().splitlines()[0].split(",") if f]
+    assert len(fields) >= 3, out.stdout
+    assert fields[1] == "48000", f"采样率应为 48k:{out.stdout}"
+    assert fields[2] == "2", f"应为双声道:{out.stdout}"
+
+
+def test_concat_audio_reports_failure_instead_of_silent_false(tmp_path):
+    """失败必须回传原因,不能只给一个 False。"""
+    dest = tmp_path / "n.wav"
+
+    ok, err = narration._concat_audio([], dest)
+    assert ok is False and "没有待拼接" in err
+
+    ok, err = narration._concat_audio([tmp_path / "missing.wav"], dest)
+    assert ok is False
+    assert err, "失败原因不能为空字符串"
+
+
+# 注:这里刻意**不**用"扫描源码找裸 apad"之类的静态断言。
+# 滤镜链是多行隐式拼接的,逐行扫描既脆弱又给不了真正的保证;
+# 上面两条真跑 ffmpeg 的用例才是有效守卫 —— 修复前它们确实会失败
+# (ffmpeg 报 "More input link labels ... 4 > 2")。
+
+
+def test_build_warns_when_narration_concat_fails(monkeypatch, tmp_path):
+    """拼接失败必须进 warnings —— 静默降级出"哑片"是最糟的结果。"""
+    from app.models import ShotSpec
+
+    specs = [
+        ShotSpec(idx=0, duration=6.0, section="开场钩子",
+                 visual_zh="a", camera_zh="Static Shot", narration_zh="第一句。"),
+        ShotSpec(idx=1, duration=6.0, section="核心卖点",
+                 visual_zh="b", camera_zh="Static Shot", narration_zh="第二句。"),
+    ]
+
+    class _Asset:
+        def __init__(self, i, text):
+            self.local_path = _make_tone(tmp_path / f"t{i}.wav", 0.3)
+            self.text = text
+
+    monkeypatch.setattr(narration.audio, "synthesize_batch",
+                        lambda texts, **kw: [_Asset(i, t) for i, t in enumerate(texts)])
+    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
+
+    def boom(paths, dest):
+        return False, "模拟失败"
+
+    monkeypatch.setattr(narration, "_concat_audio", boom)
+
+    result = narration.build("p_test", specs, narration_mode="tts",
+                             with_bgm=False, profile=None)
+    assert result.narration_path is None
+    assert any("旁白拼接失败" in w for w in result.warnings), result.warnings

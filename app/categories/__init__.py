@@ -1,0 +1,517 @@
+"""品类 Profile 注册表。
+
+新增品类 = 在 `profiles/` 下放一个 YAML,**核心引擎零改动**。
+
+Profile 声明了什么:
+- 事实来源路由(用哪些 iFinD / 企查查 接口)
+- 内容方向库(每个方向一套段落结构、视觉指导、脚本规则)
+- 每个段落的视觉指导、运镜倾向、参考图视角
+- 合规词表与免责声明
+
+为什么不把段落结构交给 LLM 自由发挥:汽车解说的"钩子→卖点→参数→对比→建议"
+是行业惯例,写死在 Profile 里能保证每条视频的节奏稳定,而 LLM 只负责
+在给定结构内填内容 —— 这是把"结构正确性"从概率问题变成确定性问题。
+
+**方向库(theme)**:一条视频只讲一个内容方向(车型迭代史 / 横向对比 / ...),
+而不是把六个方向塞进同一条 60 秒视频。每个方向用一份 `blocks` 权重表声明
+"有哪些段落、各占多重的篇幅",再由 `plan_for()` 按目标镜头数**确定性铺展**
+成最终的段落序列。这样任意时长都能得到结构正确的序列,不必手写
+`duration -> 段落列表` —— 7 个方向 × 5 个时长手写就是 35 条,极易写错。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
+
+
+class ProfileError(RuntimeError):
+    """品类配置缺失或非法。"""
+
+
+def _takes_remainder(block: dict[str, Any]) -> bool:
+    """该段落块是否允许接收铺展的补位名额。
+
+    默认允许。开场钩子这类铺垫段落应设 `remainder: false`,只取 floor ——
+    否则最大余数法会把所有余量派给它(权重小 → 小数部分最大 → 优先补位),
+    60 秒视频会变成 12 秒悬念开场 + 8 秒正片。
+    """
+    return bool(block.get("remainder", True))
+
+
+@dataclass(frozen=True)
+class SectionSpec:
+    name: str
+    #: 视觉指导(中文),会进入提示词编译
+    beat: str = ""
+    #: 运镜倾向,编译器会归一到官方运镜词表
+    camera: str = ""
+    #: 参考图视角标签
+    angle: str = "exterior_45"
+    #: 旁白风格提示
+    narration_style: str = ""
+    #: 该段落是否必须引用事实(参数硬数据为 true)
+    requires_fact: bool = False
+    #: 该段落画面需要出现**第二台车**(对比 / 迭代史场景)。
+    #: 编译器据此允许可选的第二主体锚点;规则 9 仍只校验主主体。
+    multi_subject: bool = False
+
+
+@dataclass(frozen=True)
+class ThemeSpec:
+    """一个内容方向。"""
+
+    name: str
+    label: str
+    #: 方向意图,进入脚本提示词,决定叙事口吻与取舍
+    intent: str = ""
+    #: 方向专属硬规则,逐条进入脚本提示词
+    script_rules: tuple[str, ...] = ()
+    #: 方向专属事实来源名(沿用 providers.facts.SOURCES 命名空间)
+    fact_sources: tuple[str, ...] = ()
+    #: 该方向需要哪些事实层级,用于事实缺口告警
+    required_scopes: tuple[str, ...] = ("product",)
+    #: 允许直陈本车缺点(与"禁止贬低竞品"并存,只对 cost 方向打开)
+    allow_subject_critique: bool = False
+    #: 方向专属禁用词,与品类级 forbidden_terms 合并
+    extra_forbidden_terms: tuple[str, ...] = ()
+    #: 有序段落块:[{section: 段落名, weight: 相对权重}, ...]
+    blocks: tuple[dict[str, Any], ...] = ()
+    #: 传统写法:duration -> 段落序列。未声明 blocks 的 profile 走这条路径。
+    plan: dict[int, tuple[str, ...]] = field(default_factory=dict)
+
+    @property
+    def uses_blocks(self) -> bool:
+        return bool(self.blocks)
+
+
+@dataclass(frozen=True)
+class ConsistencySpec:
+    shared_reference_images: int = 5
+    chain_last_frame: bool = True
+    chain_group_size: int = 3
+
+
+@dataclass(frozen=True)
+class CategoryProfile:
+    name: str
+    label: str
+    aspect_ratio: str = "9:16"
+    duration_grid: int = 6
+    fact_sources: tuple[str, ...] = ()
+    #: duration -> 段落名列表,长度必须等于 duration/6
+    #: (未声明 themes 的老 profile 走这条路径)
+    section_plan: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    sections: dict[str, SectionSpec] = field(default_factory=dict)
+    #: 内容方向库。name -> ThemeSpec
+    themes: dict[str, ThemeSpec] = field(default_factory=dict)
+    #: 未显式指定方向时使用哪个方向
+    default_theme: str = ""
+    visual_keywords: tuple[str, ...] = ()
+    reference_query_template: str = "{subject} 实拍 {angle}"
+    #: 视角标签 -> 检索用的中文描述
+    angle_queries: dict[str, str] = field(default_factory=dict)
+    forbidden_terms: tuple[str, ...] = ()
+    required_disclaimers: tuple[str, ...] = ()
+    music_prompt: str = "instrumental background music, steady tempo, no vocals"
+    script_style: str = ""
+    #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
+    skeleton: bool = False
+    todo: tuple[str, ...] = ()
+
+    # ------------------------------------------------------------------
+    # 方向
+    # ------------------------------------------------------------------
+    def theme_spec(self, name: str | None = None) -> ThemeSpec:
+        """取方向。未知或空名一律回退默认方向,**不抛异常**。
+
+        回退而非抛错是有意的:方向已经写进 projects 表,手改库或换 profile
+        都可能让库里出现当前配置里不存在的名字。此时让已跑到一半的项目
+        继续跑(退化成默认叙事)远好过把它卡死。
+        """
+        key = (name or "").strip()
+        if key and key in self.themes:
+            return self.themes[key]
+        if self.default_theme and self.default_theme in self.themes:
+            return self.themes[self.default_theme]
+        # 极端兜底:配置里一个方向都没有(不应通过 _validate)
+        if self.themes:
+            return next(iter(self.themes.values()))
+        return ThemeSpec(name="", label=self.label)
+
+    def sources_for(self, name: str | None = None) -> tuple[str, ...]:
+        """该方向应采集的事实来源。未声明时回退品类级来源。"""
+        theme = self.theme_spec(name)
+        return theme.fact_sources or self.fact_sources
+
+    # ------------------------------------------------------------------
+    # 段落计划
+    # ------------------------------------------------------------------
+    def plan_for(self, duration: int, name: str | None = None) -> tuple[str, ...]:
+        """返回该方向在该时长下的段落序列。
+
+        两条路径:
+        - 方向声明了 `blocks`:按权重**确定性铺展**到 duration/6 个镜头。
+        - 未声明(老 profile):走手写 `section_plan`,缺失时按最近档裁剪补齐。
+        """
+        theme = self.theme_spec(name)
+        if theme.uses_blocks:
+            return self._expand_blocks(theme, duration)
+        plan = theme.plan or self.section_plan
+        if duration in plan:
+            return plan[duration]
+        if not plan:
+            raise ProfileError(f"品类 {self.name} 未声明任何 section_plan 或 blocks")
+        # 退化路径:用最接近的方案裁剪/补齐
+        closest = min(plan, key=lambda d: abs(d - duration))
+        target_shots = duration // self.duration_grid
+        base = list(plan[closest])
+        while len(base) < target_shots:
+            base.insert(max(1, len(base) - 1), base[len(base) // 2])
+        return tuple(base[:target_shots])
+
+    def _expand_blocks(self, theme: ThemeSpec, duration: int) -> tuple[str, ...]:
+        """把段落块权重表铺展成恰好 duration/6 个段落的序列。
+
+        纯函数、无随机:同一份配置 + 同一时长,结果永远相同。
+        算法:
+          1. base_i = max(1, floor(n * w_i / Σw))
+          2. 多了 → 优先从"允许补位且仍 >1"的块里减,按权重从大到小
+          3. 少了 → 按小数部分从大到小补 1,同分按声明顺序;
+             **跳过声明了 `remainder: false` 的块**
+
+        第 3 条为什么要跳过:最大余数法是标准做法,但它天然把余量派给
+        "权重小、小数部分大"的块 —— 也就是开场钩子。实测 60 秒下 7 个方向
+        里有 6 个拿到 2 个钩子,12 秒纯悬念开场把正片挤掉了。
+        钩子这类铺垫段落取 floor 就够,补位名额应该留给内容块。
+        """
+        if duration % self.duration_grid != 0:
+            raise ProfileError(
+                f"品类 {self.name}: 时长 {duration}s 必须是 {self.duration_grid} 的整数倍"
+            )
+        shots = duration // self.duration_grid
+        blocks = theme.blocks
+        weights = [max(1, int(b.get("weight", 1))) for b in blocks]
+        total = sum(weights)
+
+        exact = [shots * w / total for w in weights]
+        base = [max(1, int(x // 1)) for x in exact]
+
+        diff = shots - sum(base)
+        if diff > 0:
+            ranked = sorted(
+                range(len(blocks)),
+                key=lambda i: (-(exact[i] - int(exact[i])), i),
+            )
+            order = [i for i in ranked if _takes_remainder(blocks[i])] or ranked
+            for k in range(diff):
+                base[order[k % len(order)]] += 1
+        elif diff < 0:
+            # 先减允许补位的块(它们本来就是有余量的),再退到其它块
+            order = sorted(
+                range(len(blocks)),
+                key=lambda i: (not _takes_remainder(blocks[i]), -weights[i], i),
+            )
+            # 每轮扫一遍,直到补齐或所有块都压到 1(后者由 _validate 提前拦下)
+            while diff < 0:
+                shrunk = False
+                for i in order:
+                    if base[i] > 1:
+                        base[i] -= 1
+                        diff += 1
+                        shrunk = True
+                        if diff == 0:
+                            break
+                if not shrunk:
+                    break
+
+        out: list[str] = []
+        for block, count in zip(blocks, base):
+            out.extend([str(block.get("section", ""))] * count)
+        return tuple(out[:shots])
+
+    def section(self, name: str) -> SectionSpec:
+        return self.sections.get(name, SectionSpec(name=name))
+
+    def reference_query(self, subject: str, angle: str) -> str:
+        angle_desc = self.angle_queries.get(angle, angle)
+        return self.reference_query_template.format(subject=subject, angle=angle_desc)
+
+    def reference_prompt(self, subject: str, angle: str) -> str:
+        """检索工具的**相关性过滤说明**(与 `reference_query` 分工不同)。
+
+        `reference_query` 决定"搜什么"(中文检索串),`reference_prompt` 决定
+        "要什么样的图"(英文相关性描述)。检索工具的 `queries[].prompt` 是必填的
+        相关性过滤器,写得越具体,返回的越接近编辑部级产品照,越不像电商白底图
+        或销量柱状图 —— 这正是素材层最需要挡掉的两类噪音。
+        """
+        view = _ANGLE_PROMPT_EN.get(angle, f"{angle} view")
+        noun = _CATEGORY_NOUN_EN.get(self.name, "product")
+        return (
+            f"real photograph of {subject} ({noun}), {view}, "
+            f"professional editorial photo, {_ANGLE_NEGATIVE_EN}"
+        )
+
+
+#: 视角标签 → 英文相关性描述。只覆盖各 profile 实际用到的标签;
+#: 未收录的标签退回 `"{angle} view"`,不会让整条检索失效。
+_ANGLE_PROMPT_EN: dict[str, str] = {
+    "exterior_45": "exterior three-quarter front view, entire vehicle visible in frame",
+    "product_hero": "three-quarter hero product shot, entire product visible in frame",
+    "rear": "rear view, tail lights and rear bumper clearly visible",
+    "detail": "macro close-up detail shot of a specific component",
+    "interior": "interior cabin view, dashboard and front seats visible",
+    "screen_spec": "close-up of a screen or digital data readout interface",
+    "industry": "auto show floor or press conference stage",
+    "texture": "macro texture close-up of the product surface",
+    "lifestyle": "real in-use lifestyle scene",
+    "result": "close-up result shot after application",
+    "comparison": "two products side by side for comparison",
+}
+
+#: 一律排除的噪音类型。电商白底图与销量图表是检索最高频的两类误命中:
+#: 前者不是这台车,后者根本不是照片。
+_ANGLE_NEGATIVE_EN = (
+    "no diagrams, no charts, no graphs, no illustrations, no 3D renders, "
+    "no text overlays, no watermarks, no e-commerce product listings, "
+    "no showroom price boards"
+)
+
+#: 品类 → 英文品类名词,让相关性描述里的主体不至于太抽象。
+_CATEGORY_NOUN_EN: dict[str, str] = {
+    "auto": "electric car",
+    "beauty": "cosmetic product",
+    "digital": "consumer electronics device",
+    "home": "home furnishing product",
+}
+
+
+# --------------------------------------------------------------------------
+# 加载
+# --------------------------------------------------------------------------
+def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
+    plan: dict[int, tuple[str, ...]] = {}
+    for key, value in (raw.get("plan") or {}).items():
+        plan[int(key)] = tuple(str(v) for v in value)
+
+    blocks: list[dict[str, Any]] = []
+    for item in (raw.get("blocks") or []):
+        if not isinstance(item, dict):
+            raise ProfileError(f"方向 {name}: blocks 的每一项必须是 section/weight 映射")
+        blocks.append({
+            "section": str(item.get("section", "")),
+            "weight": int(item.get("weight", 1)),
+            # 必须显式搬运:不搬的话 remainder: false 会在解析阶段被丢掉,
+            # 配置看起来写了、实际不生效 —— 铺展结果会静默回到旧行为。
+            "remainder": bool(item.get("remainder", True)),
+        })
+
+    return ThemeSpec(
+        name=str(raw.get("name", name)),
+        label=str(raw.get("label", name)),
+        intent=str(raw.get("intent", "")),
+        script_rules=tuple(str(r) for r in (raw.get("script_rules") or ())),
+        fact_sources=tuple(str(s) for s in (raw.get("fact_sources") or ())),
+        required_scopes=tuple(str(s) for s in (raw.get("required_scopes") or ("product",))),
+        allow_subject_critique=bool(raw.get("allow_subject_critique", False)),
+        extra_forbidden_terms=tuple(str(t) for t in (raw.get("extra_forbidden_terms") or ())),
+        blocks=tuple(blocks),
+        plan=plan,
+    )
+
+
+def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
+    sections = {
+        key: SectionSpec(
+            name=key,
+            beat=str(value.get("beat", "")),
+            camera=str(value.get("camera", "")),
+            angle=str(value.get("angle", "exterior_45")),
+            narration_style=str(value.get("narration_style", "")),
+            requires_fact=bool(value.get("requires_fact", False)),
+            multi_subject=bool(value.get("multi_subject", False)),
+        )
+        for key, value in (raw.get("sections") or {}).items()
+    }
+    plan: dict[int, tuple[str, ...]] = {}
+    for key, value in (raw.get("section_plan") or {}).items():
+        plan[int(key)] = tuple(str(v) for v in value)
+
+    themes = {
+        str(key): _build_theme(str(key), value or {})
+        for key, value in (raw.get("themes") or {}).items()
+    }
+
+    if not themes:
+        # 未声明方向的老 profile(beauty / digital / home)合成一个默认方向,
+        # 行为与改造前完全一致。
+        themes["overview"] = ThemeSpec(
+            name="overview",
+            label="通用概览",
+            fact_sources=tuple(raw.get("fact_sources") or ()),
+            plan=dict(plan),
+        )
+
+    default_theme = str(raw.get("default_theme") or "")
+    if default_theme not in themes:
+        default_theme = "overview" if "overview" in themes else next(iter(themes))
+
+    return CategoryProfile(
+        name=str(raw.get("name", name)),
+        label=str(raw.get("label", name)),
+        aspect_ratio=str(raw.get("aspect_ratio", "9:16")),
+        duration_grid=int(raw.get("duration_grid", 6)),
+        fact_sources=tuple(raw.get("fact_sources") or ()),
+        section_plan=plan,
+        sections=sections,
+        themes=themes,
+        default_theme=default_theme,
+        visual_keywords=tuple(raw.get("visual_keywords") or ()),
+        reference_query_template=str(
+            raw.get("reference_query_template", "{subject} 实拍 {angle}")
+        ),
+        angle_queries={str(k): str(v) for k, v in (raw.get("angle_queries") or {}).items()},
+        forbidden_terms=tuple(raw.get("forbidden_terms") or ()),
+        required_disclaimers=tuple(raw.get("required_disclaimers") or ()),
+        music_prompt=str(
+            raw.get("music_prompt", "instrumental background music, no vocals")
+        ),
+        script_style=str(raw.get("script_style", "")),
+        skeleton=bool(raw.get("skeleton", False)),
+        todo=tuple(str(t) for t in (raw.get("todo") or ())),
+    )
+
+
+def _min_supported_shots(duration_grid: int) -> int:
+    """最短受支持时长对应的镜头数 —— 块数不能超过它,否则铺展会挤爆。"""
+    from .. import config
+
+    durations = config.SUPPORTED_DURATIONS or (60,)
+    return min(durations) // duration_grid
+
+
+def _validate(profile: CategoryProfile) -> None:
+    # 1. 老写法:手写 section_plan
+    for duration, plan in profile.section_plan.items():
+        expected = duration // profile.duration_grid
+        if len(plan) != expected:
+            raise ProfileError(
+                f"品类 {profile.name}: 时长 {duration}s 需 {expected} 个段落,"
+                f"实际声明 {len(plan)} 个"
+            )
+        unknown = [s for s in plan if s not in profile.sections]
+        if unknown:
+            raise ProfileError(
+                f"品类 {profile.name}: section_plan 引用了未定义的段落 {unknown}"
+            )
+
+    # 2. 方向库
+    min_shots = _min_supported_shots(profile.duration_grid)
+    for tname, theme in profile.themes.items():
+        if theme.uses_blocks:
+            if len(theme.blocks) > min_shots:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: 声明了 {len(theme.blocks)} 个段落块,"
+                    f"超过最短时长的镜头数 {min_shots},铺展时必然压到 0"
+                )
+            for block in theme.blocks:
+                section = str(block.get("section", ""))
+                if not section:
+                    raise ProfileError(f"品类 {profile.name} 方向 {tname}: 段落块缺少 section")
+                if section not in profile.sections:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 引用了未定义的段落 {section!r}"
+                    )
+                weight = int(block.get("weight", 1))
+                if weight < 1:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 段落块 {section} 的 weight 必须 ≥1"
+                    )
+        else:
+            for duration, plan in theme.plan.items():
+                expected = duration // profile.duration_grid
+                if len(plan) != expected:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 时长 {duration}s 需 {expected} 个段落,"
+                        f"实际声明 {len(plan)} 个"
+                    )
+                unknown = [s for s in plan if s not in profile.sections]
+                if unknown:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 引用了未定义的段落 {unknown}"
+                    )
+
+    # 3. 铺展必须落在栅格上 —— 这是最容易写错的环节,在加载期就拦掉
+    from .. import config
+
+    for duration in config.SUPPORTED_DURATIONS:
+        if duration % profile.duration_grid != 0:
+            continue
+        for tname in profile.themes:
+            got = len(profile.plan_for(duration, tname))
+            if got != duration // profile.duration_grid:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: {duration}s 铺展出 {got} 个段落,"
+                    f"应为 {duration // profile.duration_grid} 个"
+                )
+
+    if profile.default_theme not in profile.themes:
+        raise ProfileError(
+            f"品类 {profile.name}: default_theme={profile.default_theme!r} 不在 themes 中"
+        )
+
+
+@lru_cache(maxsize=None)
+def load_profile(name: str) -> CategoryProfile:
+    path = PROFILES_DIR / f"{name}.yaml"
+    if not path.is_file():
+        available = sorted(p.stem for p in PROFILES_DIR.glob("*.yaml"))
+        raise ProfileError(f"未知品类 {name!r}。可用品类:{available}")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    profile = _build(name, raw)
+    _validate(profile)
+    return profile
+
+
+def available_categories() -> list[dict[str, Any]]:
+    from .. import config
+
+    out = []
+    for path in sorted(PROFILES_DIR.glob("*.yaml")):
+        try:
+            profile = load_profile(path.stem)
+        except Exception as exc:  # pragma: no cover - 配置错误不应拖垮列表页
+            out.append({"name": path.stem, "label": path.stem, "error": str(exc),
+                        "skeleton": True, "durations": [], "themes": [],
+                        "default_theme": ""})
+            continue
+        out.append({
+            "name": profile.name,
+            "label": profile.label,
+            "skeleton": profile.skeleton,
+            "todo": list(profile.todo),
+            # 时长由全局栅格决定,不再取 section_plan 的键 ——
+            # 方向库模式下 plan 由 blocks 铺展而来,没有"键"可言。
+            "durations": list(config.SUPPORTED_DURATIONS),
+            "default_theme": profile.default_theme,
+            "themes": [
+                {"name": t.name, "label": t.label, "intent": t.intent}
+                for t in profile.themes.values()
+            ],
+        })
+    return out
+
+
+def default_category() -> str:
+    from .. import config
+
+    try:
+        load_profile(config.DEFAULT_CATEGORY)
+    except ProfileError:
+        return "auto"
+    return config.DEFAULT_CATEGORY
