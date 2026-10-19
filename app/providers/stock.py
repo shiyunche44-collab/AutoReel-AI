@@ -1,11 +1,14 @@
-"""免费图库 Provider:Pexels + Pixabay(视频与图片)。
+"""免费图库 Provider:Pexels / Pixabay / Coverr(视频),Pexels / Pixabay / Unsplash /
+Openverse(图片)。
 
 定位:**非车画面**的第二梯队。开场钩子、城市夜景、车展人流、充电桩这类
 氛围镜头,视频平台搜不到合适的时候,图库里的空镜画质高、没水印、没台标,
 比 AI 生成快也更真实。车辆镜头不走这里 —— 图库里的车几乎不可能是目标车型。
 
-两家都要免费 API Key(`.env` 的 PEXELS_API_KEY / PIXABAY_API_KEY),
-没填的那一家自动跳过。图库检索词要用英文,中文命中率很差。
+除 Openverse 外都要免费 Key(`.env` 的 PEXELS_API_KEY / PIXABAY_API_KEY /
+COVERR_API_KEY / UNSPLASH_ACCESS_KEY),没填的那一家自动跳过;Openverse 匿名可用,
+`USE_OPENVERSE=0` 关掉。Pexels 已暂停发放新 Key,老 Key 照常能用。
+图库检索词要用英文,中文命中率很差。
 """
 from __future__ import annotations
 
@@ -21,6 +24,9 @@ PEXELS_VIDEO_API = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_API = "https://api.pexels.com/v1/search"
 PIXABAY_VIDEO_API = "https://pixabay.com/api/videos/"
 PIXABAY_PHOTO_API = "https://pixabay.com/api/"
+COVERR_VIDEO_API = "https://api.coverr.co/videos"
+UNSPLASH_PHOTO_API = "https://api.unsplash.com/search/photos"
+OPENVERSE_IMAGE_API = "https://api.openverse.org/v1/images/"
 
 _TIMEOUT = 25
 
@@ -130,16 +136,84 @@ def parse_pixabay_photos(payload: dict[str, Any]) -> list[ImageRef]:
     return out
 
 
+def parse_coverr_videos(payload: dict[str, Any]) -> list[ClipCandidate]:
+    """Coverr 的返回结构没拿真接口核对过,按 `hits` / `videos` 两种外层都认,
+    字段缺了就跳过那一条。竖屏素材排前面。"""
+    items = payload.get("hits") or payload.get("videos") or []
+    if not isinstance(items, list):
+        return []
+    scored: list[tuple[int, ClipCandidate]] = []
+    for v in items:
+        if not isinstance(v, dict):
+            continue
+        urls = v.get("urls") or {}
+        link = urls.get("mp4_download") or urls.get("mp4") or urls.get("mp4_preview")
+        if not link:
+            continue
+        slug = str(v.get("slug") or "")
+        scored.append((0 if v.get("is_vertical") else 1, ClipCandidate(
+            url=str(link),
+            page_url=f"https://coverr.co/videos/{slug}" if slug else "",
+            origin="stock:coverr",
+            title=str(v.get("title") or slug)[:80],
+            license="Coverr License",
+            author=str((v.get("author") or {}).get("name") or "")
+            if isinstance(v.get("author"), dict) else "",
+            duration=float(v.get("duration") or 0.0),
+        )))
+    return [c for _, c in sorted(scored, key=lambda x: x[0])]
+
+
+def parse_unsplash_photos(payload: dict[str, Any]) -> list[ImageRef]:
+    out: list[ImageRef] = []
+    for p in payload.get("results") or []:
+        urls = p.get("urls") or {}
+        url = urls.get("regular") or urls.get("full")
+        if not url:
+            continue
+        out.append(ImageRef(
+            url=str(url), origin="stock:unsplash",
+            note=str(p.get("alt_description") or p.get("description") or "")[:120],
+            license="Unsplash License",
+            author=str((p.get("user") or {}).get("name") or ""),
+            width=p.get("width"),
+            source_page=str((p.get("links") or {}).get("html") or ""),
+        ))
+    return out
+
+
+def parse_openverse_images(payload: dict[str, Any]) -> list[ImageRef]:
+    out: list[ImageRef] = []
+    for p in payload.get("results") or []:
+        url = p.get("url")
+        if not url:
+            continue
+        lic = " ".join(x for x in (str(p.get("license") or "").upper(),
+                                   str(p.get("license_version") or "")) if x)
+        if lic and not lic.startswith(("CC0", "PDM")):
+            lic = f"CC {lic}"
+        out.append(ImageRef(
+            url=str(url), origin="stock:openverse",
+            note=str(p.get("title") or "")[:120],
+            license=lic or "CC",
+            author=str(p.get("creator") or ""),
+            width=p.get("width"),
+            source_page=str(p.get("foreign_landing_url") or ""),
+        ))
+    return out
+
+
 # --------------------------------------------------------------------------
 # 检索
 # --------------------------------------------------------------------------
 def available() -> bool:
-    return bool(config.PEXELS_API_KEY or config.PIXABAY_API_KEY)
+    return bool(config.PEXELS_API_KEY or config.PIXABAY_API_KEY or config.COVERR_API_KEY
+                or config.UNSPLASH_ACCESS_KEY or config.USE_OPENVERSE)
 
 
 def search_videos(query: str, *, limit: int = 6, errors: list[str] | None = None
                   ) -> list[ClipCandidate]:
-    """两家合并:Pexels 在前(竖屏素材多),Pixabay 补位。"""
+    """按 Pexels → Pixabay → Coverr 合并,没 Key 的跳过。"""
     out: list[ClipCandidate] = []
     if config.PEXELS_API_KEY:
         def _pexels() -> list[ClipCandidate]:
@@ -158,11 +232,22 @@ def search_videos(query: str, *, limit: int = 6, errors: list[str] | None = None
         out += _guard("Pixabay 视频", query, errors,
                       lambda: webassets._cached("pixabay_v", query, limit, _pixabay,
                                                 factory=ClipCandidate))
+    if config.COVERR_API_KEY:
+        def _coverr() -> list[ClipCandidate]:
+            qs = urllib.parse.urlencode({"query": query, "page_size": limit, "urls": "true",
+                                         "api_key": config.COVERR_API_KEY})
+            return parse_coverr_videos(_get_json(
+                f"{COVERR_VIDEO_API}?{qs}",
+                headers={"Authorization": f"Bearer {config.COVERR_API_KEY}"}))
+        out += _guard("Coverr 视频", query, errors,
+                      lambda: webassets._cached("coverr_v", query, limit, _coverr,
+                                                factory=ClipCandidate))
     return out
 
 
 def search_photos(query: str, *, limit: int = 6, errors: list[str] | None = None
                   ) -> list[ImageRef]:
+    """按 Pexels → Pixabay → Unsplash → Openverse 合并,没 Key 的跳过。"""
     out: list[ImageRef] = []
     if config.PEXELS_API_KEY:
         def _pexels() -> list[ImageRef]:
@@ -180,6 +265,25 @@ def search_photos(query: str, *, limit: int = 6, errors: list[str] | None = None
             return parse_pixabay_photos(_get_json(f"{PIXABAY_PHOTO_API}?{qs}"))
         out += _guard("Pixabay 图片", query, errors,
                       lambda: webassets._cached("pixabay_p", query, limit, _pixabay))
+    if config.UNSPLASH_ACCESS_KEY:
+        def _unsplash() -> list[ImageRef]:
+            qs = urllib.parse.urlencode({"query": query, "per_page": limit,
+                                         "orientation": "portrait"})
+            return parse_unsplash_photos(_get_json(
+                f"{UNSPLASH_PHOTO_API}?{qs}",
+                headers={"Authorization": f"Client-ID {config.UNSPLASH_ACCESS_KEY}",
+                         "Accept-Version": "v1"}))
+        out += _guard("Unsplash 图片", query, errors,
+                      lambda: webassets._cached("unsplash_p", query, limit, _unsplash))
+    if config.USE_OPENVERSE:
+        def _openverse() -> list[ImageRef]:
+            # 匿名调用限流严,结果同样走 24 小时缓存
+            qs = urllib.parse.urlencode({"q": query[:200], "page_size": limit,
+                                         "aspect_ratio": "tall", "mature": "false"})
+            return parse_openverse_images(_get_json(
+                f"{OPENVERSE_IMAGE_API}?{qs}", headers={"User-Agent": webassets.BROWSER_UA}))
+        out += _guard("Openverse 图片", query, errors,
+                      lambda: webassets._cached("openverse_p", query, limit, _openverse))
     return out
 
 

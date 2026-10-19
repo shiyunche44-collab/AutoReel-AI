@@ -71,9 +71,14 @@ YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
 #: Netscape 格式 cookie 文件(浏览器插件导出)。B 站高清、抖音下载需要。
 YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "").strip()
 
-#: 免费图库 API Key。没填的那一路自动跳过。
+#: 免费图库 API Key。没填的那一路自动跳过。Pexels 已暂停发放新 Key,老 Key 照常能用。
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
+#: Coverr 只有视频空镜,Unsplash 只有图片。
+COVERR_API_KEY = os.getenv("COVERR_API_KEY", "").strip()
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
+#: Openverse(CC 授权图片聚合)不需要 Key,匿名可用;限流严时可关掉。
+USE_OPENVERSE = os.getenv("USE_OPENVERSE", "1") not in ("0", "false", "False")
 
 #: 逐镜头取材的总时长预算(秒)。取材在门禁 A 确认时同步执行,网络慢时
 #: 不能无限拖住确认请求 —— 超出预算后剩余镜头直接走生成。
