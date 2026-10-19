@@ -1,11 +1,11 @@
-"""免费图库 Provider:Pexels + Pixabay(视频与图片)。
+"""免费图库 Provider:Pexels + Pixabay + Coverr(视频)/ Unsplash(图片)。
 
 定位:**非车画面**的第二梯队。开场钩子、城市夜景、车展人流、充电桩这类
 氛围镜头,视频平台搜不到合适的时候,图库里的空镜画质高、没水印、没台标,
 比 AI 生成快也更真实。车辆镜头不走这里 —— 图库里的车几乎不可能是目标车型。
 
-两家都要免费 API Key(`.env` 的 PEXELS_API_KEY / PIXABAY_API_KEY),
-没填的那一家自动跳过。图库检索词要用英文,中文命中率很差。
+每家都要免费 API Key(`.env` 的 PEXELS_API_KEY / PIXABAY_API_KEY /
+COVERR_API_KEY / UNSPLASH_ACCESS_KEY),没填的那一家自动跳过。图库检索词要用英文,中文命中率很差。
 """
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ PEXELS_VIDEO_API = "https://api.pexels.com/videos/search"
 PEXELS_PHOTO_API = "https://api.pexels.com/v1/search"
 PIXABAY_VIDEO_API = "https://pixabay.com/api/videos/"
 PIXABAY_PHOTO_API = "https://pixabay.com/api/"
+COVERR_VIDEO_API = "https://api.coverr.co/videos"
+UNSPLASH_PHOTO_API = "https://api.unsplash.com/search/photos"
 
 _TIMEOUT = 25
 
@@ -95,6 +97,27 @@ def parse_pixabay_videos(payload: dict[str, Any]) -> list[ClipCandidate]:
     return out
 
 
+def parse_coverr_videos(payload: dict[str, Any]) -> list[ClipCandidate]:
+    """Coverr 竖屏素材少,竖屏的排前面;付费素材跳过。"""
+    rows: list[tuple[int, ClipCandidate]] = []
+    for h in payload.get("hits") or []:
+        if h.get("is_premium"):
+            continue
+        link = str((h.get("urls") or {}).get("mp4") or "")
+        if not link:
+            continue
+        slug = str(h.get("slug") or h.get("base_filename") or h.get("id") or "")
+        rows.append((0 if h.get("is_vertical") else 1, ClipCandidate(
+            url=link,
+            page_url=f"https://coverr.co/videos/{slug}" if slug else "",
+            origin="stock:coverr",
+            title=str(h.get("title") or "").strip()[:80],
+            license="Coverr License",
+            duration=float(h.get("duration") or 0.0),
+        )))
+    return [c for _, c in sorted(rows, key=lambda r: r[0])]
+
+
 def parse_pexels_photos(payload: dict[str, Any]) -> list[ImageRef]:
     out: list[ImageRef] = []
     for p in payload.get("photos") or []:
@@ -130,16 +153,36 @@ def parse_pixabay_photos(payload: dict[str, Any]) -> list[ImageRef]:
     return out
 
 
+def parse_unsplash_photos(payload: dict[str, Any]) -> list[ImageRef]:
+    out: list[ImageRef] = []
+    for p in payload.get("results") or []:
+        urls = p.get("urls") or {}
+        # regular = 宽 1080 的 jpg,竖屏够用;raw/full 动辄十几 MB
+        url = urls.get("regular") or urls.get("full")
+        if not url:
+            continue
+        out.append(ImageRef(
+            url=str(url), origin="stock:unsplash",
+            note=str(p.get("alt_description") or p.get("description") or "")[:120],
+            license="Unsplash License",
+            author=str((p.get("user") or {}).get("name") or ""),
+            width=min(int(p.get("width") or 0), 1080) or None,
+            source_page=str((p.get("links") or {}).get("html") or ""),
+        ))
+    return out
+
+
 # --------------------------------------------------------------------------
 # 检索
 # --------------------------------------------------------------------------
 def available() -> bool:
-    return bool(config.PEXELS_API_KEY or config.PIXABAY_API_KEY)
+    return bool(config.PEXELS_API_KEY or config.PIXABAY_API_KEY
+                or config.COVERR_API_KEY or config.UNSPLASH_ACCESS_KEY)
 
 
 def search_videos(query: str, *, limit: int = 6, errors: list[str] | None = None
                   ) -> list[ClipCandidate]:
-    """两家合并:Pexels 在前(竖屏素材多),Pixabay 补位。"""
+    """合并:Pexels 在前(竖屏素材多),Pixabay、Coverr 补位。"""
     out: list[ClipCandidate] = []
     if config.PEXELS_API_KEY:
         def _pexels() -> list[ClipCandidate]:
@@ -157,6 +200,16 @@ def search_videos(query: str, *, limit: int = 6, errors: list[str] | None = None
             return parse_pixabay_videos(_get_json(f"{PIXABAY_VIDEO_API}?{qs}"))
         out += _guard("Pixabay 视频", query, errors,
                       lambda: webassets._cached("pixabay_v", query, limit, _pixabay,
+                                                factory=ClipCandidate))
+    if config.COVERR_API_KEY:
+        def _coverr() -> list[ClipCandidate]:
+            qs = urllib.parse.urlencode({"query": query, "page_size": max(3, limit),
+                                         "urls": "true"})
+            return parse_coverr_videos(_get_json(
+                f"{COVERR_VIDEO_API}?{qs}",
+                headers={"Authorization": f"Bearer {config.COVERR_API_KEY}"}))
+        out += _guard("Coverr 视频", query, errors,
+                      lambda: webassets._cached("coverr_v", query, limit, _coverr,
                                                 factory=ClipCandidate))
     return out
 
@@ -180,6 +233,16 @@ def search_photos(query: str, *, limit: int = 6, errors: list[str] | None = None
             return parse_pixabay_photos(_get_json(f"{PIXABAY_PHOTO_API}?{qs}"))
         out += _guard("Pixabay 图片", query, errors,
                       lambda: webassets._cached("pixabay_p", query, limit, _pixabay))
+    if config.UNSPLASH_ACCESS_KEY:
+        def _unsplash() -> list[ImageRef]:
+            qs = urllib.parse.urlencode({"query": query, "per_page": limit,
+                                         "orientation": "portrait"})
+            return parse_unsplash_photos(_get_json(
+                f"{UNSPLASH_PHOTO_API}?{qs}",
+                headers={"Authorization": f"Client-ID {config.UNSPLASH_ACCESS_KEY}",
+                         "Accept-Version": "v1"}))
+        out += _guard("Unsplash 图片", query, errors,
+                      lambda: webassets._cached("unsplash_p", query, limit, _unsplash))
     return out
 
 

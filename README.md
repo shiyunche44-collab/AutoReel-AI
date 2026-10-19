@@ -42,6 +42,7 @@ copy .env.example .env
 | `YTDLP_PROXY` | 空 | yt-dlp 代理,国内访问 YouTube 需要,如 `http://127.0.0.1:7890` |
 | `YTDLP_COOKIES` | 空 | 浏览器导出的 `cookies.txt`。B站高清 / 抖音下载需要 |
 | `PEXELS_API_KEY` / `PIXABAY_API_KEY` | 空 | 免费图库 Key,非车画面兜底用;没填自动跳过 |
+| `COVERR_API_KEY` / `UNSPLASH_ACCESS_KEY` | 空 | Coverr(视频)/ Unsplash(图片)免费图库 Key,同上 |
 | `USE_STILL_SHOTS` | `1` | 允许把真实图片做成推拉动效镜头 |
 | `MEDIA_TIME_BUDGET` | `900` | 取材总时长预算(秒),超出后剩余镜头走生成 |
 
@@ -253,7 +254,7 @@ Readable on-screen text includes "[年款标识]"
 | 镜头类型 | 判定 | 来源顺序 |
 |---|---|---|
 | **车辆镜头** | 画面主体是目标车型(外观 / 内饰 / 尾部 / 细节 / 仪表) | ⓪ 官方视频 → ⓪ 官方图片 → ① 平台视频 → ② 维基 / 车媒页 → ③ 网上图片 → ④ AI 生成 |
-| **非车镜头** | 氛围、城市、车展人流、行业场景 | ① 平台视频 → ② Pexels / Pixabay 视频 → ③ Pexels / Pixabay 图片 → ④ AI 生成 |
+| **非车镜头** | 氛围、城市、车展人流、行业场景 | ① 平台视频 → ② Pexels / Pixabay / Coverr 视频 → ③ Pexels / Pixabay / Unsplash 图片 → ④ AI 生成 |
 
 镜头类型和检索词由 `media_query.py` 一次 LLM 批量调用生成(每镜头一个中文词给 B站 / Bing,
 一个英文词给 YouTube / 图库,顺带识别品牌);LLM 不可用时退回模板检索词。
@@ -268,7 +269,7 @@ Readable on-screen text includes "[年款标识]"
 | **抖音 / 西瓜** | `platform_video.search_douyin` | **实验性**。yt-dlp 没有这两家的搜索,靠 Bing 站内检索拿视频页再下载,多半要 `YTDLP_COOKIES` |
 | 维基共享资源 / 车媒文章页 | `clips.py` | 原有来源,保留作补位。车媒页里嵌的 B站 / YouTube 播放器现在会还原成视频页交给 yt-dlp |
 | **网上图片** | 参考图集 + `webassets.bing_images` | `cn.bing.com` 图片检索,国内直连、免密钥 |
-| **Pexels / Pixabay** | `stock.py` | 官方免费 API,无水印空镜,只给非车镜头用 |
+| **Pexels / Pixabay / Coverr / Unsplash** | `stock.py` | 官方免费 API,无水印空镜,只给非车镜头用。Coverr 只出视频,Unsplash 只出图片 |
 
 #### 落地方式
 

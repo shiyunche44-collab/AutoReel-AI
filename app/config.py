@@ -74,6 +74,8 @@ YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "").strip()
 #: 免费图库 API Key。没填的那一路自动跳过。
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
+COVERR_API_KEY = os.getenv("COVERR_API_KEY", "").strip()
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
 
 #: 逐镜头取材的总时长预算(秒)。取材在门禁 A 确认时同步执行,网络慢时
 #: 不能无限拖住确认请求 —— 超出预算后剩余镜头直接走生成。

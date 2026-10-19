@@ -61,7 +61,9 @@ def main() -> None:
     print(f"主体:{subject}   品牌:{brand_key or '未识别'}   平台:{config.MEDIA_PLATFORMS}")
     print(f"代理:{config.YTDLP_PROXY or '无'}   cookie:{config.YTDLP_COOKIES or '无'}   "
           f"Pexels:{'有' if config.PEXELS_API_KEY else '无'}   "
-          f"Pixabay:{'有' if config.PIXABAY_API_KEY else '无'}\n")
+          f"Pixabay:{'有' if config.PIXABAY_API_KEY else '无'}   "
+          f"Coverr:{'有' if config.COVERR_API_KEY else '无'}   "
+          f"Unsplash:{'有' if config.UNSPLASH_ACCESS_KEY else '无'}\n")
 
     print("① 各来源检索")
     errors: list[str] = []
@@ -79,8 +81,8 @@ def main() -> None:
         for h in hits[:2]:
             print(f"      {h.uploader} · {h.title[:40]} · {h.duration:.0f}s")
     _timed("Bing 图片", lambda: webassets.bing_images(f"{subject} 外观", limit=10))
-    _timed("Pexels/Pixabay 视频", lambda: stock.search_videos("auto show crowd", errors=errors))
-    _timed("Pexels/Pixabay 图片", lambda: stock.search_photos("city night traffic",
+    _timed("图库视频", lambda: stock.search_videos("auto show crowd", errors=errors))
+    _timed("图库图片", lambda: stock.search_photos("city night traffic",
                                                              errors=errors))
     for e in errors[:10]:
         print(f"    ! {e}")

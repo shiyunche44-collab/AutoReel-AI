@@ -14,7 +14,7 @@
   ② 维基共享资源视频、车媒文章页里的直链与嵌入播放器
   ③ 网上真实图片(参考图集、Bing 图片)→ 推拉动效镜头
 非车镜头(氛围、行业、人物):
-  ① 平台视频 → ② Pexels / Pixabay 视频 → ③ Pexels / Pixabay 图片 → 推拉动效镜头
+  ① 平台视频 → ② Pexels / Pixabay / Coverr 视频 → ③ Pexels / Pixabay / Unsplash 图片 → 推拉动效镜头
 最后都是 ④ AI 生成(什么都不做,镜头留给生成层)。
 
 为什么注入点在素材层,而不是分镜层

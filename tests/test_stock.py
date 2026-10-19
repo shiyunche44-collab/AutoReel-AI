@@ -1,4 +1,4 @@
-"""免费图库(Pexels / Pixabay)响应解析与"没 Key 就跳过"。"""
+"""免费图库(Pexels / Pixabay / Coverr / Unsplash)响应解析与"没 Key 就跳过"。"""
 from __future__ import annotations
 
 from app import config
@@ -51,6 +51,8 @@ def test_photo_parsers():
 def test_no_keys_means_no_requests(monkeypatch):
     monkeypatch.setattr(config, "PEXELS_API_KEY", "")
     monkeypatch.setattr(config, "PIXABAY_API_KEY", "")
+    monkeypatch.setattr(config, "COVERR_API_KEY", "")
+    monkeypatch.setattr(config, "UNSPLASH_ACCESS_KEY", "")
 
     def _boom(*a, **k):
         raise AssertionError("没配 Key 不该发请求")
@@ -64,6 +66,7 @@ def test_no_keys_means_no_requests(monkeypatch):
 def test_api_failure_is_reported_not_raised(monkeypatch):
     monkeypatch.setattr(config, "PEXELS_API_KEY", "k")
     monkeypatch.setattr(config, "PIXABAY_API_KEY", "")
+    monkeypatch.setattr(config, "COVERR_API_KEY", "")
     monkeypatch.setattr(stock.webassets, "_cached", lambda kind, q, l, fetch, **k: fetch())
 
     def _boom(*a, **k):
@@ -73,3 +76,53 @@ def test_api_failure_is_reported_not_raised(monkeypatch):
     errors: list[str] = []
     assert stock.search_videos("city", errors=errors) == []
     assert errors and "Pexels" in errors[0]
+
+
+def test_coverr_videos_vertical_first_and_skip_premium():
+    cands = stock.parse_coverr_videos({"hits": [
+        {"title": "Land", "slug": "land", "is_vertical": False, "duration": "12.5",
+         "urls": {"mp4": "https://c/land.mp4"}},
+        {"title": "Paid", "is_premium": True, "urls": {"mp4": "https://c/paid.mp4"}},
+        {"title": "Port", "slug": "port", "is_vertical": True, "duration": "8",
+         "urls": {"mp4": "https://c/port.mp4"}},
+        {"title": "NoUrl", "urls": {}},
+    ]})
+    assert [c.url for c in cands] == ["https://c/port.mp4", "https://c/land.mp4"]
+    assert cands[0].origin == "stock:coverr"
+    assert cands[0].page_url == "https://coverr.co/videos/port"
+    assert cands[1].duration == 12.5
+
+
+def test_unsplash_photos():
+    x = stock.parse_unsplash_photos({"results": [{
+        "width": 4000, "alt_description": "city at night",
+        "urls": {"regular": "https://u/r.jpg", "full": "https://u/f.jpg"},
+        "user": {"name": "Juan"}, "links": {"html": "https://unsplash.com/photos/1"},
+    }, {"urls": {}}]})
+    assert len(x) == 1
+    assert x[0].url == "https://u/r.jpg" and x[0].origin == "stock:unsplash"
+    assert x[0].author == "Juan" and x[0].source_page == "https://unsplash.com/photos/1"
+
+
+def test_coverr_unsplash_keys_go_in_headers(monkeypatch):
+    """密钥只走请求头:URL 会出现在错误信息里,不能带 Key。"""
+    monkeypatch.setattr(config, "PEXELS_API_KEY", "")
+    monkeypatch.setattr(config, "PIXABAY_API_KEY", "")
+    monkeypatch.setattr(config, "COVERR_API_KEY", "ck")
+    monkeypatch.setattr(config, "UNSPLASH_ACCESS_KEY", "uk")
+    monkeypatch.setattr(stock.webassets, "_cached", lambda kind, q, l, fetch, **k: fetch())
+    calls: list[tuple[str, dict]] = []
+
+    def _fake(url, *, headers=None):
+        calls.append((url, headers or {}))
+        if "coverr" in url:
+            return {"hits": [{"title": "t", "urls": {"mp4": "https://c/a.mp4"}}]}
+        return {"results": [{"urls": {"regular": "https://u/a.jpg"}}]}
+
+    monkeypatch.setattr(stock, "_get_json", _fake)
+    assert stock.available()
+    assert [c.url for c in stock.search_videos("city")] == ["https://c/a.mp4"]
+    assert [r.url for r in stock.search_photos("city")] == ["https://u/a.jpg"]
+    (cu, ch), (uu, uh) = calls
+    assert ch["Authorization"] == "Bearer ck" and "ck" not in cu
+    assert uh["Authorization"] == "Client-ID uk" and "uk" not in uu
