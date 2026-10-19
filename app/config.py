@@ -56,11 +56,12 @@ USE_REAL_CLIPS = os.getenv("USE_REAL_CLIPS", "1") not in ("0", "false", "False")
 REAL_CLIP_LIMIT = int(os.getenv("REAL_CLIP_LIMIT", "0"))
 
 #: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin。
-#: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接再下载,
-#: 而且多半要 cookie 才下得动 —— 属于**实验性**来源,失败就安静跳过。
+#: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接 —— 而 cn.bing
+#: 会无视 `site:`,实测一条都搜不到(小米 YU7),白跑一趟,所以默认不开。
+#: 抖音素材请手动贴链接进素材池(`library add`)。
 MEDIA_PLATFORMS: tuple[str, ...] = tuple(
     p.strip().lower()
-    for p in os.getenv("MEDIA_PLATFORMS", "bilibili,youtube,douyin").split(",")
+    for p in os.getenv("MEDIA_PLATFORMS", "bilibili,youtube").split(",")
     if p.strip()
 )
 
@@ -80,6 +81,12 @@ UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
 #: 逐镜头取材的总时长预算(秒)。取材在门禁 A 确认时同步执行,网络慢时
 #: 不能无限拖住确认请求 —— 超出预算后剩余镜头直接走生成。
 MEDIA_TIME_BUDGET = int(os.getenv("MEDIA_TIME_BUDGET", "900"))
+
+#: 素材池(`pipeline/library.py`):按车型预先攒素材、按剪辑点切段、打视角标签,
+#: 取材时最先从池子里挑。分镜阶段在后台增量构建,不拖住门禁确认。
+USE_LIBRARY = os.getenv("USE_LIBRARY", "1") not in ("0", "false", "False")
+#: 后台构建一次的时长预算(秒);超时停在当前进度,下次接着做。0 不限
+LIBRARY_BUILD_BUDGET = int(os.getenv("LIBRARY_BUILD_BUDGET", "1800"))
 
 #: 是否允许把网上的静态图片做成推拉动效镜头(Ken Burns)。
 #: 视频片段找不到时,真实图片动起来仍比 AI 编的车可信。

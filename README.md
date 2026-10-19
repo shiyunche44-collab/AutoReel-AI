@@ -305,7 +305,7 @@ Readable on-screen text includes "[年款标识]"
 
 | 镜头类型 | 判定 | 来源顺序 |
 |---|---|---|
-| **车辆镜头** | 画面主体是目标车型(外观 / 内饰 / 尾部 / 细节 / 仪表) | ⓪ 官方视频 → ⓪ 官方图片 → ① 平台视频 → ② 维基 / 车媒页 → ③ 网上图片 → ④ AI 生成 |
+| **车辆镜头** | 画面主体是目标车型(外观 / 内饰 / 尾部 / 细节 / 仪表) | ⓪ 素材池 → ⓪ 官方视频 → ⓪ 官方图片 → ① 平台视频 → ② 维基 / 车媒页 → ③ 网上图片 → ④ AI 生成 |
 | **非车镜头** | 氛围、城市、车展人流、行业场景 | ① 平台视频 → ② Pexels / Pixabay / Coverr 视频 → ③ Pexels / Pixabay / Unsplash 图片 → ④ AI 生成 |
 
 镜头类型和检索词由 `media_query.py` 一次 LLM 批量调用生成(每镜头一个中文词给 B站 / Bing,
@@ -315,13 +315,44 @@ Readable on-screen text includes "[年款标识]"
 |---|---|---|
 | **品牌官方号** | `official.platform_official` | B站 / YouTube 搜索结果里,上传者名含品牌名且"认证过 或 带 官方/汽车/Official"的算官方。另补搜一轮"{品牌}官方 {车型}"。不需要逐品牌配置 |
 | **车企官网 / 媒体中心** | `official.site_media` | 域名配在 `profiles/auto.yaml` 的 `official_sites`(已内置 16 个常见品牌)。用 Bing `site:域名 车型` 定位车型页,抓页面里的 mp4 / m3u8、嵌入播放器和大图。新增品牌只改 YAML |
-| **汽车之家 / 懂车帝官图** | `official.autohome_images` / `dongchedi_images` | 站内检索定位车系,汽车之家按图库分类页抓图(外观→外观镜头,中控/座椅→内饰镜头,细节→细节镜头) |
+| **汽车之家 / 懂车帝官图** | `official.autohome_images` / `dongchedi_images` | 汽车之家用全车系目录(`NewSpecCompare.js`)按车型名查车系 ID,按图库分类页抓原图(外观→外观镜头,中控/座椅→内饰镜头,细节→细节镜头,另有官图);懂车帝用站内搜索接口查车系、抓手机版图库页(图多为 640 宽,只做补位)。⚠️ 不再靠 Bing `site:` 定位:cn.bing 会无视它 |
 | **B站** | `platform_video.search_bilibili` | 直连站内搜索接口(拿得到标题 / UP 主 / 时长),失败退回 yt-dlp 的 `bilisearch` |
 | **YouTube** | `platform_video.search_youtube` | yt-dlp `ytsearch`。国内需配 `YTDLP_PROXY` |
-| **抖音 / 西瓜** | `platform_video.search_douyin` | **实验性**。yt-dlp 没有这两家的搜索,靠 Bing 站内检索拿视频页再下载,多半要 `YTDLP_COOKIES` |
+| **抖音 / 西瓜** | `platform_video.search_douyin` | **基本不可用**:靠 Bing 站内检索拿视频页,而 cn.bing 无视 `site:`,实测搜不到。抖音素材请手动贴链接进素材池(见下文),下载需 `YTDLP_COOKIES` |
 | 维基共享资源 / 车媒文章页 | `clips.py` | 原有来源,保留作补位。车媒页里嵌的 B站 / YouTube 播放器现在会还原成视频页交给 yt-dlp |
 | **网上图片** | 参考图集 + `webassets.bing_images` | `cn.bing.com` 图片检索,国内直连、免密钥 |
 | **Pexels / Pixabay / Coverr / Unsplash** | `stock.py` | 官方免费 API,无水印空镜,只给非车镜头用。Coverr 只出视频,Unsplash 只出图片 |
+
+#### 素材池(`pipeline/library.py`)
+
+旧做法是"每个镜头现搜现切":在搜到的长视频里按固定起点切 6 秒,切到字幕卡、口播就被质检毙掉,
+再换个起点赌一次。素材池把顺序倒过来 —— **先攒、再切、再看、最后挑**:
+
+1. **攒**:按车型自动发现一批源(品牌官方号、宣传片、实拍、静态体验;B站 + YouTube,口播类不要),
+   加上手动贴的链接、汽车之家官图。6 分钟以内的源整条下载,更长的在 8%–92% 区间分 8 个 40 秒窗下载;
+2. **切**:ffmpeg 场景检测(`scene>0.3`),在**原片自己的剪辑点**切段,不会切在转场中间;
+3. **看**:每段抽中间帧问一次视觉模型,LLM 转成标签:视角(车头 / 侧面 / 前 45° / 车尾 / 行驶 /
+   航拍 / 座舱 / 中控屏 / 座椅 / 细节 / 人物 / 文字卡)、是不是这台车、海报字幕等问题和一句话描述。
+   每个源最多看 60 段,长段优先;
+4. **挑**:取材时作为车辆镜头的第一级,按镜头视角从同一文件里拼出撑满 6 秒的连续窗口
+   (只接同一大类的好段,细节特写两边都能接),官方源、认出是这台车的、首段更长的排前面。
+   用过的时间段不会再给别的镜头。
+
+池子按车型存在 `data/library/<车型>/`(`library.json` + 原片 + 帧 + 官图),**跨项目复用**。
+构建是增量的、有时长预算(`LIBRARY_BUILD_BUDGET`),超时停在当前进度,下次接着做。
+项目走到分镜阶段时自动在后台构建,门禁 A 确认时用池子里已有的,不在确认请求里等下载。
+
+```bash
+python -m app.pipeline.library build 小米YU7 --brand 小米      # 手动构建 / 续建
+python -m app.pipeline.library add 小米YU7 <链接> [<链接>...]   # 加自动搜不到的好素材(抖音只能走这里)
+python -m app.pipeline.library show 小米YU7                      # 统计:源、段、各视角可用数
+python -m app.pipeline.library sheet 小米YU7 [--usable]          # 导出联系表,人工过一遍标签
+```
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `USE_LIBRARY` | `1` | 是否启用素材池(后台构建 + 取材第一级) |
+| `LIBRARY_BUILD_BUDGET` | `1800` | 一次构建的时长预算(秒),`0` 不限 |
 
 #### 落地方式
 

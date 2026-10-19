@@ -8,6 +8,8 @@
 取材梯子(见 `CAR_TIERS` / `OTHER_TIERS`)
 ---------------------------------------
 车辆镜头(画面主体是目标车型):
+  ⓪ 素材池:按车型预先攒好、按剪辑点切段、打过视角标签的视频段与官图
+     (`library.py`),按镜头视角拼窗口,不必现搜现切
   ⓪ 官方视频:品牌官方号(B 站 / YouTube)、车企官网 / 媒体中心里的视频
   ⓪ 官方图片:汽车之家 / 懂车帝官图库、车企官网大图 → 推拉动效镜头
   ① 平台视频:B 站 → YouTube → 抖音/西瓜,按镜头检索词搜(官方号结果仍排最前)
@@ -50,13 +52,13 @@ from ..categories import CategoryProfile
 from ..models import ShotSpec
 from ..providers import clips as clips_mod
 from ..providers import images, official, platform_video, stock, webassets
-from . import asset_resolver, media_query, render, vision_verdict
+from . import asset_resolver, library, media_query, render, vision_verdict
 
 #: 视角 → 是否车辆画面。沿用 media_query 的定义,两处必须一致
 REAL_CLIP_ANGLES: tuple[str, ...] = media_query.CAR_ANGLES
 
 CAR_TIERS: tuple[str, ...] = (
-    "official_video", "official_still", "platform_video", "page_clip", "web_still",
+    "library", "official_video", "official_still", "platform_video", "page_clip", "web_still",
 )
 OTHER_TIERS: tuple[str, ...] = ("platform_video", "stock_video", "stock_still")
 STILL_TIERS: frozenset[str] = frozenset({"official_still", "web_still", "stock_still"})
@@ -208,8 +210,9 @@ def _dedupe(pool: Iterable[clips_mod.ClipCandidate]) -> list[clips_mod.ClipCandi
 
 
 def _key(c: clips_mod.ClipCandidate) -> str:
-    """同一条平台视频的不同起点算不同素材 —— 它们会被切给相邻镜头。"""
-    return f"{c.url}@{c.start:.1f}" if c.platform else c.url
+    """同一条平台视频(或素材池里同一个文件)的不同起点算不同素材 ——
+    它们会被切给相邻镜头。"""
+    return f"{c.url}@{c.start:.1f}" if (c.platform or library.is_library(c)) else c.url
 
 
 def _hits_to_candidates(hits: Iterable[platform_video.PlatformHit], *, seconds: float,
@@ -261,6 +264,8 @@ class _Ctx:
     tried: set[str] = field(default_factory=set)
     bad_urls: set[str] = field(default_factory=set)
     sources_tried: list[str] = field(default_factory=list)
+    #: 素材池里已经用掉的 (文件, 起, 止):重叠的窗口不再给别的镜头
+    used_ranges: list[tuple[str, float, float]] = field(default_factory=list)
 
     def memo(self, key: str, fn: Callable[[], list[clips_mod.ClipCandidate]]
              ) -> list[clips_mod.ClipCandidate]:
@@ -285,6 +290,19 @@ def _platforms_for(lang: str) -> list[str]:
 def _tier_candidates(ctx: _Ctx, tier: str, q: media_query.ShotQuery
                      ) -> list[clips_mod.ClipCandidate]:
     car = q.kind == "car"
+    if tier == "library":
+        if not config.USE_LIBRARY:
+            return []
+        try:
+            got = library.candidates(ctx.subject, q.angle, seconds=ctx.seconds,
+                                     exclude=ctx.used_ranges)
+        except Exception as exc:  # noqa: BLE001
+            ctx.errors.append(f"素材池读取失败:{str(exc)[:120]}")
+            return []
+        if "library" not in {s.split(":", 1)[0] for s in ctx.sources_tried}:
+            ctx.sources_tried.append(f"library:{len(got)}")
+        return got
+
     if tier == "official_video":
         if not ctx.aliases:
             return []
@@ -396,6 +414,15 @@ def _materialise(candidate: clips_mod.ClipCandidate, dest: Path,
     - 平台视频:yt-dlp 只下 [start, start+seconds] 一段,再统一转码;
     - 直链:ffmpeg 直接拉流裁剪(源比目标短就循环补足)。
     """
+    if library.is_library(candidate):
+        # 素材池里的是本地文件:图直接做动效,视频从段起点截
+        if candidate.kind == "still":
+            render.still_to_clip(candidate.url, dest, seconds=seconds, motion=_motion_for(dest))
+        else:
+            clips_mod.fetch_clip(candidate.url, dest, seconds=seconds, start=candidate.start)
+        candidate.local_path = str(dest)
+        return candidate
+
     if candidate.kind == "still":
         raw = dest.with_name(dest.stem + "_src.img")
         headers = {"User-Agent": webassets.BROWSER_UA}
@@ -630,6 +657,8 @@ def collect(*, subject: str, profile: CategoryProfile,
             if hit is not None:
                 assignment[spec.idx] = hit
                 tiers_of[spec.idx] = tier
+                if library.is_library(hit):
+                    ctx.used_ranges.append((hit.url, hit.start, hit.start + seconds))
                 last_page = hit.page_url or last_page
                 break
 

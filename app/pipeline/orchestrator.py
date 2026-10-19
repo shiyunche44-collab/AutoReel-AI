@@ -26,6 +26,7 @@ from . import (  # noqa: F401 - 显式列出便于阅读依赖
     clip_resolver,
     generate,
     intake,
+    library,
     media_query,
     narration,
     prompt_compiler,
@@ -311,6 +312,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
     if state == State.SCRIPT_READY:
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
+        _start_library(project_id, subject, profile, llm)
         segments = _script(project_id)
         facts = _facts(project_id)
         card_log: list[dict] = []
@@ -361,6 +363,8 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         # 卡片与取材都必须在 initialise_shots 之后 —— 它们靠把镜头写成
         # succeeded 来"顶掉"草稿生成,shot 行要先存在。
         card_shots, _ = cards.materialize(project_id, specs, refs, stage="draft")
+        # 分镜阶段起的后台构建可能还没完:取材用池子里已有的,剩下的继续在后台攒
+        _start_library(project_id, subject, profile, llm)
         real_shots = _collect_media(project_id, subject, profile,
                                     [s for s in specs if not s.card], refs, llm)
         _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
@@ -646,6 +650,18 @@ def _real_ref_images(refs: Sequence[Any]) -> list:
         if isinstance(r, ImageRef) and r.origin != "generate":
             out.append(r)
     return out
+
+
+def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
+    """后台增量构建这台车的素材池(见 `library.py`)。只对有官方渠道配置的品类
+    (汽车)生效;已经在建就什么都不做。失败只记事件,不影响主流程。"""
+    if not (config.USE_REAL_CLIPS and config.USE_LIBRARY and profile.official_sites):
+        return
+    try:
+        if library.build_async(subject, profile=profile, llm=llm):
+            db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
+    except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
 
 def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],

@@ -205,6 +205,9 @@ def offline(monkeypatch):
                         lambda *a, **k: list(box.get("commons", [])))
     monkeypatch.setattr(cr.clips_mod, "page_media", lambda *a, **k: ([], []))
     monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k: clipped)
+    # 素材池读的是 data/library 下真实建好的池子,单测里换成夹具里给的
+    monkeypatch.setattr(cr.library, "candidates",
+                        lambda *a, **k: list(box.get("library", [])))
     box["materialised"] = []
 
     def _fake_materialise(cand, dest, secs):
@@ -1209,3 +1212,57 @@ def test_qc_reject_budget_is_per_tier(offline, tmp_path, monkeypatch):
                         [c for c in clipped if "poster" not in c.url])
     assignment, _ = _collect(tmp_path, _specs(1))
     assert assignment[0].url == "https://b/good"
+
+
+# --------------------------------------------------------------------------
+# 素材池
+# --------------------------------------------------------------------------
+def _lib(path: str, start: float, kind: str = "video") -> clips_mod.ClipCandidate:
+    return clips_mod.ClipCandidate(url=path, origin="library:bilibili", kind=kind,
+                                   start=start, view="exterior_45", official=True)
+
+
+def test_library_tier_comes_first(offline, tmp_path):
+    offline["library"] = [_lib("F:/lib/a.mp4", 0.1)]
+    offline["official_platform"] = [_hit("https://b/official", uploader="比亚迪汽车",
+                                          official=True)]
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].url == "F:/lib/a.mp4"
+    assert report["selected"]["0"]["tier"] == "library"
+
+
+def test_library_windows_do_not_overlap_across_shots(offline, tmp_path, monkeypatch):
+    pool = [_lib("F:/lib/a.mp4", 0.1), _lib("F:/lib/a.mp4", 2.0), _lib("F:/lib/a.mp4", 8.1)]
+    seen_exclude: list = []
+
+    def _cands(subject, angle, *, seconds=6, exclude=()):
+        seen_exclude.append(list(exclude))
+        return [c for c in pool
+                if not any(p == c.url and c.start < e and s < c.start + seconds
+                           for p, s, e in exclude)]
+
+    monkeypatch.setattr(cr.library, "candidates", _cands)
+    specs = [ShotSpec(idx=i, duration=6.0, section="核心卖点", visual_zh="x",
+                      angle="exterior_45") for i in range(2)]
+    assignment, _ = _collect(tmp_path, specs)
+    assert [assignment[i].start for i in (0, 1)] == [0.1, 8.1]
+    assert ("F:/lib/a.mp4", 0.1, 6.1) in seen_exclude[-1]
+
+
+def test_library_candidates_with_same_file_are_distinct_keys():
+    assert cr._key(_lib("F:/lib/a.mp4", 0.1)) != cr._key(_lib("F:/lib/a.mp4", 8.1))
+
+
+def test_materialise_library_uses_local_file(tmp_path, monkeypatch):
+    calls: dict = {}
+    monkeypatch.setattr(cr.clips_mod, "fetch_clip",
+                        lambda url, dest, **k: calls.update(video=(url, k)) or dest)
+    monkeypatch.setattr(cr.render, "still_to_clip",
+                        lambda img, dest, **k: calls.update(still=img) or dest)
+    monkeypatch.setattr(cr.platform_video, "download_segment",
+                        lambda *a, **k: pytest.fail("素材池不该再下载"))
+    got = cr._materialise(_lib("F:/lib/a.mp4", 8.1), tmp_path / "shot_000.mp4", 6.0)
+    assert calls["video"] == ("F:/lib/a.mp4", {"seconds": 6.0, "start": 8.1})
+    assert got.local_path.endswith("shot_000.mp4")
+    cr._materialise(_lib("F:/lib/i.jpg", 0, kind="still"), tmp_path / "shot_001.mp4", 6.0)
+    assert calls["still"] == "F:/lib/i.jpg"

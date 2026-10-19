@@ -307,7 +307,7 @@ def _ffmpeg() -> str:
 
 
 def fetch_clip(url: str, dest: str | Path, *, seconds: float | None = None,
-               referer: str | None = None, loop: bool = False,
+               referer: str | None = None, loop: bool = False, start: float = 0.0,
                timeout: int = 600) -> Path:
     """把一条视频直链抓成定长、竖屏友好的本地 mp4。
 
@@ -317,6 +317,7 @@ def fetch_clip(url: str, dest: str | Path, *, seconds: float | None = None,
 
     `loop=True` 用于源比目标短的情况(`-stream_loop -1`),短片段循环补足
     到网格秒,否则渲染层归一化时会拿到一个短于 6 秒的片段,音画就会错位。
+    `start` 是从源的第几秒开始截(素材池的段在原片中间)。
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -331,6 +332,8 @@ def fetch_clip(url: str, dest: str | Path, *, seconds: float | None = None,
             args += ["-headers", f"Referer: {referer}\r\n"]
     if loop:
         args += ["-stream_loop", "-1"]
+    if start > 0:
+        args += ["-ss", f"{start:.3f}"]
     args += [
         "-i", url,
         "-t", str(length),
