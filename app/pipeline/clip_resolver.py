@@ -50,7 +50,7 @@ from ..categories import CategoryProfile
 from ..models import ShotSpec
 from ..providers import clips as clips_mod
 from ..providers import images, official, platform_video, stock, webassets
-from . import asset_resolver, media_query, render
+from . import asset_resolver, media_query, render, vision_verdict
 
 #: 视角 → 是否车辆画面。沿用 media_query 的定义,两处必须一致
 REAL_CLIP_ANGLES: tuple[str, ...] = media_query.CAR_ANGLES
@@ -65,20 +65,35 @@ STILL_TIERS: frozenset[str] = frozenset({"official_still", "web_still", "stock_s
 #: 一分钟;不设上限的话,一个坏源(全是 403)能把整个素材层拖上半小时。
 TRIES_PER_TIER = 2
 
-#: 片段质检提问。要问两件事:主体有没有被画幅裁掉(横屏素材裁 9:16 最容易
-#: 把车切掉),以及有没有字幕台标。
+#: 片段质检提问(**单帧**)。要问两件事:主体有没有被画幅裁掉(横屏素材裁 9:16
+#: 最容易把车切掉),以及有没有字幕台标。
+#:
+#: ⚠️ 视觉问答工具恒回散文、一次多张只描述第一张(见 `vision_verdict`),
+#: 所以每帧单独问,并要求它把三件事**说出来** —— 照旧回散文也能被 LLM 转成判定。
 QC_PROMPT = (
-    "下面每张图片是从候选视频片段中点抽出的帧。请逐张判定,只依据图片内容回答。\n"
-    "对每张图片输出一个 JSON 对象,字段:\n"
-    '  "index": 第几张图(从 1 开始,与给出顺序一致)\n'
-    '  "subject_whole": true / false —— 画面里的主体(车)是否**完整**在画面内,'
-    "没有被画幅裁掉\n"
-    '  "has_text_overlay": true / false —— 是否有字幕、台标、水印或大段文字\n'
-    '  "problem": 空字符串表示可用;否则填下面之一 —— '
-    "cropped(主体被裁掉) / text_overlay(有字幕台标) / unclear(画面糊或看不清主体) "
-    "/ unknown\n"
-    "只输出 JSON 数组,不要任何解释文字。"
+    "这张图片是从候选视频片段中点抽出的一帧。只依据图片内容回答,请务必说明:\n"
+    "1. 画面主体(车)是否**完整**在画面内,还是车头、车尾或车身被画幅边缘切掉了;\n"
+    "2. 画面是否清晰,能否看清主体;\n"
+    "3. 是否有字幕、台标、水印或大段文字。\n"
+    "如果可以,只输出一个 JSON 对象,字段:\n"
+    '  "subject_whole": true / false —— 主体是否完整在画面内\n'
+    '  "has_text_overlay": true / false\n'
+    '  "problem": 空字符串表示可用;否则填 cropped / text_overlay / unclear / unknown 之一'
 )
+
+#: 把逐帧散文转成判定的 LLM 系统提示。只认描述里明确写出的问题 ——
+#: 没提到被裁就当完整,质检的第一原则是不误杀真实素材。
+QC_STRUCTURE_SYSTEM = """你把视觉模型对若干视频帧的描述转成片段质检结论。
+
+只依据描述里**明确写出**的内容判定,保守,不要推理补全:
+- subject_whole:描述明确说车(主体)被画面边缘切掉、只露出一部分 → false;否则 → true。
+  特写镜头(只拍轮毂、车灯、内饰)是刻意构图,不算被切掉。
+- problem:subject_whole 为 false → "cropped";描述明确说模糊、过暗、看不清主体 → "unclear";
+  有字幕、台标、水印或大段文字 → "text_overlay";都没有 → ""。
+- 描述是报错、拒答或为空 → subject_whole 填 true,problem 填 ""。
+
+输出 JSON 对象 {"verdicts": [...]},每帧一项,字段 index(与输入编号一致)、
+subject_whole、problem、reason(一句中文依据,引用描述原话)。"""
 
 #: 硬弃用的理由。
 #:
@@ -372,7 +387,12 @@ def _materialise(candidate: clips_mod.ClipCandidate, dest: Path,
 
 
 def _extract_frame(clip_path: str | Path, dest: Path) -> Path | None:
-    """抽片段中点的一帧用于质检。"""
+    """抽片段中点的一帧用于质检。
+
+    ⚠️ 目录必须先建:ffmpeg 不会替你建父目录,过去这里漏了这一步,
+    每一帧都抽失败、质检按"抽不出帧就保留"一路放行 —— 质检从没真正跑过。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
     duration = clips_mod.probe_duration(clip_path)
     at = max(0.0, duration / 2) if duration else 1.0
     proc = subprocess.run(
@@ -384,88 +404,57 @@ def _extract_frame(clip_path: str | Path, dest: Path) -> Path | None:
     return dest if proc.returncode == 0 and dest.is_file() else None
 
 
-#: 视觉问答一次最多收 10 张图(`images.describe` 会截断),多了要分批
-_QC_BATCH = 10
-
-
 def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
-        errors: list[str]) -> list[clips_mod.ClipCandidate]:
-    """分批质检。逐镜头取材后一部片可能有几十个真实镜头,一次问不完。"""
-    if len(clipped) <= _QC_BATCH:
-        return _qc_batch(clipped, work_dir, errors)
-    kept: list[clips_mod.ClipCandidate] = []
-    for n in range(0, len(clipped), _QC_BATCH):
-        kept += _qc_batch(clipped[n:n + _QC_BATCH], work_dir / f"batch{n // _QC_BATCH:02d}",
-                          errors)
-    return kept
+        errors: list[str], llm: Any = None) -> list[clips_mod.ClipCandidate]:
+    """对已落地的片段逐帧质检:主体被裁 / 画面不清的弃用。
 
+    每条片段抽一帧、单独问一次视觉模型;散文回答交给 `llm` 转成判定
+    (不给 `llm` 则只认模型直接返回的 JSON)。
 
-def _qc_batch(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
-              errors: list[str]) -> list[clips_mod.ClipCandidate]:
-    """对已落地的片段抽帧质检:主体被裁 / 画面不清的弃用。
-
-    质检失败(抽不出帧、传不上传、模型不认 JSON)时**一律保留** ——
+    质检失败(抽不出帧、传不上传、得不出结论)时**一律保留** ——
     宁可让一条可能有点问题的片段进成片,也不要因为质检链路抖动把真实素材
     通路整个废掉。
     """
     if not clipped:
         return []
     frames_dir = work_dir / "qc_frames"
-    frame_urls: list[str] = []
-    keep_flags: list[bool] = []
+    urls: list[str] = []
+    slots: list[int] = []   # urls[i] 对应 clipped[slots[i]]
 
     for i, cand in enumerate(clipped):
-        frame = _extract_frame(cand.local_path, frames_dir / f"f{i:02d}.jpg")
+        frame = _extract_frame(cand.local_path, frames_dir / f"f{i:03d}.jpg")
         if frame is None:
-            frame_urls.append("")
-            keep_flags.append(True)
             continue
         try:
-            frame_urls.append(images.cli.upload_temp_url(str(frame)))
+            urls.append(images.cli.upload_temp_url(str(frame)))
+            slots.append(i)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"质检帧上传失败({cand.url[:40]}):{exc}")
-            frame_urls.append("")
-            keep_flags.append(True)
 
-    valid = [u for u in frame_urls if u]
-    if not valid:
+    if not urls:
         return clipped
 
-    try:
-        answer = images.describe(valid, QC_PROMPT)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"片段质检调用失败:{exc}")
+    verdicts, _, _ = vision_verdict.judge(urls, QC_PROMPT, QC_STRUCTURE_SYSTEM, llm,
+                                          errors, what="片段")
+    if not any(verdicts):
+        errors.append("片段质检没有得出任何可用结论,已全部保留")
         return clipped
 
-    verdicts = asset_resolver.parse_verdicts(answer)
-    if not verdicts:
-        errors.append("片段质检返回无法解析,已全部保留")
-        return clipped
-
-    # index 是按 valid 顺序编号的,和 clipped 顺序要对齐
-    index_of = {url: n for n, url in enumerate(valid, start=1)}
-    by_index: dict[int, dict[str, Any]] = {}
-    for v in verdicts:
-        try:
-            by_index[int(v.get("index", 0))] = v
-        except (TypeError, ValueError):
-            continue
-
+    verdict_of = {pos: v for pos, v in zip(slots, verdicts) if v}
     kept: list[clips_mod.ClipCandidate] = []
     rejected: list[str] = []
-    for cand, url in zip(clipped, frame_urls):
-        if not url:
-            kept.append(cand)
-            continue
-        verdict = by_index.get(index_of.get(url, -1))
+    for i, cand in enumerate(clipped):
+        verdict = verdict_of.get(i)
         if not verdict:
             kept.append(cand)
             continue
         problem = str(verdict.get("problem") or "").strip().lower()
         if verdict.get("subject_whole") is False and problem not in _BLOCKING_PROBLEMS:
             problem = "cropped"
+        reason = str(verdict.get("reason") or "").strip()
         if problem in _BLOCKING_PROBLEMS:
-            rejected.append(f"{cand.title or cand.url[:40]}:{problem}")
+            rejected.append(f"{cand.title or cand.url[:40]}:{problem}"
+                            + (f"({reason[:60]})" if reason else ""))
             continue
         if problem:
             # 记录但不弃用 —— 见 _BLOCKING_PROBLEMS 的说明
@@ -486,12 +475,14 @@ def collect(*, subject: str, profile: CategoryProfile,
             limit: int = DEFAULT_LIMIT, qc: bool = True,
             queries: Sequence[media_query.ShotQuery] | None = None,
             brand: str = "",
-            ref_images: Sequence[images.ImageRef] | None = None) -> tuple[
+            ref_images: Sequence[images.ImageRef] | None = None,
+            llm: Any = None) -> tuple[
                 dict[int, clips_mod.ClipCandidate], dict[str, Any]]:
     """逐镜头取材、质检。返回 (镜头序号 → 候选, 报告)。
 
     全程不抛异常:任何一步失败都只是这个镜头往下降一级,最后退回生成。
-    `queries` 不给时用模板检索词(不调 LLM)。
+    `queries` 不给时用模板检索词(不调 LLM)。`llm` 只用于把质检的散文
+    回答转成判定,不给则质检只认模型直接返回的 JSON。
     """
     report: dict[str, Any] = {
         "subject": subject,
@@ -558,7 +549,7 @@ def collect(*, subject: str, profile: CategoryProfile,
     # 质检只查车辆镜头:非车画面没有"是不是这台车 / 车被裁没裁"的问题
     if qc:
         car_idx = [i for i in assignment if (by_idx.get(i) and by_idx[i].kind == "car")]
-        kept = _qc([assignment[i] for i in car_idx], work_dir, report["errors"])
+        kept = _qc([assignment[i] for i in car_idx], work_dir, report["errors"], llm=llm)
         kept_ids = {id(c) for c in kept}
         for i in car_idx:
             if id(assignment[i]) not in kept_ids:

@@ -403,7 +403,7 @@ def test_describe_error_on_one_image_keeps_it(tmp_path, search_stub, describe_st
     describe_stub["result"] = _answer
     refs, report = _build(tmp_path, search_stub, describe_stub)
     assert [r.url for r in refs] == ["https://xchuxing.com/b.jpg"]
-    assert any("校验调用失败" in e for e in report["errors"])
+    assert any("调用失败" in e for e in report["errors"])
 
 
 def test_nonblocking_problem_only_warns(tmp_path, search_stub, describe_stub, no_network):

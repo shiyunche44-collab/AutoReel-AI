@@ -576,49 +576,144 @@ def _apply_local(cand, tmp_path):
     return cand
 
 
-def test_qc_keeps_everything_when_answer_is_unparseable(tmp_path, monkeypatch):
+@pytest.fixture
+def qc_env(tmp_path, monkeypatch):
+    """抽帧 / 上传打桩成功;上传地址带候选序号,便于按片段给回答。"""
+    monkeypatch.setattr(cr, "_extract_frame", lambda clip, dest: _clip_file(tmp_path, Path(dest).name))
+    monkeypatch.setattr(cr.images.cli, "upload_temp_url", lambda p: f"https://up/{Path(p).name}")
+    box: dict = {"calls": [], "answers": {}}
+
+    def _describe(urls, prompt, **k):
+        box["calls"].append(list(urls))
+        answer = box["answers"].get(urls[0].rsplit("/", 1)[-1], "")
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(cr.images, "describe", _describe)
+    return box
+
+
+class _QcLLM:
+    def __init__(self, result):
+        self.result = result
+        self.calls: list[dict] = []
+
+    def structured(self, system, user, **kw):
+        self.calls.append({"system": system, "user": user, **kw})
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _cands(tmp_path, n):
+    return [clips_mod.ClipCandidate(url=f"u{i}", title=f"片段{i}",
+                                    local_path=str(_clip_file(tmp_path, f"c{i}.mp4")))
+            for i in range(n)]
+
+
+def test_qc_keeps_everything_when_answer_is_unparseable(tmp_path, qc_env):
     """质检链路抖动不能把真实素材通路整个废掉。"""
-    from app.pipeline import asset_resolver
-
-    cand = clips_mod.ClipCandidate(url="u", local_path=str(_clip_file(tmp_path)))
-    monkeypatch.setattr(cr, "_extract_frame", lambda *a, **k: _clip_file(tmp_path))
-    monkeypatch.setattr(cr.images.cli, "upload_temp_url", lambda p: "https://up/1.jpg")
-    monkeypatch.setattr(cr.images, "describe", lambda urls, prompt, **k: "我无法分析这些图片。")
-    monkeypatch.setattr(asset_resolver, "parse_verdicts", lambda text: [])
-
+    cands = _cands(tmp_path, 1)
+    qc_env["answers"]["f000.jpg"] = "我无法分析这些图片。"
     errors: list[str] = []
-    assert cr._qc([cand], tmp_path, errors) == [cand]
-    assert any("无法解析" in e for e in errors)
+    assert cr._qc(cands, tmp_path, errors) == cands
+    assert any("可用结论" in e for e in errors)
 
 
-def test_qc_drops_cropped_frames(tmp_path, monkeypatch):
+def test_qc_asks_each_frame_separately(tmp_path, qc_env):
+    """一次多帧只会描述第一帧 —— 其余片段从没被质检过。"""
+    cands = _cands(tmp_path, 12)
+    cr._qc(cands, tmp_path, [])
+    assert len(qc_env["calls"]) == 12
+    assert all(len(c) == 1 for c in qc_env["calls"])
+
+
+def test_qc_drops_cropped_frames(tmp_path, qc_env):
     """横屏素材裁 9:16 会把车切掉,这是混合方案最大的画面风险。"""
-    cand = clips_mod.ClipCandidate(url="u", local_path=str(_clip_file(tmp_path)))
-    monkeypatch.setattr(cr, "_extract_frame", lambda *a, **k: _clip_file(tmp_path))
-    monkeypatch.setattr(cr.images.cli, "upload_temp_url", lambda p: "https://up/1.jpg")
-    monkeypatch.setattr(
-        cr.images, "describe",
-        lambda urls, prompt, **k: json.dumps(
-            [{"index": 1, "subject_whole": False, "problem": "cropped"}]
-        ),
-    )
-    assert cr._qc([cand], tmp_path, []) == []
+    cands = _cands(tmp_path, 1)
+    qc_env["answers"]["f000.jpg"] = json.dumps({"subject_whole": False, "problem": "cropped"})
+    assert cr._qc(cands, tmp_path, []) == []
 
 
-def test_qc_only_warns_on_text_overlay(tmp_path, monkeypatch):
+def test_qc_only_warns_on_text_overlay(tmp_path, qc_env):
     """车媒视频几乎都带台标。按这条过滤会让整条通路空转,功能等于没做。"""
-    cand = clips_mod.ClipCandidate(url="u", local_path=str(_clip_file(tmp_path)))
-    monkeypatch.setattr(cr, "_extract_frame", lambda *a, **k: _clip_file(tmp_path))
-    monkeypatch.setattr(cr.images.cli, "upload_temp_url", lambda p: "https://up/1.jpg")
-    monkeypatch.setattr(
-        cr.images, "describe",
-        lambda urls, prompt, **k: json.dumps(
-            [{"index": 1, "subject_whole": True, "problem": "text_overlay"}]
-        ),
-    )
-    kept = cr._qc([cand], tmp_path, [])
+    cands = _cands(tmp_path, 1)
+    qc_env["answers"]["f000.jpg"] = json.dumps(
+        [{"index": 1, "subject_whole": True, "problem": "text_overlay"}])
+    kept = cr._qc(cands, tmp_path, [])
     assert len(kept) == 1
     assert "text_overlay" in kept[0].license
+
+
+def test_qc_prose_is_structured_by_llm(tmp_path, qc_env):
+    cands = _cands(tmp_path, 3)
+    qc_env["answers"] = {
+        "f000.jpg": "车身完整,画面清晰。",
+        "f001.jpg": "车头被画面左侧边缘切掉了一半。",
+        "f002.jpg": "右下角有懂车帝台标。",
+    }
+    llm = _QcLLM({"verdicts": [
+        {"index": 1, "subject_whole": True, "problem": ""},
+        {"index": 2, "subject_whole": False, "problem": "cropped", "reason": "车头被切掉"},
+        {"index": 3, "subject_whole": True, "problem": "text_overlay"},
+    ]})
+    errors: list[str] = []
+    kept = cr._qc(cands, tmp_path, errors, llm=llm)
+
+    assert [c.url for c in kept] == ["u0", "u2"]
+    assert len(llm.calls) == 1, "散文要合在一次 LLM 调用里转"
+    assert "车头被画面左侧边缘切掉" in llm.calls[0]["user"]
+    assert any("车头被切掉" in e for e in errors)
+    assert "text_overlay" in kept[1].license
+
+
+def test_qc_llm_failure_keeps_everything(tmp_path, qc_env):
+    cands = _cands(tmp_path, 2)
+    qc_env["answers"] = {"f000.jpg": "车被切掉了。", "f001.jpg": "很模糊。"}
+    errors: list[str] = []
+    kept = cr._qc(cands, tmp_path, errors, llm=_QcLLM(RuntimeError("down")))
+    assert kept == cands
+    assert any("结构化失败" in e for e in errors)
+
+
+def test_qc_frame_without_verdict_is_kept(tmp_path, qc_env):
+    """一条片段没得出结论(调用报错)就丢掉,代价太大。"""
+    cands = _cands(tmp_path, 2)
+    qc_env["answers"] = {
+        "f000.jpg": json.dumps({"subject_whole": False, "problem": "cropped"}),
+        "f001.jpg": RuntimeError("timeout"),
+    }
+    errors: list[str] = []
+    kept = cr._qc(cands, tmp_path, errors)
+    assert [c.url for c in kept] == ["u1"]
+    assert any("调用失败" in e for e in errors)
+
+
+def test_qc_frame_extract_failure_keeps_clip(tmp_path, qc_env, monkeypatch):
+    cands = _cands(tmp_path, 2)
+    monkeypatch.setattr(
+        cr, "_extract_frame",
+        lambda clip, dest: None if clip.endswith("c0.mp4") else _clip_file(tmp_path, Path(dest).name))
+    qc_env["answers"]["f001.jpg"] = json.dumps({"subject_whole": False, "problem": "cropped"})
+    kept = cr._qc(cands, tmp_path, [])
+    assert [c.url for c in kept] == ["u0"]
+    assert len(qc_env["calls"]) == 1
+
+
+def test_collect_passes_llm_to_qc(offline, tmp_path, monkeypatch):
+    box: dict = {}
+
+    def _qc(clipped, work_dir, errors, llm=None):
+        box["llm"] = llm
+        return clipped
+
+    monkeypatch.setattr(cr, "_qc", _qc)
+    sentinel = object()
+    specs = [ShotSpec(idx=0, duration=6.0, visual_zh="x", angle="exterior_45")]
+    cr.collect(subject="比亚迪汉 EV", profile=load_profile("auto"), specs=specs,
+               project_dir=tmp_path, llm=sentinel)
+    assert box["llm"] is sentinel
 
 
 # ==========================================================================
@@ -980,3 +1075,22 @@ def test_collect_media_failure_does_not_raise(live_project, monkeypatch):
     assert orchestrator._collect_media(live_project, "x", load_profile("auto"),
                                        _specs(2), []) == 0
     assert cr.load_report(live_project)["status"] == "failed"
+
+
+def test_extract_frame_creates_missing_directory(tmp_path, monkeypatch):
+    """ffmpeg 不建父目录。漏了这一步,每帧都抽失败,质检一路放行、从没跑过。"""
+    seen: dict = {}
+
+    class _Proc:
+        returncode = 0
+
+    def _run(cmd, **kw):
+        seen["parent_exists"] = Path(cmd[-1]).parent.is_dir()
+        Path(cmd[-1]).write_bytes(b"jpg")
+        return _Proc()
+
+    monkeypatch.setattr(cr.clips_mod, "probe_duration", lambda p: 6.0)
+    monkeypatch.setattr(cr.subprocess, "run", _run)
+    dest = tmp_path / "work" / "qc_frames" / "f000.jpg"
+    assert cr._extract_frame("clip.mp4", dest) == dest
+    assert seen["parent_exists"] is True

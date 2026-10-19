@@ -394,7 +394,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         # 真实素材:门禁 A 之后取好的素材,按批应用到成片档,省掉成片生成。
         # 必须在 initialise_shots 之后 —— 它靠把镜头写成 succeeded 来"顶掉"
         # 那次生成,而 initialise_shots 之前 shot 行还不存在。
-        real_shots = _inject_clips(project_id, subject, profile, specs, approved, refs)
+        real_shots = _inject_clips(project_id, subject, profile, specs, approved, refs, llm)
 
         review = _review_state(project_id, len(specs))
         _set_state(project_id, State.GATE_B, State.FINAL_RENDERING,
@@ -648,7 +648,7 @@ def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotS
             project_dir=config.project_dir(project_id),
             page_urls=clips_mod.page_urls_from(ref_images),
             limit=config.REAL_CLIP_LIMIT, queries=queries, brand=brand,
-            ref_images=ref_images,
+            ref_images=ref_images, llm=llm,
         )
         report["errors"] = errors + report.get("errors", [])
         applied = clip_resolver.apply_clips(project_id, assignment, stage="draft")
@@ -670,7 +670,7 @@ def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotS
 
 
 def _inject_clips(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
-                  approved: set[int], refs: Sequence[Any]) -> int:
+                  approved: set[int], refs: Sequence[Any], llm=None) -> int:
     """给已批准的镜头应用真实素材(成片档)。返回本次生效的镜头数。
 
     三条自我约束:
@@ -698,7 +698,7 @@ def _inject_clips(project_id: str, subject: str, profile, specs: Sequence[ShotSp
                 subject=subject, profile=profile, specs=specs,
                 project_dir=config.project_dir(project_id),
                 page_urls=clips_mod.page_urls_from(ref_images),
-                limit=config.REAL_CLIP_LIMIT, ref_images=ref_images,
+                limit=config.REAL_CLIP_LIMIT, ref_images=ref_images, llm=llm,
             )
             report.update({"status": "ok", "runs": 1})
 

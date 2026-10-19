@@ -17,6 +17,7 @@ from typing import Any, Sequence
 from ..categories import CategoryProfile
 from ..models import ShotSpec
 from ..providers import images, webassets
+from . import vision_verdict
 
 #: 用户手动上传参考图的目录。人工挑过的照片是唯一能"保证是这台车"的来源,
 #: 因此优先级高于一切自动检索 —— 自动检索再灵,也不知道你要哪一台年款。
@@ -69,8 +70,8 @@ def verify_prompt(subject: str) -> str:
 
     所以改成每张图问一次,并且提示词里点名要它说出**品牌、车型和依据**
     (车标、车尾字样、车牌位文字)。哪怕它照旧回散文,散文里也有足够的
-    信息交给 LLM 转成结构化判定(见 `_structure_with_llm`)。工具哪天开始
-    认 JSON,`_parse_one` 会直接吃下,不用改代码。
+    信息交给 LLM 转成结构化判定(见 `vision_verdict`)。工具哪天开始
+    认 JSON,会被直接吃下,不用改代码。
     """
     return (
         f"判定这张图片能否作为「{subject}」的参考图。只依据图片内容回答,不要猜。\n"
@@ -85,27 +86,6 @@ def verify_prompt(subject: str) -> str:
         '  "problem": 空字符串表示可用;否则填 not_target_model / e-commerce / '
         "text_overlay / low_quality / unknown 之一"
     )
-
-
-def parse_verdicts(text: str) -> list[dict[str, Any]]:
-    """从自由文本里抠出 JSON 数组。解析不出来就返回空列表。
-
-    故意保守:抠不出来就返回空,让调用方按"未校验"处理。**绝不猜** ——
-    把解析失败当成"全部不合格"会把素材层变成新的失败源,而这一层
-    的第一原则是降级而不是阻断。
-
-    公开出来是因为 `clip_resolver` 的片段质检要用同一套抠取逻辑:
-    视觉问答工具的返回形态不统一,两边各写一份必然漂移。
-    """
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end <= start:
-        return []
-    try:
-        data = json.loads(text[start:end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return []
-    return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
 
 
 def _prepare_verify_targets(picked: list[images.ImageRef], project_dir: Path,
@@ -154,9 +134,6 @@ def _prepare_verify_targets(picked: list[images.ImageRef], project_dir: Path,
     return targets, slots, local_of
 
 
-#: 每张图单独问一次后,并发数。视觉问答走 CLI 子进程,开太多会被限流
-_VERIFY_WORKERS = 4
-
 STRUCTURE_SYSTEM = """你把视觉模型对若干张图片的描述转成参考图校验结论。目标车型是「{subject}」。
 
 只依据描述里**明确写出**的内容判定,保守,不要推理补全:
@@ -170,85 +147,6 @@ STRUCTURE_SYSTEM = """你把视觉模型对若干张图片的描述转成参考�
 
 输出 JSON 对象 {{"verdicts": [...]}},每张图一项,字段 index(与输入编号一致)、
 is_target_model、view、problem、reason(一句中文依据,引用描述原话)。"""
-
-
-def _parse_one(text: str) -> dict[str, Any] | None:
-    """从单张图的回答里抠出判定对象。数组取第一项,对象直接用;抠不出返回 None。"""
-    found = parse_verdicts(text)
-    if found:
-        return found[0]
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    try:
-        data = json.loads(text[start:end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return None
-    return data if isinstance(data, dict) and "problem" in data else None
-
-
-def _describe_each(targets: list[str], subject: str,
-                   report: dict[str, Any]) -> list[str]:
-    """每张图单独问一次视觉模型。单张失败只记一条,返回空串(= 该图未校验)。"""
-    from concurrent.futures import ThreadPoolExecutor
-
-    prompt = verify_prompt(subject)
-
-    def _one(url: str) -> str:
-        try:
-            return images.describe([url], prompt)
-        except Exception as exc:  # noqa: BLE001
-            report["errors"].append(f"参考图校验调用失败(该图保留):{str(exc)[:120]}")
-            return ""
-
-    with ThreadPoolExecutor(max_workers=min(_VERIFY_WORKERS, len(targets))) as pool:
-        return list(pool.map(_one, targets))
-
-
-def _structure_with_llm(texts: dict[int, str], subject: str, llm: Any,
-                        report: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    """把散文描述一次性交给 LLM 转成判定。`texts` 的键是 1 起的图片编号。
-
-    一次调用转完所有图,而不是每张一次:散文已经是文本,LLM 不需要看图,
-    合在一起问更便宜也更快。失败时返回空 —— 等于这些图未校验,全部保留。
-    """
-    if not texts or llm is None:
-        return {}
-    user = "\n\n".join(f"### 图 {n}\n{t[:1500]}" for n, t in sorted(texts.items()))
-    try:
-        data = llm.structured(STRUCTURE_SYSTEM.format(subject=subject), user,
-                              required_keys=["verdicts"], temperature=0.0)
-    except Exception as exc:  # noqa: BLE001
-        report["errors"].append(f"校验描述结构化失败,这些图按未校验保留:{str(exc)[:120]}")
-        return {}
-    out: dict[int, dict[str, Any]] = {}
-    for v in data.get("verdicts") or []:
-        if not isinstance(v, dict):
-            continue
-        try:
-            n = int(v.get("index", 0))
-        except (TypeError, ValueError):
-            continue
-        if n in texts:
-            out[n] = v
-    return out
-
-
-def _collect_verdicts(texts: list[str], subject: str, llm: Any,
-                      report: dict[str, Any]) -> list[dict[str, Any] | None]:
-    """逐张得出判定:模型直接给了 JSON 就用,否则交给 LLM 转;都不成则 None。"""
-    verdicts: list[dict[str, Any] | None] = [_parse_one(t) if t else None for t in texts]
-    prose = {n: t for n, (t, v) in enumerate(zip(texts, verdicts), start=1)
-             if t and v is None}
-    structured = _structure_with_llm(prose, subject, llm, report)
-    for n, v in structured.items():
-        verdicts[n - 1] = v
-    report["verify_sources"] = {
-        "json": sum(1 for t in texts if t and _parse_one(t) is not None),
-        "llm": len(structured),
-        "none": sum(1 for v in verdicts if v is None),
-    }
-    return verdicts
 
 
 def _apply_verdicts(refs: list[images.ImageRef], verdicts: list[dict[str, Any] | None],
@@ -441,9 +339,12 @@ def build_reference_set(
         try:
             targets, slots, local_of = _prepare_verify_targets(picked, project_dir, report)
             if targets:
-                texts = _describe_each(targets, subject, report)
+                verdicts, texts, sources = vision_verdict.judge(
+                    targets, verify_prompt(subject), STRUCTURE_SYSTEM.format(subject=subject),
+                    llm, report["errors"],
+                )
                 report["verify_texts"] = [t[:300] for t in texts]
-                verdicts = _collect_verdicts(texts, subject, llm, report)
+                report["verify_sources"] = sources
                 picked = _apply_verdicts(picked, verdicts, slots, report)
             else:
                 report["errors"].append("没有可提交的校验图(全部未能落地或上传),已按未校验处理")
