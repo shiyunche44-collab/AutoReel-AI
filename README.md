@@ -21,7 +21,7 @@
 | M Plan 订阅 Key **或** `mcode-tools` CLI | 二选一 | 生成通道。订阅 Key 填 `.env` 的 `MINIMAX_PLAN_KEY`,任何终端可跑(见「两种接口后端」);`mcode-tools` 由 MiniMax Code 运行时注入,只能在 MiniMax Code 里跑 |
 | fastapi / uvicorn / pydantic / httpx / Pillow / PyYAML | 已预装 | |
 | jinja2 / pytest | 需补装 | `pip install jinja2 pytest` |
-| yt-dlp | 需补装 | `pip install yt-dlp`。B站 / YouTube / 抖音 视频检索与分段下载 |
+| yt-dlp | 需补装 | `pip install "yt-dlp[default]"`。B站 / YouTube / 抖音 视频检索与分段下载。YouTube 还需要 PATH 上有 node 或 deno(解 JS 校验题) |
 
 ### 2. 配置
 

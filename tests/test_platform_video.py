@@ -231,3 +231,11 @@ def test_cookie_folder_is_merged_into_one_file(monkeypatch, tmp_path):
 def test_empty_cookie_folder_means_no_cookies(monkeypatch, tmp_path):
     monkeypatch.setattr(pv.config, "YTDLP_COOKIES", str(tmp_path))
     assert "cookiefile" not in pv._base_opts()
+
+
+def test_js_runtime_enabled_when_node_is_installed(monkeypatch):
+    """YouTube 不解 JS 题就报 "The page needs to be reloaded";yt-dlp 默认只认 deno。"""
+    monkeypatch.setattr(pv.shutil, "which", lambda name: "C:/node.exe" if name == "node" else None)
+    assert pv._base_opts()["js_runtimes"] == {"node": {}}
+    monkeypatch.setattr(pv.shutil, "which", lambda name: None)
+    assert "js_runtimes" not in pv._base_opts()

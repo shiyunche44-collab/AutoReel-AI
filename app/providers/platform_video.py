@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import shutil
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -337,6 +338,12 @@ def _base_opts() -> dict[str, Any]:
     cookiefile = _cookie_file()
     if cookiefile:
         opts["cookiefile"] = cookiefile
+    # YouTube 要先解一道 JS 题("n challenge")才给格式,否则报
+    # "The page needs to be reloaded"。yt-dlp 默认只认 deno,本机装的是 node,
+    # 要显式启用;解题脚本来自 yt-dlp-ejs(`pip install "yt-dlp[default]"`)。
+    runtimes = {name: {} for name in ("deno", "node", "bun") if shutil.which(name)}
+    if runtimes:
+        opts["js_runtimes"] = runtimes
     if config.FFMPEG_PATH:
         opts["ffmpeg_location"] = str(Path(config.FFMPEG_PATH).parent)
         _ffmpeg_on_path(Path(config.FFMPEG_PATH).parent)
