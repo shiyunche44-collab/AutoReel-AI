@@ -31,6 +31,7 @@ def _report_line(label: str, report: dict) -> None:
     print(f"    硬过滤        {report.get('rejected_by_filter', 0)} 张")
     print(f"    校验弃用      {report.get('verified_rejected', 0)} 张"
           f" / 可解析 {report.get('verify_parsed')}")
+    print(f"    结论来源      {report.get('verify_sources')}")
 
 
 def main() -> int:
@@ -65,6 +66,7 @@ def main() -> int:
     refs, report = asset_resolver.build_reference_set(
         subject=subject, profile=profile, specs=specs,
         project_dir=project_dir, limit=config.CATEGORY_REF_LIMIT, verify=True,
+        llm=DeepSeekProvider(),
     )
     _report_line("修复后", report)
     for reason in report.get("rejected_reasons", [])[:5]:

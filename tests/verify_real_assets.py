@@ -34,13 +34,14 @@ def _specs():
 def check_refs() -> tuple[bool, dict]:
     """素材层:真实车照能不能拿到,以及筛没筛掉电商图。"""
     from app import categories
+    from app.llm.deepseek import DeepSeekProvider
     from app.pipeline import asset_resolver
 
     profile = categories.load_profile("auto")
     refs, report = asset_resolver.build_reference_set(
         subject=SUBJECT, profile=profile, specs=_specs(),
         project_dir=ROOT / "data" / "projects" / SELFTEST_PROJECT,
-        limit=5, verify=True,
+        limit=5, verify=True, llm=DeepSeekProvider(),
     )
     print(f"  检索命中 {report['searched']} 张 -> 采用 {len(refs)} 张")
     print(f"  来源构成 {report.get('origin_counts')}")

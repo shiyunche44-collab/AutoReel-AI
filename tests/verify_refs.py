@@ -16,6 +16,7 @@ SUBJECT = "比亚迪汉 EV"
 
 def main() -> int:
     from app import categories, config
+    from app.llm.deepseek import DeepSeekProvider
     from app.pipeline import asset_resolver
     from app.pipeline.orchestrator import _specs
 
@@ -27,7 +28,7 @@ def main() -> int:
 
     refs, report = asset_resolver.build_reference_set(
         subject=SUBJECT, profile=profile, specs=specs,
-        project_dir=pdir, limit=5,
+        project_dir=pdir, limit=5, llm=DeepSeekProvider(),
     )
 
     print(f"主体      : {SUBJECT}")

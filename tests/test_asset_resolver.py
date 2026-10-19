@@ -32,16 +32,26 @@ def no_network(monkeypatch):
     这样打桩才贴近真实路径 —— 报错路径由 `download_fails` 单独覆盖。
     """
 
+    origin_of: dict[str, str] = {}   # 上传地址 → 原始检索地址
+    local_of: dict[str, str] = {}
+
     def _download(url, dest, **kw):
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"fake-image")
+        local_of[dest.name] = url
         return dest
 
+    def _upload(path):
+        up = f"https://up/{Path(path).name}"
+        origin_of[up] = local_of.get(Path(path).name, up)
+        return up
+
     monkeypatch.setattr(ar.images, "download", _download)
-    monkeypatch.setattr(ar.images.cli, "upload_temp_url", lambda p: f"https://up/{Path(p).name}")
+    monkeypatch.setattr(ar.images.cli, "upload_temp_url", _upload)
     monkeypatch.setattr(ar.webassets, "collect", lambda *a, **k: ([], []))
     monkeypatch.setattr(ar.images, "generate", lambda *a, **k: None)
+    return origin_of
 
 
 @pytest.fixture
@@ -72,10 +82,30 @@ def describe_stub(monkeypatch):
 
     def _describe(urls, prompt, **kw):
         box["calls"].append({"urls": list(urls), "prompt": prompt})
-        return box["result"]
+        result = box["result"]
+        return result(urls) if callable(result) else result
 
     monkeypatch.setattr(ar.images, "describe", _describe)
     return box
+
+def _per_image(no_network, answers: dict[str, str]):
+    """按原始检索地址给每张图一个回答。校验是并发逐张问的,不能靠调用顺序。"""
+    return lambda urls: answers.get(no_network[urls[0]], "")
+
+
+class _FakeLLM:
+    """记录 structured 调用;`result` 可以是返回值或异常。"""
+
+    def __init__(self, result):
+        self.result = result
+        self.calls: list[dict] = []
+
+    def structured(self, system, user, **kw):
+        self.calls.append({"system": system, "user": user, **kw})
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
 
 def _build(tmp_path, search_stub, describe_stub, **kw):
     from app.models import ShotSpec
@@ -248,6 +278,15 @@ def test_verify_prompt_names_the_target_subject(tmp_path, search_stub, describe_
 # --------------------------------------------------------------------------
 # 校验结论的解析与保守策略
 # --------------------------------------------------------------------------
+def test_each_image_is_asked_separately(tmp_path, search_stub, describe_stub, no_network):
+    """实测一次塞 10 张图,视觉模型只描述第一张 —— 其余 9 张从没被看过。"""
+    search_stub["result"] = [_ref(f"https://xchuxing.com/{c}.jpg") for c in "abc"]
+    describe_stub["result"] = ""
+    _build(tmp_path, search_stub, describe_stub)
+    assert len(describe_stub["calls"]) == 3
+    assert all(len(c["urls"]) == 1 for c in describe_stub["calls"])
+
+
 def test_verdict_rejects_wrong_model_and_ecommerce(tmp_path, search_stub, describe_stub,
                                                    no_network):
     search_stub["result"] = [
@@ -255,23 +294,80 @@ def test_verdict_rejects_wrong_model_and_ecommerce(tmp_path, search_stub, descri
         _ref("https://xchuxing.com/wrong.jpg", author="车讯"),
         _ref("https://xchuxing.com/shop.jpg", author="某电商"),
     ]
-    describe_stub["result"] = json.dumps([
-        {"index": 1, "is_target_model": True, "problem": ""},
-        {"index": 2, "is_target_model": False, "problem": "not_target_model"},
-        {"index": 3, "is_target_model": True, "problem": "e-commerce"},
-    ], ensure_ascii=False)
+    describe_stub["result"] = _per_image(no_network, {
+        "https://xchuxing.com/good.jpg": '{"is_target_model": true, "problem": ""}',
+        "https://xchuxing.com/wrong.jpg":
+            '{"is_target_model": false, "problem": "not_target_model"}',
+        "https://xchuxing.com/shop.jpg": '{"is_target_model": true, "problem": "e-commerce"}',
+    })
     refs, report = _build(tmp_path, search_stub, describe_stub)
 
     assert [r.url for r in refs] == ["https://xchuxing.com/good.jpg"]
     assert report["verified_rejected"] == 2
     assert report["verified_ok"] == 1
     assert report["verify_parsed"] is True
+    assert report["verify_sources"]["json"] == 3
     assert any("not_target_model" in r for r in report["rejected_reasons"])
     assert any("e-commerce" in r for r in report["rejected_reasons"])
 
 
-def test_unparseable_verdict_keeps_everything(tmp_path, search_stub, describe_stub,
-                                               no_network):
+def test_prose_is_structured_by_llm(tmp_path, search_stub, describe_stub, no_network):
+    """视觉工具恒回散文:散文交给 LLM 转成判定,校验才真正生效。"""
+    search_stub["result"] = [_ref("https://xchuxing.com/han.jpg", author="新出行"),
+                             _ref("https://xchuxing.com/seal.jpg", author="车讯")]
+    describe_stub["result"] = _per_image(no_network, {
+        "https://xchuxing.com/han.jpg": "这是一台比亚迪汉 EV,车尾有 HAN 字样。",
+        "https://xchuxing.com/seal.jpg": "这是一台白色比亚迪海豹 07 DM-i。",
+    })
+    llm = _FakeLLM({"verdicts": [
+        {"index": 1, "is_target_model": True, "problem": "", "reason": "车尾 HAN"},
+        {"index": 2, "is_target_model": False, "problem": "not_target_model",
+         "reason": "海豹 07"},
+    ]})
+    refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
+
+    assert [r.url for r in refs] == ["https://xchuxing.com/han.jpg"]
+    assert len(llm.calls) == 1, "散文要合在一次 LLM 调用里转"
+    assert "BYD Han EV" in llm.calls[0]["system"]
+    assert "海豹 07" in llm.calls[0]["user"]
+    assert report["verify_sources"] == {"json": 0, "llm": 2, "none": 0}
+    assert any("海豹 07" in r for r in report["rejected_reasons"])
+
+
+def test_only_prose_answers_go_to_llm(tmp_path, search_stub, describe_stub, no_network):
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
+                             _ref("https://xchuxing.com/b.jpg")]
+    describe_stub["result"] = _per_image(no_network, {
+        "https://xchuxing.com/a.jpg": '{"is_target_model": true, "problem": ""}',
+        "https://xchuxing.com/b.jpg": "一台白色 SUV,看不出车标。",
+    })
+    llm = _FakeLLM({"verdicts": [{"index": 2, "is_target_model": "unknown", "problem": ""}]})
+    refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
+    assert len(refs) == 2
+    assert "### 图 2" in llm.calls[0]["user"]
+    assert "### 图 1" not in llm.calls[0]["user"]
+
+
+def test_llm_failure_keeps_everything(tmp_path, search_stub, describe_stub, no_network):
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
+    describe_stub["result"] = "一台别的车。"
+    llm = _FakeLLM(RuntimeError("deepseek down"))
+    refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
+    assert len(refs) == 1
+    assert report["verify_parsed"] is False
+    assert any("结构化失败" in e for e in report["errors"])
+
+
+def test_llm_index_out_of_range_is_ignored(tmp_path, search_stub, describe_stub, no_network):
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
+    describe_stub["result"] = "一台别的车。"
+    llm = _FakeLLM({"verdicts": [{"index": 7, "is_target_model": False}]})
+    refs, _ = _build(tmp_path, search_stub, describe_stub, llm=llm)
+    assert len(refs) == 1
+
+
+def test_unparseable_verdict_without_llm_keeps_everything(tmp_path, search_stub,
+                                                           describe_stub, no_network):
     """解析失败必须**保守保留** —— 把"解析不了"当成"全不合格",
     会让校验层变成素材层新的失败源。"""
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
@@ -281,35 +377,51 @@ def test_unparseable_verdict_keeps_everything(tmp_path, search_stub, describe_st
 
     assert len(refs) == 2
     assert report["verify_parsed"] is False
-    assert any("无法解析" in e for e in report["errors"])
+    assert any("可用结论" in e for e in report["errors"])
 
 
 def test_empty_verdict_keeps_everything(tmp_path, search_stub, describe_stub, no_network):
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
     describe_stub["result"] = ""
-    refs, report = _build(tmp_path, search_stub, describe_stub)
+    llm = _FakeLLM({"verdicts": []})
+    refs, report = _build(tmp_path, search_stub, describe_stub, llm=llm)
     assert len(refs) == 1
     assert report["verify_parsed"] is False
+    assert not llm.calls, "空回答没有可转的内容,不该花一次 LLM 调用"
+
+
+def test_describe_error_on_one_image_keeps_it(tmp_path, search_stub, describe_stub,
+                                              no_network):
+    search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
+                             _ref("https://xchuxing.com/b.jpg")]
+
+    def _answer(urls):
+        if no_network[urls[0]].endswith("b.jpg"):
+            raise RuntimeError("timeout")
+        return '{"is_target_model": false, "problem": "not_target_model"}'
+
+    describe_stub["result"] = _answer
+    refs, report = _build(tmp_path, search_stub, describe_stub)
+    assert [r.url for r in refs] == ["https://xchuxing.com/b.jpg"]
+    assert any("校验调用失败" in e for e in report["errors"])
 
 
 def test_nonblocking_problem_only_warns(tmp_path, search_stub, describe_stub, no_network):
     """带水印的图作为"这台车长什么样"的锚点仍然成立,不该丢。"""
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
-    describe_stub["result"] = json.dumps([
-        {"index": 1, "is_target_model": True, "problem": "text_overlay"},
-    ], ensure_ascii=False)
+    describe_stub["result"] = '{"is_target_model": true, "problem": "text_overlay"}'
     refs, report = _build(tmp_path, search_stub, describe_stub)
     assert len(refs) == 1
     assert report.get("verify_notes")
 
 
-def test_missing_index_keeps_the_image(tmp_path, search_stub, describe_stub, no_network):
-    """模型漏判一张就丢掉好图,代价太大。"""
+def test_image_without_verdict_is_kept(tmp_path, search_stub, describe_stub, no_network):
+    """一张没得出结论就丢掉好图,代价太大。"""
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg"),
                              _ref("https://xchuxing.com/b.jpg")]
-    describe_stub["result"] = json.dumps([
-        {"index": 1, "is_target_model": True, "problem": ""},
-    ], ensure_ascii=False)
+    describe_stub["result"] = _per_image(no_network, {
+        "https://xchuxing.com/a.jpg": '{"is_target_model": true, "problem": ""}',
+    })
     refs, _ = _build(tmp_path, search_stub, describe_stub)
     assert len(refs) == 2
 
@@ -317,9 +429,7 @@ def test_missing_index_keeps_the_image(tmp_path, search_stub, describe_stub, no_
 def test_false_target_model_without_problem_is_still_rejected(tmp_path, search_stub,
                                                               describe_stub, no_network):
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
-    describe_stub["result"] = json.dumps([
-        {"index": 1, "is_target_model": False, "problem": ""},
-    ], ensure_ascii=False)
+    describe_stub["result"] = '{"is_target_model": false, "problem": ""}'
     refs, report = _build(tmp_path, search_stub, describe_stub)
     assert refs == []
     assert report["verified_rejected"] == 1
@@ -344,9 +454,7 @@ def test_verdict_wrapped_in_prose_still_parses(tmp_path, search_stub, describe_s
 def test_all_rejected_falls_back_to_ai_generation(tmp_path, search_stub, describe_stub,
                                                    no_network, monkeypatch):
     search_stub["result"] = [_ref("https://xchuxing.com/a.jpg")]
-    describe_stub["result"] = json.dumps([
-        {"index": 1, "is_target_model": False, "problem": "not_target_model"},
-    ], ensure_ascii=False)
+    describe_stub["result"] = '{"is_target_model": false, "problem": "not_target_model"}'
 
     def _gen(*a, **k):
         r = _ref("https://ai/generated.png", origin="generate")

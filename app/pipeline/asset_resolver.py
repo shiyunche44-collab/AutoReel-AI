@@ -55,34 +55,35 @@ def _junk_reason(ref: images.ImageRef) -> str:
 
 
 def verify_prompt(subject: str) -> str:
-    """构造参考图校验提问。
+    """构造**单张**参考图的校验提问。
 
     必须把**目标车型**写进提示词。过去这一层只问"是不是汽车产品照片",
     从没告诉模型目标是谁 —— 于是它只能答"这是一台轿车",校验通过,但
     车画出来照样不是这台。这正是"文案讲汉、画面不是汉"的另一条来路。
 
-    ⚠️ 实测:视觉问答工具**恒返回散文描述**,不理会"只输出 JSON 数组"的
-    要求 —— 提示词里写死输出形状、要求首尾是 `[` `]` 也一样,返回的仍是
-    几百字的图文描述。所以这套结构化过滤在当前工具下**不会真的剔掉东西**,
-    `parse_verdicts` 失败一律保留。
+    ⚠️ 实测两件事,决定了现在的形状:
 
-    这是刻意的保守选择,不是没做完:用启发式去猜散文里"讲的是不是这台车",
-    会把明明正确、只是没被点名的好参考图删掉,最后退化成 AI 编的假车 ——
-    那比不过滤糟糕得多。工具哪天开始认 JSON,这套解析会自动生效,不用改代码。
+    1. 视觉问答工具**恒返回散文描述**,不理会"只输出 JSON"的要求;
+    2. 一次塞 10 张图,它**只描述第一张**(实测 p_d1851382e779:10 张进,
+       一段讲海豹 07 的散文出)—— 批量校验其余 9 张从来没被看过。
 
-    真正解决"车型不对"的是上一层的检索(拿到真实车照),不是这一层校验。
+    所以改成每张图问一次,并且提示词里点名要它说出**品牌、车型和依据**
+    (车标、车尾字样、车牌位文字)。哪怕它照旧回散文,散文里也有足够的
+    信息交给 LLM 转成结构化判定(见 `_structure_with_llm`)。工具哪天开始
+    认 JSON,`_parse_one` 会直接吃下,不用改代码。
     """
     return (
-        f"下面每张图片需要你判定一次。目标车型是「{subject}」。"
-        "只依据图片内容回答,不确定就说 unknown,不要猜。\n"
-        "对每张图片输出一个 JSON 对象,字段:\n"
-        '  "index": 第几张图(从 1 开始,与给出顺序一致)\n'
-        f'  "is_target_model": true / false / "unknown" —— 画面里的车是不是「{subject}」\n'
+        f"判定这张图片能否作为「{subject}」的参考图。只依据图片内容回答,不要猜。\n"
+        "请务必说明:\n"
+        "1. 画面里车的品牌和车型,以及你的依据(车标、车尾字样、车牌位文字);"
+        "看不出来就直说看不出来;\n"
+        "2. 拍摄视角:外观正侧 / 车尾 / 内饰 / 局部细节 / 其他;\n"
+        "3. 是否是电商白底图、画面里有没有价格文字、大段文字或水印、是否模糊过暗。\n"
+        "如果可以,只输出一个 JSON 对象,字段:\n"
+        f'  "is_target_model": true / false / "unknown" —— 是不是「{subject}」\n'
         '  "view": exterior / interior / rear / detail / other\n'
-        '  "problem": 空字符串表示可用;否则填下面之一 —— '
-        "not_target_model(不是这台车) / e-commerce(电商白底图或画面带价格文字) / "
-        "text_overlay(带大段文字或水印) / low_quality(糊、过暗或纯截图) / unknown\n"
-        "只输出 JSON 数组,不要任何解释文字。"
+        '  "problem": 空字符串表示可用;否则填 not_target_model / e-commerce / '
+        "text_overlay / low_quality / unknown 之一"
     )
 
 
@@ -153,50 +154,135 @@ def _prepare_verify_targets(picked: list[images.ImageRef], project_dir: Path,
     return targets, slots, local_of
 
 
-def _apply_verdicts(refs: list[images.ImageRef], text: str, slots: list[int],
-                     report: dict[str, Any]) -> list[images.ImageRef]:
-    """按校验结论剔除不合格的图。解析失败则**原样保留**并记录。
+#: 每张图单独问一次后,并发数。视觉问答走 CLI 子进程,开太多会被限流
+_VERIFY_WORKERS = 4
 
-    `slots` 是实际提交给模型的那几张在 `refs` 里的下标 —— 没提交的图
+STRUCTURE_SYSTEM = """你把视觉模型对若干张图片的描述转成参考图校验结论。目标车型是「{subject}」。
+
+只依据描述里**明确写出**的内容判定,保守,不要推理补全:
+- is_target_model:描述明确认出的就是目标车型(同品牌同车系;年款、动力版本不同仍算是)→ true;
+  描述明确认出是**别的品牌或别的车系** → false;描述没点名车型、只说"一台白色 SUV"之类 → "unknown"。
+- view:exterior / interior / rear / detail / other。
+- problem:描述明确说是电商白底图或画面有价格文字 → "e-commerce";
+  is_target_model 为 false → "not_target_model";有大段文字或水印 → "text_overlay";
+  明确说模糊、过暗、截图 → "low_quality";都没有 → ""。
+- 描述是报错、拒答或为空 → is_target_model 填 "unknown",problem 填 ""。
+
+输出 JSON 对象 {{"verdicts": [...]}},每张图一项,字段 index(与输入编号一致)、
+is_target_model、view、problem、reason(一句中文依据,引用描述原话)。"""
+
+
+def _parse_one(text: str) -> dict[str, Any] | None:
+    """从单张图的回答里抠出判定对象。数组取第一项,对象直接用;抠不出返回 None。"""
+    found = parse_verdicts(text)
+    if found:
+        return found[0]
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) and "problem" in data else None
+
+
+def _describe_each(targets: list[str], subject: str,
+                   report: dict[str, Any]) -> list[str]:
+    """每张图单独问一次视觉模型。单张失败只记一条,返回空串(= 该图未校验)。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    prompt = verify_prompt(subject)
+
+    def _one(url: str) -> str:
+        try:
+            return images.describe([url], prompt)
+        except Exception as exc:  # noqa: BLE001
+            report["errors"].append(f"参考图校验调用失败(该图保留):{str(exc)[:120]}")
+            return ""
+
+    with ThreadPoolExecutor(max_workers=min(_VERIFY_WORKERS, len(targets))) as pool:
+        return list(pool.map(_one, targets))
+
+
+def _structure_with_llm(texts: dict[int, str], subject: str, llm: Any,
+                        report: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """把散文描述一次性交给 LLM 转成判定。`texts` 的键是 1 起的图片编号。
+
+    一次调用转完所有图,而不是每张一次:散文已经是文本,LLM 不需要看图,
+    合在一起问更便宜也更快。失败时返回空 —— 等于这些图未校验,全部保留。
+    """
+    if not texts or llm is None:
+        return {}
+    user = "\n\n".join(f"### 图 {n}\n{t[:1500]}" for n, t in sorted(texts.items()))
+    try:
+        data = llm.structured(STRUCTURE_SYSTEM.format(subject=subject), user,
+                              required_keys=["verdicts"], temperature=0.0)
+    except Exception as exc:  # noqa: BLE001
+        report["errors"].append(f"校验描述结构化失败,这些图按未校验保留:{str(exc)[:120]}")
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for v in data.get("verdicts") or []:
+        if not isinstance(v, dict):
+            continue
+        try:
+            n = int(v.get("index", 0))
+        except (TypeError, ValueError):
+            continue
+        if n in texts:
+            out[n] = v
+    return out
+
+
+def _collect_verdicts(texts: list[str], subject: str, llm: Any,
+                      report: dict[str, Any]) -> list[dict[str, Any] | None]:
+    """逐张得出判定:模型直接给了 JSON 就用,否则交给 LLM 转;都不成则 None。"""
+    verdicts: list[dict[str, Any] | None] = [_parse_one(t) if t else None for t in texts]
+    prose = {n: t for n, (t, v) in enumerate(zip(texts, verdicts), start=1)
+             if t and v is None}
+    structured = _structure_with_llm(prose, subject, llm, report)
+    for n, v in structured.items():
+        verdicts[n - 1] = v
+    report["verify_sources"] = {
+        "json": sum(1 for t in texts if t and _parse_one(t) is not None),
+        "llm": len(structured),
+        "none": sum(1 for v in verdicts if v is None),
+    }
+    return verdicts
+
+
+def _apply_verdicts(refs: list[images.ImageRef], verdicts: list[dict[str, Any] | None],
+                    slots: list[int], report: dict[str, Any]) -> list[images.ImageRef]:
+    """按逐张校验结论剔除不合格的图。没有结论的图**原样保留**。
+
+    `slots[i]` 是第 i 张提交图在 `refs` 里的下标 —— 没提交的图
     (落地/上传失败)不参与判定,直接保留。
     """
-    verdicts = parse_verdicts(text)
-    report["verify_text"] = text[:600]
-    if not verdicts:
-        report["errors"].append(
-            "参考图校验返回无法解析的结构,已按未校验处理(全部保留);"
-            f"原始返回:{text[:160]}"
-        )
+    if not any(verdicts):
+        report["errors"].append("参考图校验没有得出任何可用结论,已按未校验处理(全部保留)")
         report["verify_parsed"] = False
         report["verified_ok"] = len(refs)
         return refs
 
     report["verify_parsed"] = True
-    by_index: dict[int, dict[str, Any]] = {}
-    for v in verdicts:
-        try:
-            by_index[int(v.get("index", 0))] = v
-        except (TypeError, ValueError):
-            continue
-
     drop: set[int] = set()
-    for n, pos in enumerate(slots, start=1):
-        verdict = by_index.get(n)
+    for verdict, pos in zip(verdicts, slots):
         if not verdict:
-            # 模型漏掉这张 → 保留,别因为少一条就把好图丢了
+            # 这张没得出结论 → 保留,别因为少一条就把好图丢了
             continue
         ref = refs[pos]
+        label = ref.author or ref.url[:40]
+        reason = str(verdict.get("reason") or "").strip()
         problem = str(verdict.get("problem") or "").strip().lower()
         if verdict.get("is_target_model") is False and problem not in _BLOCKING_PROBLEMS:
             problem = "not_target_model"
         if problem in _BLOCKING_PROBLEMS:
             report["verified_rejected"] += 1
-            report["rejected_reasons"].append(f"{ref.author or ref.url[:40]}:{problem}")
+            report["rejected_reasons"].append(
+                f"{label}:{problem}" + (f"({reason[:60]})" if reason else ""))
             drop.add(pos)
         elif problem:
-            report.setdefault("verify_notes", []).append(
-                f"{ref.author or ref.url[:40]}:{problem}"
-            )
+            report.setdefault("verify_notes", []).append(f"{label}:{problem}")
     kept = [r for i, r in enumerate(refs) if i not in drop]
     report["verified_ok"] = len(kept)
     return kept
@@ -247,11 +333,15 @@ def build_reference_set(
     project_dir: Path,
     limit: int = 5,
     verify: bool = True,
+    llm: Any = None,
 ) -> tuple[list[images.ImageRef], dict]:
     """构建并落库全片共享参考图集。返回 (参考图列表, 报告)。
 
     任一环节失败都不抛异常 —— 素材层必须降级而不是阻断流水线:
     检索失败 → AI 生图兜底 → 仍失败 → 空集合(生成阶段走纯文生视频)。
+
+    `llm` 用来把视觉模型的散文描述转成结构化判定;不给则只认模型直接
+    返回的 JSON,其余图按未校验保留。
     """
     angles = _angles_for(specs)
     picked: list[images.ImageRef] = []
@@ -351,8 +441,10 @@ def build_reference_set(
         try:
             targets, slots, local_of = _prepare_verify_targets(picked, project_dir, report)
             if targets:
-                verdict = images.describe(targets, verify_prompt(subject))
-                picked = _apply_verdicts(picked, verdict, slots, report)
+                texts = _describe_each(targets, subject, report)
+                report["verify_texts"] = [t[:300] for t in texts]
+                verdicts = _collect_verdicts(texts, subject, llm, report)
+                picked = _apply_verdicts(picked, verdicts, slots, report)
             else:
                 report["errors"].append("没有可提交的校验图(全部未能落地或上传),已按未校验处理")
         except Exception as exc:  # noqa: BLE001

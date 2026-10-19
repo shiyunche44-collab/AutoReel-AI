@@ -327,7 +327,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         project_dir = config.project_dir(project_id)
         refs, report = asset_resolver.build_reference_set(
             subject=subject, profile=profile, specs=_specs(project_id),
-            project_dir=project_dir, limit=config.CATEGORY_REF_LIMIT,
+            project_dir=project_dir, limit=config.CATEGORY_REF_LIMIT, llm=llm,
         )
         _set_state(project_id, state, State.ASSETS_READY,
                    reason=f"参考图 {len(refs)} 张(检索 {report['searched']})")
