@@ -12,6 +12,7 @@ import pytest
 from app.models import ShotSpec
 from app.pipeline.prompt_compiler import (
     ShotTranslation,
+    _englishize_placeholder,
     assemble,
     compile_shot,
     format_timestamp,
@@ -452,13 +453,22 @@ def _with_visible(items: list[str]) -> ShotTranslation:
     return t
 
 
-def test_chinese_placeholder_is_translated_to_english():
-    """实测漏翻的那个占位符,必须被换成英文。"""
-    prompt = assemble(_spec(), _with_visible(["[年款标识]"]), narration_mode="tts")
-    assert "[MODEL YEAR BADGE]" in prompt
-    assert "年款标识" not in prompt
+def test_placeholders_never_reach_the_video_prompt():
+    """占位符是"内容未知"的标记,不是画面文字。视频模型会照字面画出来 ——
+    小米 YU7 草稿里 "[BODY LENGTH]"、"[BLOCKING RATE]" 全成了画面字幕。"""
+    prompt = assemble(_spec(), _with_visible(["[年款标识]", "[PRODUCT TITLE]", "[A] [B]"]),
+                      narration_mode="tts")
+    assert "Readable on-screen text" not in prompt
+    assert "[MODEL YEAR BADGE]" not in prompt and "年款标识" not in prompt
+    assert "[PRODUCT TITLE]" not in prompt
     assert validate(prompt, duration=6.0, narration_mode="tts",
                     subject_en="BYD Han EV") == []
+
+
+def test_concrete_text_is_kept_next_to_dropped_placeholders():
+    prompt = assemble(_spec(), _with_visible(["702 km", "[续航读数]"]), narration_mode="tts")
+    assert '"702 km"' in prompt
+    assert "[" not in prompt.split("Readable on-screen text")[1].split(".")[0]
 
 
 @pytest.mark.parametrize("zh,en", [
@@ -467,32 +477,12 @@ def test_chinese_placeholder_is_translated_to_english():
     ("[百公里能耗]", "[ENERGY CONSUMPTION PER 100KM]"),
     ("[车机界面]", "[INFOTAINION SCREEN]"),
     ("[价格]", "[PRICE TAG]"),
+    ("车机界面", "[INFOTAINION SCREEN]"),
+    ("[某个没收录的标识]", "[ON-SCREEN LABEL]"),
 ])
 def test_placeholder_map_covers_common_auto_labels(zh: str, en: str):
-    prompt = assemble(_spec(), _with_visible([zh]), narration_mode="tts")
-    assert en in prompt and zh not in prompt
-
-
-def test_unknown_chinese_placeholder_degrades_not_crashes():
-    """词表没覆盖的不能原样放行 —— 汉字进画面就是鬼画符。"""
-    prompt = assemble(_spec(), _with_visible(["[某个没收录的标识]"]), narration_mode="tts")
-    assert "[ON-SCREEN LABEL]" in prompt
-    assert "某个没收录的标识" not in prompt
-    assert validate(prompt, duration=6.0, narration_mode="tts") == []
-
-
-def test_bare_chinese_visible_text_is_translated_too():
-    """模型有时连括号都不加,直接把中文标签整串抄回来。"""
-    prompt = assemble(_spec(), _with_visible(["车机界面"]), narration_mode="tts")
-    assert "[INFOTAINION SCREEN]" in prompt
-    assert "车机界面" not in prompt
-
-
-def test_english_placeholders_pass_through_untouched():
-    prompt = assemble(
-        _spec(), _with_visible(["[PRODUCT TITLE]", "[2025 MODEL YEAR]"]), narration_mode="tts",
-    )
-    assert "[PRODUCT TITLE]" in prompt and "[2025 MODEL YEAR]" in prompt
+    """映射仍然保留:它决定一段文字算不算占位符(中文标签 → 英文占位符 → 丢弃)。"""
+    assert _englishize_placeholder(zh) == en
 
 
 def test_chinese_subject_name_still_compiles():

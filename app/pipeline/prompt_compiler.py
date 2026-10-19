@@ -91,6 +91,11 @@ _CJK_PLACEHOLDER_MAP: dict[str, str] = {
 _CJK_PLACEHOLDER_FALLBACK = "[ON-SCREEN LABEL]"
 
 
+def _is_placeholder(text: str) -> bool:
+    """整串都是方括号占位符(可以有多个,如 "[A] [B]")。"""
+    return bool(re.fullmatch(r"(?:\s*\[[^\[\]]*\]\s*)+", text))
+
+
 def _englishize_placeholder(text: str) -> str:
     """把可见文字里的中文占位符换成英文占位符。
 
@@ -263,10 +268,16 @@ def assemble(
     # 但模型漏翻是常态(实测 drafts/001.mp4、004.mp4 就是漏翻的 "[年款标识]",
     # 被 H3 画成了鬼画符)。放在 assemble 而不是 translate_shot,是为了让
     # 手工构造的 ShotTranslation 也逃不掉这一层。
+    #
+    # ⚠️ 占位符(整串是方括号)**一律不进提示词**,英文的也不进。占位符是分镜
+    # "内容未知"的诚实标记,不是画面文字 —— 但视频模型会照字面把它画出来:
+    # 小米 YU7 项目的草稿里,"[BODY LENGTH]"、"[BLOCKING RATE]"、
+    # "[MODEL BADGE A]" 全被 Hailuo 当成字幕画进了画面。具体文字(如 "702 km")照常保留。
     text_bits = [
-        _englishize_placeholder(t.strip())
-        for t in translation.visible_text
+        bit for t in translation.visible_text
         if t and t.strip()
+        for bit in [_englishize_placeholder(t.strip())]
+        if not _is_placeholder(bit)
     ]
     if text_bits:
         joined = " ".join(f'"{t}"' for t in text_bits)

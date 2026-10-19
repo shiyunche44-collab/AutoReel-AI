@@ -339,7 +339,18 @@ def test_qc_rejection_sends_shot_back_to_generation(offline, tmp_path, monkeypat
     monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k: [])
     assignment, report = _collect(tmp_path, _specs(1))
     assert assignment == {}
-    assert report["qc_rejected"] == 1
+    # 同一条视频的每个起点各落地一次、各被弃用一次,都不过关才退回生成
+    assert 1 <= report["qc_rejected"] <= cr.QC_REJECTS_PER_SHOT
+
+
+def test_qc_rejection_tries_next_candidate(offline, tmp_path, monkeypatch):
+    """落地即质检:海报被拦后接着试下一条,而不是整镜退回生成。"""
+    offline["platform"] = [_hit("https://b/poster"), _hit("https://b/good")]
+    monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k:
+                        [c for c in clipped if "poster" not in c.url])
+    assignment, report = _collect(tmp_path, _specs(1))
+    assert assignment[0].url == "https://b/good"
+    assert report["qc_rejected"] >= 1
 
 
 def test_time_budget_stops_collection(offline, tmp_path, monkeypatch):
@@ -705,18 +716,21 @@ def test_qc_frame_extract_failure_keeps_clip(tmp_path, qc_env, monkeypatch):
 def test_collect_passes_llm_to_qc(offline, tmp_path, monkeypatch):
     box: dict = {}
 
-    def _qc(clipped, work_dir, errors, llm=None, subject=""):
+    def _qc(clipped, work_dir, errors, llm=None, subject="", intents=None, car_flags=None):
         box["llm"] = llm
         box["subject"] = subject
+        box["intents"] = intents
         return clipped
 
     monkeypatch.setattr(cr, "_qc", _qc)
+    offline["platform"] = [_hit("https://b/x")]
     sentinel = object()
     specs = [ShotSpec(idx=0, duration=6.0, visual_zh="x", angle="exterior_45")]
     cr.collect(subject="比亚迪汉 EV", profile=load_profile("auto"), specs=specs,
                project_dir=tmp_path, llm=sentinel)
     assert box["llm"] is sentinel
     assert box["subject"] == "比亚迪汉 EV"
+    assert box["intents"] == ["x"], "镜头意图要交给质检判文不对题"
 
 
 # ==========================================================================
@@ -1138,3 +1152,60 @@ def test_qc_without_subject_ignores_model_verdict(tmp_path, qc_env):
     qc_env["answers"]["f000.jpg"] = json.dumps(
         {"is_target_model": False, "problem": "not_target_model"})
     assert cr._qc(cands, tmp_path, []) == cands
+
+
+def test_qc_bare_json_answer_is_asked_again_for_prose(tmp_path, qc_env):
+    """只回 JSON、没有描述的帧以前直接"没有结论"放行 —— 海报、网页截图就这样混进成片。"""
+    cands = _cands(tmp_path, 1)
+    answers = iter([json.dumps({"is_target_model": True, "problem": "text_overlay"}),
+                    "这是一张宣传海报,大标题写着 YU7,旁边站着代言人。"])
+    qc_env["answers"] = type("A", (dict,), {"get": lambda self, k, d=None: next(answers)})()
+    llm = _QcLLM({"verdicts": [{"index": 1, "problem": "poster", "reason": "宣传海报"}]})
+    kept = cr._qc(cands, tmp_path, [], llm=llm, subject="小米 YU7")
+    assert kept == []
+    assert len(qc_env["calls"]) == 2
+    assert "不要输出 JSON" in qc_env["prompts"][1]
+    assert "宣传海报" in llm.calls[0]["user"]
+
+
+def test_qc_blocks_poster_and_off_topic(tmp_path, qc_env):
+    cands = _cands(tmp_path, 3)
+    qc_env["answers"] = {"f000.jpg": "海报", "f001.jpg": "只有一台车", "f002.jpg": "一台小米 YU7"}
+    llm = _QcLLM({"verdicts": [
+        {"index": 1, "problem": "poster"},
+        {"index": 2, "problem": "off_topic", "reason": "要两车同框却只有一台"},
+        {"index": 3, "is_target_model": True, "problem": ""},
+    ]})
+    kept = cr._qc(cands, tmp_path, [], llm=llm, subject="小米 YU7",
+                  intents=["内饰", "小米YU7与特斯拉Model Y并排", "外观"])
+    assert [c.url for c in kept] == ["u2"]
+    assert "小米YU7与特斯拉Model Y并排" in qc_env["prompts"][1]
+    assert "【镜头意图】小米YU7与特斯拉Model Y并排" in llm.calls[0]["user"]
+
+
+def test_qc_non_car_shot_only_checks_other_problems(tmp_path, qc_env):
+    """非车辆镜头不判车型 / 被裁,但文不对题(飞机舷窗)要拦。"""
+    cands = _cands(tmp_path, 2)
+    qc_env["answers"] = {"f000.jpg": "飞机舷窗外的云层", "f001.jpg": "城市街景"}
+    llm = _QcLLM({"verdicts": [
+        {"index": 1, "problem": "off_topic"},
+        {"index": 2, "is_target_model": False, "subject_whole": False, "problem": "no_subject"},
+    ]})
+    kept = cr._qc(cands, tmp_path, [], llm=llm, subject="小米 YU7",
+                  intents=["女性乘客坐在车内", "城市街景"], car_flags=[False, False])
+    assert [c.url for c in kept] == ["u1"]
+    assert "【非车辆镜头】" in llm.calls[0]["user"]
+
+
+def test_qc_reject_budget_is_per_tier(offline, tmp_path, monkeypatch):
+    """官网图一级被拦光,也要轮到下一级的平台视频。"""
+    from app.providers.images import ImageRef
+
+    offline["gallery"] = [ImageRef(url=f"https://img/poster{i}.jpg", origin="official:autohome",
+                                   angle="exterior_45")
+                          for i in range(cr.QC_REJECTS_PER_SHOT + 2)]
+    offline["platform"] = [_hit("https://b/good")]
+    monkeypatch.setattr(cr, "_qc", lambda clipped, *a, **k:
+                        [c for c in clipped if "poster" not in c.url])
+    assignment, _ = _collect(tmp_path, _specs(1))
+    assert assignment[0].url == "https://b/good"

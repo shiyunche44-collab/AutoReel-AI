@@ -71,21 +71,28 @@ TRIES_PER_TIER = 2
 #:
 #: ⚠️ 视觉问答工具恒回散文、一次多张只描述第一张(见 `vision_verdict`),
 #: 所以每帧单独问,并要求它把这几件事**说出来** —— 照旧回散文也能被 LLM 转成判定。
-def qc_prompt(subject: str) -> str:
+def qc_prompt(subject: str, intent: str = "") -> str:
+    """`intent` 是这个镜头想要的画面(分镜的 visual_zh),给了就多问一条"对不对题"。"""
+    want = (f"5. 这个镜头想要的画面是:「{intent}」。图里的场景和它是不是同一类"
+            "(例如要车内却是飞机舷窗、要两车同框却只有一台、要内饰却是外观海报)?\n"
+            if intent else "")
     return (
         f"这张图片是从「{subject}」的候选视频片段中点抽出的一帧。"
         "只依据图片内容回答,不要猜。同一车系的不同年款、不同动力版本(如 EV / DM-i)"
-        "也算是目标车型;看不出年款不算不是。请务必说明:\n"
-        "1. 画面里有没有车;有的话是什么品牌和车型,依据是什么(车标、车尾字样、车牌位文字),"
-        "看不出来就直说看不出来;\n"
+        "也算是目标车型;看不出年款不算不是。注意同品牌的不同车系(如小米 SU7 与 YU7)"
+        "是不同车型。请务必用文字说明:\n"
+        "1. 画面里有没有车;有的话是什么品牌和车型,依据是什么(车标、车尾字样、车牌位文字、"
+        "画面里的车型名),看不出来就直说看不出来;\n"
         "2. 车是否**完整**在画面内,还是车头、车尾或车身被画幅边缘切掉了;\n"
         "3. 画面是否清晰,能否看清主体;\n"
-        "4. 是否有字幕、台标、水印或大段文字。\n"
-        "如果可以,只输出一个 JSON 对象,字段:\n"
+        "4. 是否有字幕、台标、水印或大段文字;是不是宣传海报(大标题字、代言人摆拍)"
+        "或网页 / App 截图(按钮、导航栏);\n"
+        + want +
+        "先用文字逐条说明,最后可以再附一个 JSON 对象,字段:\n"
         f'  "is_target_model": true / false / "unknown" —— 是不是「{subject}」\n'
         '  "subject_whole": true / false —— 车是否完整在画面内\n'
         '  "problem": 空字符串表示可用;否则填 not_target_model / no_subject / cropped / '
-        "text_overlay / unclear / unknown 之一"
+        "poster / off_topic / text_overlay / unclear / unknown 之一"
     )
 
 
@@ -108,7 +115,13 @@ QC_STRUCTURE_SYSTEM = """你把视觉模型对若干视频帧的描述转成片�
   描述明确说画面里没有车,**或**描述了画面主体却通篇没提到任何车辆或车辆部件
   (例如只讲出镜主持人、风景、测试图)→ "no_subject"(车内内饰、车辆局部特写都算有车);
   subject_whole 为 false → "cropped";描述明确说模糊、过暗、看不清主体 → "unclear";
+  描述明确说是宣传海报(大标题字、代言人摆拍)或网页 / App 截图(按钮、导航栏)→ "poster";
+  帧描述前给了"镜头意图",且描述的场景和意图**根本不是一类**(要车内却是飞机舷窗、
+  要两车同框却只有一台、要内饰却是外观)→ "off_topic";角度、光线、颜色、背景、
+  具体部件的出入**不算**;
   有字幕、台标、水印或大段文字 → "text_overlay";都没有 → ""。
+- 帧描述前标了"非车辆镜头"的:不判车型(is_target_model 填 "unknown"),
+  不判 no_subject 和 cropped,只看 unclear / poster / off_topic / text_overlay。
 - 描述是报错、拒答或为空 → is_target_model 填 "unknown",subject_whole 填 true,problem 填 ""。
 
 输出 JSON 对象 {{"verdicts": [...]}},每帧一项,字段 index(与输入编号一致)、
@@ -120,7 +133,18 @@ is_target_model、subject_whole、problem、reason(一句中文依据,引用描�
 #: 这一整条通路空转 —— 候选全被毙掉,功能等于没做。带角标的真实车画面,
 #: 对"个人学习"用途完全够看,所以只记警告不弃用。
 #: 真正会**出错**的是车不对(别的车型 / 根本没车)、主体被裁掉和画面不清,必须拦。
-_BLOCKING_PROBLEMS = {"not_target_model", "no_subject", "cropped", "unclear"}
+#: 海报 / 网页截图(`poster`)和文不对题(`off_topic`)也拦:台标是角落小字,
+#: 海报是整屏大字和代言人,截图带按钮 —— 这些放进解说成片就是明显的错。
+_BLOCKING_PROBLEMS = {"not_target_model", "no_subject", "cropped", "unclear",
+                      "poster", "off_topic"}
+#: 非车辆镜头(氛围、人物、行业)只查这几项:没有"是不是这台车 / 车被裁没裁"的问题
+_OTHER_BLOCKING = {"unclear", "poster", "off_topic"}
+
+#: 一个镜头在**每一级**最多被质检弃用几次。每次弃用都要再落地一个候选 +
+#: 一次视觉判定,不设上限的话,一个全是海报的官网能让单镜头试上十几轮。
+#: 按级计数而不是按镜头:按镜头计时,官网图一级就把次数耗光,B 站那一级
+#: 从来轮不到(小米 YU7 项目实测)。
+QC_REJECTS_PER_SHOT = 4
 
 #: 默认不设上限:能用真实就用真实。`.env` 的 REAL_CLIP_LIMIT 可以收紧
 DEFAULT_LIMIT = 0
@@ -425,11 +449,14 @@ def _extract_frame(clip_path: str | Path, dest: Path) -> Path | None:
 
 def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
         errors: list[str], llm: Any = None, *,
-        subject: str = "") -> list[clips_mod.ClipCandidate]:
-    """对已落地的片段逐帧质检:不是目标车型 / 没有车 / 主体被裁 / 画面不清的弃用。
+        subject: str = "", intents: Sequence[str] | None = None,
+        car_flags: Sequence[bool] | None = None) -> list[clips_mod.ClipCandidate]:
+    """对已落地的片段逐帧质检:不是目标车型 / 没有车 / 主体被裁 / 画面不清 /
+    海报截图 / 文不对题的弃用。
 
     `subject` 是目标车型;不给时不做车型判定(`not_target_model` 一律不算),
-    其余检查照常。
+    其余检查照常。`intents` 与 `clipped` 对齐,是各镜头想要的画面,用于判
+    `off_topic`;`car_flags` 标出哪些是车辆镜头,非车辆镜头只按 `_OTHER_BLOCKING` 弃用。
 
     每条片段抽一帧、单独问一次视觉模型;散文回答交给 `llm` 转成判定
     (不给 `llm` 则只认模型直接返回的 JSON)。
@@ -458,9 +485,26 @@ def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
         return clipped
 
     target = subject or "目标车型"
+    intent_of = list(intents or [])
+    is_car = list(car_flags or [])
+
+    def _intent(i: int) -> str:
+        return intent_of[i] if i < len(intent_of) else ""
+
+    def _car(i: int) -> bool:
+        return is_car[i] if i < len(is_car) else True
+
+    contexts = [
+        "".join([
+            "" if _car(i) else "【非车辆镜头】",
+            f"【镜头意图】{_intent(i)}" if _intent(i) else "",
+        ])
+        for i in slots
+    ]
     verdicts, _, _ = vision_verdict.judge(
-        urls, qc_prompt(target), QC_STRUCTURE_SYSTEM.format(subject=target), llm,
-        errors, what="片段",
+        urls, [qc_prompt(target, _intent(i)) for i in slots],
+        QC_STRUCTURE_SYSTEM.format(subject=target), llm,
+        errors, what="片段", contexts=contexts,
     )
     if not any(verdicts):
         errors.append("片段质检没有得出任何可用结论,已全部保留")
@@ -477,13 +521,14 @@ def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
         problem = str(verdict.get("problem") or "").strip().lower()
         if problem == "not_target_model" and not subject:
             problem = ""
-        if problem not in _BLOCKING_PROBLEMS:
+        blocking = _BLOCKING_PROBLEMS if _car(i) else _OTHER_BLOCKING
+        if _car(i) and problem not in blocking:
             if subject and verdict.get("is_target_model") is False:
                 problem = "not_target_model"
             elif verdict.get("subject_whole") is False:
                 problem = "cropped"
         reason = str(verdict.get("reason") or "").strip()
-        if problem in _BLOCKING_PROBLEMS:
+        if problem in blocking:
             rejected.append(f"{cand.title or cand.url[:40]}:{problem}"
                             + (f"({reason[:60]})" if reason else ""))
             continue
@@ -561,13 +606,27 @@ def collect(*, subject: str, profile: CategoryProfile,
         q = by_idx.get(spec.idx) or media_query._fallback(subject, profile, spec)
         tiers = CAR_TIERS if q.kind == "car" else OTHER_TIERS
         dest = clip_dir / f"shot_{spec.idx:03d}.mp4"
+        is_car = q.kind == "car"
         for tier in tiers:
-            cands = [c for c in _tier_candidates(ctx, tier, q) if _key(c) not in ctx.tried]
-            considered.update(_key(c) for c in cands)
-            # 同源优先:上一个镜头用的视频还有别的起点,接着用它
-            if last_page:
-                cands.sort(key=lambda c: 0 if c.page_url == last_page else 1)
-            hit = _try_tier(ctx, cands, dest, seconds, report)
+            hit = None
+            rejects = 0
+            while rejects < QC_REJECTS_PER_SHOT:
+                cands = [c for c in _tier_candidates(ctx, tier, q) if _key(c) not in ctx.tried]
+                considered.update(_key(c) for c in cands)
+                # 同源优先:上一个镜头用的视频还有别的起点,接着用它
+                if last_page:
+                    cands.sort(key=lambda c: 0 if c.page_url == last_page else 1)
+                hit = _try_tier(ctx, cands, dest, seconds, report)
+                if hit is None:
+                    break
+                # 落地即质检:不过关就在本级接着试下一个候选,而不是整镜退回生成
+                if not qc or _qc([hit], work_dir / f"s{spec.idx:03d}_{rejects}",
+                                 report["errors"], llm=llm, subject=subject,
+                                 intents=[spec.visual_zh], car_flags=[is_car]):
+                    break
+                report["qc_rejected"] += 1
+                rejects += 1
+                hit = None
             if hit is not None:
                 assignment[spec.idx] = hit
                 tiers_of[spec.idx] = tier
@@ -576,18 +635,6 @@ def collect(*, subject: str, profile: CategoryProfile,
 
     report["candidates"] = len(considered)
     report["sources_tried"] = ctx.sources_tried
-
-    # 质检只查车辆镜头:非车画面没有"是不是这台车 / 车被裁没裁"的问题
-    if qc:
-        car_idx = [i for i in assignment if (by_idx.get(i) and by_idx[i].kind == "car")]
-        kept = _qc([assignment[i] for i in car_idx], work_dir, report["errors"], llm=llm,
-                   subject=subject)
-        kept_ids = {id(c) for c in kept}
-        for i in car_idx:
-            if id(assignment[i]) not in kept_ids:
-                del assignment[i]
-                tiers_of.pop(i, None)
-                report["qc_rejected"] += 1
 
     for idx, cand in sorted(assignment.items()):
         report["selected"][str(idx)] = {

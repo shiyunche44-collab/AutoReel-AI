@@ -197,3 +197,13 @@ def test_search_respects_platform_order_and_isolates_failures(monkeypatch):
     hits = pv.search("比亚迪汉", platforms=["douyin", "youtube", "bilibili"], errors=errors)
     assert [h.platform for h in hits] == ["douyin", "bilibili"]
     assert any("youtube" in e for e in errors)
+
+
+def test_ffmpeg_dir_is_put_on_path(monkeypatch, tmp_path):
+    """yt-dlp 判断能否分段下载只查 PATH,不读 ffmpeg_location。"""
+    monkeypatch.setenv("PATH", "C:\Windows")
+    monkeypatch.setattr(pv.config, "FFMPEG_PATH", tmp_path / "ffmpeg.exe")
+    pv._base_opts()
+    pv._base_opts()
+    parts = pv.os.environ["PATH"].split(pv.os.pathsep)
+    assert parts.count(str(tmp_path)) == 1

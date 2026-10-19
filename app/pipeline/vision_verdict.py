@@ -17,13 +17,18 @@
 10 张里的 8 张。所以有 LLM 时**一律**走 LLM 的保守规则(JSON 连同它后面
 的判定依据一起交过去),视觉模型的 JSON 只在没有 LLM 或 LLM 失败时兜底。
 任何一步失败,对应的图只是"没有结论",由调用方按保守原则保留。
+
+⚠️ 视觉模型还会**只**回一段 JSON、一句描述都没有。去掉 JSON 后什么都不剩,
+这张图就成了"没有结论"而被保留 —— 实测小米 YU7 一项目里,网页截图、
+海报、被裁的图全是这样混进成片的。所以这类回答**追问一次**,要它用文字
+描述;追问仍然只有 JSON,才算没有结论。
 """
 from __future__ import annotations
 
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Sequence
 
 from ..providers import images
 
@@ -63,21 +68,32 @@ def parse_one(text: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and "problem" in data else None
 
 
-def describe_each(urls: list[str], prompt: str, errors: list[str], *,
+#: 回答只有 JSON 时追问用的后缀。
+PROSE_RETRY = ("\n\n上一次你只给了 JSON 结论,没有任何描述。这次**不要输出 JSON**,"
+               "用几句中文逐条描述你在图里看到了什么:主体是什么、有哪些文字、"
+               "车是否完整。")
+
+
+def describe_each(urls: list[str], prompt: str | Sequence[str], errors: list[str], *,
                   what: str = "图") -> list[str]:
-    """每张图单独问一次视觉模型。单张失败只记一条,返回空串(= 这张没有结论)。"""
+    """每张图单独问一次视觉模型。单张失败只记一条,返回空串(= 这张没有结论)。
+
+    `prompt` 可以是一个(所有图共用)或与 `urls` 对齐的一组。
+    """
     if not urls:
         return []
+    prompts = [prompt] * len(urls) if isinstance(prompt, str) else list(prompt)
 
-    def _one(url: str) -> str:
+    def _one(pair: tuple[str, str]) -> str:
+        url, text = pair
         try:
-            return images.describe([url], prompt)
+            return images.describe([url], text)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"视觉判定调用失败(该{what}保留):{str(exc)[:120]}")
             return ""
 
     with ThreadPoolExecutor(max_workers=min(WORKERS, len(urls))) as pool:
-        return list(pool.map(_one, urls))
+        return list(pool.map(_one, zip(urls, prompts)))
 
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*[\[{].*?```", re.DOTALL)
@@ -126,16 +142,32 @@ def structure_with_llm(texts: dict[int, str], system: str, llm: Any,
     return out
 
 
-def judge(urls: list[str], prompt: str, system: str, llm: Any, errors: list[str], *,
-          what: str = "图") -> tuple[list[dict[str, Any] | None], list[str], dict[str, int]]:
+def judge(urls: list[str], prompt: str | Sequence[str], system: str, llm: Any,
+          errors: list[str], *, what: str = "图",
+          contexts: Sequence[str] | None = None,
+          ) -> tuple[list[dict[str, Any] | None], list[str], dict[str, int]]:
     """逐张判定。返回 (与 urls 对齐的结论或 None, 原始回答, 结论来源计数)。
 
     有 LLM 时,回答去掉视觉模型自己的 JSON 判定后交给 LLM 按 `system` 的规则转;
     只有一段 JSON、没有任何描述的回答没有依据,该图没有结论(= 保留)。
     没有 LLM 或 LLM 调用失败时,才退回视觉模型自己的 JSON。
+
+    只回 JSON 的图追问一次(见模块说明)。`contexts` 与 `urls` 对齐,
+    逐图拼在描述前面交给 LLM(如"这个镜头想要的画面"),空串不拼。
     """
     texts = describe_each(urls, prompt, errors, what=what)
-    described = {n: d for n, t in enumerate(texts, start=1) if t
+    if llm is not None:
+        prompts = [prompt] * len(urls) if isinstance(prompt, str) else list(prompt)
+        bare = [i for i, t in enumerate(texts) if t and not strip_verdict_json(t)]
+        if bare:
+            again = describe_each([urls[i] for i in bare],
+                                  [prompts[i] + PROSE_RETRY for i in bare], errors, what=what)
+            for i, t in zip(bare, again):
+                if t and strip_verdict_json(t):
+                    texts[i] = t
+    ctx = list(contexts or [])
+    described = {n: (f"{ctx[n - 1]}\n{d}" if n - 1 < len(ctx) and ctx[n - 1] else d)
+                 for n, t in enumerate(texts, start=1) if t
                  for d in [strip_verdict_json(t)] if d}
     structured = structure_with_llm(described, system, llm, errors, what=what)
     verdicts: list[dict[str, Any] | None] = []

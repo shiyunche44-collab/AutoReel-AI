@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import urllib.parse
 from dataclasses import dataclass, field
@@ -337,7 +338,21 @@ def _base_opts() -> dict[str, Any]:
         opts["cookiefile"] = config.YTDLP_COOKIES
     if config.FFMPEG_PATH:
         opts["ffmpeg_location"] = str(Path(config.FFMPEG_PATH).parent)
+        _ffmpeg_on_path(Path(config.FFMPEG_PATH).parent)
     return opts
+
+
+def _ffmpeg_on_path(ffmpeg_dir: Path) -> None:
+    """把 ffmpeg 目录放进本进程的 PATH。
+
+    ⚠️ 光给 `ffmpeg_location` 不够:yt-dlp 判断"能不能分段下载"时调的是
+    `FFmpegFD.available()`,它**不读** `ffmpeg_location`、只查 PATH(源码里
+    自带 Fixme)。ffmpeg 不在系统 PATH 时(本机就是),所有 `download_ranges`
+    下载都报"ffmpeg is not installed",B 站 / YouTube 通路整条空转。
+    """
+    current = os.environ.get("PATH", "")
+    if str(ffmpeg_dir).lower() not in current.lower().split(os.pathsep):
+        os.environ["PATH"] = str(ffmpeg_dir) + os.pathsep + current
 
 
 def _ytdlp_extract(url: str, *, flat: bool = False) -> dict[str, Any]:
