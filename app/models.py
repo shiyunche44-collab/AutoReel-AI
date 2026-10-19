@@ -23,7 +23,7 @@ ShotStatus = Literal[
     "failed",       # 失败
     "skipped",      # 被跳过(如用户标记不需要)
 ]
-Consistency = Literal["ok", "degraded", "real"]
+Consistency = Literal["ok", "degraded", "real", "card"]
 
 
 def new_id(prefix: str = "") -> str:
@@ -88,6 +88,9 @@ class ShotSpec(BaseModel):
     angle: str = "exterior_45"
     #: 画面中可见的文字(如仪表读数、车型标识)。**缺失时用占位符,禁止臆造。**
     on_screen_text: list[str] = Field(default_factory=list)
+    #: 数据卡片规格(核对过事实的参数 / 对比 / 时间线 / 柱状图)。非空时这个镜头
+    #: 由代码渲染,不取材、不生成。形状见 `cards.normalise()`。
+    card: dict | None = None
 
 
 class Shot(BaseModel):
@@ -108,7 +111,8 @@ class Shot(BaseModel):
     attempts: int = 0
     error: str | None = None
     #: 一致性链状态:ok = 共享参考图 + 尾帧串联均生效;degraded = 降级;
-    #: real = 该镜头用的是网上抓来的真实视频片段,没经过生成
+    #: real = 该镜头用的是网上抓来的真实视频片段,没经过生成;
+    #: card = 数据卡片,由代码直接渲染(见 pipeline/cards.py)
     consistency: Consistency = "ok"
     #: 所在链的序号与链内位置
     chain_id: int = 0

@@ -22,6 +22,7 @@ from ..providers import clips as clips_mod
 from ..state import State, assert_transition
 from . import (  # noqa: F401 - 显式列出便于阅读依赖
     asset_resolver,
+    cards,
     clip_resolver,
     generate,
     intake,
@@ -275,6 +276,11 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
 
     if state == State.DRAFT_INTENT:
         facts, report = intake.run(project_id, profile, subject, theme=theme.name, llm=llm)
+        if not report.get("sources_ok") and report.get("sources_failed"):
+            # 一个来源都没通是环境问题(CLI 缺失、登录失效),不是"这款车没数据"。
+            # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
+            first = report["sources_failed"][0]
+            raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
         db.update_project(project_id, shot_count=config.shots_for_duration(project["duration"]))
         _set_state(project_id, state, State.FACTS_RESOLVED,
                    reason=f"采集 {len(report['sources_ok'])} 个来源,"
@@ -307,16 +313,22 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
             raise PipelineError(LLM_REQUIRED_HINT)
         segments = _script(project_id)
         facts = _facts(project_id)
+        card_log: list[dict] = []
         specs = storyboard.build(
             subject=subject, profile=profile, segments=segments, facts=facts,
-            duration=project["duration"], llm=llm,
+            duration=project["duration"], llm=llm, card_log=card_log,
         )
         problems = storyboard.validate_specs(specs, project["duration"])
         if problems:
             raise PipelineError("分镜自检未通过:" + "; ".join(problems))
         _save_specs(project_id, specs)
-        _set_state(project_id, state, State.STORYBOARD_READY, reason=f"分镜 {len(specs)} 个镜头")
-        return {"state": str(State.STORYBOARD_READY), "shots": len(specs)}
+        db.write_json(project_id, "cards.json", card_log)
+        cards.invalidate(project_id)
+        n_cards = sum(1 for s in specs if s.card)
+        _set_state(project_id, state, State.STORYBOARD_READY,
+                   reason=f"分镜 {len(specs)} 个镜头"
+                          + (f",其中 {n_cards} 个数据卡片" if card_log else ""))
+        return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "cards": n_cards}
 
     if state == State.STORYBOARD_READY:
         _set_state(project_id, state, State.GATE_A, reason="等待确认脚本与分镜")
@@ -336,19 +348,24 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
             raise PipelineError(LLM_REQUIRED_HINT)
         # 真实镜头也照常编译提示词:门禁 B 不满意某个真实镜头时要能"重试"
         # 回退生成,缺提示词就退不回去。几十次 LLM 调用比这条退路便宜。
+        specs = _specs(project_id)
+        # 卡片镜头不编译提示词、不取材:画面由代码渲染,两者都用不上
+        footage = [s.idx for s in specs if not s.card]
         compiled, errors = compile_all_prompts(
             project_id, profile=profile, subject=subject,
             narration_mode=project["narration_mode"], llm=llm, stage="draft",
+            only_idx=footage,
         )
         db.write_json(project_id, "prompt_errors.json", errors)
-        generate.initialise_shots(project_id, _specs(project_id), stage="draft",
-                                  ref_limit=len(refs))
-        # 逐镜头取材:必须在 initialise_shots 之后 —— 命中的镜头靠写成
+        generate.initialise_shots(project_id, specs, stage="draft", ref_limit=len(refs))
+        # 卡片与取材都必须在 initialise_shots 之后 —— 它们靠把镜头写成
         # succeeded 来"顶掉"草稿生成,shot 行要先存在。
-        real_shots = _collect_media(project_id, subject, profile, _specs(project_id),
-                                    refs, llm)
+        card_shots, _ = cards.materialize(project_id, specs, refs, stage="draft")
+        real_shots = _collect_media(project_id, subject, profile,
+                                    [s for s in specs if not s.card], refs, llm)
         _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
                    reason=f"编译 {compiled} 条提示词,校验失败 {len(errors)} 条"
+                          + (f",{card_shots} 个数据卡片" if card_shots else "")
                           + (f",{real_shots} 个镜头用真实素材" if real_shots else ""))
         _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
                    reason=f"开始草稿生成({config.DRAFT_MODEL})")
@@ -379,7 +396,8 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         # 差集:已编译过的不再编译 —— 重复编译会重复烧 LLM 额度。
         todo = [
             s.idx for s in specs
-            if s.idx in approved and not generate.load_prompt(project_id, "final", s.idx)
+            if s.idx in approved and not s.card
+            and not generate.load_prompt(project_id, "final", s.idx)
         ]
         if llm is None and todo:
             raise PipelineError(LLM_REQUIRED_HINT)
@@ -394,7 +412,9 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         # 真实素材:门禁 A 之后取好的素材,按批应用到成片档,省掉成片生成。
         # 必须在 initialise_shots 之后 —— 它靠把镜头写成 succeeded 来"顶掉"
         # 那次生成,而 initialise_shots 之前 shot 行还不存在。
-        real_shots = _inject_clips(project_id, subject, profile, specs, approved, refs, llm)
+        cards.materialize(project_id, specs, refs, stage="final", only=approved)
+        real_shots = _inject_clips(project_id, subject, profile,
+                                   [s for s in specs if not s.card], approved, refs, llm)
 
         review = _review_state(project_id, len(specs))
         _set_state(project_id, State.GATE_B, State.FINAL_RENDERING,
@@ -793,9 +813,18 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
     if problems:
         raise PipelineError("分镜自检未通过:" + "; ".join(problems))
     _save_specs(project_id, specs)
+    cards.invalidate(project_id)
 
 
 def retry(project_id: str, idx: int, stage: str) -> None:
+    spec = next((s for s in _specs(project_id) if s.idx == idx), None)
+    if spec is not None and spec.card:
+        # 卡片没有生成任务可重试:重画一遍(比如改了 cards 的版式之后)
+        cards.invalidate(project_id, idx)
+        _, errs = cards.materialize(project_id, [spec], _refs(project_id), stage=stage)
+        if errs:
+            raise PipelineError(errs[0])
+        return
     generate.retry_shot(project_id, idx, stage)
 
 

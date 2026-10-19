@@ -280,15 +280,21 @@ def submit_ready(
     model = _model_for(stage)
     resolution = _resolution_for(stage)
 
-    # 已完成镜头 → 尾帧,供链中镜头作首帧
+    # 已完成镜头 → 尾帧,供链中镜头作首帧。
+    # 数据卡片除外:它的尾帧是一张图表,拿去当下一镜的首帧,视频模型会照着
+    # 图表往下"续拍"。卡片的后继按链首处理(只靠参考图集),不算降级。
+    card_idx = {r["idx"] for r in rows if r.get("consistency") == "card"}
     completed_videos = {
         r["idx"]: Path(r[f"{stage}_path"])
         for r in rows
-        if r["status"] == "succeeded" and r.get(f"{stage}_path")
+        if r["status"] == "succeeded" and r.get(f"{stage}_path") and r["idx"] not in card_idx
     }
     frame_plan = chains_mod.plan_first_frames(
         chains, stage, project_dir, ref_limit=ref_limit
     )
+    for idx, plan in list(frame_plan.items()):
+        if plan.get("from_shot") in card_idx:
+            frame_plan[idx] = {"path": None, "source": "reference_set" if ref_limit else "none"}
     first_frames = chains_mod.materialize_first_frames(
         frame_plan, chains, completed_videos, stage
     )

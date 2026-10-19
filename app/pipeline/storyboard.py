@@ -14,6 +14,7 @@ from typing import Sequence
 from .. import config
 from ..categories import CategoryProfile
 from ..models import Fact, ScriptSegment, ShotSpec
+from . import cards
 
 SYSTEM = """你是中文短视频的分镜导演,为每个镜头写一段**画面描述**。
 
@@ -30,6 +31,14 @@ SYSTEM = """你是中文短视频的分镜导演,为每个镜头写一段**画�
 4. 逐条遵守镜头清单里的「节拍方向」;若标注了「画面硬要求」,那是**不可协商**的,
    必须在画面里出现,即使旁白只提到了其中一台车。
 5. 竖屏 9:16 构图,主体尽量置于画面中部。
+6. 标注了「数据卡片」的镜头,画面由程序渲染成图表,你要额外给出 `card` 对象:
+   {{"title": "卡片标题(12 字内)", "columns": [对比对象名,仅对比卡需要],
+     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
+   - 每一行**只能**取自下面「可用事实」里的某一条,fact_id 填那条事实的 id;
+     values 里的数字必须与事实原文一字不差(含单位),不得换算、取整或估算。
+   - 优先挑与该镜头旁白相关的数据;同一视频里不同卡片不要重复同一行。
+   - 找不到合适事实时 rows 给空数组,不要编。
+   - 这类镜头的 visual 仍要写,作为卡片作废时的备用画面。
 
 必需键: shots"""
 
@@ -42,7 +51,7 @@ Aspect ratio: 9:16 (vertical)
 镜头清单(逐条对应,visual 要呼应 narration):
 {shots}
 
-可用事实(仅在画面确需展示数据时可作为 on_screen_text 的依据):
+可用事实(数据卡片只能取自这里;普通镜头仅在画面确需展示数据时可作为 on_screen_text 的依据):
 {facts}
 
 输出 JSON。"""
@@ -56,8 +65,13 @@ def build(
     facts: Sequence[Fact],
     duration: int,
     llm,
+    card_log: list[dict] | None = None,
 ) -> list[ShotSpec]:
-    """生成分镜表。"""
+    """生成分镜表。
+
+    `card_log` 非空时收集每个卡片镜头的核对结果(哪些行因数字无据被丢掉),
+    供门禁 A 复核。
+    """
     shot_count = config.shots_for_duration(duration)
     grid = config.SHOT_GRID_SECONDS
 
@@ -77,15 +91,23 @@ def build(
             " | 画面硬要求:必须出现第二台车(不同年款或不同配置),两台同框"
             if sec.multi_subject else ""
         )
+        card = (
+            f" | 数据卡片:{cards.KIND_GUIDE[sec.card]}" if sec.card in cards.KIND_GUIDE else ""
+        )
         shot_lines.append(
             f"[镜头 {i + 1}] 段落:{sec.name or '未分类'} | "
-            f"节拍方向:{sec.beat or '无'}{hard} | "
+            f"节拍方向:{sec.beat or '无'}{hard}{card} | "
             f"旁白:{narration}"
         )
 
+    # 卡片要能取到中置信度的参数(新闻源里大部分产品参数是 medium);
+    # 低置信度(超期旧参数)一律不给,ground() 也会再拦一次。
+    has_cards = any(profile.section(p).card for p in plan[:shot_count])
+    usable = [f for f in facts if f.enabled and
+              (f.confidence == "high" or (has_cards and f.confidence == "medium"))]
     facts_payload = "\n".join(
-        f"- {f.id}: {f.claim}" for f in facts if f.confidence == "high"
-    )[:2000] or "(无)"
+        f"- {f.id}: {f.claim}" for f in usable
+    )[:4000 if has_cards else 2000] or "(无)"
 
     data = llm.structured(
         SYSTEM.format(category=profile.label),
@@ -115,6 +137,13 @@ def build(
         # 若模型给出了具体品牌/型号而事实层没有,这里不做判断,交由 QA 与人工门禁把关。
         on_screen = [str(v).strip() for v in visible if str(v).strip()]
 
+        card, dropped = (None, [])
+        if sec.card:
+            card, dropped = cards.ground(cards.normalise(item.get("card"), sec.card), facts)
+        if card_log is not None and sec.card:
+            card_log.append({"idx": i, "section": sec.name, "kind": sec.card,
+                             "rendered": card is not None, "dropped": dropped})
+
         specs.append(
             ShotSpec(
                 idx=i,
@@ -126,7 +155,8 @@ def build(
                 ambience_zh=sec.beat or "",
                 narration_zh=seg.text if seg else "",
                 angle=sec.angle,
-                on_screen_text=on_screen,
+                on_screen_text=[] if card else on_screen,
+                card=card,
             )
         )
     return specs

@@ -203,6 +203,8 @@ themes:
 # 单一扁平命名空间,所有方向共用 —— profile.section(name) 的调用点无需区分方向。
 # beat 决定画面,camera 归一到官方运镜词表,angle 决定参考图视角,
 # multi_subject 标记该段落画面需要出现第二台车(对比 / 迭代史场景)。
+# card 标记该段落用数据卡片(spec 参数 / compare 对比 / timeline 时间线 / bars 柱状图):
+# 由代码渲染,数字逐条核对事实,不交给视频模型画。核对后不够一张卡时退回普通画面。
 # --------------------------------------------------------------------------
 sections:
   开场钩子:
@@ -220,6 +222,7 @@ sections:
     camera: Static Shot
     angle: detail
     narration_style: 播报可量化数据,每句必须挂事实引用
+    card: spec
     requires_fact: true
   卖点深挖:
     beat: 内饰做工、材质与使用场景的细节特写
@@ -268,6 +271,7 @@ sections:
     camera: Static Shot
     angle: screen_spec
     narration_style: 逐一说明对比哪几个维度、为什么选这几个维度
+    card: compare
   选购决策:
     beat: 车辆静置收尾,画面留出决策感
     camera: Pull Out
@@ -312,6 +316,7 @@ sections:
     camera: Static Shot
     angle: screen_spec
     narration_style: 摊开讲能耗、保险、保养等成本,说明估算口径
+    card: spec
 
   # ---- 品牌历史与产品战略 ----
   品牌起点:
@@ -341,6 +346,7 @@ sections:
     camera: Static Shot
     angle: screen_spec
     narration_style: 用数据说明这个细分市场现在是谁在拿份额
+    card: bars
   热点事件:
     beat: 车展、发布会或行业事件的现场画面
     camera: Tracking Shot
@@ -351,6 +357,7 @@ sections:
     camera: Pull Out
     angle: screen_spec
     narration_style: 从数据推出趋势判断,并点明不确定性
+    card: bars
 
 visual_keywords: [汽车, 轿车, 新能源汽车, 内饰, 续航, 座舱]
 reference_query_template: "{subject} 实拍 {angle}"

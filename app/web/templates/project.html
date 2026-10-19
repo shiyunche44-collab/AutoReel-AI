@@ -200,8 +200,15 @@
       {% for s in p.shots %}
       <div class="sb-row" data-idx="{{ s.idx }}">
         <div class="sb-no">#{{ '%02d' % s.idx }}</div>
-        <div class="sb-visual">{{ s.spec.visual_zh }}</div>
+        <div class="sb-visual">
+          {% if s.spec.card %}
+          <strong>{{ s.spec.card.title }}</strong>{% if s.spec.card.columns %}({{ s.spec.card.columns | join(' vs ') }}){% endif %}
+          {% for r in s.spec.card.rows %}<br><span class="muted">{{ r.label }}</span> {{ r.values | join(' / ') }} <code>{{ r.fact_id }}</code>{% endfor %}
+          {% else %}{{ s.spec.visual_zh }}{% endif %}
+        </div>
         <div class="sb-meta">
+          {% if s.spec.card %}<span class="tag">数据卡片 · {{ s.spec.card.kind }}</span>{% endif %}
+          {% if s.consistency == 'real' %}<span class="tag">真实素材</span>{% endif %}
           <span class="tag">{{ s.spec.section }}</span>
           <span class="tag">{{ s.spec.camera_zh }}</span>
           <span class="tag">{{ s.spec.angle }}</span>

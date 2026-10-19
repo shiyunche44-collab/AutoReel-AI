@@ -166,9 +166,11 @@ def audit_narration(audio_path: str | Path, expected_text: str) -> dict[str, Any
 
 def run(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     """对成片档的全部镜头执行质检,产出 qa.json。"""
+    # 数据卡片不进视觉质检:画面里本来就没有车,问"是不是目标车型"只会误判;
+    # 它的数字在分镜阶段已经逐行核对过事实。
     rows = [
         r for r in db.get_shots(project_id, "final")
-        if r["status"] == "succeeded" and r.get("final_path")
+        if r["status"] == "succeeded" and r.get("final_path") and r.get("consistency") != "card"
     ]
     spec_map = {s.idx: s for s in specs}
     results: list[ShotQA] = []

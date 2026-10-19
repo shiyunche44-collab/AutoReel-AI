@@ -1,0 +1,399 @@
+"""数据卡片镜头:参数、对比、时间线、柱状图由代码直接渲染,不交给视频模型画。
+
+视频模型画不出准确的数字和汉字 —— "数据界面"类镜头交给 H3,拿回来的是一屏
+乱码或编造的读数。而这类镜头恰恰是解说视频最需要"一个字都不能错"的地方。
+
+分工与提示词编译器一致:
+- 分镜 LLM 只负责**挑**:从事实层选出要上屏的几行,并给每行挂 `fact_id`;
+- `ground()` 负责**核**:每行的数字必须出现在它引用的那条事实里,否则整行丢弃;
+- `render()` 负责**画**:纯 PIL + ffmpeg,确定性、零生成额度、秒级出片。
+
+核完剩下的行不够撑起一张卡片时返回 None,镜头退回普通画面 —— 宁可少一张卡,
+也不上一张有错数字的卡。
+"""
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Sequence
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+from .. import categories, config
+from ..models import Fact
+from . import render as render_mod
+from .grounding import numbers_in
+
+#: 卡片版式(定义在 categories,Profile 加载期据此校验)。段落用 `card:` 声明自己用哪一种。
+CARD_KINDS = categories.CARD_KINDS
+
+#: 每种版式至少要几行才值得上屏,最多放几行(9:16 一屏的可读上限)
+_MIN_ROWS = {"spec": 1, "compare": 1, "timeline": 2, "bars": 2}
+_MAX_ROWS = {"spec": 5, "compare": 5, "timeline": 5, "bars": 6}
+
+#: 版式说明,拼进分镜提示词,告诉 LLM 每种卡片的 rows 怎么填
+KIND_GUIDE = {
+    "spec": "参数卡:rows 每行 {label: 参数名, values: [取值含单位], fact_id}",
+    "compare": "对比卡:columns 给两个对比对象名;rows 每行 {label: 维度, values: [A 的值, B 的值], fact_id}",
+    "timeline": "时间线:rows 每行 {label: 年份, values: [这一年发生了什么,15 字内], fact_id}",
+    "bars": "柱状图:rows 每行 {label: 项目名, values: [数值含单位], fact_id},数值必须可比(同单位同口径)",
+}
+
+W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+FPS = 24
+
+# 内容区避开平台 UI:顶部状态栏与搜索框、底部字幕(timeline 的 margin_v = 0.14H)
+# 与标题/文案区、右侧点赞评论那一列。
+_TOP = int(H * 0.15)
+_BOTTOM = int(H * 0.70)
+_LEFT = int(W * 0.07)
+_RIGHT = int(W * 0.88)
+
+_BG_TOP = (15, 17, 21)
+_BG_BOTTOM = (28, 34, 48)
+_PANEL = (255, 255, 255, 22)
+_TEXT = (255, 255, 255)
+_MUTED = (176, 184, 196)
+_ACCENT = (77, 163, 255)
+_ACCENT_B = (255, 181, 71)
+_RULE = (255, 255, 255, 40)
+
+
+# --------------------------------------------------------------------------
+# 结构清洗与事实核对
+# --------------------------------------------------------------------------
+def normalise(raw: Any, kind: str) -> dict[str, Any] | None:
+    """把 LLM 给的卡片对象洗成固定形状。形状不对返回 None。"""
+    if kind not in CARD_KINDS or not isinstance(raw, dict):
+        return None
+    rows: list[dict[str, Any]] = []
+    for r in raw.get("rows") or []:
+        if not isinstance(r, dict):
+            continue
+        values = r.get("values")
+        if isinstance(values, str):
+            values = [values]
+        values = [str(v).strip() for v in (values or []) if str(v).strip()]
+        label = str(r.get("label", "")).strip()
+        if not label or not values:
+            continue
+        rows.append({"label": label, "values": values,
+                     "fact_id": str(r.get("fact_id", "")).strip()})
+    columns = [str(c).strip() for c in (raw.get("columns") or []) if str(c).strip()]
+    return {
+        "kind": kind,
+        "title": str(raw.get("title", "")).strip()[:16],
+        "columns": columns[:2],
+        "rows": rows,
+    }
+
+
+def _bar_value(text: str) -> float | None:
+    m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
+    return float(m.group(0)) if m else None
+
+
+def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
+           ) -> tuple[dict[str, Any] | None, list[str]]:
+    """逐行核对卡片数字。返回 (核对后的卡片或 None, 丢弃原因列表)。
+
+    规则:
+    - 每行必须引用一条存在且启用的事实,低置信度事实不上屏;
+    - 行内(标签 + 取值)出现的每个数字都必须见于该事实原文;
+    - 对比卡每行必须正好两个值,柱状图每行必须解析得出数值;
+    - 剩余行数不够版式下限 → 整张卡作废。
+    """
+    if not card:
+        return None, []
+    kind = card["kind"]
+    by_id = {f.id: f for f in facts if f.enabled and f.confidence != "low"}
+    kept: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for row in card["rows"]:
+        fact = by_id.get(row["fact_id"])
+        text = row["label"] + " " + " ".join(row["values"])
+        if fact is None:
+            dropped.append(f"「{text}」引用的事实 {row['fact_id'] or '(空)'} 不存在或置信度低")
+            continue
+        missing = numbers_in(text) - numbers_in(fact.claim)
+        if missing:
+            dropped.append(f"「{text}」中的 {sorted(missing)} 不见于 {fact.id}:{fact.claim}")
+            continue
+        if kind == "compare" and len(row["values"]) != 2:
+            dropped.append(f"「{text}」对比卡每行需要两个值")
+            continue
+        if kind == "bars" and _bar_value(row["values"][0]) is None:
+            dropped.append(f"「{text}」柱状图取值不是数字")
+            continue
+        kept.append({**row, "values": row["values"][:2] if kind == "compare" else row["values"][:1]})
+
+    kept = kept[: _MAX_ROWS[kind]]
+    if len(kept) < _MIN_ROWS[kind]:
+        return None, dropped + [f"核对后剩 {len(kept)} 行,不足 {_MIN_ROWS[kind]} 行,卡片作废"]
+    if kind == "compare" and len(card["columns"]) != 2:
+        return None, dropped + ["对比卡缺两个对比对象名,卡片作废"]
+
+    used = [by_id[r["fact_id"]] for r in kept]
+    dates = sorted({f.retrieved_at[:7] for f in used if f.retrieved_at})
+    return {**card, "rows": kept,
+            "source": f"数据来源:公开资料整理{' · ' + dates[-1] if dates else ''}"}, dropped
+
+
+# --------------------------------------------------------------------------
+# 绘制
+# --------------------------------------------------------------------------
+def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    fonts = Path(config.FONTS_DIR)
+    names = ("msyhbd.ttc", "msyh.ttc", "simhei.ttf") if bold else ("msyh.ttc", "simhei.ttf")
+    for name in names:
+        p = fonts / name
+        if p.is_file():
+            return ImageFont.truetype(str(p), size)
+    return ImageFont.load_default()
+
+
+def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    return int(draw.textlength(text, font=font))
+
+
+def _fit(draw: ImageDraw.ImageDraw, text: str, size: int, max_w: int, bold: bool = False):
+    """缩小字号直到一行放得下(最小到原字号的 55%),仍放不下就截断。"""
+    for s in range(size, int(size * 0.55) - 1, -2):
+        f = _font(s, bold)
+        if _text_w(draw, text, f) <= max_w:
+            return text, f
+    f = _font(int(size * 0.55), bold)
+    while text and _text_w(draw, text + "…", f) > max_w:
+        text = text[:-1]
+    return text + "…", f
+
+
+def _background(bg: Path | None) -> Image.Image:
+    if bg and Path(bg).is_file():
+        try:
+            img = Image.open(bg).convert("RGB")
+            scale = max(W / img.width, H / img.height)
+            img = img.resize((int(img.width * scale) + 1, int(img.height * scale) + 1))
+            left, top = (img.width - W) // 2, (img.height - H) // 2
+            img = img.crop((left, top, left + W, top + H)).filter(ImageFilter.GaussianBlur(28))
+            return Image.blend(img, Image.new("RGB", (W, H), _BG_TOP), 0.62)
+        except OSError:
+            pass
+    grad = Image.new("RGB", (1, H))
+    for y in range(H):
+        t = y / (H - 1)
+        grad.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(_BG_TOP, _BG_BOTTOM)))
+    return grad.resize((W, H))
+
+
+def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Image) -> Image.Image:
+    img = base.copy().convert("RGBA")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(overlay)
+    d.rounded_rectangle((_LEFT - 30, _TOP - 40, _RIGHT + 30, _BOTTOM + 30), radius=36, fill=_PANEL)
+
+    inner_w = _RIGHT - _LEFT
+    y = _TOP
+    tag, tag_f = _fit(d, subject, 36, inner_w)
+    d.text((_LEFT, y), tag, font=tag_f, fill=_ACCENT)
+    y += 58
+    title, title_f = _fit(d, card.get("title") or "关键数据", 66, inner_w, bold=True)
+    d.text((_LEFT, y), title, font=title_f, fill=_TEXT)
+    y += 110
+
+    rows = card["rows"][:visible_rows]
+    kind = card["kind"]
+    area = _BOTTOM - 60 - y
+    if kind == "compare":
+        y = _draw_compare(d, card, rows, y, area)
+    elif kind == "timeline":
+        _draw_timeline(d, card, rows, y, area)
+    elif kind == "bars":
+        _draw_bars(d, card, rows, y, area)
+    else:
+        _draw_spec(d, card, rows, y, area)
+
+    src, src_f = _fit(d, card.get("source", ""), 26, inner_w)
+    d.text((_LEFT, _BOTTOM - 20), src, font=src_f, fill=_MUTED)
+    return Image.alpha_composite(img, overlay).convert("RGB")
+
+
+def _row_h(card: dict[str, Any], area: int, extra: int = 0) -> int:
+    return min(190, area // max(1, len(card["rows"]) + extra))
+
+
+def _draw_spec(d, card, rows, y, area) -> None:
+    rh = _row_h(card, area)
+    half = (_RIGHT - _LEFT) // 2
+    for r in rows:
+        label, lf = _fit(d, r["label"], 40, half - 20)
+        d.text((_LEFT, y + rh // 2), label, font=lf, fill=_MUTED, anchor="lm")
+        value, vf = _fit(d, r["values"][0], 64, half + 20, bold=True)
+        d.text((_RIGHT, y + rh // 2), value, font=vf, fill=_TEXT, anchor="rm")
+        d.line((_LEFT, y + rh, _RIGHT, y + rh), fill=_RULE, width=2)
+        y += rh
+
+
+def _draw_compare(d, card, rows, y, area) -> int:
+    col_w = (_RIGHT - _LEFT) // 2
+    a, b = card["columns"]
+    a, af = _fit(d, a, 42, col_w - 30, bold=True)
+    b, bf = _fit(d, b, 42, col_w - 30, bold=True)
+    d.text((_LEFT + col_w // 2, y + 30), a, font=af, fill=_ACCENT, anchor="mm")
+    d.text((_RIGHT - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
+    y += 80
+    rh = _row_h(card, area - 80)
+    for r in rows:
+        label, lf = _fit(d, r["label"], 32, _RIGHT - _LEFT)
+        d.text(((_LEFT + _RIGHT) // 2, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
+        va, vaf = _fit(d, r["values"][0], 54, col_w - 30, bold=True)
+        vb, vbf = _fit(d, r["values"][1], 54, col_w - 30, bold=True)
+        d.text((_LEFT + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
+        d.text((_RIGHT - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
+        d.line((_LEFT, y + rh, _RIGHT, y + rh), fill=_RULE, width=2)
+        y += rh
+    return y
+
+
+def _draw_timeline(d, card, rows, y, area) -> None:
+    rh = _row_h(card, area)
+    x_line = _LEFT + 20
+    if rows:
+        d.line((x_line, y + rh // 2, x_line, y + rh * (len(rows) - 1) + rh // 2), fill=_RULE, width=4)
+    for r in rows:
+        cy = y + rh // 2
+        d.ellipse((x_line - 14, cy - 14, x_line + 14, cy + 14), fill=_ACCENT)
+        year, yf = _fit(d, r["label"], 46, 220, bold=True)
+        d.text((x_line + 44, cy), year, font=yf, fill=_ACCENT, anchor="lm")
+        ev, ef = _fit(d, r["values"][0], 40, _RIGHT - x_line - 290)
+        d.text((x_line + 270, cy), ev, font=ef, fill=_TEXT, anchor="lm")
+        y += rh
+
+
+def _draw_bars(d, card, rows, y, area) -> None:
+    rh = _row_h(card, area)
+    peak = max((_bar_value(r["values"][0]) or 0 for r in card["rows"]), default=0) or 1
+    bar_w = _RIGHT - _LEFT
+    for i, r in enumerate(rows):
+        label, lf = _fit(d, r["label"], 36, bar_w)
+        d.text((_LEFT, y + 8), label, font=lf, fill=_MUTED)
+        v = max(0.0, _bar_value(r["values"][0]) or 0)
+        top, bottom = y + 60, y + min(rh - 20, 60 + 54)
+        length = max(12, int((bar_w - 220) * v / peak))
+        d.rounded_rectangle((_LEFT, top, _LEFT + length, bottom), radius=10,
+                            fill=_ACCENT if i == 0 else (*_ACCENT, 150))
+        value, vf = _fit(d, r["values"][0], 40, 210, bold=True)
+        d.text((_LEFT + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT, anchor="lm")
+        y += rh
+
+
+def render_frames(card: dict[str, Any], subject: str, out_dir: Path,
+                  background: Path | None = None) -> list[Path]:
+    """逐行出现的关键帧:第 0 帧只有标题,之后每帧多一行。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = _background(background)
+    frames = []
+    for n in range(len(card["rows"]) + 1):
+        p = out_dir / f"step_{n:02d}.png"
+        _frame(card, subject, n, base).save(p)
+        frames.append(p)
+    return frames
+
+
+def render(card: dict[str, Any], subject: str, dest: str | Path, *,
+           seconds: float | None = None, background: Path | None = None) -> Path:
+    """渲染成定长 9:16 镜头(无音轨,合成层会统一补静音轨)。失败抛 RuntimeError。"""
+    seconds = float(seconds or config.SHOT_GRID_SECONDS)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="card_") as tmp:
+        frames = render_frames(card, subject, Path(tmp), background)
+        # 节奏:标题 0.4s,每行 0.45s,行全部出完后定格到结束
+        step = 0.45
+        durations = [0.4] + [step] * (len(frames) - 2)
+        durations.append(max(1.0, seconds - sum(durations)))
+        lines = []
+        for f, dur in zip(frames, durations):
+            lines += [f"file '{f.as_posix()}'", f"duration {dur:.3f}"]
+        lines.append(f"file '{frames[-1].as_posix()}'")  # concat 要求末帧重复一次
+        listing = Path(tmp) / "list.txt"
+        listing.write_text("\n".join(lines), encoding="utf-8")
+        proc = subprocess.run(
+            [render_mod._ffmpeg(), "-y", "-v", "error",
+             "-f", "concat", "-safe", "0", "-i", str(listing),
+             "-vf", f"fps={FPS},format=yuv420p",
+             "-t", f"{seconds:.3f}", "-an",
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             "-movflags", "+faststart", str(dest)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        )
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        raise RuntimeError(f"卡片渲染失败:{(proc.stderr or '')[-300:]}")
+    return dest
+
+
+# --------------------------------------------------------------------------
+# 接入流水线
+# --------------------------------------------------------------------------
+def background_for(project_dir: Path, refs: Sequence[Any]) -> Path | None:
+    """取参考图集里第一张真实照片做卡片底图(虚化压暗),没有就用渐变底。"""
+    for i, r in enumerate(refs):
+        origin = r.get("origin") if isinstance(r, dict) else getattr(r, "origin", "")
+        p = project_dir / "refs" / f"ref_{i:02d}.jpg"
+        if origin != "generate" and p.is_file():
+            return p
+    return None
+
+
+def materialize(project_id: str, specs: Sequence[Any], refs: Sequence[Any], *,
+                stage: str, only: set[int] | None = None) -> tuple[int, list[str]]:
+    """渲染卡片镜头并写成该档位的 succeeded。返回 (生效镜头数, 错误列表)。
+
+    卡片只渲染一次(`cards/NNN.mp4`),草稿档与成片档共用同一个文件 ——
+    门禁 B 审到的就是最终会上屏的那张卡。单张失败只记错误,该镜头留在生成队列里。
+    """
+    from .. import db  # 延迟导入:本模块的纯函数部分不依赖数据库
+
+    project_dir = config.project_dir(project_id)
+    out_dir = project_dir / ("drafts" if stage == "draft" else "shots")
+    path_field = "draft_path" if stage == "draft" else "final_path"
+    project = db.get_project(project_id) or {}
+    subject = project.get("subject", "")
+    bg = background_for(project_dir, refs)
+
+    applied, errors = 0, []
+    for spec in specs:
+        if not spec.card or (only is not None and spec.idx not in only):
+            continue
+        cached = project_dir / "cards" / f"{spec.idx:03d}.mp4"
+        try:
+            if not cached.is_file():
+                render(spec.card, subject, cached, seconds=spec.duration, background=bg)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            dest = out_dir / f"{spec.idx:03d}.mp4"
+            shutil.copyfile(cached, dest)
+        except (RuntimeError, OSError, subprocess.SubprocessError, render_mod.RenderError) as exc:
+            errors.append(f"镜头 {spec.idx} 卡片渲染失败:{exc}")
+            continue
+        db.update_shot(project_id, spec.idx, stage, status="succeeded", provider_task_id=None,
+                       error=None, attempts=0, est_cost=0.0, consistency="card",
+                       **{path_field: str(dest)})
+        applied += 1
+    if applied:
+        db.add_event(project_id, "succeeded", src="cards",
+                     reason=f"{applied} 个数据卡片镜头已渲染({stage})")
+    for e in errors:
+        db.add_event(project_id, "pending", src="cards", reason=e)
+    return applied, errors
+
+
+def invalidate(project_id: str, idx: int | None = None) -> None:
+    """分镜被修改后丢掉缓存的卡片,下次 materialize 时重画。"""
+    d = config.project_dir(project_id) / "cards"
+    if not d.is_dir():
+        return
+    for p in d.glob("*.mp4" if idx is None else f"{idx:03d}.mp4"):
+        p.unlink(missing_ok=True)

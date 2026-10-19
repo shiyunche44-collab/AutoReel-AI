@@ -29,6 +29,9 @@ import yaml
 
 PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 
+#: 数据卡片版式,渲染实现在 pipeline/cards.py
+CARD_KINDS: tuple[str, ...] = ("spec", "compare", "timeline", "bars")
+
 
 class ProfileError(RuntimeError):
     """品类配置缺失或非法。"""
@@ -60,6 +63,9 @@ class SectionSpec:
     #: 该段落画面需要出现**第二台车**(对比 / 迭代史场景)。
     #: 编译器据此允许可选的第二主体锚点;规则 9 仍只校验主主体。
     multi_subject: bool = False
+    #: 数据卡片版式(spec / compare / timeline / bars)。非空时该段落的镜头
+    #: 由代码渲染成卡片,数字逐条核对事实 —— 视频模型画不出准确的数字。
+    card: str = ""
 
 
 @dataclass(frozen=True)
@@ -339,6 +345,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             narration_style=str(value.get("narration_style", "")),
             requires_fact=bool(value.get("requires_fact", False)),
             multi_subject=bool(value.get("multi_subject", False)),
+            card=str(value.get("card", "") or ""),
         )
         for key, value in (raw.get("sections") or {}).items()
     }
@@ -457,7 +464,14 @@ def _validate(profile: CategoryProfile) -> None:
                         f"品类 {profile.name} 方向 {tname}: 引用了未定义的段落 {unknown}"
                     )
 
-    # 3. 铺展必须落在栅格上 —— 这是最容易写错的环节,在加载期就拦掉
+    # 3. 卡片版式写错会让该段落静默退回生成,加载期就拦掉
+    for sname, sec in profile.sections.items():
+        if sec.card and sec.card not in CARD_KINDS:
+            raise ProfileError(
+                f"品类 {profile.name} 段落 {sname}: card={sec.card!r} 不在 {CARD_KINDS} 之中"
+            )
+
+    # 4. 铺展必须落在栅格上 —— 这是最容易写错的环节,在加载期就拦掉
     from .. import config
 
     for duration in config.SUPPORTED_DURATIONS:
