@@ -208,6 +208,8 @@ def offline(monkeypatch):
     # 素材池读的是 data/library 下真实建好的池子,单测里换成夹具里给的
     monkeypatch.setattr(cr.library, "candidates",
                         lambda *a, **k: list(box.get("library", [])))
+    monkeypatch.setattr(cr.library, "has_usable_video",
+                        lambda *a, **k: bool(box.get("library_ready")))
     box["materialised"] = []
 
     def _fake_materialise(cand, dest, secs):
@@ -1266,3 +1268,43 @@ def test_materialise_library_uses_local_file(tmp_path, monkeypatch):
     assert got.local_path.endswith("shot_000.mp4")
     cr._materialise(_lib("F:/lib/i.jpg", 0, kind="still"), tmp_path / "shot_001.mp4", 6.0)
     assert calls["still"] == "F:/lib/i.jpg"
+
+
+def test_library_hits_skip_vision_qc_and_follow_intent_pick(offline, tmp_path, monkeypatch):
+    pool = [_lib("F:/lib/a.mp4", 0.1), _lib("F:/lib/b.mp4", 0.1)]
+    offline["library"] = pool
+    monkeypatch.setattr(cr, "_qc", lambda *a, **k: pytest.fail("素材池不该再逐镜头视觉质检"))
+    seen: dict = {}
+
+    def _match(cands, intent, llm, errors):
+        seen["intent"] = intent
+        return [cands[1]]
+
+    monkeypatch.setattr(cr.library, "match_intent", _match)
+    specs = [ShotSpec(idx=0, duration=6.0, section="核心卖点", visual_zh="夕阳下的 YU7",
+                      angle="exterior_45")]
+    assignment, _ = _collect(tmp_path, specs, llm=object())
+    assert assignment[0].url == "F:/lib/b.mp4"
+    assert seen["intent"] == "夕阳下的 YU7"
+
+
+def test_library_intent_pick_empty_falls_through(offline, tmp_path, monkeypatch):
+    offline["library"] = [_lib("F:/lib/a.mp4", 0.1)]
+    offline["platform"] = [_hit("https://b/good")]
+    monkeypatch.setattr(cr.library, "match_intent", lambda *a, **k: [])
+    assignment, report = _collect(tmp_path, _specs(1), llm=object())
+    assert assignment[0].url == "https://b/good"
+    assert report["selected"]["0"]["tier"] == "platform_video"
+
+
+def test_car_shots_skip_platform_search_once_library_is_built(offline, tmp_path, monkeypatch):
+    """池子判了"没有合适的",不能再去现搜现切 —— 捡回来的是猎奇视频。"""
+    offline["library_ready"] = True
+    offline["platform"] = [_hit("https://b/junk")]
+    monkeypatch.setattr(cr.library, "match_intent", lambda *a, **k: [])
+    offline["library"] = [_lib("F:/lib/a.mp4", 0.1)]
+    specs = [ShotSpec(idx=0, duration=6.0, section="核心卖点", visual_zh="x", angle="exterior_45"),
+             ShotSpec(idx=1, duration=6.0, section="核心卖点", visual_zh="x", angle="industry")]
+    assignment, _ = _collect(tmp_path, specs, llm=object())
+    assert 0 not in assignment                       # 车辆镜头:退回生成
+    assert assignment[1].url == "https://b/junk"     # 非车镜头不受影响

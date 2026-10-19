@@ -118,9 +118,13 @@ QC_STRUCTURE_SYSTEM = """你把视觉模型对若干视频帧的描述转成片�
   (例如只讲出镜主持人、风景、测试图)→ "no_subject"(车内内饰、车辆局部特写都算有车);
   subject_whole 为 false → "cropped";描述明确说模糊、过暗、看不清主体 → "unclear";
   描述明确说是宣传海报(大标题字、代言人摆拍)或网页 / App 截图(按钮、导航栏)→ "poster";
-  帧描述前给了"镜头意图",且描述的场景和意图**根本不是一类**(要车内却是飞机舷窗、
-  要两车同框却只有一台、要内饰却是外观)→ "off_topic";角度、光线、颜色、背景、
-  具体部件的出入**不算**;
+  帧描述前给了"镜头意图",且画面**主体类别**和意图不同 → "off_topic"。主体类别只分这几种:
+  车外观 / 车内座舱 / 车辆局部特写 / 人物 / 非车场景;另外"要两车同框却只有一台"也算。
+  例:要车内却是飞机舷窗、要内饰却是外观、要外观却是主持人半身 → off_topic。
+  以下**一律不算** off_topic:角度、景别、光线、颜色、天气、时间(白天 / 夕阳 / 夜晚)、
+  地点和背景(影棚 / 赛道 / 公路 / 停车场 / 雪山)、动静(行驶 / 静止)、
+  具体是哪个部件(要中控屏给了座椅、要车门给了中控台,同属车内座舱)、
+  有没有人在画面边上、能不能认出车型(车型另由 is_target_model 判);
   有字幕、台标、水印或大段文字 → "text_overlay";都没有 → ""。
 - 帧描述前标了"非车辆镜头"的:不判车型(is_target_model 填 "unknown"),
   不判 no_subject 和 cropped,只看 unclear / poster / off_topic / text_overlay。
@@ -266,6 +270,13 @@ class _Ctx:
     sources_tried: list[str] = field(default_factory=list)
     #: 素材池里已经用掉的 (文件, 起, 止):重叠的窗口不再给别的镜头
     used_ranges: list[tuple[str, float, float]] = field(default_factory=list)
+    #: 素材池按意图挑选用:镜头序号 → 分镜画面描述;LLM
+    intents: dict[int, str] = field(default_factory=dict)
+    llm: Any = None
+    #: 这台车的素材池里有可用视频段。有的话车辆镜头不再"现搜现切"平台视频 ——
+    #: 池子就是平台视频精选、看过、打过标签的版本;池子判了"没有合适的"再去
+    #: 按检索词现搜,捡回来的是猎奇、吐槽类视频(小米 YU7 试跑实测)
+    library_ready: bool = False
 
     def memo(self, key: str, fn: Callable[[], list[clips_mod.ClipCandidate]]
              ) -> list[clips_mod.ClipCandidate]:
@@ -301,7 +312,13 @@ def _tier_candidates(ctx: _Ctx, tier: str, q: media_query.ShotQuery
             return []
         if "library" not in {s.split(":", 1)[0] for s in ctx.sources_tried}:
             ctx.sources_tried.append(f"library:{len(got)}")
-        return got
+        # 按镜头意图挑一次(每个镜头只问一次 LLM),之后只在挑中的里按可用性过滤
+        memo = f"_library_pick:{q.idx}"
+        if memo not in ctx.cache:
+            picked = library.match_intent(got, ctx.intents.get(q.idx, ""), ctx.llm, ctx.errors)
+            ctx.cache[memo] = got if picked is None else picked
+        allowed = {_key(c) for c in got}
+        return [c for c in ctx.cache[memo] if _key(c) in allowed]
 
     if tier == "official_video":
         if not ctx.aliases:
@@ -324,6 +341,9 @@ def _tier_candidates(ctx: _Ctx, tier: str, q: media_query.ShotQuery
         return _by_angle(ctx.memo("official_still", _official_still), q.angle)
 
     if tier == "platform_video":
+        if car and ctx.library_ready:
+            return []
+
         def _platform(query: str, lang: str) -> list[clips_mod.ClipCandidate]:
             hits = platform_video.search(query, platforms=_platforms_for(lang),
                                          errors=ctx.errors)
@@ -611,6 +631,8 @@ def collect(*, subject: str, profile: CategoryProfile,
         subject=subject, profile=profile, seconds=seconds, errors=report["errors"],
         page_urls=list(page_urls or []), ref_images=list(ref_images or []),
         brand_key=brand_key, brand_spec=brand_spec,
+        intents={s.idx: s.visual_zh for s in specs}, llm=llm,
+        library_ready=config.USE_LIBRARY and library.has_usable_video(subject),
         aliases=official.brand_aliases(brand_key, brand_spec, brand) if (brand_key or brand) else [],
     )
     report["brand"] = brand_key or brand
@@ -646,8 +668,11 @@ def collect(*, subject: str, profile: CategoryProfile,
                 hit = _try_tier(ctx, cands, dest, seconds, report)
                 if hit is None:
                     break
-                # 落地即质检:不过关就在本级接着试下一个候选,而不是整镜退回生成
-                if not qc or _qc([hit], work_dir / f"s{spec.idx:03d}_{rejects}",
+                # 落地即质检:不过关就在本级接着试下一个候选,而不是整镜退回生成。
+                # 素材池的段入池时已经看过(车型 / 裁切 / 海报),对题由 match_intent
+                # 按文本挑过 —— 再逐镜头问一次视觉模型只会添噪声(实测它把广告片的
+                # 局部构图判成 cropped、把"驾驶舱"对"车门内饰"判成不对题)
+                if not qc or library.is_library(hit) or _qc([hit], work_dir / f"s{spec.idx:03d}_{rejects}",
                                  report["errors"], llm=llm, subject=subject,
                                  intents=[spec.visual_zh], car_flags=[is_car]):
                     break

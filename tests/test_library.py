@@ -266,3 +266,57 @@ def test_candidates_prefer_clean_over_logo_over_subtitle(data_dir):
     ])
     got = [Path(c.url).stem for c in lib_mod.candidates("小米YU7", "exterior_45", seconds=6)]
     assert got == ["clean", "logo", "sub"]
+
+
+class _FakeLLM:
+    def __init__(self, picks=None, boom=False):
+        self.picks, self.boom, self.calls = picks, boom, []
+
+    def structured(self, system, user, **k):
+        self.calls.append(user)
+        if self.boom:
+            raise RuntimeError("down")
+        return {"picks": self.picks}
+
+
+def _cand(n):
+    from app.providers.clips import ClipCandidate
+
+    return ClipCandidate(url=f"F:/lib/{n}.mp4", origin="library:bilibili", title=f"画面{n}",
+                         view="exterior_45", start=float(n))
+
+
+def test_match_intent_reorders_and_filters():
+    cands = [_cand(n) for n in range(4)]
+    llm = _FakeLLM(picks=[3, "1", 99, "x", 3])
+    got = lib_mod.match_intent(cands, "夕阳下静止的 YU7", llm, [])
+    assert [c.title for c in got] == ["画面2", "画面0"]
+    assert "夕阳下静止的 YU7" in llm.calls[0] and "1. [exterior_45 / 视频] 画面0" in llm.calls[0]
+
+
+def test_match_intent_none_means_keep_order():
+    cands = [_cand(0)]
+    assert lib_mod.match_intent(cands, "x", None, []) is None
+    assert lib_mod.match_intent(cands, "", _FakeLLM([1]), []) is None
+    errors: list[str] = []
+    assert lib_mod.match_intent(cands, "x", _FakeLLM(boom=True), errors) is None
+    assert errors
+    assert lib_mod.match_intent(cands, "x", _FakeLLM(picks=[]), []) == []
+
+
+def test_dirt_counts_presenter_like_subtitle():
+    assert lib_mod._dirt(_seg(1, 0, 3)) == 0
+    assert lib_mod._dirt(_seg(1, 0, 3, problem="text_overlay")) == 1
+    host = _seg(1, 0, 3)
+    host.desc = "男士在YU7前45度处介绍大灯"
+    assert lib_mod._dirt(host) == 2
+    model = _seg(1, 0, 3)
+    model.desc = "红裙女子站在红色SUV旁"
+    assert lib_mod._dirt(model) == 0
+
+
+def test_match_intent_orders_clean_first():
+    cands = [_cand(n) for n in range(3)]
+    cands[0].dirt, cands[1].dirt, cands[2].dirt = 2, 0, 1
+    got = lib_mod.match_intent(cands, "x", _FakeLLM(picks=[1, 2, 3]), [])
+    assert [c.title for c in got] == ["画面1", "画面2", "画面0"]
