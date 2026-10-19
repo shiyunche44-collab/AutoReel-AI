@@ -8,7 +8,7 @@
 
 输出分两段:
 1. 各来源**检索**结果数(官方号 / 汽车之家 / 懂车帝 / 官网 / B 站 / YouTube /
-   抖音 / Bing 图片 / Pexels / Pixabay)—— 0 条的来源就是你这边不通或没配 Key;
+   抖音 / Bing 图片 / 免费图库)—— 0 条的来源就是你这边不通或没配 Key;
 2. 逐镜头**落地**结果:每个镜头最后用了哪一级、哪个来源,落地文件在哪。
 
 YouTube 不通先检查 .env 的 YTDLP_PROXY;抖音下载失败多半是缺 YTDLP_COOKIES。
@@ -60,8 +60,11 @@ def main() -> None:
     aliases = official.brand_aliases(brand_key, spec) if brand_key else []
     print(f"主体:{subject}   品牌:{brand_key or '未识别'}   平台:{config.MEDIA_PLATFORMS}")
     print(f"代理:{config.YTDLP_PROXY or '无'}   cookie:{config.YTDLP_COOKIES or '无'}   "
-          f"Pexels:{'有' if config.PEXELS_API_KEY else '无'}   "
-          f"Pixabay:{'有' if config.PIXABAY_API_KEY else '无'}\n")
+          f"\n图库 Key:Pixabay {'有' if config.PIXABAY_API_KEY else '无'} · "
+          f"Pexels {'有' if config.PEXELS_API_KEY else '无'} · "
+          f"Coverr {'有' if config.COVERR_API_KEY else '无'} · "
+          f"Unsplash {'有' if config.UNSPLASH_ACCESS_KEY else '无'} · "
+          f"Openverse {'开' if config.USE_OPENVERSE else '关'}\n")
 
     print("① 各来源检索")
     errors: list[str] = []
@@ -79,8 +82,8 @@ def main() -> None:
         for h in hits[:2]:
             print(f"      {h.uploader} · {h.title[:40]} · {h.duration:.0f}s")
     _timed("Bing 图片", lambda: webassets.bing_images(f"{subject} 外观", limit=10))
-    _timed("Pexels/Pixabay 视频", lambda: stock.search_videos("auto show crowd", errors=errors))
-    _timed("Pexels/Pixabay 图片", lambda: stock.search_photos("city night traffic",
+    _timed("免费图库 视频", lambda: stock.search_videos("auto show crowd", errors=errors))
+    _timed("免费图库 图片", lambda: stock.search_photos("city night traffic",
                                                              errors=errors))
     for e in errors[:10]:
         print(f"    ! {e}")
