@@ -65,43 +65,58 @@ STILL_TIERS: frozenset[str] = frozenset({"official_still", "web_still", "stock_s
 #: 一分钟;不设上限的话,一个坏源(全是 403)能把整个素材层拖上半小时。
 TRIES_PER_TIER = 2
 
-#: 片段质检提问(**单帧**)。要问两件事:主体有没有被画幅裁掉(横屏素材裁 9:16
-#: 最容易把车切掉),以及有没有字幕台标。
+#: 片段质检提问(**单帧**)。要问三件事:画面里是不是目标车型(平台视频常是
+#: 同品牌别的车、对比视频里的竞品,甚至根本没有车),主体有没有被画幅裁掉
+#: (横屏素材裁 9:16 最容易把车切掉),以及有没有字幕台标。
 #:
 #: ⚠️ 视觉问答工具恒回散文、一次多张只描述第一张(见 `vision_verdict`),
-#: 所以每帧单独问,并要求它把三件事**说出来** —— 照旧回散文也能被 LLM 转成判定。
-QC_PROMPT = (
-    "这张图片是从候选视频片段中点抽出的一帧。只依据图片内容回答,请务必说明:\n"
-    "1. 画面主体(车)是否**完整**在画面内,还是车头、车尾或车身被画幅边缘切掉了;\n"
-    "2. 画面是否清晰,能否看清主体;\n"
-    "3. 是否有字幕、台标、水印或大段文字。\n"
-    "如果可以,只输出一个 JSON 对象,字段:\n"
-    '  "subject_whole": true / false —— 主体是否完整在画面内\n'
-    '  "has_text_overlay": true / false\n'
-    '  "problem": 空字符串表示可用;否则填 cropped / text_overlay / unclear / unknown 之一'
-)
+#: 所以每帧单独问,并要求它把这几件事**说出来** —— 照旧回散文也能被 LLM 转成判定。
+def qc_prompt(subject: str) -> str:
+    return (
+        f"这张图片是从「{subject}」的候选视频片段中点抽出的一帧。"
+        "只依据图片内容回答,不要猜,请务必说明:\n"
+        "1. 画面里有没有车;有的话是什么品牌和车型,依据是什么(车标、车尾字样、车牌位文字),"
+        "看不出来就直说看不出来;\n"
+        "2. 车是否**完整**在画面内,还是车头、车尾或车身被画幅边缘切掉了;\n"
+        "3. 画面是否清晰,能否看清主体;\n"
+        "4. 是否有字幕、台标、水印或大段文字。\n"
+        "如果可以,只输出一个 JSON 对象,字段:\n"
+        f'  "is_target_model": true / false / "unknown" —— 是不是「{subject}」\n'
+        '  "subject_whole": true / false —— 车是否完整在画面内\n'
+        '  "problem": 空字符串表示可用;否则填 not_target_model / no_subject / cropped / '
+        "text_overlay / unclear / unknown 之一"
+    )
+
 
 #: 把逐帧散文转成判定的 LLM 系统提示。只认描述里明确写出的问题 ——
-#: 没提到被裁就当完整,质检的第一原则是不误杀真实素材。
-QC_STRUCTURE_SYSTEM = """你把视觉模型对若干视频帧的描述转成片段质检结论。
+#: 没点名车型就是 unknown、没提到被裁就当完整,质检的第一原则是不误杀真实素材。
+#: 唯一的例外是"没有车":视觉模型描述主持人口播帧时只讲人、不会说"画面里没有车",
+#: 只认明确表述会让这类帧全部放行;而误判的代价只是这个镜头退回生成。
+QC_STRUCTURE_SYSTEM = """你把视觉模型对若干视频帧的描述转成片段质检结论。目标车型是「{subject}」。
 
 只依据描述里**明确写出**的内容判定,保守,不要推理补全:
-- subject_whole:描述明确说车(主体)被画面边缘切掉、只露出一部分 → false;否则 → true。
+- is_target_model:描述明确认出的就是目标车型(同品牌同车系;年款、动力版本不同仍算是)→ true;
+  描述明确认出是**别的品牌或别的车系** → false;没点名车型、只说"一台白色轿车"之类 → "unknown"。
+- subject_whole:描述明确说车被画面边缘切掉、只露出一部分 → false;否则 → true。
   特写镜头(只拍轮毂、车灯、内饰)是刻意构图,不算被切掉。
-- problem:subject_whole 为 false → "cropped";描述明确说模糊、过暗、看不清主体 → "unclear";
+- problem,按顺序取第一条命中的:
+  is_target_model 为 false → "not_target_model";
+  描述明确说画面里没有车,**或**描述了画面主体却通篇没提到任何车辆或车辆部件
+  (例如只讲出镜主持人、风景、测试图)→ "no_subject"(车内内饰、车辆局部特写都算有车);
+  subject_whole 为 false → "cropped";描述明确说模糊、过暗、看不清主体 → "unclear";
   有字幕、台标、水印或大段文字 → "text_overlay";都没有 → ""。
-- 描述是报错、拒答或为空 → subject_whole 填 true,problem 填 ""。
+- 描述是报错、拒答或为空 → is_target_model 填 "unknown",subject_whole 填 true,problem 填 ""。
 
-输出 JSON 对象 {"verdicts": [...]},每帧一项,字段 index(与输入编号一致)、
-subject_whole、problem、reason(一句中文依据,引用描述原话)。"""
+输出 JSON 对象 {{"verdicts": [...]}},每帧一项,字段 index(与输入编号一致)、
+is_target_model、subject_whole、problem、reason(一句中文依据,引用描述原话)。"""
 
 #: 硬弃用的理由。
 #:
 #: `text_overlay` **刻意不在列**。车媒视频几乎每条都带台标,按它过滤会让
 #: 这一整条通路空转 —— 候选全被毙掉,功能等于没做。带角标的真实车画面,
 #: 对"个人学习"用途完全够看,所以只记警告不弃用。
-#: 真正会**出错**的是主体被裁掉和画面不清,那两条必须拦。
-_BLOCKING_PROBLEMS = {"cropped", "unclear"}
+#: 真正会**出错**的是车不对(别的车型 / 根本没车)、主体被裁掉和画面不清,必须拦。
+_BLOCKING_PROBLEMS = {"not_target_model", "no_subject", "cropped", "unclear"}
 
 #: 默认不设上限:能用真实就用真实。`.env` 的 REAL_CLIP_LIMIT 可以收紧
 DEFAULT_LIMIT = 0
@@ -405,8 +420,12 @@ def _extract_frame(clip_path: str | Path, dest: Path) -> Path | None:
 
 
 def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
-        errors: list[str], llm: Any = None) -> list[clips_mod.ClipCandidate]:
-    """对已落地的片段逐帧质检:主体被裁 / 画面不清的弃用。
+        errors: list[str], llm: Any = None, *,
+        subject: str = "") -> list[clips_mod.ClipCandidate]:
+    """对已落地的片段逐帧质检:不是目标车型 / 没有车 / 主体被裁 / 画面不清的弃用。
+
+    `subject` 是目标车型;不给时不做车型判定(`not_target_model` 一律不算),
+    其余检查照常。
 
     每条片段抽一帧、单独问一次视觉模型;散文回答交给 `llm` 转成判定
     (不给 `llm` 则只认模型直接返回的 JSON)。
@@ -434,8 +453,11 @@ def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
     if not urls:
         return clipped
 
-    verdicts, _, _ = vision_verdict.judge(urls, QC_PROMPT, QC_STRUCTURE_SYSTEM, llm,
-                                          errors, what="片段")
+    target = subject or "目标车型"
+    verdicts, _, _ = vision_verdict.judge(
+        urls, qc_prompt(target), QC_STRUCTURE_SYSTEM.format(subject=target), llm,
+        errors, what="片段",
+    )
     if not any(verdicts):
         errors.append("片段质检没有得出任何可用结论,已全部保留")
         return clipped
@@ -449,8 +471,13 @@ def _qc(clipped: list[clips_mod.ClipCandidate], work_dir: Path,
             kept.append(cand)
             continue
         problem = str(verdict.get("problem") or "").strip().lower()
-        if verdict.get("subject_whole") is False and problem not in _BLOCKING_PROBLEMS:
-            problem = "cropped"
+        if problem == "not_target_model" and not subject:
+            problem = ""
+        if problem not in _BLOCKING_PROBLEMS:
+            if subject and verdict.get("is_target_model") is False:
+                problem = "not_target_model"
+            elif verdict.get("subject_whole") is False:
+                problem = "cropped"
         reason = str(verdict.get("reason") or "").strip()
         if problem in _BLOCKING_PROBLEMS:
             rejected.append(f"{cand.title or cand.url[:40]}:{problem}"
@@ -549,7 +576,8 @@ def collect(*, subject: str, profile: CategoryProfile,
     # 质检只查车辆镜头:非车画面没有"是不是这台车 / 车被裁没裁"的问题
     if qc:
         car_idx = [i for i in assignment if (by_idx.get(i) and by_idx[i].kind == "car")]
-        kept = _qc([assignment[i] for i in car_idx], work_dir, report["errors"], llm=llm)
+        kept = _qc([assignment[i] for i in car_idx], work_dir, report["errors"], llm=llm,
+                   subject=subject)
         kept_ids = {id(c) for c in kept}
         for i in car_idx:
             if id(assignment[i]) not in kept_ids:

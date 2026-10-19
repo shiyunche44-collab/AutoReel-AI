@@ -585,6 +585,7 @@ def qc_env(tmp_path, monkeypatch):
 
     def _describe(urls, prompt, **k):
         box["calls"].append(list(urls))
+        box.setdefault("prompts", []).append(prompt)
         answer = box["answers"].get(urls[0].rsplit("/", 1)[-1], "")
         if isinstance(answer, Exception):
             raise answer
@@ -704,8 +705,9 @@ def test_qc_frame_extract_failure_keeps_clip(tmp_path, qc_env, monkeypatch):
 def test_collect_passes_llm_to_qc(offline, tmp_path, monkeypatch):
     box: dict = {}
 
-    def _qc(clipped, work_dir, errors, llm=None):
+    def _qc(clipped, work_dir, errors, llm=None, subject=""):
         box["llm"] = llm
+        box["subject"] = subject
         return clipped
 
     monkeypatch.setattr(cr, "_qc", _qc)
@@ -714,6 +716,7 @@ def test_collect_passes_llm_to_qc(offline, tmp_path, monkeypatch):
     cr.collect(subject="比亚迪汉 EV", profile=load_profile("auto"), specs=specs,
                project_dir=tmp_path, llm=sentinel)
     assert box["llm"] is sentinel
+    assert box["subject"] == "比亚迪汉 EV"
 
 
 # ==========================================================================
@@ -1094,3 +1097,44 @@ def test_extract_frame_creates_missing_directory(tmp_path, monkeypatch):
     dest = tmp_path / "work" / "qc_frames" / "f000.jpg"
     assert cr._extract_frame("clip.mp4", dest) == dest
     assert seen["parent_exists"] is True
+
+
+def test_qc_drops_wrong_model_and_frames_without_a_car(tmp_path, qc_env):
+    """平台视频常是同品牌别的车、竞品,甚至根本没车 —— 这两类必须拦。"""
+    cands = _cands(tmp_path, 4)
+    qc_env["answers"] = {
+        "f000.jpg": "一台比亚迪汉 EV,车尾有 HAN 字样,车身完整。",
+        "f001.jpg": "一台白色比亚迪海豹 07 DM-i。",
+        "f002.jpg": "一个人站在人行道上,背景是灌木和电动车,画面里没有汽车。",
+        "f003.jpg": "一台白色轿车,看不出车标。",
+    }
+    llm = _QcLLM({"verdicts": [
+        {"index": 1, "is_target_model": True, "subject_whole": True, "problem": ""},
+        {"index": 2, "is_target_model": False, "subject_whole": True,
+         "problem": "not_target_model", "reason": "海豹 07"},
+        {"index": 3, "is_target_model": "unknown", "subject_whole": True,
+         "problem": "no_subject", "reason": "没有汽车"},
+        {"index": 4, "is_target_model": "unknown", "subject_whole": True, "problem": ""},
+    ]})
+    errors: list[str] = []
+    kept = cr._qc(cands, tmp_path, errors, llm=llm, subject="比亚迪汉 EV")
+
+    assert [c.url for c in kept] == ["u0", "u3"], "认不出车型的不能误杀"
+    assert "比亚迪汉 EV" in llm.calls[0]["system"]
+    assert "比亚迪汉 EV" in qc_env["prompts"][0]
+    assert any("not_target_model" in e and "海豹 07" in e for e in errors)
+    assert any("no_subject" in e for e in errors)
+
+
+def test_qc_false_target_model_without_problem_is_rejected(tmp_path, qc_env):
+    cands = _cands(tmp_path, 1)
+    qc_env["answers"]["f000.jpg"] = json.dumps({"is_target_model": False, "problem": ""})
+    assert cr._qc(cands, tmp_path, [], subject="比亚迪汉 EV") == []
+
+
+def test_qc_without_subject_ignores_model_verdict(tmp_path, qc_env):
+    """不知道目标车型时,"不是目标车型"无从谈起,不能据此弃用。"""
+    cands = _cands(tmp_path, 1)
+    qc_env["answers"]["f000.jpg"] = json.dumps(
+        {"is_target_model": False, "problem": "not_target_model"})
+    assert cr._qc(cands, tmp_path, []) == cands
