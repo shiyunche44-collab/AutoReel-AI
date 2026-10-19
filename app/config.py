@@ -187,6 +187,22 @@ def ffmpeg_status() -> tuple[bool, str]:
 # 生成通道
 # --------------------------------------------------------------------------
 MCODE_TOOLS = os.getenv("MCODE_TOOLS") or shutil.which("mcode-tools") or ""
+
+#: M Plan 订阅 Key(sk-cp-…)。配了它就能不经 mcode-tools、直连 MiniMax 开放平台
+#: (视频 / 语音 / 音乐 / 生图 / 图片理解 / 网络搜索),额度从订阅套餐里扣。
+MINIMAX_PLAN_KEY = os.getenv("MINIMAX_PLAN_KEY", "").strip()
+MINIMAX_API_HOST = os.getenv("MINIMAX_API_HOST", "https://api.minimax.cn").rstrip("/")
+
+#: 接口后端:`mcode` = 经 MiniMax Code 托管的 mcode-tools;`direct` = 用订阅 Key 直连。
+#: 不填时:有订阅 Key 且找不到 mcode-tools 就走 direct,否则走 mcode。
+CONNECTOR_BACKEND = (
+    os.getenv("CONNECTOR_BACKEND", "").strip().lower()
+    or ("direct" if MINIMAX_PLAN_KEY and not MCODE_TOOLS else "mcode")
+)
+#: 直连后端用到的模型(mcode 后端由 Connector 自己选)
+TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
+MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
 #: Connector 调用的默认超时(视频提交快,查询快;生图/检索较慢)
 CONNECTOR_TIMEOUT_DEFAULT = 180
 CONNECTOR_TIMEOUT_GENERATE = 600

@@ -174,27 +174,29 @@ def invoke(
     流水线仍应继续(计划风险 #6 的降级路径)。
     """
     today = time.strftime("%Y-%m-%d")
+    # 直连模式下 search_news 实际走的是网络搜索 —— 来源要如实记,不能挂同花顺的名
+    label = cli.source_label(tool)
     try:
         result = cli.call(tool, args, timeout=timeout)
         text = _flatten(result)
         if len(text.strip()) < _MIN_USEFUL_CHARS:
             doc = RawDoc(
-                tool=tool, query=query_label, retrieved_at=today, text="",
+                tool=label, query=query_label, retrieved_at=today, text="",
                 ok=False,
                 error=f"Connector 返回空正文(仅 {len(text.strip())} 字符)",
             )
         else:
-            doc = RawDoc(tool=tool, query=query_label, retrieved_at=today, text=text)
+            doc = RawDoc(tool=label, query=query_label, retrieved_at=today, text=text)
     except cli.ConnectorError as exc:
         doc = RawDoc(
-            tool=tool, query=query_label, retrieved_at=today, text="",
+            tool=label, query=query_label, retrieved_at=today, text="",
             ok=False, error=exc.message,
         )
 
     if project_dir:
         raw_dir = project_dir / "facts_raw"
         raw_dir.mkdir(parents=True, exist_ok=True)
-        slug = re.sub(r"[^A-Za-z0-9_]+", "_", tool.split("__")[-1])[:40]
+        slug = re.sub(r"[^A-Za-z0-9_]+", "_", label.split("__")[-1])[:40]
         path = raw_dir / f"{slug}_{int(time.time() * 1000)}.json"
         try:
             path.write_text(

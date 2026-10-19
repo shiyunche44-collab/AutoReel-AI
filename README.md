@@ -18,7 +18,7 @@
 |---|---|---|
 | Python 3.12 | 必需 | |
 | ffmpeg | **必需** | 已安装于 `C:\ffmpeg\bin`,不在系统 PATH,在 `.env` 里指定 |
-| `mcode-tools` CLI | 必需 | MiniMax Code 运行时注入,用于调用生成通道 |
+| M Plan 订阅 Key **或** `mcode-tools` CLI | 二选一 | 生成通道。订阅 Key 填 `.env` 的 `MINIMAX_PLAN_KEY`,任何终端可跑(见「两种接口后端」);`mcode-tools` 由 MiniMax Code 运行时注入,只能在 MiniMax Code 里跑 |
 | fastapi / uvicorn / pydantic / httpx / Pillow / PyYAML | 已预装 | |
 | jinja2 / pytest | 需补装 | `pip install jinja2 pytest` |
 | yt-dlp | 需补装 | `pip install yt-dlp`。B站 / YouTube / 抖音 视频检索与分段下载 |
@@ -224,6 +224,29 @@ validate()         纯函数:8 条硬校验,不合规就拦下,绝不发给模�
   甚至生物图;文件名含 `diagram`/`chart`/`sales share` 的一律丢弃。
 - **不能用中文主体派生英文查询**。`比亚迪汉 EV` 去掉汉字后只剩 `EV`,拿它去搜
   出来全是噪音。实测中文查询本身就能命中英文文件名的真实照片。
+
+### 两种接口后端:mcode 与 direct
+
+所有外部能力都经过 `providers/cli.call(工具名, 参数)`。`CONNECTOR_BACKEND` 决定它落到哪:
+
+- **`mcode`**:`mcode-tools` CLI。登录由 MiniMax Code 应用托管(shared-broker),
+  离开 MiniMax Code 就调不通。
+- **`direct`**:`providers/direct.py` 用 M Plan 订阅 Key 直连开放平台,按工具名翻译成 HTTP 调用、
+  返回与 Connector 相同的形状,上层代码不感知。额度与 MiniMax Code 里用的是同一份。
+
+| 能力 | direct 实现 | 备注 |
+|---|---|---|
+| 视频 | H3 / H3-Max → `/v2/video_generation`;Hailuo → `/v1/video_generation` | V2 首尾帧与参考图**互斥**:有首帧时丢参考图 |
+| 配音 / BGM / 生图 / 音色 | `/v1/t2a_v2`、`/v1/music_generation`、`/v1/image_generation`、`/v1/get_voice` | 模型由 `TTS_MODEL` / `MUSIC_MODEL` / `IMAGE_MODEL` 指定 |
+| 图片理解 | `/v1/coding_plan/vlm` | 本地图转 data URI,不需要图床 |
+| 视频质检 | 抽帧拼图 → 图片理解 | 开放平台没有视频理解接口 |
+| 图片检索 | Bing 图片 | 开放平台没有图片检索接口 |
+| 事实:新闻检索 | `/v1/coding_plan/search`(网络搜索) | 事实的 `source_tool` 记为 `minimax.web_search` |
+| 事实:同花顺行情财报 / 企查查 | **不支持** | 该来源记失败,其余照常 |
+| 配音逐字核对(语音识别) | **不支持** | 跳过,不阻断 |
+
+`.env` 填 `MINIMAX_PLAN_KEY`,`CONNECTOR_BACKEND` 留空时:有订阅 Key 且找不到 `mcode-tools` 就走 direct。
+自检:`python -m tests.verify_direct`(便宜项)/ `--video MiniMax-Hailuo-2.3`(再试一条草稿视频)。
 
 ### 数据镜头为什么由代码渲染(数据卡片)
 
@@ -530,7 +553,7 @@ app/
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 550 项单元测试,无需网络与额度
+python -m pytest tests/ -q                  # 569 项单元测试,无需网络与额度
 python -m tests.verify_templates            # 模板语法 + 多套样例渲染(抓未定义字段)
 python -m tests.verify_render               # 渲染层端到端自检(用合成素材,不消耗额度)
 python -m tests.verify_llm                  # 真实 LLM 调用自检(消耗 API 额度)
@@ -666,8 +689,10 @@ python -m tests.verify_real_assets           # 真实素材端到端自检(要�
 
 ### 其他限制
 
-- **`mcode-tools` 认证**:CLI 由 MiniMax Code 运行时注入,长时间运行或服务重启后
-  是否仍持有有效登录态**未经验证**。若失效,需改用自有开放平台 API Key 直连 HTTP。
+- **`mcode-tools` 认证**:CLI 由 MiniMax Code 运行时注入,只能在 MiniMax Code 里用。
+  在别处跑请用 direct 后端(M Plan 订阅 Key 直连),见「两种接口后端」。
+- **direct 后端少两样**:同花顺 / 企查查的行情、财报、工商数据,以及配音的语音识别核对,
+  只能经 MiniMax Code。品牌 / 市场方向的公司层事实会变少,靠网络搜索补。
 - **H3 配额上限未知**:套餐确认含 H3,但具体额度与并发上限需从 MiniMax 控制台确认。
 - **没有通用网络检索**:Connector 目录 176 个工具中不存在通用 `web_search`,
   也**不存在视频检索**工具。产品参数来自同花顺 `search_news` 的新闻语义检索(见下);

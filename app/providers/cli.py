@@ -40,6 +40,20 @@ class ConnectorTimeout(ConnectorError):
     """调用超时。"""
 
 
+def is_direct() -> bool:
+    """是否走直连后端(M Plan 订阅 Key 直连开放平台,不经 mcode-tools)。"""
+    return config.CONNECTOR_BACKEND == "direct"
+
+
+def source_label(tool: str) -> str:
+    """一次调用实际用的数据源名,写进事实的 source_tool。直连时与工具名可能不同。"""
+    if is_direct():
+        from . import direct
+
+        return direct.source_label(tool)
+    return tool
+
+
 def cli_path() -> str:
     path = config.MCODE_TOOLS
     if not path:
@@ -134,6 +148,10 @@ def call(
         raise ValueError("Connector 参数必须是单个 JSON 对象")
 
     timeout = timeout or config.CONNECTOR_TIMEOUT_DEFAULT
+    if is_direct():
+        from . import direct  # 延迟导入:direct 依赖本模块的异常类
+
+        return direct.call(tool, payload, timeout=timeout)
     last_error: ConnectorError | None = None
 
     for attempt in range(retries + 1):
@@ -195,6 +213,10 @@ def _unwrap(tool: str, result: Any) -> Any:
 # --------------------------------------------------------------------------
 def get_asset_url(node_id: str, *, timeout: int = 60) -> str:
     """把 Drive node_id 换成一个可下载的短时链接。"""
+    if is_direct():
+        from . import direct
+
+        return direct.get_asset_url(node_id)
     raw = run_raw(["get_asset_url", node_id], timeout=timeout)
     data = _extract_json(raw)
     if isinstance(data, dict):
@@ -210,6 +232,10 @@ def upload_temp_url(local_path: str | Path, *, mime_type: str | None = None,
     path = Path(local_path)
     if not path.is_file():
         raise ConnectorError("upload_temp_url", f"文件不存在: {path}")
+    if is_direct():
+        from . import direct
+
+        return direct.upload_temp_url(path)
     args = ["upload_temp_url", str(path)]
     if mime_type:
         args += ["--mime-type", mime_type]
@@ -224,6 +250,10 @@ def upload_temp_url(local_path: str | Path, *, mime_type: str | None = None,
 
 def health_check() -> tuple[bool, str]:
     """连通性自检。用于启动横幅与设置页。"""
+    if is_direct():
+        from . import direct
+
+        return direct.health_check()
     try:
         exe = cli_path()
     except ConnectorError as exc:
