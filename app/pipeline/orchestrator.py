@@ -316,9 +316,10 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         segments = _script(project_id)
         facts = _facts(project_id)
         card_log: list[dict] = []
+        pool = _library_catalog(project_id, subject, profile)
         specs = storyboard.build(
             subject=subject, profile=profile, segments=segments, facts=facts,
-            duration=project["duration"], llm=llm, card_log=card_log,
+            duration=project["duration"], llm=llm, card_log=card_log, pool=pool,
         )
         problems = storyboard.validate_specs(specs, project["duration"])
         if problems:
@@ -327,9 +328,11 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         db.write_json(project_id, "cards.json", card_log)
         cards.invalidate(project_id)
         n_cards = sum(1 for s in specs if s.card)
+        n_pool = sum(1 for s in specs if s.pool_id)
         _set_state(project_id, state, State.STORYBOARD_READY,
                    reason=f"分镜 {len(specs)} 个镜头"
-                          + (f",其中 {n_cards} 个数据卡片" if card_log else ""))
+                          + (f",其中 {n_cards} 个数据卡片" if card_log else "")
+                          + (f",{n_pool} 个按素材池实拍写" if pool else ""))
         return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "cards": n_cards}
 
     if state == State.STORYBOARD_READY:
@@ -662,6 +665,20 @@ def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
     except Exception as exc:  # noqa: BLE001
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
+
+
+def _library_catalog(project_id: str, subject: str, profile) -> list[dict]:
+    """素材池清单,给分镜看「这台车已经有哪些实拍」。池子还没建好(第一次做
+    这台车,后台刚开始建)就给空,分镜照旧先写画面、取材时再按描述挑。"""
+    if not (config.USE_REAL_CLIPS and config.USE_LIBRARY and profile.official_sites):
+        return []
+    try:
+        if not library.has_usable_video(subject):
+            return []
+        return library.catalog(subject)
+    except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "assets", reason=f"素材池清单读取失败:{exc}")
+        return []
 
 
 def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],

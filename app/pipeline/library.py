@@ -919,6 +919,82 @@ def match_intent(cands: Sequence[clips_mod.ClipCandidate], intent: str, llm: Any
     return sorted(out, key=lambda c: c.dirt)
 
 
+#: 素材视角 → 镜头 angle(参考图、兜底生成都按 angle 走)
+ANGLE_OF_VIEW: dict[str, str] = {
+    "exterior_front": "exterior_45", "exterior_side": "exterior_45", "exterior_45": "exterior_45",
+    "driving": "exterior_45", "aerial": "exterior_45", "rear": "rear",
+    "interior": "interior", "seat": "interior", "screen": "screen_spec", "detail": "detail",
+}
+#: 给分镜看的素材清单上限。每条一行描述,60 条约 3k 字,够挑也不撑爆上下文
+CATALOG_LIMIT = 60
+#: 清单里官图最多占几条 —— 视频是主菜,图只在视频缺某个视角时补位
+CATALOG_STILLS = 12
+
+
+def catalog(subject: str, *, seconds: float | None = None,
+            limit: int = CATALOG_LIMIT) -> list[dict[str, Any]]:
+    """给分镜用的「池子里有什么」:每条是一个能撑满一个镜头的画面。
+
+    视频条目是能拼满 `seconds` 的窗口(以首段为代表),图片是可用官图。
+    按 干净 → 官方 → 认出是这台车 排序;同一视角最多占四分之一,免得
+    40 段细节特写把内饰挤出清单。返回 dict:id / kind / view / angle / desc /
+    official / dirt。
+    """
+    seconds = float(seconds or config.SHOT_GRID_SECONDS)
+    lib = Library.load(subject)
+    by_file: dict[str, list[Item]] = {}
+    for i in lib.items:
+        if i.kind == "video" and Path(i.path).is_file():
+            by_file.setdefault(i.path, []).append(i)
+    firsts: dict[str, Item] = {}
+    for segs in by_file.values():
+        for angle in ANGLE_VIEWS:
+            for first, _ in windows(segs, seconds, angle):
+                firsts.setdefault(first.id, first)
+
+    def rank(i: Item) -> tuple:
+        return (_dirt(i), not i.official, i.target != "yes", -i.length)
+
+    videos = sorted(firsts.values(), key=rank)
+    stills = sorted((i for i in lib.items if i.kind == "still" and i.usable
+                     and i.view in ANGLE_OF_VIEW and Path(i.path).is_file()), key=rank)
+    per_view = max(3, limit // 4)
+    out: list[Item] = []
+    seen: dict[str, int] = {}
+    for i in videos + stills[:CATALOG_STILLS]:
+        if len(out) >= limit:
+            break
+        if seen.get(i.view, 0) >= per_view:
+            continue
+        seen[i.view] = seen.get(i.view, 0) + 1
+        out.append(i)
+    return [{"id": i.id, "kind": i.kind, "view": i.view, "angle": ANGLE_OF_VIEW.get(i.view, ""),
+             "desc": i.desc, "official": i.official, "dirt": _dirt(i)} for i in out]
+
+
+def pick(subject: str, item_id: str, *, seconds: float | None = None,
+         exclude: Sequence[tuple[str, float, float]] = ()) -> clips_mod.ClipCandidate | None:
+    """分镜点名要的那条素材 → 候选。已经失效(文件没了、被重新打标签判不可用、
+    窗口跟别的镜头重叠)就返回 None,调用方退回按意图挑。"""
+    seconds = float(seconds or config.SHOT_GRID_SECONDS)
+    lib = Library.load(subject)
+    item = next((i for i in lib.items if i.id == item_id), None)
+    if item is None or not item.usable or not Path(item.path).is_file():
+        return None
+    if item.kind == "still":
+        if any(p == item.path for p, _, _ in exclude):
+            return None
+        return _to_candidate(item, item.path)
+    a, b = item.start, item.start + seconds
+    if any(p == item.path and a < e and s < b for p, s, e in exclude):
+        return None
+    segs = [i for i in lib.items if i.kind == "video" and i.path == item.path]
+    angle = ANGLE_OF_VIEW.get(item.view, "")
+    if not any(first.id == item.id for first, _ in windows(segs, seconds, angle)):
+        return None
+    return _to_candidate(item, item.path)
+
+
 def has_usable_video(subject: str) -> bool:
     """池子里有没有能用的视频段(文件还在)。"""
     return any(i.kind == "video" and i.usable and Path(i.path).is_file()

@@ -277,6 +277,8 @@ class _Ctx:
     #: 池子就是平台视频精选、看过、打过标签的版本;池子判了"没有合适的"再去
     #: 按检索词现搜,捡回来的是猎奇、吐槽类视频(小米 YU7 试跑实测)
     library_ready: bool = False
+    #: 分镜点名的素材池条目:镜头序号 → `library.Item.id`
+    pool_picks: dict[int, str] = field(default_factory=dict)
 
     def memo(self, key: str, fn: Callable[[], list[clips_mod.ClipCandidate]]
              ) -> list[clips_mod.ClipCandidate]:
@@ -312,6 +314,13 @@ def _tier_candidates(ctx: _Ctx, tier: str, q: media_query.ShotQuery
             return []
         if "library" not in {s.split(":", 1)[0] for s in ctx.sources_tried}:
             ctx.sources_tried.append(f"library:{len(got)}")
+        # 分镜写的就是这条素材,先用它;取不到(失效、重叠、下载失败)再按意图挑
+        pinned_id = ctx.pool_picks.get(q.idx, "")
+        if pinned_id:
+            pinned = library.pick(ctx.subject, pinned_id, seconds=ctx.seconds,
+                                  exclude=ctx.used_ranges)
+            if pinned is not None and _key(pinned) not in ctx.tried:
+                return [pinned]
         # 按镜头意图挑一次(每个镜头只问一次 LLM),之后只在挑中的里按可用性过滤
         memo = f"_library_pick:{q.idx}"
         if memo not in ctx.cache:
@@ -632,6 +641,7 @@ def collect(*, subject: str, profile: CategoryProfile,
         page_urls=list(page_urls or []), ref_images=list(ref_images or []),
         brand_key=brand_key, brand_spec=brand_spec,
         intents={s.idx: s.visual_zh for s in specs}, llm=llm,
+        pool_picks={s.idx: s.pool_id for s in specs if s.pool_id},
         library_ready=config.USE_LIBRARY and library.has_usable_video(subject),
         aliases=official.brand_aliases(brand_key, brand_spec, brand) if (brand_key or brand) else [],
     )
@@ -653,7 +663,7 @@ def collect(*, subject: str, profile: CategoryProfile,
                 f"取材超出时长预算({config.MEDIA_TIME_BUDGET}s),镜头 {spec.idx} 起走生成")
             break
         q = by_idx.get(spec.idx) or media_query._fallback(subject, profile, spec)
-        tiers = CAR_TIERS if q.kind == "car" else OTHER_TIERS
+        tiers = CAR_TIERS if (q.kind == "car" or spec.pool_id) else OTHER_TIERS
         dest = clip_dir / f"shot_{spec.idx:03d}.mp4"
         is_car = q.kind == "car"
         for tier in tiers:

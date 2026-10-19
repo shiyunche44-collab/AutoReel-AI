@@ -320,3 +320,50 @@ def test_match_intent_orders_clean_first():
     cands[0].dirt, cands[1].dirt, cands[2].dirt = 2, 0, 1
     got = lib_mod.match_intent(cands, "x", _FakeLLM(picks=[1, 2, 3]), [])
     assert [c.title for c in got] == ["画面1", "画面2", "画面0"]
+
+
+def test_catalog_lists_fillable_windows_clean_first(data_dir):
+    a = data_dir / "a.mp4"
+    b = data_dir / "b.mp4"
+    img = data_dir / "i.jpg"
+    for f in (a, b, img):
+        f.write_bytes(b"x")
+    _write_lib(data_dir, [
+        _seg(1, 0.1, 7.9, "interior", path=str(a), problem="subtitle"),
+        _seg(2, 0.1, 7.9, "exterior_45", path=str(b), official=True),
+        _seg(3, 8.1, 9.0, "rear", path=str(b)),            # 撑不满 6 秒,不进清单
+        Item(id="img1", kind="still", path=str(img), tagged=True, view="detail"),
+    ])
+    got = lib_mod.catalog("小米YU7", seconds=6)
+    assert [p["id"] for p in got] == ["s2", "s1", "img1"]
+    assert got[0]["angle"] == "exterior_45" and got[1]["angle"] == "interior"
+    assert got[1]["dirt"] == 2 and got[2]["kind"] == "still"
+
+
+def test_catalog_caps_one_view(data_dir):
+    a = data_dir / "a.mp4"
+    a.write_bytes(b"x")
+    items = [_seg(n, n * 10.0, n * 10.0 + 8, "detail", path=str(a)) for n in range(30)]
+    items.append(_seg(99, 400.0, 408.0, "interior", path=str(a)))
+    _write_lib(data_dir, items)
+    got = lib_mod.catalog("小米YU7", seconds=6, limit=12)
+    assert sum(p["view"] == "detail" for p in got) == 3
+    assert any(p["view"] == "interior" for p in got)
+
+
+def test_pick_by_id(data_dir):
+    a = data_dir / "a.mp4"
+    a.write_bytes(b"x")
+    _write_lib(data_dir, [
+        _seg(1, 0.1, 7.9, "exterior_45", path=str(a)),
+        _seg(2, 8.1, 9.0, "rear", path=str(a)),
+        _seg(3, 10.0, 18.0, "interior", path=str(a), problem="poster"),
+    ])
+    got = lib_mod.pick("小米YU7", "s1", seconds=6)
+    assert got is not None and (got.url, got.start) == (str(a), 0.1)
+    assert lib_mod.is_library(got)
+    assert lib_mod.pick("小米YU7", "s1", seconds=6, exclude=[(str(a), 3.0, 9.0)]) is None
+    assert lib_mod.pick("小米YU7", "s2", seconds=6) is None     # 撑不满
+    assert lib_mod.pick("小米YU7", "s3", seconds=6) is None     # 不可用
+    assert lib_mod.pick("小米YU7", "nope", seconds=6) is None
+

@@ -210,6 +210,8 @@ def offline(monkeypatch):
                         lambda *a, **k: list(box.get("library", [])))
     monkeypatch.setattr(cr.library, "has_usable_video",
                         lambda *a, **k: bool(box.get("library_ready")))
+    monkeypatch.setattr(cr.library, "pick",
+                        lambda subject, item_id, **k: box.get("pinned", {}).get(item_id))
     box["materialised"] = []
 
     def _fake_materialise(cand, dest, secs):
@@ -1308,3 +1310,35 @@ def test_car_shots_skip_platform_search_once_library_is_built(offline, tmp_path,
     assignment, _ = _collect(tmp_path, specs, llm=object())
     assert 0 not in assignment                       # 车辆镜头:退回生成
     assert assignment[1].url == "https://b/junk"     # 非车镜头不受影响
+
+
+def test_storyboard_pool_pick_is_used_first_without_intent_match(offline, tmp_path, monkeypatch):
+    """分镜点名了素材:直接用它,不再按意图重挑。"""
+    offline["library"] = [_lib("F:/lib/a.mp4", 0.1)]
+    offline["pinned"] = {"seg_9": _lib("F:/lib/b.mp4", 3.0)}
+    monkeypatch.setattr(cr.library, "match_intent",
+                        lambda *a, **k: pytest.fail("点名素材可用时不该再按意图挑"))
+    specs = [ShotSpec(idx=0, duration=6.0, section="核心卖点", visual_zh="x",
+                      angle="exterior_45", pool_id="seg_9")]
+    assignment, report = _collect(tmp_path, specs, llm=object())
+    assert (assignment[0].url, assignment[0].start) == ("F:/lib/b.mp4", 3.0)
+    assert report["selected"]["0"]["tier"] == "library"
+
+
+def test_storyboard_pool_pick_gone_falls_back_to_intent_match(offline, tmp_path, monkeypatch):
+    offline["library"] = [_lib("F:/lib/a.mp4", 0.1)]
+    monkeypatch.setattr(cr.library, "match_intent", lambda cands, *a, **k: cands)
+    specs = [ShotSpec(idx=0, duration=6.0, section="核心卖点", visual_zh="x",
+                      angle="exterior_45", pool_id="gone")]
+    assignment, _ = _collect(tmp_path, specs, llm=object())
+    assert assignment[0].url == "F:/lib/a.mp4"
+
+
+def test_storyboard_pool_pick_wins_even_for_non_car_query(offline, tmp_path):
+    """检索词分类把镜头判成"非车辆"也不影响:分镜点名的就是池子里这台车的素材。"""
+    offline["pinned"] = {"seg_1": _lib("F:/lib/b.mp4", 0.0)}
+    specs = [ShotSpec(idx=0, duration=6.0, section="核心卖点", visual_zh="x",
+                      angle="industry", pool_id="seg_1")]
+    assignment, _ = _collect(tmp_path, specs)
+    assert assignment[0].url == "F:/lib/b.mp4"
+

@@ -42,6 +42,22 @@ SYSTEM = """你是中文短视频的分镜导演,为每个镜头写一段**画�
 
 必需键: shots"""
 
+#: 有素材池时追加到 SYSTEM 末尾(不过 format,花括号原样)
+POOL_RULES = """
+
+## 实拍素材池
+下面「可用实拍素材」列出了这台车**已经有的真实画面**(编号 / 视角 / 描述)。
+真实画面比 AI 生成可信得多,所以:
+- 先看旁白在讲什么,池子里有画面能撑住这句话的(讲外观给外观、讲内饰给内饰、
+  讲驾驶给行驶画面、讲配置给对应细节或座舱),就在该镜头给 `"pool": "素材编号"`,
+  visual 照抄那条素材的描述即可(程序以素材描述为准);
+- 不要求逐字对上:旁白讲"续航 800 公里",给一段行驶画面就够了;
+- 每条素材全片只用一次;有「字幕或主持人」标记的,只在没有干净素材可选时才用;
+- 池子撑不住的才自己写 visual 交给 AI 生成,`pool` 给空字符串:比如画面硬要求
+  两车同框、要特定人物、要池子里没有的部件;
+- 数据卡片镜头不选素材。
+每项输出格式变为 {"idx", "visual", "on_screen_text", "pool"}。"""
+
 USER = """Subject: {subject}
 Category: {category}
 Shot duration: {duration} seconds each
@@ -66,11 +82,16 @@ def build(
     duration: int,
     llm,
     card_log: list[dict] | None = None,
+    pool: Sequence[dict] | None = None,
 ) -> list[ShotSpec]:
     """生成分镜表。
 
     `card_log` 非空时收集每个卡片镜头的核对结果(哪些行因数字无据被丢掉),
     供门禁 A 复核。
+
+    `pool` 是素材池清单(`library.catalog()`)。给了就让模型先看池子里有什么、
+    能用实拍的镜头直接点名素材 —— 反过来"先写画面再去找",写出来的往往是
+    "车门夹层玻璃特写""两车并排"这种池子里压根没有的画面。
     """
     shot_count = config.shots_for_duration(duration)
     grid = config.SHOT_GRID_SECONDS
@@ -109,22 +130,30 @@ def build(
         f"- {f.id}: {f.claim}" for f in usable
     )[:4000 if has_cards else 2000] or "(无)"
 
+    pool_by_id = {str(p["id"]): p for p in pool or [] if p.get("id")}
+    system = SYSTEM.format(category=profile.label)
+    user = USER.format(
+        subject=subject,
+        category=profile.label,
+        duration=grid,
+        count=shot_count,
+        shots="\n".join(shot_lines),
+        facts=facts_payload,
+    )
+    if pool_by_id:
+        system += POOL_RULES
+        user += "\n\n可用实拍素材:\n" + "\n".join(_pool_line(p) for p in pool_by_id.values())
+
     data = llm.structured(
-        SYSTEM.format(category=profile.label),
-        USER.format(
-            subject=subject,
-            category=profile.label,
-            duration=grid,
-            count=shot_count,
-            shots="\n".join(shot_lines),
-            facts=facts_payload,
-        ),
+        system,
+        user,
         required_keys=["shots"],
         temperature=0.65,
     )
 
     raw = data.get("shots") or []
     specs: list[ShotSpec] = []
+    used_pool: set[str] = set()
     for i in range(shot_count):
         item = raw[i] if i < len(raw) and isinstance(raw[i], dict) else {}
         sec = profile.section(plan[i] if i < len(plan) else "")
@@ -144,22 +173,44 @@ def build(
             card_log.append({"idx": i, "section": sec.name, "kind": sec.card,
                              "rendered": card is not None, "dropped": dropped})
 
+        # 点名的素材必须真在清单里、没被前面的镜头用过;卡片镜头不取材
+        pool_id = str(item.get("pool") or "").strip()
+        if card or pool_id not in pool_by_id or pool_id in used_pool:
+            pool_id = ""
+        if pool_id:
+            used_pool.add(pool_id)
+        angle = (pool_by_id[pool_id].get("angle") if pool_id else "") or sec.angle
+        visual = str(item.get("visual", "")).strip()
+        # 点了素材,画面描述就是素材本身的描述:模型照着改写时总会添油加醋
+        # (静态车灯特写写成"从画面深处驶来"、雪山写成"黄昏余晖"),
+        # 门禁 A 审的是这段文字,必须是那段实拍里真有的东西
+        if pool_id and pool_by_id[pool_id].get("desc"):
+            visual = str(pool_by_id[pool_id]["desc"]).strip()
+
         specs.append(
             ShotSpec(
                 idx=i,
                 duration=float(grid),
                 section=sec.name,
-                visual_zh=str(item.get("visual", "")).strip()
+                visual_zh=visual
                 or (sec.beat or f"{subject} 的第 {i + 1} 个展示镜头"),
                 camera_zh=sec.camera or "Static Shot",
                 ambience_zh=sec.beat or "",
                 narration_zh=seg.text if seg else "",
-                angle=sec.angle,
+                angle=angle,
                 on_screen_text=[] if card else on_screen,
                 card=card,
+                pool_id=pool_id,
             )
         )
     return specs
+
+
+def _pool_line(p: dict) -> str:
+    tags = [p.get("view") or "-", "官方" if p.get("official") else "",
+            "图片" if p.get("kind") == "still" else "视频",
+            {1: "有台标", 2: "有字幕或主持人"}.get(int(p.get("dirt") or 0), "")]
+    return f"- {p['id']} [{' / '.join(t for t in tags if t)}] {p.get('desc') or '(无描述)'}"
 
 
 def fallback_specs(

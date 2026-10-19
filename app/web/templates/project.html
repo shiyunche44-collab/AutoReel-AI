@@ -209,6 +209,7 @@
         <div class="sb-meta">
           {% if s.spec.card %}<span class="tag">数据卡片 · {{ s.spec.card.kind }}</span>{% endif %}
           {% if s.consistency == 'real' %}<span class="tag">真实素材</span>{% endif %}
+          {% if s.spec.pool_id %}<span class="tag">素材池实拍</span>{% endif %}
           <span class="tag">{{ s.spec.section }}</span>
           <span class="tag">{{ s.spec.camera_zh }}</span>
           <span class="tag">{{ s.spec.angle }}</span>

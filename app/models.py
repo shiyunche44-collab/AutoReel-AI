@@ -91,6 +91,9 @@ class ShotSpec(BaseModel):
     #: 数据卡片规格(核对过事实的参数 / 对比 / 时间线 / 柱状图)。非空时这个镜头
     #: 由代码渲染,不取材、不生成。形状见 `cards.normalise()`。
     card: dict | None = None
+    #: 分镜时从素材池点名的实拍素材(`library.Item.id`)。非空时取材先用它,
+    #: visual_zh 描述的就是这段实拍;失效了再按画面描述挑
+    pool_id: str = ""
 
 
 class Shot(BaseModel):
