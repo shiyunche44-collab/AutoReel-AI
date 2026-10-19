@@ -111,9 +111,62 @@ def test_autohome_series_id_from_search_results():
     assert official.autohome_series_id(["https://club.autohome.com.cn/bbs/1"]) == ""
 
 
+CATALOG_JS = (
+    'var listCompare$100= [{"I":489,"N":"小米汽车","L":"X","List":[{"I":667,"N":"小米汽车",'
+    '"List":[{"I":6962,"N":"小米SU7"},{"I":7915,"N":"小米SU7 Ultra"},{"I":7793,"N":"小米YU7"}]}]},'
+    '{"I":75,"N":"比亚迪","L":"B","List":[{"I":1,"N":"比亚迪","List":[{"I":5713,"N":"汉"},'
+    '{"I":4000,"N":"汉家族"}]}]}];'
+)
+
+
+def test_parse_autohome_catalog():
+    rows = official.parse_autohome_catalog(CATALOG_JS)
+    assert ("7793", "小米汽车", "小米YU7") in rows
+    assert len(rows) == 5
+    assert official.parse_autohome_catalog("garbage") == []
+
+
+def test_match_autohome_series():
+    rows = official.parse_autohome_catalog(CATALOG_JS)
+    assert official.match_autohome_series("小米YU7", rows) == "7793"
+    # SU7 与 SU7 Ultra:取主体里包含的最长车系名
+    assert official.match_autohome_series("小米SU7 Ultra", rows) == "7915"
+    assert official.match_autohome_series("小米 SU7", rows) == "6962"
+    # 品牌 + 单字车系名
+    assert official.match_autohome_series("比亚迪汉 EV", rows) == "5713"
+    # 主体只写了型号
+    assert official.match_autohome_series("YU7", rows) == "7793"
+    assert official.match_autohome_series("理想L9", rows) == ""
+
+
+def test_find_autohome_series_falls_back_to_search(monkeypatch):
+    def _boom():
+        raise official.webassets.WebAssetError("HTTP 503")
+
+    monkeypatch.setattr(official, "autohome_catalog", _boom)
+    queries: list[str] = []
+
+    def _bing(q, **k):
+        queries.append(q)
+        return ["https://www.autohome.com.cn/7793/"]
+
+    monkeypatch.setattr(official.webassets, "bing_web", _bing)
+    errors: list[str] = []
+    assert official.find_autohome_series("小米YU7", errors) == "7793"
+    assert "图片" not in queries[0]
+    assert errors
+
+
+def test_find_dongchedi_series(monkeypatch):
+    payload = ('{"data":[{"display":{"series_id":99,"series_name":"小米SU7"}},'
+               '{"display":{"series_id":20041,"series_name":"小米YU7"}}]}')
+    monkeypatch.setattr(official.webassets, "_http_text", lambda url, **k: payload)
+    assert official.find_dongchedi_series("小米YU7") == "20041"
+
+
 def test_autohome_images_tag_angles(monkeypatch):
-    monkeypatch.setattr(official.webassets, "bing_web",
-                        lambda q, **k: ["https://car.autohome.com.cn/pic/series/5713.html"])
+    monkeypatch.setattr(official, "autohome_catalog",
+                        lambda: [("5713", "比亚迪", "汉")])
     pages: list[str] = []
 
     def _http(url, **k):

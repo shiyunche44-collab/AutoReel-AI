@@ -239,3 +239,16 @@ def test_js_runtime_enabled_when_node_is_installed(monkeypatch):
     assert pv._base_opts()["js_runtimes"] == {"node": {}}
     monkeypatch.setattr(pv.shutil, "which", lambda name: None)
     assert "js_runtimes" not in pv._base_opts()
+
+
+@pytest.mark.parametrize("title,ok", [
+    ("Xiaomi YU7 | Debut", True),
+    ("All-new Xiaomi YU7 GT - official video", True),
+    ("小米yu7宣传片", True),
+    ("Xiaomi SU7 Ultra review", False),
+    ("XYU70 something", False),
+    ("EV review", False),
+])
+def test_title_relevance_model_code_in_chinese_subject(title, ok):
+    """回归:中文主体只认整串,英文标题(YouTube)被全部过滤掉。"""
+    assert pv.title_relevant(title, "小米YU7") is ok

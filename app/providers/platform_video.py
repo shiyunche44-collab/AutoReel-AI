@@ -103,7 +103,14 @@ def title_relevant(title: str, subject: str) -> bool:
     core = re.sub(r"\s+", "", subject).lower()
     # "比亚迪汉 EV" → 先试整串,再试去掉尾部英文后缀的中文部分
     candidates = [core, re.sub(r"[a-z0-9]+$", "", core)]
-    return any(c and c in low for c in candidates)
+    if any(c and c in low for c in candidates):
+        return True
+    # 中文主体里的型号(YU7、L9、ET5)单独也认:YouTube 标题是英文的
+    # ("Xiaomi YU7 | Debut"),只认"小米yu7"整串会把它们全部当成不相关。
+    # 只认字母 + 数字混写的型号,"EV" 这种通用词不算。
+    codes = re.findall(r"[a-z]+\d+[a-z0-9]*|\d+[a-z]+[a-z0-9]*", core)
+    spaced = re.sub(r"<[^>]+>", "", title).lower()
+    return any(re.search(rf"(?<![a-z0-9]){re.escape(c)}(?![a-z0-9])", spaced) for c in codes)
 
 
 def rank(hits: list[PlatformHit], *, subject: str = "", require_subject: bool = False

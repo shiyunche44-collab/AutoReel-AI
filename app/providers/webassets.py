@@ -345,6 +345,12 @@ _BING_WEB_RE = re.compile(
 
 def _http_text(url: str, *, timeout: int = _TIMEOUT, referer: str | None = None) -> str:
     """抓网页文本。用浏览器 UA:Bing 和车媒站会给匿名 UA 返回空壳页。"""
+    return _http_bytes(url, timeout=timeout, referer=referer, as_text=True)  # type: ignore[return-value]
+
+
+def _http_bytes(url: str, *, timeout: int = _TIMEOUT, referer: str | None = None,
+                as_text: bool = False) -> bytes | str:
+    """抓原始字节:编码不是 UTF-8 的页面(汽车之家的 GBK 脚本)由调用方自己解。"""
     import httpx
 
     headers = {
@@ -359,7 +365,7 @@ def _http_text(url: str, *, timeout: int = _TIMEOUT, referer: str | None = None)
         raise WebAssetError(f"{type(exc).__name__}: {exc}") from exc
     if resp.status_code >= 400:
         raise WebAssetError(f"HTTP {resp.status_code}")
-    return resp.text
+    return resp.text if as_text else resp.content
 
 
 BROWSER_UA = (
