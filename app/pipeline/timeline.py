@@ -233,6 +233,7 @@ def format_ass(
     width: int | None = None,
     height: int | None = None,
     font_name: str = "Microsoft YaHei",
+    line_chars: int | None = None,
 ) -> str:
     """生成 ASS 字幕文件内容。
 
@@ -262,7 +263,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     lines = [header]
     for cue in cues:
-        body = wrap_subtitle(cue.text)
+        body = wrap_subtitle(cue.text, line_chars)
         lines.append(
             f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},"
             f"Default,,0,0,0,,{body}"

@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -45,12 +46,30 @@ KIND_GUIDE = {
 W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
 FPS = 24
 
-# 内容区避开平台 UI:顶部状态栏与搜索框、底部字幕(timeline 的 margin_v = 0.14H)
-# 与标题/文案区、右侧点赞评论那一列。
-_TOP = int(H * 0.15)
-_BOTTOM = int(H * 0.70)
-_LEFT = int(W * 0.07)
-_RIGHT = int(W * 0.88)
+
+@dataclass(frozen=True)
+class Geo:
+    """画布与内容区。竖屏避开平台 UI(顶部搜索框、底部字幕与文案区、右侧点赞列);
+    横屏内容区居中,底部让出字幕和章节条。"""
+    w: int
+    h: int
+    top: int
+    bottom: int
+    left: int
+    right: int
+
+
+def geo_for(size: tuple[int, int] | None = None) -> Geo:
+    w, h = size or (W, H)
+    if w > h:
+        return Geo(w, h, top=int(h * 0.13), bottom=int(h * 0.78),
+                   left=int(w * 0.20), right=int(w * 0.80))
+    return Geo(w, h, top=int(h * 0.15), bottom=int(h * 0.70),
+               left=int(w * 0.07), right=int(w * 0.88))
+
+
+_GEO = geo_for()
+_TOP, _BOTTOM, _LEFT, _RIGHT = _GEO.top, _GEO.bottom, _GEO.left, _GEO.right
 
 _BG_TOP = (15, 17, 21)
 _BG_BOTTOM = (28, 34, 48)
@@ -171,53 +190,54 @@ def _fit(draw: ImageDraw.ImageDraw, text: str, size: int, max_w: int, bold: bool
     return text + "…", f
 
 
-def _background(bg: Path | None) -> Image.Image:
+def _background(bg: Path | None, g: Geo = _GEO) -> Image.Image:
     if bg and Path(bg).is_file():
         try:
             img = Image.open(bg).convert("RGB")
-            scale = max(W / img.width, H / img.height)
+            scale = max(g.w / img.width, g.h / img.height)
             img = img.resize((int(img.width * scale) + 1, int(img.height * scale) + 1))
-            left, top = (img.width - W) // 2, (img.height - H) // 2
-            img = img.crop((left, top, left + W, top + H)).filter(ImageFilter.GaussianBlur(28))
-            return Image.blend(img, Image.new("RGB", (W, H), _BG_TOP), 0.62)
+            left, top = (img.width - g.w) // 2, (img.height - g.h) // 2
+            img = img.crop((left, top, left + g.w, top + g.h)).filter(ImageFilter.GaussianBlur(28))
+            return Image.blend(img, Image.new("RGB", (g.w, g.h), _BG_TOP), 0.62)
         except OSError:
             pass
-    grad = Image.new("RGB", (1, H))
-    for y in range(H):
-        t = y / (H - 1)
+    grad = Image.new("RGB", (1, g.h))
+    for y in range(g.h):
+        t = y / (g.h - 1)
         grad.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(_BG_TOP, _BG_BOTTOM)))
-    return grad.resize((W, H))
+    return grad.resize((g.w, g.h))
 
 
-def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Image) -> Image.Image:
+def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Image,
+           g: Geo = _GEO) -> Image.Image:
     img = base.copy().convert("RGBA")
-    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    overlay = Image.new("RGBA", (g.w, g.h), (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
-    d.rounded_rectangle((_LEFT - 30, _TOP - 40, _RIGHT + 30, _BOTTOM + 30), radius=36, fill=_PANEL)
+    d.rounded_rectangle((g.left - 30, g.top - 40, g.right + 30, g.bottom + 30), radius=36, fill=_PANEL)
 
-    inner_w = _RIGHT - _LEFT
-    y = _TOP
+    inner_w = g.right - g.left
+    y = g.top
     tag, tag_f = _fit(d, subject, 36, inner_w)
-    d.text((_LEFT, y), tag, font=tag_f, fill=_ACCENT)
+    d.text((g.left, y), tag, font=tag_f, fill=_ACCENT)
     y += 58
     title, title_f = _fit(d, card.get("title") or "关键数据", 66, inner_w, bold=True)
-    d.text((_LEFT, y), title, font=title_f, fill=_TEXT)
+    d.text((g.left, y), title, font=title_f, fill=_TEXT)
     y += 110
 
     rows = card["rows"][:visible_rows]
     kind = card["kind"]
-    area = _BOTTOM - 60 - y
+    area = g.bottom - 60 - y
     if kind == "compare":
-        y = _draw_compare(d, card, rows, y, area)
+        y = _draw_compare(d, card, rows, y, area, g)
     elif kind == "timeline":
-        _draw_timeline(d, card, rows, y, area)
+        _draw_timeline(d, card, rows, y, area, g)
     elif kind == "bars":
-        _draw_bars(d, card, rows, y, area)
+        _draw_bars(d, card, rows, y, area, g)
     else:
-        _draw_spec(d, card, rows, y, area)
+        _draw_spec(d, card, rows, y, area, g)
 
     src, src_f = _fit(d, card.get("source", ""), 26, inner_w)
-    d.text((_LEFT, _BOTTOM - 20), src, font=src_f, fill=_MUTED)
+    d.text((g.left, g.bottom - 20), src, font=src_f, fill=_MUTED)
     return Image.alpha_composite(img, overlay).convert("RGB")
 
 
@@ -225,42 +245,42 @@ def _row_h(card: dict[str, Any], area: int, extra: int = 0) -> int:
     return min(190, area // max(1, len(card["rows"]) + extra))
 
 
-def _draw_spec(d, card, rows, y, area) -> None:
+def _draw_spec(d, card, rows, y, area, g: Geo = _GEO) -> None:
     rh = _row_h(card, area)
-    half = (_RIGHT - _LEFT) // 2
+    half = (g.right - g.left) // 2
     for r in rows:
         label, lf = _fit(d, r["label"], 40, half - 20)
-        d.text((_LEFT, y + rh // 2), label, font=lf, fill=_MUTED, anchor="lm")
+        d.text((g.left, y + rh // 2), label, font=lf, fill=_MUTED, anchor="lm")
         value, vf = _fit(d, r["values"][0], 64, half + 20, bold=True)
-        d.text((_RIGHT, y + rh // 2), value, font=vf, fill=_TEXT, anchor="rm")
-        d.line((_LEFT, y + rh, _RIGHT, y + rh), fill=_RULE, width=2)
+        d.text((g.right, y + rh // 2), value, font=vf, fill=_TEXT, anchor="rm")
+        d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
         y += rh
 
 
-def _draw_compare(d, card, rows, y, area) -> int:
-    col_w = (_RIGHT - _LEFT) // 2
+def _draw_compare(d, card, rows, y, area, g: Geo = _GEO) -> int:
+    col_w = (g.right - g.left) // 2
     a, b = card["columns"]
     a, af = _fit(d, a, 42, col_w - 30, bold=True)
     b, bf = _fit(d, b, 42, col_w - 30, bold=True)
-    d.text((_LEFT + col_w // 2, y + 30), a, font=af, fill=_ACCENT, anchor="mm")
-    d.text((_RIGHT - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
+    d.text((g.left + col_w // 2, y + 30), a, font=af, fill=_ACCENT, anchor="mm")
+    d.text((g.right - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
     y += 80
     rh = _row_h(card, area - 80)
     for r in rows:
-        label, lf = _fit(d, r["label"], 32, _RIGHT - _LEFT)
-        d.text(((_LEFT + _RIGHT) // 2, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
+        label, lf = _fit(d, r["label"], 32, g.right - g.left)
+        d.text(((g.left + g.right) // 2, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
         va, vaf = _fit(d, r["values"][0], 54, col_w - 30, bold=True)
         vb, vbf = _fit(d, r["values"][1], 54, col_w - 30, bold=True)
-        d.text((_LEFT + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
-        d.text((_RIGHT - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
-        d.line((_LEFT, y + rh, _RIGHT, y + rh), fill=_RULE, width=2)
+        d.text((g.left + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
+        d.text((g.right - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
+        d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
         y += rh
     return y
 
 
-def _draw_timeline(d, card, rows, y, area) -> None:
+def _draw_timeline(d, card, rows, y, area, g: Geo = _GEO) -> None:
     rh = _row_h(card, area)
-    x_line = _LEFT + 20
+    x_line = g.left + 20
     if rows:
         d.line((x_line, y + rh // 2, x_line, y + rh * (len(rows) - 1) + rh // 2), fill=_RULE, width=4)
     for r in rows:
@@ -268,49 +288,52 @@ def _draw_timeline(d, card, rows, y, area) -> None:
         d.ellipse((x_line - 14, cy - 14, x_line + 14, cy + 14), fill=_ACCENT)
         year, yf = _fit(d, r["label"], 46, 220, bold=True)
         d.text((x_line + 44, cy), year, font=yf, fill=_ACCENT, anchor="lm")
-        ev, ef = _fit(d, r["values"][0], 40, _RIGHT - x_line - 290)
+        ev, ef = _fit(d, r["values"][0], 40, g.right - x_line - 290)
         d.text((x_line + 270, cy), ev, font=ef, fill=_TEXT, anchor="lm")
         y += rh
 
 
-def _draw_bars(d, card, rows, y, area) -> None:
+def _draw_bars(d, card, rows, y, area, g: Geo = _GEO) -> None:
     rh = _row_h(card, area)
     peak = max((_bar_value(r["values"][0]) or 0 for r in card["rows"]), default=0) or 1
-    bar_w = _RIGHT - _LEFT
+    bar_w = g.right - g.left
     for i, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 36, bar_w)
-        d.text((_LEFT, y + 8), label, font=lf, fill=_MUTED)
+        d.text((g.left, y + 8), label, font=lf, fill=_MUTED)
         v = max(0.0, _bar_value(r["values"][0]) or 0)
         top, bottom = y + 60, y + min(rh - 20, 60 + 54)
         length = max(12, int((bar_w - 220) * v / peak))
-        d.rounded_rectangle((_LEFT, top, _LEFT + length, bottom), radius=10,
+        d.rounded_rectangle((g.left, top, g.left + length, bottom), radius=10,
                             fill=_ACCENT if i == 0 else (*_ACCENT, 150))
         value, vf = _fit(d, r["values"][0], 40, 210, bold=True)
-        d.text((_LEFT + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT, anchor="lm")
+        d.text((g.left + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT, anchor="lm")
         y += rh
 
 
 def render_frames(card: dict[str, Any], subject: str, out_dir: Path,
-                  background: Path | None = None) -> list[Path]:
+                  background: Path | None = None,
+                  size: tuple[int, int] | None = None) -> list[Path]:
     """逐行出现的关键帧:第 0 帧只有标题,之后每帧多一行。"""
     out_dir.mkdir(parents=True, exist_ok=True)
-    base = _background(background)
+    g = geo_for(size)
+    base = _background(background, g)
     frames = []
     for n in range(len(card["rows"]) + 1):
         p = out_dir / f"step_{n:02d}.png"
-        _frame(card, subject, n, base).save(p)
+        _frame(card, subject, n, base, g).save(p)
         frames.append(p)
     return frames
 
 
 def render(card: dict[str, Any], subject: str, dest: str | Path, *,
-           seconds: float | None = None, background: Path | None = None) -> Path:
-    """渲染成定长 9:16 镜头(无音轨,合成层会统一补静音轨)。失败抛 RuntimeError。"""
+           seconds: float | None = None, background: Path | None = None,
+           size: tuple[int, int] | None = None) -> Path:
+    """渲染成定长镜头(默认 9:16,无音轨,合成层会统一补静音轨)。失败抛 RuntimeError。"""
     seconds = float(seconds or config.SHOT_GRID_SECONDS)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="card_") as tmp:
-        frames = render_frames(card, subject, Path(tmp), background)
+        frames = render_frames(card, subject, Path(tmp), background, size)
         # 节奏:标题 0.4s,每行 0.45s,行全部出完后定格到结束
         step = 0.45
         durations = [0.4] + [step] * (len(frames) - 2)

@@ -94,6 +94,16 @@ class ShotSpec(BaseModel):
     #: 分镜时从素材池点名的实拍素材(`library.Item.id`)。非空时取材先用它,
     #: visual_zh 描述的就是这段实拍;失效了再按画面描述挑
     pool_id: str = ""
+    # ---- 以下只有横屏解说轨(track=explainer)用,见 pipeline/explainer.py ----
+    #: 版式:broll / panel / highlight / card。空 = 竖屏链路的普通镜头
+    layout: str = ""
+    #: 叠加层数据(核对过事实):panel = {kind, title, rows, source};
+    #: highlight = {kind, lines}
+    overlay: dict | None = None
+    #: 底部章节条上的章节名
+    chapter: str = ""
+    #: 背景画面偏好:exterior / interior / any —— 只影响排序,不做硬过滤
+    view: str = ""
 
 
 class Shot(BaseModel):
@@ -162,6 +172,7 @@ class ProjectCreate(BaseModel):
     category: str = "auto"
     #: 内容方向名。为空时取品类默认方向(Profile 的 default_theme)。
     theme: str | None = Field(default=None, description="内容方向,如 'iteration'")
+    #: 目标时长(秒)。竖屏链路是精确时长;横屏解说轨是**目标**,成片跟着旁白走
     duration: int = 60
     narration_mode: NarrationMode = "tts"
     quota_budget: float | None = None

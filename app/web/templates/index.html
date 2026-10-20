@@ -67,7 +67,7 @@
 
       <div class="field">
         <span class="field-label">时长</span>
-        <div class="segmented" role="radiogroup" aria-label="时长">
+        <div class="segmented" role="radiogroup" aria-label="时长" id="duration-group">
           {% for d in durations %}
           <input type="radio" name="duration" id="dur-{{ d }}" value="{{ d }}" {% if loop.first %}checked{% endif %}>
           <label for="dur-{{ d }}">{{ d }} 秒</label>

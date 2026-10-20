@@ -24,6 +24,7 @@ from . import (  # noqa: F401 - 显式列出便于阅读依赖
     asset_resolver,
     cards,
     clip_resolver,
+    explainer,
     generate,
     intake,
     library,
@@ -193,9 +194,9 @@ def create_project(payload: ProjectCreate) -> str:
             f"品类「{profile.label}」目前是骨架配置,尚未完整实现。"
             f"待补齐:{'; '.join(profile.todo) or '行业逻辑'}"
         )
-    if payload.duration not in config.SUPPORTED_DURATIONS:
+    if payload.duration not in profile.supported_durations():
         raise PipelineError(
-            f"不支持的时长 {payload.duration}s。可选:{list(config.SUPPORTED_DURATIONS)}"
+            f"不支持的时长 {payload.duration}s。可选:{list(profile.supported_durations())}"
         )
 
     theme_name = (payload.theme or "").strip()
@@ -210,7 +211,7 @@ def create_project(payload: ProjectCreate) -> str:
     # 时长能否铺展出正确长度的段落序列,在这里就验掉,
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
     plan = profile.plan_for(payload.duration, theme_name)
-    expected_shots = config.shots_for_duration(payload.duration)
+    expected_shots = profile.shots_for(payload.duration)
     if len(plan) != expected_shots:
         raise PipelineError(
             f"方向「{theme_name}」在 {payload.duration}s 下铺展出 {len(plan)} 个段落,"
@@ -218,8 +219,10 @@ def create_project(payload: ProjectCreate) -> str:
         )
 
     project_id = new_id("p_")
-    shot_count = config.shots_for_duration(payload.duration)
+    shot_count = expected_shots
     budget = payload.quota_budget or costs.default_budget_for(payload.duration)
+    # 横屏解说轨不调视频生成,只有 TTS 与 BGM,按 0 估
+    est = 0.0 if profile.is_explainer else costs.estimate_project(payload.duration)["with_retry"]
     now = time.time()
     title = payload.title or f"{payload.subject} 解说视频"
 
@@ -237,7 +240,7 @@ def create_project(payload: ProjectCreate) -> str:
             "state_reason": None,
             "quota_budget": budget,
             "spent_cost": 0.0,
-            "est_cost": costs.estimate_project(payload.duration)["with_retry"],
+            "est_cost": est,
             "created_at": now,
             "updated_at": now,
         }
@@ -282,7 +285,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
             # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
             first = report["sources_failed"][0]
             raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
-        db.update_project(project_id, shot_count=config.shots_for_duration(project["duration"]))
+        db.update_project(project_id, shot_count=profile.shots_for(project["duration"]))
         _set_state(project_id, state, State.FACTS_RESOLVED,
                    reason=f"采集 {len(report['sources_ok'])} 个来源,"
                           f"抽取 {len(facts)} 条事实(方向:{theme.label})")
@@ -308,6 +311,9 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
                    reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条")
         return {"state": str(State.SCRIPT_READY), "segments": len(segments),
                 "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
+
+    if profile.is_explainer and state in _EXPLAINER_STATES:
+        return _advance_explainer(project_id, project, state, profile, llm)
 
     if state == State.SCRIPT_READY:
         if llm is None:
@@ -461,6 +467,132 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
 
     if state == State.COMPOSING:
         return finish(project_id)
+
+    return {"state": str(state), "action": "无可执行步骤"}
+
+
+# --------------------------------------------------------------------------
+# 横屏解说轨(profile track=explainer)
+# --------------------------------------------------------------------------
+#: 解说轨接管的状态。事实采集与脚本两步与竖屏链路完全相同,不在这里
+_EXPLAINER_STATES = frozenset({
+    State.SCRIPT_READY, State.STORYBOARD_READY, State.GATE_A, State.PROMPTS_READY,
+    State.DRAFT_RENDERING, State.GATE_B, State.FINAL_RENDERING, State.QA_PASSED,
+    State.COMPOSING,
+})
+#: 后台每轮渲染几拍(一拍约 5 秒;调度循环是同步的,一轮不能拖太久)
+EXPLAINER_BEATS_PER_TICK = 4
+
+
+def _advance_explainer(project_id: str, project: dict[str, Any], state: State,
+                       profile, llm) -> dict[str, Any]:
+    """解说轨的状态推进。状态机沿用竖屏链路,含义换成:
+
+    STORYBOARD_READY  逐拍版式与叠加数据(已核对事实)
+    GATE_A 确认后     先跑 TTS 定每拍时长 → DRAFT_RENDERING 逐拍渲染
+    GATE_B            审渲好的各拍(重拍 = 换一组背景)
+    确认后            草稿即成片,跳过生成与视觉质检 → 合成
+    """
+    subject = project["subject"]
+
+    if state == State.SCRIPT_READY:
+        _start_library(project_id, subject, profile, llm)
+        segments = _script(project_id)
+        facts = _facts(project_id)
+        log: list[dict] = []
+        if llm is None:
+            specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments)
+        else:
+            specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
+                                          facts=facts, llm=llm, card_log=log)
+        problems = explainer.validate_beats(specs)
+        if problems:
+            raise PipelineError("分镜自检未通过:" + "; ".join(problems))
+        _save_specs(project_id, specs)
+        db.write_json(project_id, "cards.json", log)
+        db.update_project(project_id, shot_count=len(specs))
+        counts: dict[str, int] = {}
+        for s in specs:
+            counts[s.layout] = counts.get(s.layout, 0) + 1
+        _set_state(project_id, state, State.STORYBOARD_READY,
+                   reason=f"分镜 {len(specs)} 拍(" + ",".join(
+                       f"{k} {v}" for k, v in sorted(counts.items())) + ")"
+                          + (f",{len(log)} 拍的叠加数据核对后降级" if log else ""))
+        return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "layouts": counts}
+
+    if state == State.STORYBOARD_READY:
+        _set_state(project_id, state, State.GATE_A, reason="等待确认脚本与分镜")
+        return {"state": str(State.GATE_A), "waiting": True}
+
+    if state == State.GATE_A:
+        specs = _specs(project_id)
+        try:
+            specs, nar = explainer.time_beats(project_id, specs, profile)
+        except RuntimeError as exc:
+            raise PipelineError(str(exc)) from exc
+        _save_specs(project_id, specs)
+        total = sum(s.duration for s in specs)
+        db.delete_shots(project_id, "draft")
+        db.delete_shots(project_id, "final")
+        generate.initialise_shots(project_id, specs, stage="draft")
+        generate.initialise_shots(project_id, specs, stage="final")
+        _set_state(project_id, state, State.ASSETS_READY,
+                   reason=f"旁白 {len(nar.sentences)} 句,成片约 {total:.0f} 秒")
+        _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
+                   reason="解说轨不编译生成提示词")
+        _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
+                   reason=f"开始逐拍渲染({len(specs)} 拍)")
+        return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
+                "warnings": nar.warnings}
+
+    if state == State.PROMPTS_READY:
+        _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")
+        return {"state": str(State.DRAFT_RENDERING)}
+
+    if state == State.DRAFT_RENDERING:
+        specs = _specs(project_id)
+        result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
+                                          limit=EXPLAINER_BEATS_PER_TICK)
+        if result["stage_complete"]:
+            _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
+            return {"state": str(State.GATE_B), "waiting": True, **result}
+        failed = [r for r in db.get_shots(project_id, "draft") if r["status"] == "failed"]
+        if failed and len(failed) == len(result["remaining"]) and not result["rendered"]:
+            raise PipelineError("这几拍渲染失败:" + "; ".join(result["errors"][:3]))
+        return {"state": str(state), **result}
+
+    if state == State.GATE_B:
+        specs = _specs(project_id)
+        # 门禁 B 审的就是成片画面:草稿直接转成片,没有第二遍生成
+        n = explainer.promote_all(project_id, specs)
+        _set_state(project_id, state, State.FINAL_RENDERING, reason=f"{n} 拍转为成片")
+        return {"state": str(State.FINAL_RENDERING), "promoted": n}
+
+    if state == State.FINAL_RENDERING:
+        done = {r["idx"] for r in db.get_shots(project_id, "final")
+                if r["status"] == "succeeded" and r.get("final_path")}
+        missing = [s.idx for s in _specs(project_id) if s.duration > 0 and s.idx not in done]
+        if missing:
+            # 门禁 B 里重拍过、还没渲完的拍:回草稿档补渲
+            _set_state(project_id, state, State.GATE_B,
+                       reason=f"还有 {len(missing)} 拍没有成片,请重拍完成后再确认")
+            return {"state": str(State.GATE_B), "waiting": True, "missing": missing}
+        _set_state(project_id, state, State.QA_PASSED,
+                   reason="解说轨画面来自已审各拍,跳过视觉质检")
+        return {"state": str(State.QA_PASSED)}
+
+    if state in (State.QA_PASSED, State.COMPOSING):
+        if state == State.QA_PASSED:
+            _set_state(project_id, state, State.COMPOSING, reason="拼接各拍与混音")
+        try:
+            payload = explainer.compose(project_id, _specs(project_id), profile,
+                                        project["title"])
+        except RuntimeError as exc:
+            raise PipelineError(str(exc)) from exc
+        _set_state(project_id, State.COMPOSING, State.DONE,
+                   reason=f"成片完成:{Path(payload['output_path']).name}")
+        return {"state": str(State.DONE), "output": payload["output_path"],
+                "cover": payload.get("cover"), "duration": payload.get("duration")}
 
     return {"state": str(state), "action": "无可执行步骤"}
 
@@ -842,7 +974,11 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
         raise PipelineError("项目不存在")
     if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
         raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
-    problems = storyboard.validate_specs(specs, project["duration"])
+    if _profile(project).is_explainer:
+        specs = explainer.enforce_rhythm(list(specs))
+        problems = explainer.validate_beats(specs)
+    else:
+        problems = storyboard.validate_specs(specs, project["duration"])
     if problems:
         raise PipelineError("分镜自检未通过:" + "; ".join(problems))
     _save_specs(project_id, specs)
@@ -850,6 +986,15 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
 
 
 def retry(project_id: str, idx: int, stage: str) -> None:
+    project = db.get_project(project_id)
+    if project and _profile(project).is_explainer:
+        # 解说轨的"重拍" = 换一组背景重渲这一拍;渲染只在 DRAFT_RENDERING 里跑,
+        # 门禁 B 上点重拍要先退回去,渲完会自己回到门禁 B
+        explainer.rerender(project_id, idx)
+        if State(project["state"]) == State.GATE_B:
+            _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                       reason=f"重拍第 {idx} 拍(换背景)")
+        return
     spec = next((s for s in _specs(project_id) if s.idx == idx), None)
     if spec is not None and spec.card:
         # 卡片没有生成任务可重试:重画一遍(比如改了 cards 的版式之后)

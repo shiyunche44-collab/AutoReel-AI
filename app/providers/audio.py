@@ -34,6 +34,8 @@ class AudioAsset:
     local_path: Path
     duration: float = 0.0
     node_id: str = ""
+    #: 在 synthesize_batch 输入里的位置。失败的条目不进结果,调用方要靠它对回原句
+    index: int = -1
 
 
 def list_voices() -> list[dict[str, str]]:
@@ -72,11 +74,13 @@ def synthesize_batch(
     volume: float | None = None,
     output_dir: str | Path | None = None,
     timeout: int = 600,
+    file_prefix: str = "tts",
 ) -> list[AudioAsset]:
     """批量合成语音。自动按 10 条一批切分,逐批下载到本地。
 
-    返回的列表与输入 texts **顺序一致**;失败的条目不会出现在结果里,
-    调用方应通过 `len` 差异察觉并决定降级策略。
+    返回的列表与输入 texts **顺序一致**;失败的条目不会出现在结果里 ——
+    中间有一条失败,后面的就整体错位,调用方必须按 `AudioAsset.index` 对回原句。
+    `file_prefix` 让补跑的那一批不覆盖第一批的文件。
     """
     if not texts:
         return []
@@ -97,7 +101,7 @@ def synthesize_batch(
             if volume is not None:
                 item["volume"] = volume
             if out_dir:
-                item["output_file"] = f"tts_{start + offset:03d}.mp3"
+                item["output_file"] = f"{file_prefix}_{start + offset:03d}.mp3"
             requests.append(item)
 
         result = cli.call(TTS_TOOL, {"requests": requests}, timeout=timeout)
@@ -113,15 +117,16 @@ def synthesize_batch(
                 continue
             if out_dir:
                 ext = Path(file_name).suffix or ".mp3"
-                dest = out_dir / f"tts_{start + offset:03d}{ext}"
+                dest = out_dir / f"{file_prefix}_{start + offset:03d}{ext}"
                 try:
                     _download(url, dest)
                 except Exception:
                     continue
             else:
-                dest = Path(file_name or f"tts_{start + offset:03d}.mp3")
+                dest = Path(file_name or f"{file_prefix}_{start + offset:03d}.mp3")
             assets.append(
-                AudioAsset(text=batch[offset], local_path=dest, node_id=str(node_id))
+                AudioAsset(text=batch[offset], local_path=dest, node_id=str(node_id),
+                           index=start + offset)
             )
     return assets
 

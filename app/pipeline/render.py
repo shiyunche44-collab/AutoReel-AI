@@ -79,12 +79,19 @@ def _fontsdir_arg() -> str | None:
 # --------------------------------------------------------------------------
 # 第一段:镜头归一化
 # --------------------------------------------------------------------------
-def normalise_clip(src: str | Path, dest: str | Path) -> bool:
-    """把单个镜头归一化为 1080×1920 / 24fps / yuv420p / 静音音轨。
+def _size(size: tuple[int, int] | None) -> tuple[int, int]:
+    return size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+
+
+def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] | None = None,
+                   trim: float | None = config.SHOT_GRID_SECONDS) -> bool:
+    """把单个镜头归一化为目标画幅(默认 1080×1920)/ 24fps / yuv420p / 静音音轨。
 
     竖屏 9:16 素材源分辨率不统一,统一 scale+crop 到目标画幅可保证拼接不花屏。
     统一生成静音音轨是必需的:concat 要求所有片段的流结构一致。
+    `trim` 为 None 时不截断(横屏解说轨的节拍时长各不相同,已经在渲染时定好)。
     """
+    w, h = _size(size)
     proc = _run(
         [
             "-y", "-v", "error",
@@ -94,15 +101,15 @@ def normalise_clip(src: str | Path, dest: str | Path) -> bool:
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
             "-vf",
             (
-                f"scale={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT},"
+                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},"
                 f"fps={FPS},setsar=1,format=yuv420p"
             ),
             "-map", "0:v:0", "-map", "1:a:0",
             "-shortest",
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             "-c:a", "aac", "-b:a", "128k",
-            "-t", str(config.SHOT_GRID_SECONDS),
+            *(["-t", str(trim)] if trim else []),
             str(dest),
         ],
         timeout=600,
@@ -114,7 +121,7 @@ def normalise_clip(src: str | Path, dest: str | Path) -> bool:
 STILL_MOTIONS: tuple[str, ...] = ("zoom_in", "pan_right", "zoom_out", "pan_left")
 
 
-def still_filter(motion: str, seconds: float) -> str:
+def still_filter(motion: str, seconds: float, size: tuple[int, int] | None = None) -> str:
     """静图 → 9:16 动效镜头的滤镜图。
 
     两步:
@@ -123,7 +130,7 @@ def still_filter(motion: str, seconds: float) -> str:
        放大模糊铺满。
     2. **zoompan 推拉 / 平移**:先放大到 2 倍再 zoompan,否则逐帧取整会抖。
     """
-    w, h = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
+    w, h = _size(size)
     frames = max(1, int(round(seconds * FPS)))
     center_x, center_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
     if motion == "zoom_out":
@@ -145,8 +152,8 @@ def still_filter(motion: str, seconds: float) -> str:
 
 
 def still_to_clip(image: str | Path, dest: str | Path, *, seconds: float | None = None,
-                  motion: str = "zoom_in") -> Path:
-    """把一张图片做成定长 9:16 动效镜头。失败抛 RenderError。"""
+                  motion: str = "zoom_in", size: tuple[int, int] | None = None) -> Path:
+    """把一张图片做成定长动效镜头(默认 9:16)。失败抛 RenderError。"""
     seconds = float(seconds or config.SHOT_GRID_SECONDS)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -154,7 +161,7 @@ def still_to_clip(image: str | Path, dest: str | Path, *, seconds: float | None 
         [
             "-y", "-v", "error",
             "-i", str(image),
-            "-filter_complex", still_filter(motion, seconds),
+            "-filter_complex", still_filter(motion, seconds, size),
             "-map", "[v]",
             "-t", f"{seconds:.3f}", "-r", str(FPS),
             "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
@@ -168,7 +175,9 @@ def still_to_clip(image: str | Path, dest: str | Path, *, seconds: float | None 
     return dest
 
 
-def normalise_all(shot_paths: Sequence[Path], work_dir: Path) -> tuple[list[Path], list[str]]:
+def normalise_all(shot_paths: Sequence[Path], work_dir: Path, *,
+                  size: tuple[int, int] | None = None,
+                  trim: float | None = config.SHOT_GRID_SECONDS) -> tuple[list[Path], list[str]]:
     """归一化全部镜头。返回 (成功列表, 警告列表)。"""
     work_dir.mkdir(parents=True, exist_ok=True)
     ok: list[Path] = []
@@ -179,7 +188,7 @@ def normalise_all(shot_paths: Sequence[Path], work_dir: Path) -> tuple[list[Path
             ok.append(dest)
             continue
         try:
-            if normalise_clip(src, dest):
+            if normalise_clip(src, dest, size=size, trim=trim):
                 ok.append(dest)
             else:
                 warnings.append(f"镜头 {i} 归一化失败,已跳过")
@@ -229,16 +238,24 @@ def compose(
     narration_path: Path | None = None,
     bgm_path: Path | None = None,
     output_name: str = "output.mp4",
+    size: tuple[int, int] | None = None,
+    durations: Sequence[float] | None = None,
 ) -> RenderResult:
-    """主合成入口。"""
+    """主合成入口。
+
+    `durations` 给了就是逐镜头时长不等的横屏解说轨:镜头不再截成 6 秒,
+    成片总长 = 各镜时长之和。
+    """
     project_dir = config.project_dir(project_id)
     output = project_dir / output_name
     work_dir = project_dir / "_render"
+    w, h = _size(size)
 
     if not shot_paths:
         return RenderResult(ok=False, warnings=["没有可用的成片镜头"])
 
-    normalised, warnings = normalise_all(list(shot_paths), work_dir)
+    normalised, warnings = normalise_all(list(shot_paths), work_dir, size=(w, h),
+                                         trim=None if durations else config.SHOT_GRID_SECONDS)
     if not normalised:
         return RenderResult(ok=False, warnings=warnings + ["所有镜头归一化失败"])
 
@@ -261,8 +278,7 @@ def compose(
         inputs += ["-stream_loop", "-1", "-i", str(bgm_path)]
 
     # 视频滤镜链:拼接后的视频 → 可选烧字幕
-    vf_parts = [f"scale={config.OUTPUT_WIDTH}:{config.OUTPUT_HEIGHT}",
-                f"fps={FPS}", "setsar=1", "format=yuv420p"]
+    vf_parts = [f"scale={w}:{h}", f"fps={FPS}", "setsar=1", "format=yuv420p"]
     ass_filter = _build_ass_filter(ass_path, project_dir)
     if ass_filter:
         vf_parts.append(ass_filter)
@@ -281,7 +297,8 @@ def compose(
     args += [
         "-c:v", "libx264", "-preset", "slow", "-crf", "20",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-        "-t", str(config.SHOT_GRID_SECONDS * len(normalised)),
+        "-t", f"{sum(durations):.3f}" if durations
+        else str(config.SHOT_GRID_SECONDS * len(normalised)),
     ]
     if audio_filter:
         args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
@@ -296,6 +313,7 @@ def compose(
                 project_id, shot_paths,
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
+                size=size, durations=durations,
             )
         return RenderResult(
             ok=False, warnings=warnings + [f"合成失败:{proc.stderr[-500:]}"],
@@ -332,10 +350,10 @@ def _build_ass_filter(ass_path: Path | None, project_dir: Path) -> str | None:
 # 封面
 # --------------------------------------------------------------------------
 def build_cover(video_path: str | Path, title: str, dest: str | Path,
-                subtitle: str = "") -> Path | None:
+                subtitle: str = "", size: tuple[int, int] | None = None) -> Path | None:
     from .narration import make_cover
 
-    return make_cover(video_path, title, dest, subtitle)
+    return make_cover(video_path, title, dest, subtitle, size=size)
 
 
 # --------------------------------------------------------------------------

@@ -41,6 +41,21 @@ function syncThemeIntent() {
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
 }
 
+// 时长档位也跟着品类走:横屏解说轨(auto_long)是 2–8 分钟,竖屏是 60–240 秒
+function syncDurations() {
+  const group = $('#duration-group');
+  const cat = catInfo($('#category-select').value);
+  const options = (cat.durations && cat.durations.length) ? cat.durations : DATA.durations;
+  const keep = Number(selectedDuration());
+  const pick = options.includes(keep) ? keep : options[0];
+  const label = (d) => (d >= 120 && d % 60 === 0 ? `${d / 60} 分钟` : `${d} 秒`);
+  group.replaceChildren(...options.flatMap((d) => [
+    h('input', { type: 'radio', name: 'duration', id: `dur-${d}`, value: String(d), checked: d === pick }),
+    h('label', { for: `dur-${d}` }, label(d)),
+  ]));
+  $$('input[name="duration"]', group).forEach((r) => r.addEventListener('change', refreshEstimate));
+}
+
 function selectedDuration() {
   const r = form.querySelector('input[name="duration"]:checked');
   return r ? r.value : DATA.durations[0];
@@ -59,8 +74,14 @@ async function refreshEstimate() {
     const rc = data.real_clips || {};
     $('#est-shots').textContent = data.shot_count;
     $('#est-cost').textContent = data.cost.with_retry.toFixed(2);
-    $('#est-time').replaceChildren(`${wc.final_minutes_low}–${wc.final_minutes_high}`, h('small', {}, '分钟'));
-    $('#est-time-sub').textContent = `${wc.chains} 条一致性链 · ${wc.waves} 个波次`;
+    if (data.track === 'explainer') {
+      // 横屏解说轨没有生成排队:实拍铺底 + 叠加层,几分钟就能渲完
+      $('#est-time').replaceChildren(`${Math.max(1, Math.round(data.shot_count * 5 / 60))}`, h('small', {}, '分钟'));
+      $('#est-time-sub').textContent = `约 ${data.shot_count} 拍 · 横屏 16:9 · 时长跟着旁白走`;
+    } else {
+      $('#est-time').replaceChildren(`${wc.final_minutes_low}–${wc.final_minutes_high}`, h('small', {}, '分钟'));
+      $('#est-time-sub').textContent = `${wc.chains} 条一致性链 · ${wc.waves} 个波次`;
+    }
     if (rc.enabled) {
       $('#est-save').textContent = `$${rc.max_savings.toFixed(2)}`;
       $('#est-save-sub').textContent = `最多 ${rc.max_shots} 个外观镜头用实拍`;
@@ -75,9 +96,9 @@ async function refreshEstimate() {
 }
 
 if (form) {
-  $('#category-select').addEventListener('change', () => { syncThemeField(); refreshEstimate(); });
+  $('#category-select').addEventListener('change', () => { syncThemeField(); syncDurations(); refreshEstimate(); });
   $('#theme-select').addEventListener('change', syncThemeIntent);
-  $$('input[name="duration"]', form).forEach((r) => r.addEventListener('change', refreshEstimate));
+  syncDurations();
   syncThemeField();
   refreshEstimate();
 

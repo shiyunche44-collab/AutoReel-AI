@@ -41,6 +41,8 @@ class NarrationResult:
     total_chars: int = 0
     total_duration: float = 0.0
     warnings: list[str] = field(default_factory=list)
+    #: 补跑后仍没有音频的句子(在 sentences 里的位置)
+    missing_sentences: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,8 +80,13 @@ def build(
     narration_mode: str = "tts",
     with_bgm: bool = True,
     profile=None,
+    size: tuple[int, int] | None = None,
+    line_chars: int | None = None,
 ) -> NarrationResult:
-    """生成旁白、字幕与 BGM。任一环节失败都尽量降级而非抛出。"""
+    """生成旁白、字幕与 BGM。任一环节失败都尽量降级而非抛出。
+
+    `size` / `line_chars`:字幕画布尺寸与单行字数,横屏解说轨用(默认竖屏)。
+    """
     project_dir = config.project_dir(project_id)
     audio_dir = project_dir / "audio"
     # 字幕在拼接之前就要落盘,目录必须先建好 —— 否则第一次跑就会
@@ -115,17 +122,38 @@ def build(
         result.warnings.append(f"TTS 失败:{exc}")
         return result
 
-    if len(assets) != len(texts):
+    # 失败的句子不在结果里,而且后面的会整体前移 —— 必须按输入位置对回原句,
+    # 否则一句失败,之后每条字幕都挂到错的镜头上。
+    by_pos = {(a.index if getattr(a, "index", -1) >= 0 else n): a for n, a in enumerate(assets)}
+    missing = [i for i in range(len(texts)) if i not in by_pos]
+    if missing:
+        # 批量接口偶发整批失败(限流、超时),补跑一次通常就齐了
+        try:
+            retry = audio.synthesize_batch([texts[i] for i in missing], voice_id=voice_id,
+                                           speed=speed, output_dir=audio_dir,
+                                           file_prefix="tts_retry")
+        except Exception as exc:  # noqa: BLE001
+            retry = []
+            result.warnings.append(f"TTS 补跑失败:{exc}")
+        for n, a in enumerate(retry):
+            pos = missing[a.index if getattr(a, "index", -1) >= 0 else n]
+            by_pos[pos] = a
+        missing = [i for i in range(len(texts)) if i not in by_pos]
+    if missing:
+        result.missing_sentences = missing
         result.warnings.append(
-            f"TTS 返回 {len(assets)} 条,期望 {len(texts)} 条,缺失部分将无旁白"
+            f"TTS 返回 {len(texts) - len(missing)} 条,期望 {len(texts)} 条,"
+            f"缺失第 {[i + 1 for i in missing[:10]]} 句,这几句将无旁白"
         )
-    if not assets:
+    if not by_pos:
         result.warnings.append("TTS 未产出任何音频")
         return result
 
+    order = sorted(by_pos)
+    assets = [by_pos[i] for i in order]
     result.audio_paths = [a.local_path for a in assets]
-    used_texts = [a.text for a in assets]
-    used_shots = shot_indices[: len(assets)]
+    used_texts = [texts[i] for i in order]
+    used_shots = [shot_indices[i] for i in order]
 
     # ---- 时长探测 ----
     durations: list[float] = []
@@ -144,7 +172,9 @@ def build(
     result.cues = cues
     result.total_duration = cues[-1].end if cues else 0.0
 
-    ass_content = format_ass(cues, font_name=_pick_font_name())
+    w, h = size or (None, None)
+    ass_content = format_ass(cues, width=w, height=h, font_name=_pick_font_name(),
+                             line_chars=line_chars)
     ass_path = audio_dir / "subs.ass"
     ass_path.write_text(ass_content, encoding="utf-8")
     result.ass_path = ass_path
@@ -281,8 +311,8 @@ def extract_cover_frame(video_path: str | Path, dest: str | Path, at: float = 1.
 
 
 def make_cover(video_path: str | Path, title: str, dest: str | Path,
-               subtitle: str = "") -> Path | None:
-    """抽帧 + Pillow 合成带标题的封面。"""
+               subtitle: str = "", size: tuple[int, int] | None = None) -> Path | None:
+    """抽帧 + Pillow 合成带标题的封面(默认竖屏,`size` 给横屏尺寸)。"""
     from PIL import Image, ImageDraw, ImageFont
 
     dest = Path(dest)
@@ -291,8 +321,9 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
         return None
     try:
         image = Image.open(raw).convert("RGB")
-        # 统一裁剪为 9:16
-        target_ratio = config.OUTPUT_WIDTH / config.OUTPUT_HEIGHT
+        # 统一裁剪为成片画幅
+        out_w, out_h = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+        target_ratio = out_w / out_h
         w, h = image.size
         if w / h > target_ratio:
             new_w = int(h * target_ratio)
@@ -302,16 +333,16 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
             new_h = int(w / target_ratio)
             top = (h - new_h) // 3
             image = image.crop((0, top, w, top + new_h))
-        image = image.resize((config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT), Image.LANCZOS)
+        image = image.resize((out_w, out_h), Image.LANCZOS)
 
         draw = ImageDraw.Draw(image, "RGBA")
         # 底部渐变条,保证文字可读
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         odraw = ImageDraw.Draw(overlay)
-        band_top = int(config.OUTPUT_HEIGHT * 0.52)
-        for y in range(band_top, config.OUTPUT_HEIGHT):
-            alpha = int(200 * (y - band_top) / (config.OUTPUT_HEIGHT - band_top))
-            odraw.line([(0, y), (config.OUTPUT_WIDTH, y)], fill=(0, 0, 0, alpha))
+        band_top = int(out_h * 0.52)
+        for y in range(band_top, out_h):
+            alpha = int(200 * (y - band_top) / (out_h - band_top))
+            odraw.line([(0, y), (out_w, y)], fill=(0, 0, 0, alpha))
         image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
         draw = ImageDraw.Draw(image)
@@ -323,7 +354,7 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
         except OSError:
             title_font = sub_font = ImageFont.load_default()
 
-        y = int(config.OUTPUT_HEIGHT * 0.60)
+        y = int(out_h * 0.60)
         draw.text((70, y), title[:14], font=title_font, fill=(255, 255, 255),
                   stroke_width=4, stroke_fill=(0, 0, 0))
         if subtitle:

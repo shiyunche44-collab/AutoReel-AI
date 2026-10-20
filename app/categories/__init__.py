@@ -66,6 +66,10 @@ class SectionSpec:
     #: 数据卡片版式(spec / compare / timeline / bars)。非空时该段落的镜头
     #: 由代码渲染成卡片,数字逐条核对事实 —— 视频模型画不出准确的数字。
     card: str = ""
+    #: 横屏解说轨:该段落允许的画面版式(见 pipeline/explainer.LAYOUTS),第一个是默认
+    layouts: tuple[str, ...] = ()
+    #: 横屏解说轨:该段落归属的章节(底部章节条上的名字),空则用段落名
+    chapter: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,11 @@ class CategoryProfile:
     label: str
     aspect_ratio: str = "9:16"
     duration_grid: int = 6
+    #: 画面链路:footage = 逐镜头取实拍/AI 生成(竖屏短视频);
+    #: explainer = 横屏信息解说(实拍只当背景,信息靠叠加层,时长跟着旁白走)
+    track: str = "footage"
+    #: 可选成片时长(秒)。空 = 全局 SUPPORTED_DURATIONS
+    durations: tuple[int, ...] = ()
     fact_sources: tuple[str, ...] = ()
     #: duration -> 段落名列表,长度必须等于 duration/6
     #: (未声明 themes 的老 profile 走这条路径)
@@ -134,6 +143,37 @@ class CategoryProfile:
     #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
     skeleton: bool = False
     todo: tuple[str, ...] = ()
+
+    # ------------------------------------------------------------------
+    # 画幅与时长
+    # ------------------------------------------------------------------
+    @property
+    def is_explainer(self) -> bool:
+        return self.track == "explainer"
+
+    def supported_durations(self) -> tuple[int, ...]:
+        from .. import config
+
+        return self.durations or config.SUPPORTED_DURATIONS
+
+    def shots_for(self, duration: int) -> int:
+        """该时长铺几个镜头(解说轨叫节拍)。按本 profile 的栅格算。"""
+        if duration % self.duration_grid != 0:
+            raise ProfileError(
+                f"品类 {self.name}: 时长 {duration}s 必须是 {self.duration_grid} 的整数倍"
+            )
+        return duration // self.duration_grid
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        """成片像素尺寸。横屏 1920×1080,竖屏 1080×1920,其它比例按短边 1080 推。"""
+        try:
+            a, b = (int(x) for x in self.aspect_ratio.split(":"))
+        except ValueError:
+            a, b = 9, 16
+        if a >= b:
+            return (int(round(1080 * a / b / 2)) * 2, 1080)
+        return (1080, int(round(1080 * b / a / 2)) * 2)
 
     # ------------------------------------------------------------------
     # 方向
@@ -347,6 +387,8 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             requires_fact=bool(value.get("requires_fact", False)),
             multi_subject=bool(value.get("multi_subject", False)),
             card=str(value.get("card", "") or ""),
+            layouts=tuple(str(x) for x in (value.get("layouts") or ())),
+            chapter=str(value.get("chapter", "") or ""),
         )
         for key, value in (raw.get("sections") or {}).items()
     }
@@ -378,6 +420,8 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         label=str(raw.get("label", name)),
         aspect_ratio=str(raw.get("aspect_ratio", "9:16")),
         duration_grid=int(raw.get("duration_grid", 6)),
+        track=str(raw.get("track", "footage") or "footage"),
+        durations=tuple(int(d) for d in (raw.get("durations") or ())),
         fact_sources=tuple(raw.get("fact_sources") or ()),
         section_plan=plan,
         sections=sections,
@@ -406,15 +450,24 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
     )
 
 
-def _min_supported_shots(duration_grid: int) -> int:
+def _min_supported_shots(profile: CategoryProfile) -> int:
     """最短受支持时长对应的镜头数 —— 块数不能超过它,否则铺展会挤爆。"""
-    from .. import config
+    durations = profile.supported_durations() or (60,)
+    return min(durations) // profile.duration_grid
 
-    durations = config.SUPPORTED_DURATIONS or (60,)
-    return min(durations) // duration_grid
+
+#: 解说轨的版式名。与 pipeline/explainer.LAYOUTS 保持一致(这里不反向导入流水线)
+EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card")
 
 
 def _validate(profile: CategoryProfile) -> None:
+    if profile.track not in ("footage", "explainer"):
+        raise ProfileError(f"品类 {profile.name}: track={profile.track!r} 只能是 footage / explainer")
+    for sname, sec in profile.sections.items():
+        bad = [x for x in sec.layouts if x not in EXPLAINER_LAYOUTS]
+        if bad:
+            raise ProfileError(f"品类 {profile.name} 段落 {sname}: 未知版式 {bad}")
+
     # 1. 老写法:手写 section_plan
     for duration, plan in profile.section_plan.items():
         expected = duration // profile.duration_grid
@@ -430,7 +483,7 @@ def _validate(profile: CategoryProfile) -> None:
             )
 
     # 2. 方向库
-    min_shots = _min_supported_shots(profile.duration_grid)
+    min_shots = _min_supported_shots(profile)
     for tname, theme in profile.themes.items():
         if theme.uses_blocks:
             if len(theme.blocks) > min_shots:
@@ -473,9 +526,7 @@ def _validate(profile: CategoryProfile) -> None:
             )
 
     # 4. 铺展必须落在栅格上 —— 这是最容易写错的环节,在加载期就拦掉
-    from .. import config
-
-    for duration in config.SUPPORTED_DURATIONS:
+    for duration in profile.supported_durations():
         if duration % profile.duration_grid != 0:
             continue
         for tname in profile.themes:
@@ -492,21 +543,39 @@ def _validate(profile: CategoryProfile) -> None:
         )
 
 
-@lru_cache(maxsize=None)
-def load_profile(name: str) -> CategoryProfile:
+#: `extends` 继承时按键合并(子 profile 只写增改的条目)的字典;其余键整体覆盖。
+#: themes 故意整体覆盖:父 profile 的方向是按它的栅格和版式写的,不该悄悄带过来。
+_MERGED_KEYS = ("sections", "official_sites", "angle_queries")
+
+
+def _load_raw(name: str, chain: tuple[str, ...] = ()) -> dict[str, Any]:
     path = PROFILES_DIR / f"{name}.yaml"
     if not path.is_file():
         available = sorted(p.stem for p in PROFILES_DIR.glob("*.yaml"))
         raise ProfileError(f"未知品类 {name!r}。可用品类:{available}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    parent = str(raw.pop("extends", "") or "")
+    if not parent:
+        return raw
+    if parent in chain or parent == name:
+        raise ProfileError(f"品类 {name}: extends 循环引用 {chain + (name, parent)}")
+    base = _load_raw(parent, chain + (name,))
+    merged = {**base, **raw}
+    for key in _MERGED_KEYS:
+        if isinstance(base.get(key), dict) and isinstance(raw.get(key), dict):
+            merged[key] = {**base[key], **raw[key]}
+    return merged
+
+
+@lru_cache(maxsize=None)
+def load_profile(name: str) -> CategoryProfile:
+    raw = _load_raw(name)
     profile = _build(name, raw)
     _validate(profile)
     return profile
 
 
 def available_categories() -> list[dict[str, Any]]:
-    from .. import config
-
     out = []
     for path in sorted(PROFILES_DIR.glob("*.yaml")):
         try:
@@ -521,9 +590,11 @@ def available_categories() -> list[dict[str, Any]]:
             "label": profile.label,
             "skeleton": profile.skeleton,
             "todo": list(profile.todo),
-            # 时长由全局栅格决定,不再取 section_plan 的键 ——
+            # 时长由 profile 声明(缺省用全局档位),不再取 section_plan 的键 ——
             # 方向库模式下 plan 由 blocks 铺展而来,没有"键"可言。
-            "durations": list(config.SUPPORTED_DURATIONS),
+            "durations": list(profile.supported_durations()),
+            "track": profile.track,
+            "aspect_ratio": profile.aspect_ratio,
             "default_theme": profile.default_theme,
             "themes": [
                 {"name": t.name, "label": t.label, "intent": t.intent}

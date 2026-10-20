@@ -1,0 +1,109 @@
+# 汽车横屏解说 —— 对标「三驱兄弟」式的信息型长视频
+#
+# 与竖屏 auto 的区别:
+# - 画面链路 track=explainer:官方宣传片 / 实拍只当这台车的**背景画面**(随便哪段干净的都行,
+#   短镜头连拼),信息靠叠加层传达 —— 侧边参数面板、两行大字关键词、数据卡、底部章节条。
+# - 一镜 = 一个节拍 = 一段旁白,时长由 TTS 实际时长决定,不再是固定 6 秒。
+#   duration_grid 只用来估节拍数(平均每拍 8 秒,约 46 字)。
+# - 16:9 横屏,1920×1080。
+#
+# 事实来源、官方渠道、合规词表、BGM 都继承 auto。
+extends: auto
+name: auto_long
+label: 汽车(横屏解说)
+aspect_ratio: "16:9"
+track: explainer
+duration_grid: 8
+durations: [120, 240, 360, 480]
+
+script_style: >
+  像懂车的朋友当面给建议:口语化、短句、观点明确,每段只讲一个点。
+  参数必须来自事实层,不说空话套话,不夸张承诺。
+  全片控制在 {chars} 字左右,平均每段 {per_shot} 字。
+
+default_theme: buyguide
+
+themes:
+  buyguide:
+    label: 单车选购深讲
+    intent: >
+      围绕"这台车值不值得买、该买哪个版本"展开:定位与价格 → 外观内饰 → 三电与性能 →
+      智能配置 → 版本怎么选 → 和对手比 → 结论(适合谁、不适合谁)。
+      每段给出明确判断,参数只是论据。
+    required_scopes: [product]
+    fact_sources:
+      - ifind.product_news
+      - ifind.news
+    script_rules:
+      - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
+      - 结论段必须说清楚适合哪类人、不适合哪类人。
+    blocks:
+      - {section: 开场, weight: 1, remainder: false}
+      - {section: 定位与价格, weight: 2}
+      - {section: 外观设计, weight: 2}
+      - {section: 内饰空间, weight: 2}
+      - {section: 三电性能, weight: 3}
+      - {section: 智能配置, weight: 2}
+      - {section: 版本选择, weight: 2}
+      - {section: 竞品对比, weight: 1}
+      - {section: 结论建议, weight: 1, remainder: false}
+
+# 版式说明(pipeline/explainer.py):
+#   broll     全屏这台车的宣传片
+#   panel     宣传片 + 左侧参数面板(车名、3–5 项参数)
+#   highlight 宣传片缩成小窗 + 两行大字关键词
+#   card      整屏数据卡(spec / compare / bars / timeline,按 card 字段)
+# angle 在这里只决定背景画面偏外观还是偏车内,不要求逐镜对上。
+sections:
+  开场:
+    beat: 一句话抛出这台车最值得聊的点或争议
+    chapter: 开头
+    angle: exterior_45
+    layouts: [highlight, broll]
+  定位与价格:
+    beat: 它卖多少钱、打谁、在品牌里是什么位置
+    chapter: 定位价格
+    angle: exterior_45
+    layouts: [panel, card, broll]
+    card: spec
+    requires_fact: true
+  外观设计:
+    beat: 外观设计亮点与尺寸
+    chapter: 外观内饰
+    angle: exterior_45
+    layouts: [broll, highlight, panel]
+  内饰空间:
+    beat: 座舱、空间、做工与实用性
+    chapter: 外观内饰
+    angle: interior
+    layouts: [broll, highlight, panel]
+  三电性能:
+    beat: 动力、续航、补能、底盘
+    chapter: 三电性能
+    angle: exterior_45
+    layouts: [card, highlight, broll, panel]
+    card: spec
+    requires_fact: true
+  智能配置:
+    beat: 智驾硬件、座舱芯片与功能
+    chapter: 智能配置
+    angle: interior
+    layouts: [highlight, broll, panel]
+  版本选择:
+    beat: 各版本价格与配置差异,推荐哪个
+    chapter: 怎么选
+    angle: exterior_45
+    layouts: [card, panel, broll]
+    card: spec
+    requires_fact: true
+  竞品对比:
+    beat: 与最主要的对手比关键维度
+    chapter: 怎么选
+    angle: exterior_45
+    layouts: [card, broll]
+    card: compare
+  结论建议:
+    beat: 适合谁、不适合谁
+    chapter: 结论
+    angle: exterior_45
+    layouts: [broll, highlight]

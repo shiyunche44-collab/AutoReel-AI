@@ -354,6 +354,17 @@ def categories():
 
 @app.get("/api/estimate")
 def estimate(duration: int = 60, category: str = "auto"):
+    profile = load_profile(category)
+    if profile.is_explainer:
+        # 横屏解说轨:不调视频生成,时长跟着旁白走,这里只给节拍数的估计
+        return {
+            "duration": duration,
+            "cost": {"draft": 0.0, "final": 0.0, "with_retry": 0.0},
+            "wall_clock": {"note": "逐拍渲染约 5 秒/拍,无生成排队"},
+            "shot_count": profile.shots_for(duration),
+            "track": "explainer",
+            "real_clips": {"enabled": False, "max_shots": 0, "max_savings": 0.0},
+        }
     shot_count = config.shots_for_duration(duration)
     # 真实素材最多能覆盖多少镜头:外观视角的镜头才可能拿到真实片段。
     # 这是**上界**,不是承诺 —— 实际能不能取到要看网上有没有可用的直链。

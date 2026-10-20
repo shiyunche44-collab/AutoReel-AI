@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import re
@@ -1006,6 +1007,124 @@ def pick(subject: str, item_id: str, *, seconds: float | None = None,
     if not any(first.id == item.id for first, _ in windows(segs, seconds, angle)):
         return None
     return _to_candidate(item, item.path)
+
+
+# --------------------------------------------------------------------------
+# 铺:横屏解说轨的背景画面
+# --------------------------------------------------------------------------
+@dataclass
+class Piece:
+    """背景里的一小段:视频按 [start, start+length) 截,图片做推拉。"""
+    item_id: str
+    kind: str
+    path: str
+    start: float
+    length: float
+
+
+#: 背景画面偏好 → 优先的视角
+HINT_VIEWS: dict[str, set[str]] = {
+    "exterior": set(_EXTERIOR),
+    "interior": set(_INTERIOR) | {"detail"},
+    "driving": {"driving", "aerial", "exterior_side"},
+}
+#: 一段最长用几秒就换下一段 —— 信息解说的背景是 2–4 秒一刀的节奏,
+#: 一个镜头拖太久反而像卡住了
+FILL_MAX_PIECE = 4.5
+#: 短于这个的段不用(闪白、转场)
+FILL_MIN_PIECE = 1.2
+
+
+#: 从源片第 0 秒开始的段,跳过开头这么多秒(黑场淡入)
+SOURCE_FADE_IN = 0.8
+#: 帧平均亮度低于它就当黑场(宣传片开头结尾的黑底片名卡,打标签时常被放过)
+DARK_LUMA = 28
+
+
+@functools.lru_cache(maxsize=4096)
+def _luma(path: str) -> float:
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as im:
+            return float(ImageStat.Stat(im.convert("L").resize((64, 36))).mean[0])
+    except (OSError, ValueError):
+        return 255.0  # 读不了就不拦
+
+
+def is_dark(item: Item) -> bool:
+    """背景用不了的黑场:大面积黑底 + 一行小字的片名卡。叠上面板后整屏发黑。"""
+    probe = item.frame or (item.path if item.kind == "still" else "")
+    return bool(probe) and Path(probe).is_file() and _luma(probe) < DARK_LUMA
+
+
+def _fill_tier(item: Item, used: int) -> int:
+    """取用的先后档:干净视频 → 官图 → 用过的干净视频 → 有字幕的视频 → 其余。
+    带字幕或主持人的评测画面会和成片自己的字幕打架,宁可先用官图推拉。"""
+    clean = _dirt(item) < 2
+    if item.kind == "video":
+        if clean:
+            return 0 if not used else 2
+        return 3 if not used else 5
+    return 1 if not used else 4
+
+
+def fill(subject: str, seconds: float, *, hint: str = "",
+         used: dict[str, int] | None = None) -> list[Piece]:
+    """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
+
+    和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
+    背景只需要"是这台车、画面干净"。快剪广告里 1.3–3 秒的短段正好拿来连拼,
+    不再因为凑不满 6 秒窗口而被浪费。
+
+    `hint`(exterior / interior / driving)只参与排序。`used` 是全片共享的
+    已用计数(item_id → 次数),调用方跨节拍传同一个字典,尽量不重复。
+    返回空列表表示池子里什么都没有。
+    """
+    seconds = float(seconds)
+    used = used if used is not None else {}
+    lib = Library.load(subject)
+    want = HINT_VIEWS.get(hint, set())
+    pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
+        (i.kind == "video" and i.length >= FILL_MIN_PIECE)
+        or (i.kind == "still" and i.view in ANGLE_OF_VIEW)) and not is_dark(i)]
+
+    def rank(i: Item) -> tuple:
+        # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
+        # 混着 SU7 的赛道活动),背景里出现别的车比画面不对口严重得多
+        n = used.get(i.id, 0)
+        return (_fill_tier(i, n), i.target != "yes", bool(want) and i.view not in want, n,
+                _dirt(i), not i.official, -i.length)
+
+    pool.sort(key=rank)
+    out: list[Piece] = []
+    covered = 0.0
+    for i in pool:
+        if covered >= seconds - 0.05:
+            break
+        remaining = seconds - covered
+        if i.kind == "still":
+            take = min(remaining, FILL_MAX_PIECE)
+            start = 0.0
+        else:
+            # 源片开头的那一段几乎都是黑场淡入(打标签抽的是段中间的帧,看不出来)
+            skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
+            length = i.length - skip
+            take = min(length, remaining, FILL_MAX_PIECE)
+            # 别留一截过短的尾巴:够长就把它吃进这一段
+            if remaining - take < FILL_MIN_PIECE:
+                take = min(length, remaining)
+            start = i.start + skip
+        if take < min(FILL_MIN_PIECE, remaining):
+            continue
+        out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3)))
+        used[i.id] = used.get(i.id, 0) + 1
+        covered += take
+    if out and covered < seconds - 0.05:
+        # 池子太小铺不满:把最后一段拉长到结尾(图片推拉 / 视频截到原片允许的长度)
+        last = out[-1]
+        last.length = round(last.length + (seconds - covered), 3)
+    return out
 
 
 def has_usable_video(subject: str) -> bool:

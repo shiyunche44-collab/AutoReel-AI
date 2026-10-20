@@ -135,3 +135,54 @@ def test_build_warns_when_narration_concat_fails(monkeypatch, tmp_path):
                              with_bgm=False, profile=None)
     assert result.narration_path is None
     assert any("旁白拼接失败" in w for w in result.warnings), result.warnings
+
+
+def _three_specs():
+    from app.models import ShotSpec
+
+    return [ShotSpec(idx=i, visual_zh="v", narration_zh=f"第{i}拍的旁白。") for i in range(3)]
+
+
+def test_tts_mid_failure_is_retried_and_keeps_shot_mapping(monkeypatch, tmp_path):
+    """中间一句失败时:补跑一次,并且字幕必须仍挂在原来的镜头上(不整体前移)。"""
+    from app.providers.audio import AudioAsset
+
+    calls: list[tuple[list[str], str]] = []
+
+    def fake(texts, **kw):
+        prefix = kw.get("file_prefix", "tts")
+        calls.append((list(texts), prefix))
+        out = []
+        for i, t in enumerate(texts):
+            if prefix == "tts" and i == 1:
+                continue  # 第一轮丢掉第 2 句
+            p = _make_tone(tmp_path / f"{prefix}_{i}.wav", 0.3 + 0.1 * i)
+            out.append(AudioAsset(text=t, local_path=p, index=i))
+        return out
+
+    monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    result = narration.build("p_test", _three_specs(), with_bgm=False)
+    assert [c[1] for c in calls] == ["tts", "tts_retry"]
+    assert calls[1][0] == [calls[0][0][1]]  # 只补跑丢掉的那一句
+    assert not result.missing_sentences
+    assert [c.shot_idx for c in result.cues] == [0, 1, 2]
+    assert [c.text for c in result.cues] == calls[0][0]
+
+
+def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):
+    from app.providers.audio import AudioAsset
+
+    def fake(texts, **kw):
+        if kw.get("file_prefix") == "tts_retry":
+            return []
+        return [AudioAsset(text=t, local_path=_make_tone(tmp_path / f"t{i}.wav"), index=i)
+                for i, t in enumerate(texts) if i != 1]
+
+    monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    result = narration.build("p_test", _three_specs(), with_bgm=False)
+    assert result.missing_sentences == [1]
+    assert [c.shot_idx for c in result.cues] == [0, 2]

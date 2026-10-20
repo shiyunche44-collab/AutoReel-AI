@@ -370,17 +370,31 @@
           </div>
           {% else %}
           <div class="sb-visual">{{ s.spec.visual_zh }}</div>
+          {% if s.spec.overlay and s.spec.overlay.kind == 'panel' %}
+          <div class="sb-card">
+            <div class="sb-card-title">{{ m.icon("grid", "i-sm") }}侧边面板 · {{ s.spec.overlay.title }}</div>
+            <table class="mini-table"><tbody>
+            {% for r in s.spec.overlay.rows %}
+              <tr><td class="subtle">{{ r.label }}</td>{% for v in r.get('values') or [] %}<td class="num">{{ v }}</td>{% endfor %}<td>{% if r.fact_id %}<code class="js-fact-ref" data-ref="{{ r.fact_id }}" title="查看事实">{{ r.fact_id }}</code>{% endif %}</td></tr>
+            {% endfor %}
+            </tbody></table>
+          </div>
+          {% elif s.spec.overlay and s.spec.overlay.kind == 'highlight' %}
+          <div class="sb-card"><div class="sb-card-title">{{ m.icon("grid", "i-sm") }}大字:{{ s.spec.overlay.lines | join(' / ') }}</div></div>
+          {% endif %}
           {% endif %}
           {% if s.spec.narration_zh %}<div class="sb-narr">{{ m.icon("mic", "i-sm") }}<span>{{ s.spec.narration_zh }}</span></div>{% endif %}
           <div class="sb-tags">
+            {% if s.spec.layout %}<span class="tag tone-brand">版式 · {{ s.spec.layout }}</span>{% endif %}
+            {% if s.spec.chapter %}<span class="tag">章节 · {{ s.spec.chapter }}</span>{% endif %}
             {% if s.spec.card %}<span class="tag tone-brand">数据卡片 · {{ s.spec.card.kind }}</span>{% endif %}
             {% if s.consistency == 'real' %}<span class="tag tone-success">真实素材</span>{% endif %}
             {% if s.spec.pool_id %}<span class="tag tone-success">素材池实拍</span>{% endif %}
             {% if s.consistency == 'degraded' %}<span class="tag tone-warning">一致性降级</span>{% endif %}
             {% if s.spec.section %}<span class="tag">{{ s.spec.section }}</span>{% endif %}
             {% if s.spec.camera_zh %}<span class="tag">{{ s.spec.camera_zh }}</span>{% endif %}
-            <span class="tag">{{ s.spec.angle }}</span>
-            <span class="tag">链 {{ s.chain_id }}-{{ s.chain_pos }}</span>
+            <span class="tag">{{ s.spec.view or s.spec.angle }}</span>
+            {% if not s.spec.layout %}<span class="tag">链 {{ s.chain_id }}-{{ s.chain_pos }}</span>{% endif %}
           </div>
           {% if perr %}
           <div class="sb-err">{{ m.icon("alert-circle", "i-sm") }}<span>{{ perr | join(';') }}</span></div>
