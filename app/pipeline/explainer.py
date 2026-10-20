@@ -11,6 +11,7 @@
     panel      背景 + 左侧参数面板(核对过事实的 3–5 行)
     highlight  背景缩成小窗 + 两行大字关键词
     card       整屏数据卡(spec / compare / bars / timeline,沿用 cards.py)
+    stat       背景压暗 + 中央一个大数字从 0 滚到目标值(核对过事实的一个参数)
 
 时长不再是 6 秒栅格:门禁 A 确认后**先跑 TTS**,每拍的时长 = 它那几句旁白的实际
 时长(含句间停顿),画面按这个时长去铺。所以字幕、旁白、画面天然对齐。
@@ -32,7 +33,7 @@ from . import cards, library, narration, overlays
 from . import render as render_mod
 from .grounding import numbers_in
 
-LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card")
+LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat")
 #: 不需要任何数据就能成立的版式 —— 其它版式核对失败都退回它
 SAFE_LAYOUT = "broll"
 #: 连续几拍整屏卡片就太像 PPT 了
@@ -62,17 +63,21 @@ SYSTEM = """你是信息型汽车解说视频(横屏 16:9,对标「三驱兄弟�
 - card:整屏数据卡。段落标了「卡片」时优先用。给 `card`:
   {{"title": "卡片标题(12 字内)", "columns": [两个对比对象名,仅对比卡需要],
     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
+- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用(零百加速、续航、
+  售价、功率)。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或解释文字。
 2. `beats` 数组,每项 {{"idx": 序号, "layout": 版式, "view": "exterior|interior|driving",
-   "visual": "背景画面一句话(15 字内)", "panel": ..., "keywords": [...], "card": ...}};
+   "visual": "背景画面一句话(15 字内)", "panel": ..., "keywords": [...], "card": ...,
+   "stat": ...}};
    用不到的键可以省略。数量与给定拍数一致,idx 从 1 开始连续。
 3. layout 只能从该拍「可选版式」里选。
-4. panel / card 的每一行**只能**取自「可用事实」,fact_id 填那条事实的 id;values 里的数字
+4. panel / card 的每一行和 stat 的数字**只能**取自「可用事实」,fact_id 填那条事实的 id;values 里的数字
    必须与事实原文一字不差(含单位),不得换算、取整或估算。找不到就换版式,不要编。
 5. keywords 里的型号、芯片名、英文和数字必须在这一拍的旁白或可用事实里出现过,不得自创。
-6. 节奏:不要连续 3 拍以上用 card;panel 和 highlight 穿插着用,全片大约一半是 broll。
+6. 节奏:不要连续 3 拍以上用 card;panel、highlight、stat 穿插着用,不要连续两拍 stat,
+   全片大约四成是 broll。
 7. view:讲外观、尺寸、行驶给 exterior / driving,讲座舱、屏幕、空间给 interior。
 
 必需键: beats"""
@@ -119,6 +124,23 @@ def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact]) -> l
             continue
         out.append(text[: KEYWORD_CHARS + 4])
     return out[:2]
+
+
+def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]]:
+    """核对大数字:当成一行参数卡交给 `cards.ground`(数字必须见于引用的事实),
+    再要求取值里确实有个能滚动的数字。核不过返回 (None, 原因)。"""
+    if not isinstance(raw, dict):
+        return None, ["stat 缺数据"]
+    row = {"label": raw.get("label"), "values": [raw.get("value")], "fact_id": raw.get("fact_id")}
+    grounded, dropped = cards.ground(cards.normalise({"rows": [row]}, "spec"), facts)
+    if not grounded:
+        return None, dropped
+    r = grounded["rows"][0]
+    value = r["values"][0]
+    if overlays.split_number(value) is None:
+        return None, dropped + [f"「{value}」里没有可滚动的数字"]
+    return {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
+            "fact_id": r["fact_id"], "source": grounded.get("source", "")}, dropped
 
 
 def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile) -> str:
@@ -181,6 +203,10 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
             overlay = {"kind": "highlight", "lines": lines}
         else:
             layout = SAFE_LAYOUT
+    elif layout == "stat":
+        overlay, dropped = ground_stat(item.get("stat"), facts)
+        if overlay is None:
+            layout = SAFE_LAYOUT
     elif layout == "card":
         raw_card = item.get("card")
         kind = sec.card or (raw_card.get("kind") if isinstance(raw_card, dict) else "") or "spec"
@@ -204,9 +230,15 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
 
 
 def enforce_rhythm(specs: list[ShotSpec]) -> list[ShotSpec]:
-    """连续超过 MAX_CARD_RUN 拍整屏卡片时,把多出来的那拍退回 broll。"""
+    """连续超过 MAX_CARD_RUN 拍整屏卡片时,把多出来的那拍退回 broll;
+    连着两拍大数字也把后一拍退回 broll(一个接一个滚数字像在念参数表)。"""
     run = 0
+    prev = ""
     for s in specs:
+        if s.layout == "stat" and prev == "stat":
+            s.layout, s.overlay = SAFE_LAYOUT, None
+            s.visual_zh = re.sub(r"^\[stat\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+        prev = s.layout
         if s.layout == "card":
             run += 1
             if run > MAX_CARD_RUN:
@@ -242,7 +274,7 @@ def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
             errors.append(f"第 {s.idx} 拍没有旁白(时长由旁白决定,空拍无法定长)")
         if s.layout == "card" and not s.card:
             errors.append(f"第 {s.idx} 拍是 card 但没有卡片数据")
-        if s.layout in ("panel", "highlight") and not s.overlay:
+        if s.layout in ("panel", "highlight", "stat") and not s.overlay:
             errors.append(f"第 {s.idx} 拍是 {s.layout} 但没有叠加数据")
     return errors
 
@@ -289,9 +321,16 @@ def _ff(args: Sequence[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return render_mod._run(["-y", "-v", "error", *args], timeout=timeout)
 
 
-def _fit_filter(w: int, h: int) -> str:
+def _fit_filter(w: int, h: int, crop_bottom: float = 0.0) -> str:
     """任意比例的视频放进 w×h:前景完整缩进画幅,空出的地方用同一画面放大模糊铺满。
-    横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。"""
+    横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。
+
+    `crop_bottom` > 0(烧录字幕段):裁掉底部这一截后放大**铺满**画幅,不留模糊边 ——
+    这类段基本是横屏评测,裁完再缩进画幅会上下各空出一条模糊带,一眼就是裁过的。"""
+    if crop_bottom > 0:
+        return (f"[0:v]crop=iw:trunc(ih*{1 - crop_bottom:.3f}/2)*2:0:0,"
+                f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+                f"setsar=1,fps={render_mod.FPS},format=yuv420p")
     return (f"[0:v]split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},boxblur=20:2[bg];[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={render_mod.FPS},format=yuv420p")
@@ -303,7 +342,7 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
         return render_mod.still_to_clip(piece.path, dest, seconds=piece.length,
                                         motion=motion, size=size)
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐
-    vf = _fit_filter(w, h) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+    vf = _fit_filter(w, h, piece.crop_bottom) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -369,6 +408,13 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
             f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
             f"[v1][txt]overlay=0:0[v2];[v2][1:v]overlay=0:0,format=yuv420p[out]"
         )
+    if layout == "stat" and has_layer:
+        # [2] 是逐帧滚动的数字(concat 关键帧),播完停在最后一帧
+        return (
+            f"[0:v]eq=brightness=-0.16:saturation=0.85[bgd];[2:v]format=rgba[num];"
+            f"[bgd][num]overlay=0:0:eof_action=repeat[v1];"
+            f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
+        )
     if layout == "panel" and has_layer:
         slide = int(w * 0.36)
         return (
@@ -376,6 +422,23 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
             f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     return "[0:v][1:v]overlay=0:0,format=yuv420p[out]"
+
+
+def _stat_listing(overlay: dict, subject: str, size: tuple[int, int], work: Path,
+                  seconds: float) -> Path:
+    """大数字滚动的关键帧写成 concat 清单:滚完后最后一帧定格到拍尾。"""
+    frames = overlays.stat_frames(overlay, subject, size, work / "stat")
+    lines: list[str] = []
+    rolled = 0.0
+    for n, (path, dur) in enumerate(frames):
+        if n == len(frames) - 1:
+            dur = max(0.5, seconds - rolled)
+        rolled += dur
+        lines += [f"file '{path.as_posix()}'", f"duration {dur:.3f}"]
+    lines.append(f"file '{frames[-1][0].as_posix()}'")  # concat 要求末帧重复一次
+    listing = work / "stat.txt"
+    listing.write_text("\n".join(lines), encoding="utf-8")
+    return listing
 
 
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,
@@ -400,15 +463,20 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
 
     bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png")
     layer: Path | None = None
+    layer_input: list[str] = []
     if spec.layout == "panel" and spec.overlay:
         layer = overlays.panel(spec.overlay, subject, size, work / "layer.png")
     elif spec.layout == "highlight" and spec.overlay:
         layer = overlays.highlight(spec.overlay.get("lines") or [], size, work / "layer.png")
+    elif spec.layout == "stat" and spec.overlay:
+        layer = _stat_listing(spec.overlay, subject, size, work, seconds)
+        layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]
+    if layer and not layer_input:
+        layer_input = ["-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(layer)]
 
     dest = out_dir / f"{spec.idx:03d}.mp4"
     inputs = ["-i", str(base), "-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(bar)]
-    if layer:
-        inputs += ["-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(layer)]
+    inputs += layer_input
     proc = _ff([*inputs, "-filter_complex", layout_filter(spec.layout, size, bool(layer)),
                 "-map", "[out]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():

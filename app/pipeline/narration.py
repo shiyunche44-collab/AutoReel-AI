@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +45,11 @@ class NarrationResult:
     warnings: list[str] = field(default_factory=list)
     #: 补跑后仍没有音频的句子(在 sentences 里的位置)
     missing_sentences: list[int] = field(default_factory=list)
+    #: 命中句子缓存的句数,以及这一次真正送去合成的字数(= 这次 TTS 的花费)
+    cached_sentences: int = 0
+    synth_chars: int = 0
+    #: BGM 是否来自共享曲库(没有新生成)
+    bgm_reused: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +60,9 @@ class NarrationResult:
             "ass_path": str(self.ass_path) if self.ass_path else None,
             "narration_path": str(self.narration_path) if self.narration_path else None,
             "bgm_path": str(self.bgm_path) if self.bgm_path else None,
+            "cached_sentences": self.cached_sentences,
+            "synth_chars": self.synth_chars,
+            "bgm_reused": self.bgm_reused,
             "warnings": self.warnings,
             "cues": [c.model_dump() for c in self.cues],
         }
@@ -111,20 +121,30 @@ def build(
     result.total_chars = sum(len(t) for t in texts)
 
     # ---- TTS ----
-    try:
-        assets = audio.synthesize_batch(
-            texts,
-            voice_id=voice_id,
-            speed=speed,
-            output_dir=audio_dir,
-        )
-    except Exception as exc:  # noqa: BLE001
-        result.warnings.append(f"TTS 失败:{exc}")
-        return result
-
-    # 失败的句子不在结果里,而且后面的会整体前移 —— 必须按输入位置对回原句,
-    # 否则一句失败,之后每条字幕都挂到错的镜头上。
-    by_pos = {(a.index if getattr(a, "index", -1) >= 0 else n): a for n, a in enumerate(assets)}
+    # 同一句话、同一音色语速合成过就直接用缓存:门禁 A 改几句稿子重新确认时,
+    # 只为改动的句子付钱(以前是整片重合成)
+    by_pos = cached_tts(texts, voice_id=voice_id, speed=speed, dest_dir=audio_dir)
+    result.cached_sentences = len(by_pos)
+    todo = [i for i in range(len(texts)) if i not in by_pos]
+    if todo:
+        result.synth_chars += sum(len(texts[i]) for i in todo)
+        try:
+            assets = audio.synthesize_batch(
+                [texts[i] for i in todo],
+                voice_id=voice_id,
+                speed=speed,
+                output_dir=audio_dir,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not by_pos:
+                result.warnings.append(f"TTS 失败:{exc}")
+                return result
+            assets = []
+            result.warnings.append(f"TTS 部分失败,将补跑:{exc}")
+        # 失败的句子不在结果里,而且后面的会整体前移 —— 必须按输入位置对回原句,
+        # 否则一句失败,之后每条字幕都挂到错的镜头上。
+        for n, a in enumerate(assets):
+            by_pos[todo[a.index if getattr(a, "index", -1) >= 0 else n]] = a
     missing = [i for i in range(len(texts)) if i not in by_pos]
     if missing:
         # 批量接口偶发整批失败(限流、超时),补跑一次通常就齐了
@@ -139,6 +159,7 @@ def build(
             pos = missing[a.index if getattr(a, "index", -1) >= 0 else n]
             by_pos[pos] = a
         missing = [i for i in range(len(texts)) if i not in by_pos]
+    store_tts(texts, by_pos, voice_id=voice_id, speed=speed)
     if missing:
         result.missing_sentences = missing
         result.warnings.append(
@@ -190,19 +211,112 @@ def build(
 
     # ---- BGM ----
     if with_bgm and profile is not None:
-        bgm = audio.generate_music(
-            prompt=profile.music_prompt,
-            output_dir=audio_dir,
-            output_file="bgm.mp3",
-        )
+        bgm, reused = library_bgm(profile.music_prompt, audio_dir, project_id)
         if bgm:
-            result.bgm_path = bgm.local_path
+            result.bgm_path = bgm
+            result.bgm_reused = reused
         else:
             result.warnings.append("BGM 生成失败,将输出无背景音乐的成片")
 
     result.ok = True
     db.write_json(project_id, "narration.json", result.to_dict())
     return result
+
+
+# --------------------------------------------------------------------------
+# 缓存:逐句 TTS 与共享 BGM 曲库(跨项目,放在 data/_cache 下)
+# --------------------------------------------------------------------------
+#: 同一条 BGM 提示词最多攒几首。攒满后只复用不再生成,按项目轮换免得每片同一首
+BGM_LIBRARY_SIZE = 3
+
+
+def _tts_key(text: str, voice_id: str, speed: float) -> str:
+    raw = f"{config.TTS_MODEL}|{voice_id}|{speed:.3f}|{text}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def cache_root() -> Path:
+    return config.DATA_DIR / "_cache"
+
+
+def tts_cache_dir() -> Path:
+    return cache_root() / "tts"
+
+
+def cached_tts(texts: Sequence[str], *, voice_id: str, speed: float,
+               dest_dir: Path) -> dict[int, audio.AudioAsset]:
+    """命中缓存的句子复制进项目目录,返回 {句子位置: 音频}。"""
+    out: dict[int, audio.AudioAsset] = {}
+    cache = tts_cache_dir()
+    if not cache.is_dir():
+        return out
+    for i, text in enumerate(texts):
+        src = next((p for p in cache.glob(_tts_key(text, voice_id, speed) + ".*")
+                    if p.stat().st_size > 0), None)
+        if src is None:
+            continue
+        dest = dest_dir / f"tts_cached_{i:03d}{src.suffix}"
+        try:
+            shutil.copyfile(src, dest)
+        except OSError:
+            continue
+        out[i] = audio.AudioAsset(text=text, local_path=dest, node_id="cache", index=i)
+    return out
+
+
+def store_tts(texts: Sequence[str], by_pos: dict[int, Any], *, voice_id: str,
+              speed: float) -> None:
+    """新合成的句子写进缓存。写失败无所谓,下次再合成而已。"""
+    cache = tts_cache_dir()
+    for i, a in by_pos.items():
+        if getattr(a, "node_id", "") == "cache":
+            continue
+        src = Path(a.local_path)
+        if not src.is_file() or src.stat().st_size == 0:
+            continue
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, cache / f"{_tts_key(texts[i], voice_id, speed)}{src.suffix}")
+        except OSError:
+            pass
+
+
+def bgm_library_dir(prompt: str) -> Path:
+    key = hashlib.sha1(f"{config.MUSIC_MODEL}|{prompt}".encode("utf-8")).hexdigest()[:12]
+    return cache_root() / "bgm" / key
+
+
+def library_bgm(prompt: str, audio_dir: Path, project_id: str) -> tuple[Path | None, bool]:
+    """给项目一首 BGM。返回 (路径, 是否复用)。
+
+    - 这个项目已经有 bgm.mp3(门禁 A 重新确认)→ 原样复用;
+    - 曲库没攒满 → 生成一首新的放进曲库;生成失败退回曲库里已有的;
+    - 曲库攒满 → 按项目 id 轮换挑一首。
+    """
+    dest = audio_dir / "bgm.mp3"
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest, True
+    lib = bgm_library_dir(prompt)
+    tracks = sorted(p for p in lib.glob("*.mp3") if p.stat().st_size > 0) if lib.is_dir() else []
+    reused = True
+    if len(tracks) < BGM_LIBRARY_SIZE:
+        made = audio.generate_music(prompt=prompt, output_dir=lib,
+                                    output_file=f"{len(tracks):02d}.mp3")
+        if made and Path(made.local_path).is_file():
+            reused = False
+            tracks.append(Path(made.local_path))
+    if not tracks:
+        return None, False
+    if reused:
+        n = int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)
+        pick = tracks[n]
+    else:
+        pick = tracks[-1]
+    try:
+        shutil.copyfile(pick, dest)
+    except OSError:
+        return pick, reused
+    return dest, reused
 
 
 def audio_duration_fallback(path: str | Path, default: float = 2.5) -> float:

@@ -174,3 +174,30 @@ def test_wall_clock_waves_match_manual_count():
 def test_supported_durations_include_240():
     assert 240 in config.SUPPORTED_DURATIONS
     assert max(config.SUPPORTED_DURATIONS) == 240
+
+
+# --------------------------------------------------------------------------
+# 横屏解说轨
+# --------------------------------------------------------------------------
+def test_explainer_estimate_is_not_zero_and_cache_reduces_it():
+    full = costs.estimate_explainer(240)
+    assert full["with_retry"] > 0
+    assert full["tts"] == costs.estimate_tts(int(240 * 5.8))
+    assert full["bgm"] == costs.MUSIC_PRICE
+    cached = costs.estimate_explainer(240, cached_ratio=1.0, bgm_cached=True)
+    assert cached["tts"] == 0 and cached["bgm"] == 0
+    assert cached["with_retry"] < full["with_retry"]
+
+
+def test_explainer_spent_counts_only_new_work():
+    assert costs.explainer_spent({"synth_chars": 0, "bgm_path": "x", "bgm_reused": True}) == 0
+    fresh = costs.explainer_spent({"synth_chars": 1000, "bgm_path": "x", "bgm_reused": False})
+    assert fresh == round(costs.estimate_tts(1000) + costs.MUSIC_PRICE, 4)
+    assert costs.explainer_spent({"synth_chars": 1000, "bgm_path": None}) == \
+        costs.estimate_tts(1000)
+
+
+def test_library_estimate_scales_with_vlm_calls():
+    assert costs.estimate_library(0) == 0
+    assert costs.estimate_library(24) == round(24 * costs.VLM_CALL_PRICE
+                                               + 2 * costs.LLM_CALL_PRICE, 4)

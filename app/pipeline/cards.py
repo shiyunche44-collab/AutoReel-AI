@@ -208,8 +208,40 @@ def _background(bg: Path | None, g: Geo = _GEO) -> Image.Image:
     return grad.resize((g.w, g.h))
 
 
+def ease_out(t: float) -> float:
+    """缓出(三次):开头快、结尾慢下来停稳,数字滚动和柱子生长都用它。"""
+    t = min(1.0, max(0.0, t))
+    return 1 - (1 - t) ** 3
+
+
+#: 柱子生长分几帧、每帧多久。关键帧 + concat 时长,12 帧就够看着顺
+GROW_STEPS = 12
+GROW_STEP_SECONDS = 0.06
+
+
+def _steps(card: dict[str, Any]) -> list[tuple[int, float, bool, float]]:
+    """卡片的动画步骤:[(显示几行, 柱子生长进度, 最后一行只亮左列, 这一帧停多久)]。
+
+    - 参数卡 / 时间线:逐行出现;
+    - 对比卡:每行先亮左边的值,再亮右边的值,一左一右像在过招;
+    - 柱状图:所有行一起从 0 长到各自长度(缓出)。
+    第 0 步只有标题。最后一步的时长由 `render` 改成"定格到结束"。
+    """
+    n = len(card["rows"])
+    steps: list[tuple[int, float, bool, float]] = [(0, 1.0, False, 0.4)]
+    if card["kind"] == "bars":
+        steps += [(n, ease_out(k / GROW_STEPS), False, GROW_STEP_SECONDS)
+                  for k in range(1, GROW_STEPS + 1)]
+    elif card["kind"] == "compare":
+        for r in range(1, n + 1):
+            steps += [(r, 1.0, True, 0.3), (r, 1.0, False, 0.3)]
+    else:
+        steps += [(r, 1.0, False, 0.45) for r in range(1, n + 1)]
+    return steps
+
+
 def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Image,
-           g: Geo = _GEO) -> Image.Image:
+           g: Geo = _GEO, progress: float = 1.0, half: bool = False) -> Image.Image:
     img = base.copy().convert("RGBA")
     overlay = Image.new("RGBA", (g.w, g.h), (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
@@ -228,11 +260,11 @@ def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Im
     kind = card["kind"]
     area = g.bottom - 60 - y
     if kind == "compare":
-        y = _draw_compare(d, card, rows, y, area, g)
+        y = _draw_compare(d, card, rows, y, area, g, half=half)
     elif kind == "timeline":
         _draw_timeline(d, card, rows, y, area, g)
     elif kind == "bars":
-        _draw_bars(d, card, rows, y, area, g)
+        _draw_bars(d, card, rows, y, area, g, progress=progress)
     else:
         _draw_spec(d, card, rows, y, area, g)
 
@@ -257,7 +289,8 @@ def _draw_spec(d, card, rows, y, area, g: Geo = _GEO) -> None:
         y += rh
 
 
-def _draw_compare(d, card, rows, y, area, g: Geo = _GEO) -> int:
+def _draw_compare(d, card, rows, y, area, g: Geo = _GEO, half: bool = False) -> int:
+    """`half`:最后一行只画左列的值(右列下一帧再亮)。"""
     col_w = (g.right - g.left) // 2
     a, b = card["columns"]
     a, af = _fit(d, a, 42, col_w - 30, bold=True)
@@ -266,13 +299,14 @@ def _draw_compare(d, card, rows, y, area, g: Geo = _GEO) -> int:
     d.text((g.right - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
     y += 80
     rh = _row_h(card, area - 80)
-    for r in rows:
+    for n, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 32, g.right - g.left)
         d.text(((g.left + g.right) // 2, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
         va, vaf = _fit(d, r["values"][0], 54, col_w - 30, bold=True)
         vb, vbf = _fit(d, r["values"][1], 54, col_w - 30, bold=True)
         d.text((g.left + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
-        d.text((g.right - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
+        if not (half and n == len(rows) - 1):
+            d.text((g.right - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
         d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
         y += rh
     return y
@@ -293,7 +327,9 @@ def _draw_timeline(d, card, rows, y, area, g: Geo = _GEO) -> None:
         y += rh
 
 
-def _draw_bars(d, card, rows, y, area, g: Geo = _GEO) -> None:
+def _draw_bars(d, card, rows, y, area, g: Geo = _GEO, progress: float = 1.0) -> None:
+    """`progress`(0–1):柱子长到最终长度的几成。数值文字跟着柱头走,长满前不显示,
+    免得观众先看到一个没对上柱长的数。"""
     rh = _row_h(card, area)
     peak = max((_bar_value(r["values"][0]) or 0 for r in card["rows"]), default=0) or 1
     bar_w = g.right - g.left
@@ -302,25 +338,27 @@ def _draw_bars(d, card, rows, y, area, g: Geo = _GEO) -> None:
         d.text((g.left, y + 8), label, font=lf, fill=_MUTED)
         v = max(0.0, _bar_value(r["values"][0]) or 0)
         top, bottom = y + 60, y + min(rh - 20, 60 + 54)
-        length = max(12, int((bar_w - 220) * v / peak))
+        length = max(12, int((bar_w - 220) * v / peak * progress))
         d.rounded_rectangle((g.left, top, g.left + length, bottom), radius=10,
                             fill=_ACCENT if i == 0 else (*_ACCENT, 150))
-        value, vf = _fit(d, r["values"][0], 40, 210, bold=True)
-        d.text((g.left + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT, anchor="lm")
+        if progress >= 0.999:
+            value, vf = _fit(d, r["values"][0], 40, 210, bold=True)
+            d.text((g.left + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT,
+                   anchor="lm")
         y += rh
 
 
 def render_frames(card: dict[str, Any], subject: str, out_dir: Path,
                   background: Path | None = None,
                   size: tuple[int, int] | None = None) -> list[Path]:
-    """逐行出现的关键帧:第 0 帧只有标题,之后每帧多一行。"""
+    """动画关键帧,与 `_steps(card)` 一一对应:第 0 帧只有标题,之后按版式出行 / 生长。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     g = geo_for(size)
     base = _background(background, g)
     frames = []
-    for n in range(len(card["rows"]) + 1):
+    for n, (rows, progress, half, _) in enumerate(_steps(card)):
         p = out_dir / f"step_{n:02d}.png"
-        _frame(card, subject, n, base, g).save(p)
+        _frame(card, subject, rows, base, g, progress=progress, half=half).save(p)
         frames.append(p)
     return frames
 
@@ -334,9 +372,12 @@ def render(card: dict[str, Any], subject: str, dest: str | Path, *,
     dest.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="card_") as tmp:
         frames = render_frames(card, subject, Path(tmp), background, size)
-        # 节奏:标题 0.4s,每行 0.45s,行全部出完后定格到结束
-        step = 0.45
-        durations = [0.4] + [step] * (len(frames) - 2)
+        # 节奏见 `_steps`:动画走完后最后一帧定格到结束
+        # 拍很短时动画按比例压快,保证至少留三成时间看完整的卡
+        durations = [s[3] for s in _steps(card)][:-1]
+        budget = seconds * 0.7
+        if sum(durations) > budget > 0:
+            durations = [d * budget / sum(durations) for d in durations]
         durations.append(max(1.0, seconds - sum(durations)))
         lines = []
         for f, dur in zip(frames, durations):

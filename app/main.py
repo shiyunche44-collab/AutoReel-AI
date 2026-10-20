@@ -40,7 +40,7 @@ from .models import (
     ShotPatch,
     ShotSpec,
 )
-from .pipeline import orchestrator
+from .pipeline import library, orchestrator
 from .pipeline import render as render_mod
 from .providers import cli
 from .state import State
@@ -324,7 +324,10 @@ def project_page(request: Request, project_id: str):
     if profile.is_explainer:
         # 解说轨不调视频生成:H3 的成本与草稿/成片墙钟对它没有意义
         beats = len(detail.shots) or detail.shot_count
-        estimate = {"with_retry": 0.0}
+        estimate = costs.estimate_explainer(detail.duration)
+        lib = library.Library.load(detail.subject).stats()
+        estimate["library_vlm_calls"] = lib["vlm_calls"]
+        estimate["library"] = costs.estimate_library(lib["vlm_calls"])
         wall_clock = {"render_minutes": _explainer_minutes(beats)}
     else:
         estimate = costs.estimate_project(detail.duration)
@@ -380,7 +383,7 @@ def estimate(duration: int = 60, category: str = "auto"):
         # 横屏解说轨:不调视频生成,时长跟着旁白走,这里只给节拍数的估计
         return {
             "duration": duration,
-            "cost": {"draft": 0.0, "final": 0.0, "with_retry": 0.0},
+            "cost": {"draft": 0.0, "final": 0.0, **costs.estimate_explainer(duration)},
             "wall_clock": {"render_minutes": _explainer_minutes(profile.shots_for(duration)),
                            "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
             "shot_count": profile.shots_for(duration),

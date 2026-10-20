@@ -186,3 +186,92 @@ def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):
     result = narration.build("p_test", _three_specs(), with_bgm=False)
     assert result.missing_sentences == [1]
     assert [c.shot_idx for c in result.cues] == [0, 2]
+
+
+# --------------------------------------------------------------------------
+# 句子缓存与 BGM 曲库
+# --------------------------------------------------------------------------
+def _recording_tts(tmp_path, calls):
+    from app.providers.audio import AudioAsset
+
+    def fake(texts, **kw):
+        calls.append(list(texts))
+        out = []
+        for i, t in enumerate(texts):
+            p = _make_tone(tmp_path / f"{kw.get('file_prefix', 'tts')}_{len(calls)}_{i}.wav",
+                           0.3 + 0.05 * len(t) % 3)
+            out.append(AudioAsset(text=t, local_path=p, index=i))
+        return out
+    return fake
+
+
+def test_rebuild_only_synthesizes_changed_sentences(monkeypatch, tmp_path):
+    from app.models import ShotSpec
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+
+    first = narration.build("p1", _three_specs(), with_bgm=False)
+    assert len(calls[0]) == 3 and first.cached_sentences == 0
+    assert first.synth_chars == sum(len(t) for t in calls[0])
+
+    specs = _three_specs()
+    specs[1] = ShotSpec(idx=1, visual_zh="v", narration_zh="改过的第一拍旁白。")
+    again = narration.build("p1", specs, with_bgm=False)
+    assert len(calls[1]) == 1 and "改过" in calls[1][0]
+    assert again.cached_sentences == 2
+    assert [c.shot_idx for c in again.cues] == [0, 1, 2]
+    assert again.cues[1].text == calls[1][0]
+
+    # 别的项目同样的句子也直接命中
+    other = narration.build("p2", _three_specs(), with_bgm=False)
+    assert len(calls) == 2 and other.cached_sentences == 3 and other.synth_chars == 0
+
+
+def test_tts_cache_is_per_voice(monkeypatch, tmp_path):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    narration.build("p1", _three_specs(), with_bgm=False, voice_id="a")
+    narration.build("p1", _three_specs(), with_bgm=False, voice_id="b")
+    assert len(calls) == 2 and len(calls[1]) == 3
+
+
+def test_bgm_library_fills_then_reuses(monkeypatch, tmp_path):
+    from app.providers.audio import AudioAsset
+
+    made: list[str] = []
+
+    def gen(prompt, output_dir, output_file, **kw):
+        made.append(output_file)
+        dest = Path(output_dir) / output_file
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"music")
+        return AudioAsset(text=prompt, local_path=dest)
+
+    monkeypatch.setattr(narration.audio, "generate_music", gen)
+    for n in range(5):
+        d = tmp_path / f"proj{n}"
+        d.mkdir()
+        path, reused = narration.library_bgm("轻快电子", d, f"proj{n}")
+        assert path == d / "bgm.mp3" and path.read_bytes() == b"music"
+        assert reused == (n >= narration.BGM_LIBRARY_SIZE)
+    assert len(made) == narration.BGM_LIBRARY_SIZE
+
+    # 同一项目重新确认:直接用已有的,不生成
+    path, reused = narration.library_bgm("轻快电子", tmp_path / "proj0", "proj0")
+    assert reused and len(made) == narration.BGM_LIBRARY_SIZE
+
+
+def test_bgm_falls_back_to_library_when_generation_fails(monkeypatch, tmp_path):
+    lib = narration.bgm_library_dir("轻快电子")
+    lib.mkdir(parents=True)
+    (lib / "00.mp3").write_bytes(b"old")
+    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
+    path, reused = narration.library_bgm("轻快电子", tmp_path, "p")
+    assert reused and path.read_bytes() == b"old"
+    empty, _ = narration.library_bgm("没生成过的风格", tmp_path / "x", "p")
+    assert empty is None

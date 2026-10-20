@@ -225,8 +225,9 @@ def create_project(payload: ProjectCreate) -> str:
     project_id = new_id("p_")
     shot_count = expected_shots
     budget = payload.quota_budget or costs.default_budget_for(payload.duration)
-    # 横屏解说轨不调视频生成,只有 TTS 与 BGM,按 0 估
-    est = 0.0 if profile.is_explainer else costs.estimate_project(payload.duration)["with_retry"]
+    # 横屏解说轨不调视频生成,只有 TTS、BGM 与几次 LLM
+    est = (costs.estimate_explainer(payload.duration)["with_retry"] if profile.is_explainer
+           else costs.estimate_project(payload.duration)["with_retry"])
     now = time.time()
     title = payload.title or f"{payload.subject} 解说视频"
 
@@ -536,12 +537,18 @@ def _advance_explainer(project_id: str, project: dict[str, Any], state: State,
             raise PipelineError(str(exc)) from exc
         _save_specs(project_id, specs)
         total = sum(s.duration for s in specs)
+        # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
+        spent = float((db.get_project(project_id) or {}).get("spent_cost") or 0.0)
+        db.update_project(project_id,
+                          spent_cost=round(spent + costs.explainer_spent(nar.to_dict()), 4))
         db.delete_shots(project_id, "draft")
         db.delete_shots(project_id, "final")
         generate.initialise_shots(project_id, specs, stage="draft")
         generate.initialise_shots(project_id, specs, stage="final")
+        cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
+            (",BGM 复用曲库" if nar.bgm_reused else "")
         _set_state(project_id, state, State.ASSETS_READY,
-                   reason=f"旁白 {len(nar.sentences)} 句,成片约 {total:.0f} 秒")
+                   reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒")
         _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
                    reason="解说轨不编译生成提示词")
         _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,

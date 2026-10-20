@@ -140,6 +140,67 @@ def test_enforce_rhythm_breaks_long_card_runs():
     assert out[2].card is None
 
 
+def test_build_beats_grounds_stat_and_rejects_invented_number():
+    p = load_profile("auto_long")
+    segs = _segments(p)
+    perf = [i for i, s in enumerate(segs) if s.section == "三电性能"]
+    good, bad = perf[0], perf[-1] if len(perf) > 1 else None
+    beats = [{"idx": good + 1, "layout": "stat",
+              "stat": {"label": "CLTC续航", "value": "835公里", "fact_id": "f_1"}}]
+    if bad is not None and bad != good:
+        beats.append({"idx": bad + 1, "layout": "stat",
+                      "stat": {"label": "零百", "value": "3.2秒", "fact_id": "f_1"}})
+    specs = explainer.build_beats(subject="小米YU7", profile=p, segments=segs,
+                                  facts=_facts(), llm=FakeLLM(beats))
+    s = specs[good]
+    assert s.layout == "stat"
+    assert s.overlay == {"kind": "stat", "label": "CLTC续航", "value": "835公里",
+                         "fact_id": "f_1", "source": s.overlay["source"]}
+    if bad is not None and bad != good:
+        assert specs[bad].layout == "broll" and specs[bad].overlay is None
+    assert not explainer.validate_beats(specs)
+
+
+def test_ground_stat_needs_a_number():
+    facts = [Fact(id="f_9", claim="全系标配激光雷达", source_tool="t", confidence="high",
+                  scope="product")]
+    got, why = explainer.ground_stat({"label": "雷达", "value": "激光雷达", "fact_id": "f_9"},
+                                     facts)
+    assert got is None and why
+
+
+def test_enforce_rhythm_breaks_back_to_back_stats():
+    ov = {"kind": "stat", "label": "x", "value": "1秒"}
+    specs = [ShotSpec(idx=i, visual_zh="[stat] x", narration_zh="a", layout="stat",
+                      overlay=dict(ov)) for i in range(3)]
+    out = explainer.enforce_rhythm(specs)
+    assert [s.layout for s in out] == ["stat", "broll", "stat"]
+    assert out[1].overlay is None and out[1].visual_zh.startswith("[broll]")
+
+
+def test_count_text_rolls_up_and_lands_exactly():
+    assert overlays.count_text("3.23 秒", 0.0) == "0.00 秒"
+    assert overlays.count_text("3.23 秒", 0.5) == "1.61 秒" or \
+        overlays.count_text("3.23 秒", 0.5) == "1.62 秒"
+    assert overlays.count_text("约 1,200 km", 0.5) == "约 600 km"
+    assert overlays.count_text("约 1,200 km", 1.0) == "约 1,200 km"   # 落地与原文一字不差
+    assert overlays.count_text("激光雷达", 0.3) == "激光雷达"
+
+
+def test_render_stat_beat_with_ffmpeg(tmp_path, monkeypatch):
+    if not (config.FFMPEG_PATH and config.FFMPEG_PATH.is_file()):
+        pytest.skip("没有 ffmpeg")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    spec = ShotSpec(idx=0, duration=2.0, visual_zh="[stat] x", narration_zh="a", layout="stat",
+                    overlay={"kind": "stat", "label": "续航", "value": "835公里",
+                             "source": "数据来源"})
+    dest, _ = explainer.render_beat(spec, subject="测试车", size=(640, 360), out_dir=tmp_path,
+                                    chapters=[("开头", 2.0)], chapter_idx=0, used={},
+                                    card_bg=None)
+    from app.pipeline import timeline
+    assert timeline.probe_safe(dest, default=0.0) == pytest.approx(2.0, abs=0.1)
+
+
 # --------------------------------------------------------------------------
 # 时长与章节
 # --------------------------------------------------------------------------
@@ -220,6 +281,38 @@ def test_fill_rotates_through_unused_material(pool):
     first = [p.item_id for p in library.fill("测试车", 5.0, used=used)]
     second = [p.item_id for p in library.fill("测试车", 5.0, used=used)]
     assert not set(first) & set(second[:1])
+
+
+def test_fill_uses_subtitle_footage_cropped_before_reused_clean(pool):
+    used = {"clean1": 1, "clean2": 1, "int1": 1, "unknown1": 1}
+    pieces = library.fill("测试车", 8.0, used=used)
+    ids = [p.item_id for p in pieces]
+    assert ids[0] == "still1" and ids[1] == "sub1"     # 官图 → 裁字幕段 → 用过的干净段
+    sub = pieces[1]
+    assert sub.crop_bottom == library.SUBTITLE_CROP
+    assert pieces[0].crop_bottom == 0.0
+
+
+def test_fill_ranks_presenter_footage_after_cropped_subtitles(pool):
+    lib = library.Library.load("测试车")
+    host = library.Item(id="host1", kind="video", path=lib.items[0].path, tagged=True,
+                        view="exterior_45", target="yes", problem="subtitle",
+                        desc="博主讲解车头", start=30, end=40)
+    lib.items.append(host)
+    lib.save()
+    used = {"clean1": 1, "clean2": 1, "int1": 1, "unknown1": 1, "still1": 1}
+    pieces = library.fill("测试车", 4.0, used=used)
+    assert pieces[0].item_id == "sub1"
+    host_piece = next(p for p in library.fill("测试车", 30.0, used={}) if p.item_id == "host1")
+    assert host_piece.crop_bottom == 0.0               # 主持人裁不掉,不裁
+
+
+def test_fit_filter_crops_subtitle_band_and_fills_frame():
+    plain = explainer._fit_filter(1920, 1080)
+    assert "boxblur" in plain and "crop=iw" not in plain
+    cropped = explainer._fit_filter(1920, 1080, 0.22)
+    assert cropped.startswith("[0:v]crop=iw:trunc(ih*0.780/2)*2:0:0,")
+    assert "boxblur" not in cropped and "crop=1920:1080" in cropped
 
 
 def test_fill_on_empty_pool_returns_nothing(tmp_path, monkeypatch):

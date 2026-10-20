@@ -367,3 +367,91 @@ def test_pick_by_id(data_dir):
     assert lib_mod.pick("小米YU7", "s3", seconds=6) is None     # 不可用
     assert lib_mod.pick("小米YU7", "nope", seconds=6) is None
 
+
+
+# --------------------------------------------------------------------------
+# 打标签省钱:按源止损、够用即停、重复画面去重
+# --------------------------------------------------------------------------
+def _frame(path: Path, seed: int) -> str:
+    from PIL import Image
+
+    im = Image.new("L", (90, 80))
+    im.putdata([((x * (seed + 3) + y * (seed * 7 + 1)) * 37) % 256
+                for y in range(80) for x in range(90)])
+    im.save(path)
+    return str(path)
+
+
+def test_reject_sources_skips_rest_of_mostly_waste_source(monkeypatch):
+    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    bad = [_seg(n, n, n + 2, problem="no_subject") for n in range(3)]
+    bad.append(_seg(3, 3, 5, problem="subtitle"))     # 字幕段能裁,不算废
+    rest = [_seg(n, n, n + 2, tagged=False) for n in range(10, 13)]
+    lib = Library(subject="x", items=bad + rest)
+    assert lib_mod.reject_sources(lib) == 3           # 3/4 废 ≥ 70%
+    assert all(i.skipped == "source_rejected" for i in rest)
+    assert lib_mod._tag_queue(lib) == []
+
+
+def test_reject_sources_keeps_source_with_subtitles_only(monkeypatch):
+    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    segs = [_seg(n, n, n + 2, problem="subtitle") for n in range(4)]
+    segs.append(_seg(9, 9, 11, tagged=False))
+    lib = Library(subject="x", items=segs)
+    assert lib_mod.reject_sources(lib) == 0
+    assert [i.id for i in lib_mod._tag_queue(lib)] == ["s9"]
+
+
+def test_reject_sources_waits_for_full_sample(monkeypatch):
+    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    segs = [_seg(n, n, n + 2, problem="no_subject") for n in range(3)]
+    segs.append(_seg(9, 9, 11, tagged=False))
+    assert lib_mod.reject_sources(Library(subject="x", items=segs)) == 0
+
+
+def test_tag_queue_puts_samples_of_every_source_first(monkeypatch):
+    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 2)
+    a = [_seg(n, n, n + 2 + n * 0.1, tagged=False) for n in range(4)]
+    b = [_seg(n, n, n + 2 + n * 0.1, tagged=False) for n in range(10, 14)]
+    for i in b:
+        i.source = "other"
+    queue = lib_mod._tag_queue(Library(subject="x", items=a + b))
+    assert [i.id for i in queue] == ["s3", "s2", "s13", "s12", "s1", "s0", "s11", "s10"]
+
+
+def test_duplicate_frames_inherit_tags_without_vlm(tmp_path):
+    lib_mod._dhash.cache_clear()
+    f1 = _frame(tmp_path / "a.png", 1)
+    f2 = _frame(tmp_path / "b.png", 1)    # 同一画面
+    f3 = _frame(tmp_path / "c.png", 5)    # 不同画面
+    tagged = _seg(1, 0, 3, view="rear", target="yes")
+    tagged.frame, tagged.desc = f1, "车尾"
+    twin = _seg(2, 5, 8, tagged=False)
+    twin.frame = f2
+    other = _seg(3, 9, 12, tagged=False)
+    other.frame = f3
+    lib = Library(subject="x", items=[tagged, twin, other])
+    assert [i.id for i in lib_mod._tag_queue(lib)] == ["s3"]
+    assert lib_mod.inherit_duplicates(lib) == 1
+    assert twin.tagged and twin.view == "rear" and twin.desc == "车尾"
+    assert not other.tagged
+
+
+def test_tag_items_stops_videos_when_enough(monkeypatch):
+    calls: list[int] = []
+
+    def _judge(urls, *a, **k):
+        calls.append(len(urls))
+        return [{"target": "yes", "view": "exterior_45", "problem": ""} for _ in urls], [], {}
+
+    monkeypatch.setattr(lib_mod.vision_verdict, "judge", _judge)
+    monkeypatch.setattr(lib_mod.images.cli, "upload_temp_url", lambda p: "u")
+    monkeypatch.setattr(lib_mod, "TAG_BATCH", 2)
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(Library, "save", lambda self: None)
+    items = [_seg(n, n * 10, n * 10 + 10, tagged=False) for n in range(6)]
+    lib = Library(subject="x", items=items)
+    done = lib_mod.tag_items(lib, list(items), None, [], enough_seconds=15)
+    assert calls == [2]                     # 第一批 20 秒就够了
+    assert done == 2 and lib.vlm_calls == 2
+    assert lib.stats()["vlm_calls"] == 2

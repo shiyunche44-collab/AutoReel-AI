@@ -1,6 +1,8 @@
 """数据卡片:结构清洗、事实核对、绘制、分镜接入。不需要网络与额度。"""
 from __future__ import annotations
 
+import pytest
+
 from app.categories import load_profile
 from app.models import Fact, ScriptSegment
 from app.pipeline import cards, storyboard
@@ -96,7 +98,30 @@ def test_render_frames_all_kinds(tmp_path):
         card = {"kind": kind, "title": "测试", "columns": ["甲", "乙"], "source": "",
                 "rows": [{**r, "values": r["values"] * (2 if kind == "compare" else 1)}
                          for r in rows]}
-        assert len(cards.render_frames(card, "主体", tmp_path / kind)) == 3
+        frames = cards.render_frames(card, "主体", tmp_path / kind)
+        assert len(frames) == len(cards._steps(card))
+        expected = {"bars": 1 + cards.GROW_STEPS, "compare": 5}.get(kind, 3)
+        assert len(frames) == expected
+
+
+def test_bars_grow_and_show_values_only_when_full(tmp_path):
+    card = {"kind": "bars", "title": "续航", "columns": [], "source": "",
+            "rows": [{"label": "A", "values": ["800 km"], "fact_id": "a"},
+                     {"label": "B", "values": ["400 km"], "fact_id": "b"}]}
+    steps = cards._steps(card)
+    progress = [s[1] for s in steps[1:]]
+    assert progress == sorted(progress) and progress[-1] == pytest.approx(1.0)
+    assert progress[0] > 1 / cards.GROW_STEPS          # 缓出:第一帧就长出一大截
+    frames = cards.render_frames(card, "主体", tmp_path)
+    from PIL import Image, ImageChops
+    with Image.open(frames[1]) as a, Image.open(frames[-1]) as b:
+        assert ImageChops.difference(a.convert("RGB"), b.convert("RGB")).getbbox()
+
+
+def test_compare_lights_left_column_first():
+    card = {"kind": "compare", "rows": [{"label": "x", "values": ["1", "2"]}]}
+    assert [(r, half) for r, _, half, _ in cards._steps(card)] == \
+        [(0, False), (1, True), (1, False)]
 
 
 class _FakeLLM:

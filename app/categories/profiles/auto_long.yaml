@@ -53,6 +53,7 @@ themes:
 #   panel     宣传片 + 左侧参数面板(车名、3–5 项参数)
 #   highlight 宣传片缩成小窗 + 两行大字关键词
 #   card      整屏数据卡(spec / compare / bars / timeline,按 card 字段)
+#   stat      宣传片压暗 + 中央一个大数字从 0 滚到目标值(一个核对过的参数)
 # angle 在这里只决定背景画面偏外观还是偏车内,不要求逐镜对上。
 sections:
   开场:
@@ -64,14 +65,14 @@ sections:
     beat: 它卖多少钱、打谁、在品牌里是什么位置
     chapter: 定位价格
     angle: exterior_45
-    layouts: [panel, card, broll]
+    layouts: [panel, card, stat, broll]
     card: spec
     requires_fact: true
   外观设计:
     beat: 外观设计亮点与尺寸
     chapter: 外观内饰
     angle: exterior_45
-    layouts: [broll, highlight, panel]
+    layouts: [broll, highlight, panel, stat]
   内饰空间:
     beat: 座舱、空间、做工与实用性
     chapter: 外观内饰
@@ -81,14 +82,14 @@ sections:
     beat: 动力、续航、补能、底盘
     chapter: 三电性能
     angle: exterior_45
-    layouts: [card, highlight, broll, panel]
+    layouts: [card, stat, highlight, broll, panel]
     card: spec
     requires_fact: true
   智能配置:
     beat: 智驾硬件、座舱芯片与功能
     chapter: 智能配置
     angle: interior
-    layouts: [highlight, broll, panel]
+    layouts: [highlight, broll, panel, stat]
   版本选择:
     beat: 各版本价格与配置差异,推荐哪个
     chapter: 怎么选

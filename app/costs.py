@@ -46,6 +46,15 @@ REFERENCE_IMAGE_PRICE = 0.04
 TTS_PER_MILLION_CHARS = 60.0
 #: 图像:image-01 美元 / 张
 IMAGE_PRICE = 0.0035
+#: 以下三项没有可查的公开标价,是**粗估**(偏保守),只用来让解说轨的用量不再显示成 0
+#: BGM:music 模型 美元 / 首
+MUSIC_PRICE = 0.15
+#: 一次 LLM 结构化调用(事实抽取 / 脚本 / 版式,长输入长输出)
+LLM_CALL_PRICE = 0.01
+#: 一次视觉模型描述(素材池打标签,每张图一次)
+VLM_CALL_PRICE = 0.003
+#: 解说轨每条片子固定的 LLM 调用:事实抽取、脚本、逐拍版式
+EXPLAINER_LLM_CALLS = 3
 
 
 class BudgetExceeded(RuntimeError):
@@ -198,6 +207,36 @@ def estimate_project(duration: int, *, retry_factor: float = 1.5,
         "raw": raw,
         "with_retry": round(raw * retry_factor, 4),
     }
+
+
+def estimate_explainer(duration: int, *, cached_ratio: float = 0.0,
+                       bgm_cached: bool = False) -> dict:
+    """横屏解说轨一条片子的等效用量:TTS + BGM + 固定几次 LLM。不调视频生成。
+
+    `cached_ratio`:旁白里命中句子缓存的比例;`bgm_cached`:BGM 来自共享曲库。
+    素材池(打标签)是每台车一次性的,不摊进单条片子,另由 `estimate_library` 给。
+    """
+    ratio = min(1.0, max(0.0, float(cached_ratio)))
+    tts = estimate_tts(int(duration * 5.8 * (1 - ratio)))
+    bgm = 0.0 if bgm_cached else MUSIC_PRICE
+    llm = round(EXPLAINER_LLM_CALLS * LLM_CALL_PRICE, 4)
+    raw = round(tts + bgm + llm, 4)
+    # 解说轨没有生成重试;留 1.2 倍给门禁 A 改稿重确认(改动句重合成)
+    return {"duration": duration, "tts": tts, "bgm": bgm, "llm": llm, "raw": raw,
+            "with_retry": round(raw * 1.2, 4)}
+
+
+def explainer_spent(narration: dict) -> float:
+    """按一次 `narration.build` 的结果算这次实际花了多少(只算真正送去合成的)。"""
+    tts = estimate_tts(int(narration.get("synth_chars") or 0))
+    bgm = 0.0 if narration.get("bgm_reused") or not narration.get("bgm_path") else MUSIC_PRICE
+    return round(tts + bgm, 4)
+
+
+def estimate_library(vlm_calls: int) -> float:
+    """素材池打标签的等效用量:每次视觉调用 + 每 12 张一次结构化 LLM。"""
+    calls = max(0, int(vlm_calls))
+    return round(calls * VLM_CALL_PRICE + math.ceil(calls / 12) * LLM_CALL_PRICE, 4)
 
 
 def default_budget_for(duration: int) -> float:

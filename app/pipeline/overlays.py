@@ -1,4 +1,4 @@
-"""横屏解说轨的叠加层:侧边参数面板、两行大字关键词、底部章节条。
+"""横屏解说轨的叠加层:侧边参数面板、两行大字关键词、大数字滚动、底部章节条。
 
 全部画成透明 PNG,由 `explainer.py` 用 ffmpeg overlay 叠到背景画面上。
 画法与数据卡(`cards.py`)同源 —— 同一套字体与取字号逻辑,数字同样只来自
@@ -127,3 +127,72 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest)
     return dest
+
+
+# --------------------------------------------------------------------------
+# 大数字滚动(stat 版式)
+# --------------------------------------------------------------------------
+_NUM_RE = r"-?\d+(?:\.\d+)?"
+#: 数字从 0 滚到目标值用几帧、多久。关键帧 + concat 时长,不逐帧画满整拍
+COUNT_STEPS = 16
+COUNT_SECONDS = 1.1
+
+
+def split_number(value: str) -> tuple[str, float, int, str] | None:
+    """"3.23 秒" → ("", 3.23, 2, " 秒")。取第一个数字;千分位逗号去掉。没有数字返回 None。"""
+    import re
+
+    text = str(value).replace(",", "")
+    m = re.search(_NUM_RE, text)
+    if not m:
+        return None
+    num = m.group(0)
+    decimals = len(num.split(".")[1]) if "." in num else 0
+    return text[:m.start()], float(num), decimals, text[m.end():]
+
+
+def count_text(value: str, progress: float) -> str:
+    """滚到 `progress`(0–1)时屏幕上显示的数字。progress=1 时与原文一字不差。"""
+    parts = split_number(value)
+    if parts is None or progress >= 1:
+        return str(value)
+    head, num, decimals, tail = parts
+    return f"{head}{num * max(0.0, progress):.{decimals}f}{tail}"
+
+
+def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path,
+         progress: float = 1.0) -> Path:
+    """画面中央一个大数字:上面一行小字标签,数字本体强调色粗描边,下面一行出处。"""
+    w, h = size
+    img, d = _canvas(size)
+    label = str(overlay.get("label") or "")
+    value = count_text(str(overlay.get("value") or ""), progress)
+    max_w = int(w * 0.8)
+    tag, tf = _fit(d, f"{subject} · {label}" if subject else label, 54, max_w, bold=True)
+    d.text((w // 2, int(h * 0.26)), tag, font=tf, fill=_TEXT, anchor="mm",
+           stroke_width=4, stroke_fill=(0, 0, 0, 255))
+    # 字号按最终值定,滚动时不忽大忽小
+    _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), 210, max_w, bold=True)
+    d.text((w // 2, int(h * 0.46)), value, font=nf, fill=_ACCENT, anchor="mm",
+           stroke_width=10, stroke_fill=(0, 0, 0, 255))
+    src, sf = _fit(d, overlay.get("source", ""), 24, max_w)
+    d.text((w // 2, int(h * 0.64)), src, font=sf, fill=_MUTED, anchor="mm")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest)
+    return dest
+
+
+def stat_frames(overlay: dict[str, Any], subject: str, size: tuple[int, int],
+                out_dir: str | Path) -> list[tuple[Path, float]]:
+    """滚动关键帧:[(透明 PNG, 停留秒数)]。最后一帧是原值,停留时长由调用方定格到结束。"""
+    from .cards import ease_out
+
+    out_dir = Path(out_dir)
+    step = COUNT_SECONDS / COUNT_STEPS
+    out: list[tuple[Path, float]] = []
+    for k in range(COUNT_STEPS + 1):
+        p = stat(overlay, subject, size, out_dir / f"stat_{k:02d}.png",
+                 progress=ease_out(k / COUNT_STEPS))
+        out.append((p, step))
+    return out

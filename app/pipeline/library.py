@@ -90,6 +90,17 @@ GALLERY_PER_CATEGORY = 12
 TAG_BATCH = 12
 #: 隔多久重新搜一次新源(新车上市后官方号会陆续发片)
 REDISCOVER_SECONDS = 7 * 24 * 3600
+#: 每个源先打这么多段当样本;样本里废段(拦掉的、主持人出镜的)占比 ≥ EARLY_STOP_RATIO
+#: 就不再给这个源剩下的段打标签。B 站测评源常常整条都是主持人口播,
+#: 实测小米 YU7 池子里四成视觉调用花在这类段上
+EARLY_STOP_SAMPLE = 8
+EARLY_STOP_RATIO = 0.7
+#: 解说轨的"够用":可用视频秒数 + 可用官图 × STILL_SECONDS 达到它,就不再给视频段
+#: 打标签。背景只要是这台车、画面干净,一条片子 4 分钟的背景量就够轮换
+ENOUGH_USABLE_SECONDS = 240.0
+STILL_SECONDS = 4.0
+#: 代表帧 dHash 的汉明距离不超过它算同一个画面(同源快剪里的重复镜头),只打一个
+DUP_BITS = 6
 
 #: 拦掉的问题(与 clip_resolver 的质检口径一致;text_overlay 只记不拦)
 BLOCKING = {"not_target_model", "no_subject", "cropped", "unclear", "poster"}
@@ -143,6 +154,8 @@ class Item:
     target: str = "unknown"
     desc: str = ""
     problem: str = ""
+    #: 不打标签的原因(source_rejected = 所在源的样本废段太多)
+    skipped: str = ""
 
     @property
     def length(self) -> float:
@@ -162,6 +175,8 @@ class Library:
     discovered_at: float = 0.0
     gallery_at: float = 0.0
     updated_at: float = 0.0
+    #: 累计花了多少次视觉模型调用(打标签),给项目页看素材池的成本
+    vlm_calls: int = 0
 
     # ---- 存取 ----
     @staticmethod
@@ -190,6 +205,7 @@ class Library:
             discovered_at=float(raw.get("discovered_at") or 0.0),
             gallery_at=float(raw.get("gallery_at") or 0.0),
             updated_at=float(raw.get("updated_at") or 0.0),
+            vlm_calls=int(raw.get("vlm_calls") or 0),
         )
 
     def save(self) -> None:
@@ -205,6 +221,7 @@ class Library:
             "discovered_at": self.discovered_at,
             "gallery_at": self.gallery_at,
             "updated_at": self.updated_at,
+            "vlm_calls": self.vlm_calls,
             "sources": [asdict(s) for s in self.sources],
             "items": [asdict(i) for i in self.items],
         }
@@ -248,7 +265,10 @@ class Library:
             "video_usable": sum(1 for i in videos if i.usable),
             "stills": len(stills),
             "stills_usable": sum(1 for i in stills if i.usable),
-            "untagged": sum(1 for i in self.items if not i.tagged),
+            "untagged": sum(1 for i in self.items if not i.tagged and not i.skipped),
+            "skipped": sum(1 for i in self.items if i.skipped),
+            "vlm_calls": self.vlm_calls,
+            "usable_seconds": round(usable_seconds(self), 1),
             "usable_by_view": dict(sorted(views.items(), key=lambda kv: -kv[1])),
         }
 
@@ -629,15 +649,24 @@ target、view、problem、desc。"""
 
 
 def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *,
-              deadline: float = 0.0) -> int:
-    """给还没看过的段 / 图打标签。返回打上的个数。超过 `deadline` 就停。"""
-    done = 0
+              deadline: float = 0.0, enough_seconds: float = 0.0) -> int:
+    """给还没看过的段 / 图打标签。返回打上的个数(含继承重复画面的)。
+
+    超过 `deadline` 就停;`enough_seconds` > 0 时,可用素材够了就不再打视频段。
+    每批之后检查各源的样本,废段太多的源剩下的段直接跳过(见 `reject_sources`)。
+    """
+    done = inherit_duplicates(lib)
     prompt = tag_prompt(lib.subject)
     system = TAG_SYSTEM.format(subject=lib.subject)
-    for k in range(0, len(todo), TAG_BATCH):
+    queue = list(todo)
+    while queue:
         if deadline and time.monotonic() > deadline:
             break
-        batch = [i for i in todo[k:k + TAG_BATCH] if i.frame and Path(i.frame).is_file()]
+        if enough_seconds and usable_seconds(lib) >= enough_seconds:
+            queue = [i for i in queue if i.kind == "still"]
+        batch = [i for i in queue[:TAG_BATCH] if not i.tagged and not i.skipped
+                 and i.frame and Path(i.frame).is_file()]
+        queue = queue[TAG_BATCH:]
         urls: list[str] = []
         slots: list[Item] = []
         for item in batch:
@@ -649,13 +678,103 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
         if not urls:
             continue
         verdicts, _, _ = vision_verdict.judge(urls, prompt, system, llm, errors, what="素材")
+        lib.vlm_calls += len(urls)
         for item, v in zip(slots, verdicts):
             if not v:
                 continue
             apply_tag(item, v)
             done += 1
+        done += inherit_duplicates(lib)
+        reject_sources(lib)
         lib.save()
     return done
+
+
+def _has_host(item: Item) -> bool:
+    """描述里点名有人在讲解 / 介绍(评测博主口播)。"""
+    return bool(re.search(r"主持|讲解|介绍|解说|博主|自述|演示", item.desc or ""))
+
+
+def is_waste(item: Item) -> bool:
+    """打过标签但当背景也用不上的段。烧录字幕不算:解说轨裁掉底部照样能用。"""
+    return item.tagged and (not item.usable or _has_host(item))
+
+
+def usable_seconds(lib: Library) -> float:
+    """池子里能当解说轨背景的总量(秒):可用视频的时长 + 可用官图 × STILL_SECONDS。"""
+    total = 0.0
+    for i in lib.items:
+        if not i.usable or _has_host(i):
+            continue
+        if i.kind == "video":
+            total += i.length if i.length >= FILL_MIN_PIECE else 0.0
+        elif i.view in ANGLE_OF_VIEW:
+            total += STILL_SECONDS
+    return total
+
+
+def reject_sources(lib: Library) -> int:
+    """样本打够、废段占比太高的源:剩下没打标签的段标记跳过。返回新跳过的段数。"""
+    by_src: dict[str, list[Item]] = {}
+    for i in lib.items:
+        if i.kind == "video" and i.source:
+            by_src.setdefault(i.source, []).append(i)
+    n = 0
+    for segs in by_src.values():
+        tagged = [i for i in segs if i.tagged]
+        if len(tagged) < EARLY_STOP_SAMPLE:
+            continue
+        if sum(1 for i in tagged if is_waste(i)) / len(tagged) < EARLY_STOP_RATIO:
+            continue
+        for i in segs:
+            if not i.tagged and not i.skipped:
+                i.skipped = "source_rejected"
+                n += 1
+    return n
+
+
+@functools.lru_cache(maxsize=8192)
+def _dhash(path: str) -> int | None:
+    """代表帧的 64 位差值哈希。读不了返回 None(= 不参与去重)。"""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            px = im.convert("L").resize((9, 8)).tobytes()
+    except (OSError, ValueError):
+        return None
+    bits = 0
+    for row in range(8):
+        for col in range(8):
+            bits = (bits << 1) | int(px[row * 9 + col] > px[row * 9 + col + 1])
+    return bits
+
+
+def _same_frame(a: Item, b: Item) -> bool:
+    if a.source != b.source or not a.frame or not b.frame:
+        return False
+    ha, hb = _dhash(a.frame), _dhash(b.frame)
+    return ha is not None and hb is not None and bin(ha ^ hb).count("1") <= DUP_BITS
+
+
+def inherit_duplicates(lib: Library) -> int:
+    """同源里和已打标签的段几乎同一画面的未打段,直接照抄标签,不花视觉调用。"""
+    tagged: dict[str, list[Item]] = {}
+    for i in lib.items:
+        if i.kind == "video" and i.tagged:
+            tagged.setdefault(i.source, []).append(i)
+    n = 0
+    for i in lib.items:
+        if i.kind != "video" or i.tagged or i.skipped or not i.frame:
+            continue
+        twin = next((t for t in tagged.get(i.source, ()) if _same_frame(i, t)), None)
+        if twin is None:
+            continue
+        i.view, i.target, i.problem, i.desc = twin.view, twin.target, twin.problem, twin.desc
+        i.tagged = True
+        tagged[i.source].append(i)
+        n += 1
+    return n
 
 
 def apply_tag(item: Item, v: dict[str, Any]) -> None:
@@ -676,9 +795,16 @@ def apply_tag(item: Item, v: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------
 def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None,
           budget: float | None = None, max_sources: int = MAX_AUTO_SOURCES,
-          errors: list[str] | None = None, log: Any = None) -> dict[str, Any]:
-    """增量构建素材池。返回统计。全程不抛异常。"""
+          errors: list[str] | None = None, log: Any = None,
+          enough_seconds: float | None = None) -> dict[str, Any]:
+    """增量构建素材池。返回统计。全程不抛异常。
+
+    `enough_seconds`:可用素材够这么多秒就不再给视频段打标签。默认解说轨用
+    `ENOUGH_USABLE_SECONDS`(背景不挑画面),竖屏轨不设上限(要按镜头精确挑)。
+    """
     errors = errors if errors is not None else []
+    if enough_seconds is None:
+        enough_seconds = ENOUGH_USABLE_SECONDS if getattr(profile, "is_explainer", False) else 0.0
     say = log or (lambda msg: None)
     budget = config.LIBRARY_BUILD_BUDGET if budget is None else budget
     started = time.monotonic()
@@ -716,7 +842,8 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
             lib.save()
         todo = _tag_queue(lib)
         if todo and not _late():
-            n = tag_items(lib, todo, llm, errors, deadline=deadline)
+            n = tag_items(lib, todo, llm, errors, deadline=deadline,
+                          enough_seconds=enough_seconds)
             say(f"打标签 {n} 个")
     except Exception as exc:  # noqa: BLE001 - 素材池是补充,失败不阻断
         errors.append(f"素材池构建异常:{type(exc).__name__}: {str(exc)[:200]}")
@@ -724,7 +851,9 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
         lib.save()
     stats = lib.stats()
     stats["elapsed"] = round(time.monotonic() - started, 1)
-    stats["finished"] = not _late() and not stats["sources_pending"] and not _tag_queue(lib)
+    enough = bool(enough_seconds) and usable_seconds(lib) >= enough_seconds
+    stats["finished"] = not _late() and not stats["sources_pending"] and (
+        enough or not _tag_queue(lib))
     return stats
 
 
@@ -762,20 +891,38 @@ def is_building(subject: str) -> bool:
 
 def _tag_queue(lib: Library) -> list[Item]:
     """待打标签的:图全打;视频每个源最多 MAX_TAGGED_PER_SOURCE 段,长段优先
-    (长段更可能是完整的展示镜头,而不是快剪)。"""
+    (长段更可能是完整的展示镜头,而不是快剪)。
+
+    视频先排每个源的前 EARLY_STOP_SAMPLE 段(样本),再排各源剩下的 ——
+    样本打完就能判出整源都是口播的源,剩下的不用再花钱。
+    跳过的段、和同源里已打标签 / 已在队列的段同一画面的段不进队列。
+    """
     out: list[Item] = [i for i in lib.items if i.kind == "still" and not i.tagged and i.frame]
     by_src: dict[str, list[Item]] = {}
     for i in lib.items:
         if i.kind == "video" and i.frame:
             by_src.setdefault(i.source, []).append(i)
+    samples: list[Item] = []
+    rest: list[Item] = []
     for segs in by_src.values():
         tagged = sum(1 for i in segs if i.tagged)
         room = MAX_TAGGED_PER_SOURCE - tagged
         if room <= 0:
             continue
-        fresh = sorted((i for i in segs if not i.tagged), key=lambda i: -i.length)
-        out += fresh[:room]
-    return out
+        kept = [i for i in segs if i.tagged]
+        fresh: list[Item] = []
+        for i in sorted((i for i in segs if not i.tagged and not i.skipped),
+                        key=lambda i: -i.length):
+            if len(fresh) >= room:
+                break
+            if any(_same_frame(i, k) for k in kept):
+                continue
+            kept.append(i)
+            fresh.append(i)
+        head = max(0, EARLY_STOP_SAMPLE - tagged)
+        samples += fresh[:head]
+        rest += fresh[head:]
+    return out + samples + rest
 
 
 # --------------------------------------------------------------------------
@@ -866,7 +1013,7 @@ def _dirt(item: Item) -> int:
     字幕打架,比角落台标严重得多,所以排最后但不拦。"""
     dirt = {"": 0, "text_overlay": 1, "subtitle": 2}.get(item.problem, 1)
     # 主持人出镜同样抢戏:描述里点名有人在讲解 / 介绍的,按字幕同级处理
-    if re.search(r"主持|讲解|介绍|解说|博主|自述|演示", item.desc or ""):
+    if _has_host(item):
         dirt = max(dirt, 2)
     return dirt
 
@@ -1020,6 +1167,8 @@ class Piece:
     path: str
     start: float
     length: float
+    #: 截取时裁掉画面底部的比例(烧录字幕段裁掉字幕区再放大),0 = 不裁
+    crop_bottom: float = 0.0
 
 
 #: 背景画面偏好 → 优先的视角
@@ -1058,15 +1207,26 @@ def is_dark(item: Item) -> bool:
     return bool(probe) and Path(probe).is_file() and _luma(probe) < DARK_LUMA
 
 
+#: 烧录字幕段当背景时裁掉画面底部的比例。字幕几乎都在下方五分之一,
+#: 成片自己的字幕和章节条也盖在这一带,裁掉不损失要看的东西
+SUBTITLE_CROP = 0.22
+
+
+def _croppable(item: Item) -> bool:
+    """只有烧录字幕、没有主持人的视频段:裁掉底部就是干净画面。"""
+    return item.kind == "video" and item.problem == "subtitle" and not _has_host(item)
+
+
 def _fill_tier(item: Item, used: int) -> int:
-    """取用的先后档:干净视频 → 官图 → 用过的干净视频 → 有字幕的视频 → 其余。
-    带字幕或主持人的评测画面会和成片自己的字幕打架,宁可先用官图推拉。"""
-    clean = _dirt(item) < 2
+    """取用的先后档:干净视频 → 官图 → 裁掉字幕的视频 → 用过的干净视频 →
+    主持人出镜的视频 → 其余。主持人裁不掉,会和成片自己的旁白打架,排最后。"""
     if item.kind == "video":
-        if clean:
-            return 0 if not used else 2
-        return 3 if not used else 5
-    return 1 if not used else 4
+        if _dirt(item) < 2:
+            return 0 if not used else 3
+        if _croppable(item):
+            return 2 if not used else 5
+        return 4 if not used else 6
+    return 1 if not used else 5
 
 
 def fill(subject: str, seconds: float, *, hint: str = "",
@@ -1117,7 +1277,8 @@ def fill(subject: str, seconds: float, *, hint: str = "",
             start = i.start + skip
         if take < min(FILL_MIN_PIECE, remaining):
             continue
-        out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3)))
+        out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3),
+                         crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0))
         used[i.id] = used.get(i.id, 0) + 1
         covered += take
     if out and covered < seconds - 0.05:
