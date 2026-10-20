@@ -143,7 +143,7 @@ def test_product_source_registered():
 def test_auto_profile_uses_product_news():
     from app import categories
 
-    profile = categories.load_profile("auto")
+    profile = categories.load_profile("auto_long")
     assert "ifind.product_news" in profile.fact_sources
 
 
@@ -232,7 +232,7 @@ def test_auto_themes_reference_registered_sources():
     """auto 的每个方向声明的来源都必须真实存在,否则采集阶段会静默失败。"""
     from app import categories
 
-    profile = categories.load_profile("auto")
+    profile = categories.load_profile("auto_long")
     for name, theme in profile.themes.items():
         for src in theme.fact_sources or profile.fact_sources:
             assert src in facts.SOURCES, f"方向 {name} 引用了未注册的来源 {src}"

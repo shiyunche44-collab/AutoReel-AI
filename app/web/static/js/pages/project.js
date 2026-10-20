@@ -1,4 +1,4 @@
-/* 工作台:Tabs、门禁操作、脚本编辑、生成看板、状态轮询。 */
+/* 工作台:Tabs、门禁操作、脚本编辑、渲染看板、状态轮询。 */
 import { $, $$, readJSON, withLoading, debounce, h, icon } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog, openModal } from '../ui/modal.js';
@@ -12,9 +12,8 @@ const PID = DATA.pid;
 const RESTORE_KEY = `aimovice.restore.${PID}`;
 let lastState = DATA.state;
 let lastSucceeded = DATA.succeeded || 0;
-// 横屏解说轨:不调视频生成,一拍 = 一段旁白;门禁 B 整片一次审完
-const EXPLAINER = !!DATA.explainer;
-const UNIT = EXPLAINER ? '拍' : '镜头';
+// 不调视频生成,一拍 = 一段旁白;门禁 B 整片一次审完
+const UNIT = '拍';
 
 // ---------------------------------------------------------------------------
 // Tabs:hash 记住当前页,刷新后不丢
@@ -103,75 +102,24 @@ if (btnGateA) {
     const ok = await confirmDialog({
       title: '确认脚本与分镜?',
       body: h('div', {},
-        h('p', {}, EXPLAINER
-          ? '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'
-          : '确认后会开始生成草稿镜头,并消耗套餐额度。'),
+        h('p', {}, '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'),
         h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`)),
-      confirmText: EXPLAINER ? '确认并开始渲染' : '确认并开始生成',
+      confirmText: '确认并开始渲染',
       tone: 'success',
     });
     if (ok) await act(btnGateA, `/api/projects/${PID}/gate`, { gate: 'A' }, '确认 A');
   });
 }
 
-// 取"下一个待审批次":优先第一个尚未整批批准的批次
-async function currentBatch() {
-  try {
-    const rv = await api.get(`/api/projects/${PID}/review`);
-    const next = (rv.batch_list || []).find((b) => b.pending.length > 0);
-    if (!next) return null;
-    return { index: next.index, shots: next.shots, totalPending: rv.pending_total, totalBatches: rv.total_batches };
-  } catch {
-    return null;
-  }
-}
-
 const btnGateB = $('#btn-gate-b');
-if (btnGateB && EXPLAINER) {
-  // 解说轨:草稿就是成片,没有第二遍生成,也就没有分批放行
+if (btnGateB) {
+  // 草稿就是成片,没有第二遍生成,也就没有分批放行
   $('#gate-hint').textContent = `共 ${DATA.total || DATA.shot_count} 拍。不满意的拍可以单独「重拍」换一组背景,全部满意后确认,直接拼接混音出成片。`;
   btnGateB.addEventListener('click', async () => {
     const ok = await confirmDialog({
       title: '各拍都审过了?',
       body: '确认后把这些拍直接拼接、混入旁白与 BGM,合成成片。不调用视频生成。',
       confirmText: '确认并合成',
-      tone: 'success',
-    });
-    if (ok) await act(btnGateB, `/api/projects/${PID}/gate`, { gate: 'B' }, '确认 B');
-  });
-} else if (btnGateB) {
-  // 门禁 B 时把批次进度显示出来
-  currentBatch().then((b) => {
-    if (!b) { $('#gate-hint').textContent = '确认草稿通过后,会用 H3 生成成片镜头。'; return; }
-    $('#gate-hint').textContent =
-      `分批审片:第 ${b.index + 1} / ${b.totalBatches} 批待审,本批 ${b.shots.length} 个镜头,共 ${b.totalPending} 个待审。`;
-    $('#gate-b-label').textContent = `批准第 ${b.index + 1} 批,开始成片`;
-  });
-
-  btnGateB.addEventListener('click', async () => {
-    // 分批审片:只放行当前批次的镜头,审完一批就能开跑一批,不用等全部草稿看完。
-    const batch = await currentBatch();
-    if (batch) {
-      const rest = batch.totalPending - batch.shots.length;
-      const ok = await confirmDialog({
-        title: `批准第 ${batch.index + 1} 批?`,
-        body: h('div', {},
-          h('p', {}, `将为以下 ${batch.shots.length} 个镜头生成成片:`),
-          h('div', { class: 'row wrap-row', style: 'gap:6px;margin-bottom:12px' },
-            batch.shots.map((i) => h('span', { class: 'tag num' }, `#${String(i).padStart(2, '0')}`))),
-          h('p', {}, 'H3 单任务约 15–30 分钟,并消耗套餐额度。'),
-          rest > 0 ? h('p', {}, `还有 ${rest} 个镜头在后续批次,本批完成后会回到「确认 B」继续审。`) : null),
-        confirmText: '批准并开始',
-        tone: 'success',
-      });
-      if (ok) await act(btnGateB, `/api/projects/${PID}/gate`, { gate: 'B', approved: batch.shots }, '批准本批');
-      return;
-    }
-    // 没有批次信息(旧项目或接口异常)→ 退回一次性全批通过
-    const ok = await confirmDialog({
-      title: '确认草稿通过?',
-      body: '下一步会用 H3 生成全部成片镜头,单任务需 15–30 分钟且消耗套餐额度。',
-      confirmText: '确认并开始',
       tone: 'success',
     });
     if (ok) await act(btnGateB, `/api/projects/${PID}/gate`, { gate: 'B' }, '确认 B');
@@ -314,7 +262,7 @@ const factSearch = $('#fact-search');
 if (factSearch) factSearch.addEventListener('input', debounce(() => { factQuery = factSearch.value.trim().toLowerCase(); applyFactFilters(); }, 120));
 
 // ---------------------------------------------------------------------------
-// 生成看板
+// 渲染看板
 // ---------------------------------------------------------------------------
 const LIVE = new Set(['submitted', 'queued', 'running']);
 const shots = $$('#shot-grid .shot');
@@ -436,9 +384,7 @@ async function retryShot(btn) {
   const idx = btn.dataset.idx;
   const ok = await confirmDialog({
     title: `重拍${UNIT} #${String(idx).padStart(2, '0')}?`,
-    body: EXPLAINER
-      ? '会给这一拍换一组背景画面重新渲染,叠加层与旁白不变,不消耗生成额度。'
-      : '会重新提交这个镜头的生成任务,并再次消耗额度。',
+    body: '会给这一拍换一组背景画面重新渲染,叠加层与旁白不变,不消耗生成额度。',
     confirmText: '重拍',
     tone: 'danger',
   });
@@ -499,7 +445,7 @@ async function refreshStatus() {
     if (summary && s.total) {
       const parts = [`${done} / ${s.total} ${UNIT}完成`];
       const live = (c.submitted || 0) + (c.queued || 0) + (c.running || 0);
-      if (live) parts.push(`${live} 个${EXPLAINER ? '渲染' : '生成'}中`);
+      if (live) parts.push(`${live} 个渲染中`);
       if (c.failed) parts.push(`${c.failed} 个失败`);
       summary.textContent = parts.join(' · ');
       const prog = $('#gen-progress');
@@ -516,7 +462,7 @@ async function refreshStatus() {
       // 有新镜头出片:不打断用户,给个可点的提示
       const n = done - lastSucceeded;
       lastSucceeded = done;
-      toast(`${n} 个${UNIT}已${EXPLAINER ? '渲染' : '生成'}完成`, { type: 'brand', action: { label: '刷新查看', onClick: reloadPreserving } });
+      toast(`${n} 个${UNIT}已渲染完成`, { type: 'brand', action: { label: '刷新查看', onClick: reloadPreserving } });
     }
   } catch { /* 轮询失败静默重试 */ }
 }

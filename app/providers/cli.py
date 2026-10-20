@@ -1,6 +1,6 @@
 """`mcode-tools` Connector 子进程封装。
 
-这是整个平台与生成通道之间的唯一接口层。所有上层模块(video/images/audio/facts)
+这是整个平台与生成通道之间的唯一接口层。所有上层模块(images/audio/facts)
 都必须经过这里,好处是超时、重试、错误归一化、临时文件清理只写一遍。
 
 Windows 注意事项:
@@ -259,9 +259,9 @@ def health_check() -> tuple[bool, str]:
     except ConnectorError as exc:
         return False, exc.message
     try:
-        raw = run_raw(["connector", "tools", "--keyword", "video"], timeout=60)
+        raw = run_raw(["connector", "tools", "--keyword", "audio"], timeout=60)
         data = _extract_json(raw)
         tools = data.get("tools", []) if isinstance(data, dict) else []
-        return True, f"CLI 可用({exe}),已发现 {len(tools)} 个视频相关工具"
+        return True, f"CLI 可用({exe}),已发现 {len(tools)} 个语音相关工具"
     except ConnectorError as exc:
         return False, exc.message

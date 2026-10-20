@@ -260,7 +260,7 @@ def compose(
         return RenderResult(ok=False, warnings=warnings + ["所有镜头归一化失败"])
 
     if narration_path is None:
-        # 没有旁白的成片等于没有解说。允许它产出来(native 模式就是这种),
+        # 没有旁白的成片等于没有解说。允许它产出来(TTS 全部失败时就是这种),
         # 但一定要让人看见,而不是事后才发现成片是哑的。
         warnings.append("没有旁白音轨,成片将只有背景音乐")
     elif not Path(narration_path).is_file():

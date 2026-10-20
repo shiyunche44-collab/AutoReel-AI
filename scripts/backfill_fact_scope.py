@@ -49,7 +49,7 @@ def backfill(project_id: str) -> str:
     try:
         profile = categories.load_profile(str(detail.get("category", "auto")))
     except Exception:  # noqa: BLE001
-        profile = categories.load_profile("auto")
+        profile = categories.load_profile("auto_long")
 
     changed = 0
     for i in missing:

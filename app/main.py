@@ -1,7 +1,7 @@
 """FastAPI 应用:Web 控制台 + 后台调度器。
 
 设计要点:
-- **后台调度循环**独立于请求。H3 单任务 15-30 分钟,必须由常驻循环轮询推进,
+- **后台调度循环**独立于请求。逐拍渲染要几分钟,由常驻循环每轮渲几拍推进,
   而不是让 HTTP 请求等待。
 - **健康横幅**在启动时检测 ffmpeg 与生成通道,缺失能力以红色横幅明示,
   绝不静默降级。
@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import config, costs, db
-from .categories import available_categories, load_profile
+from .categories import available_categories, default_category, load_profile
 from .llm.deepseek import DeepSeekProvider
 from .llm.minimax import MiniMaxProvider
 from .models import (
@@ -76,8 +76,7 @@ templates.env.filters["hhmmss"] = _fmt_hhmmss
 templates.env.filters["datetime"] = _fmt_datetime
 templates.env.filters["basename"] = _basename
 
-#: 后台循环间隔(秒)。H3 轮询间隔本身由 poll_due_for_poll 控制,
-#: 这个值只是"多久扫一次项目表"。
+#: 后台循环间隔(秒):多久扫一次项目表,推进处于渲染 / 合成态的项目。
 SCHEDULER_INTERVAL = 20
 
 #: 后台循环会自动推进的状态。缺任何一个都表现为"流水线静静卡住"——
@@ -242,9 +241,6 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         facts=[Fact(**d) for d in db.read_json(project_id, "facts.json", []) or []],
         script=[ScriptSegment(**d) for d in db.read_json(project_id, "script.json", []) or []],
         shots=_shots_to_models(shot_rows),
-        refs=db.read_json(project_id, "refs.json", []) or [],
-        clip_report=db.read_json(project_id, "clip_report.json", {}) or {},
-        prompt_errors=db.read_json(project_id, "prompt_errors.json", {}) or {},
     )
 
 
@@ -286,7 +282,7 @@ def build_summary(row: dict[str, Any]) -> ProjectSummary:
 def index(request: Request):
     projects = [build_summary(r) for r in db.list_projects()]
     cats = available_categories()
-    # 方向下拉按当前品类联动:默认展示 auto 的方向,切品类时前端再刷新
+    # 方向下拉按当前品类联动:默认展示第一个品类的方向
     active = cats[0] if cats else {"themes": [], "default_theme": ""}
     # ⚠️ 新版 Starlette 的签名为 TemplateResponse(request, name, context),
     #    旧的 (name, context) 形式会把 context 误当成 name,报 "unhashable type: dict"。
@@ -321,17 +317,12 @@ def project_page(request: Request, project_id: str):
         detail = build_detail(project_id, stage="draft")
     profile = load_profile(detail.category)
     w, h = profile.frame_size
-    if profile.is_explainer:
-        # 解说轨不调视频生成:H3 的成本与草稿/成片墙钟对它没有意义
-        beats = len(detail.shots) or detail.shot_count
-        estimate = costs.estimate_explainer(detail.duration)
-        lib = library.Library.load(detail.subject).stats()
-        estimate["library_vlm_calls"] = lib["vlm_calls"]
-        estimate["library"] = costs.estimate_library(lib["vlm_calls"])
-        wall_clock = {"render_minutes": _explainer_minutes(beats)}
-    else:
-        estimate = costs.estimate_project(detail.duration)
-        wall_clock = costs.wall_clock_estimate(detail.duration)
+    beats = len(detail.shots) or detail.shot_count
+    estimate = costs.estimate_explainer(detail.duration)
+    lib = library.Library.load(detail.subject).stats()
+    estimate["library_vlm_calls"] = lib["vlm_calls"]
+    estimate["library"] = costs.estimate_library(lib["vlm_calls"])
+    wall_clock = {"render_minutes": _explainer_minutes(beats)}
     return templates.TemplateResponse(
         request,
         "project.html",
@@ -341,12 +332,10 @@ def project_page(request: Request, project_id: str):
             "health": HEALTH,
             "lint": db.read_json(project_id, "lint.json", []) or [],
             "facts_report": db.read_json(project_id, "facts_report.json", {}) or {},
-            "qa": db.read_json(project_id, "qa.json", {}) or {},
             "render": db.read_json(project_id, "render.json", {}) or {},
             "events": db.get_events(project_id, limit=40),
             "wall_clock": wall_clock,
             "estimate": estimate,
-            "explainer": profile.is_explainer,
             "frame": f"{w} × {h}",
             "forbidden_terms": list(profile.forbidden_terms),
         },
@@ -377,33 +366,16 @@ def categories():
 
 
 @app.get("/api/estimate")
-def estimate(duration: int = 60, category: str = "auto"):
-    profile = load_profile(category)
-    if profile.is_explainer:
-        # 横屏解说轨:不调视频生成,时长跟着旁白走,这里只给节拍数的估计
-        return {
-            "duration": duration,
-            "cost": {"draft": 0.0, "final": 0.0, **costs.estimate_explainer(duration)},
-            "wall_clock": {"render_minutes": _explainer_minutes(profile.shots_for(duration)),
-                           "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
-            "shot_count": profile.shots_for(duration),
-            "track": "explainer",
-            "real_clips": {"enabled": False, "max_shots": 0, "max_savings": 0.0},
-        }
-    shot_count = config.shots_for_duration(duration)
-    # 真实素材最多能覆盖多少镜头:外观视角的镜头才可能拿到真实片段。
-    # 这是**上界**,不是承诺 —— 实际能不能取到要看网上有没有可用的直链。
-    clip_cap = min(config.REAL_CLIP_LIMIT, shot_count) if config.USE_REAL_CLIPS else 0
+def estimate(duration: int = 240, category: str = ""):
+    """时长跟着旁白走,这里只给节拍数的估计。"""
+    profile = load_profile(category or default_category())
+    beats = profile.shots_for(duration)
     return {
         "duration": duration,
-        "cost": costs.estimate_project(duration),
-        "wall_clock": costs.wall_clock_estimate(duration),
-        "shot_count": shot_count,
-        "real_clips": {
-            "enabled": bool(clip_cap),
-            "max_shots": clip_cap,
-            "max_savings": costs.savings_from_clips(clip_cap, duration=config.SHOT_GRID_SECONDS),
-        },
+        "cost": costs.estimate_explainer(duration),
+        "wall_clock": {"render_minutes": _explainer_minutes(beats),
+                       "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
+        "shot_count": beats,
     }
 
 
@@ -472,11 +444,7 @@ def confirm_gate(project_id: str, payload: GateRequest):
 
 @app.get("/api/projects/{project_id}/review")
 def review(project_id: str):
-    """门禁 B 的分批审片进度。
-
-    批次按一致性链切分,保证一条链不会被劈到两批 ——
-    链内镜头靠尾帧接首帧保持连续,劈开就断了。
-    """
+    """门禁 B 的审片进度(整片一批)。"""
     row = db.get_project(project_id)
     if not row:
         raise HTTPException(404, "项目不存在")
@@ -525,9 +493,7 @@ def status(project_id: str):
     row = db.get_project(project_id)
     if not row:
         raise HTTPException(404, "项目不存在")
-    stage = "final" if row["state"] == str(State.FINAL_RENDERING) else (
-        "draft" if row["state"] == str(State.DRAFT_RENDERING) else "final"
-    )
+    stage = "draft" if row["state"] == str(State.DRAFT_RENDERING) else "final"
     shots = db.get_shots(project_id, stage)
     counts: dict[str, int] = {}
     for s in shots:
@@ -541,7 +507,6 @@ def status(project_id: str):
         "stage": stage,
         "counts": counts,
         "total": len(shots),
-        "degraded": [s["idx"] for s in shots if s.get("consistency") == "degraded"],
     }
 
 
@@ -563,8 +528,8 @@ def cover(project_id: str):
 
 @app.get("/media/{project_id}/{kind}/{name}")
 def media(project_id: str, kind: str, name: str):
-    """素材预览。kind ∈ {drafts, shots, refs, audio, prompts}。"""
-    allowed = {"drafts", "shots", "refs", "audio", "prompts"}
+    """素材预览。kind ∈ {drafts, shots, audio}。"""
+    allowed = {"drafts", "shots", "audio"}
     if kind not in allowed:
         raise HTTPException(400, f"不支持的目录:{kind}")
     safe = Path(name).name  # 阻断路径穿越

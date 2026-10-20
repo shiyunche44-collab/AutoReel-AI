@@ -102,7 +102,7 @@ STILL_SECONDS = 4.0
 #: 代表帧 dHash 的汉明距离不超过它算同一个画面(同源快剪里的重复镜头),只打一个
 DUP_BITS = 6
 
-#: 拦掉的问题(与 clip_resolver 的质检口径一致;text_overlay 只记不拦)
+#: 拦掉的问题(text_overlay 只记不拦)
 BLOCKING = {"not_target_model", "no_subject", "cropped", "unclear", "poster"}
 
 
@@ -799,8 +799,8 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
           enough_seconds: float | None = None) -> dict[str, Any]:
     """增量构建素材池。返回统计。全程不抛异常。
 
-    `enough_seconds`:可用素材够这么多秒就不再给视频段打标签。默认解说轨用
-    `ENOUGH_USABLE_SECONDS`(背景不挑画面),竖屏轨不设上限(要按镜头精确挑)。
+    `enough_seconds`:可用素材够这么多秒就不再给视频段打标签。默认
+    `ENOUGH_USABLE_SECONDS`(背景不挑画面);传 0 不设上限。
     """
     errors = errors if errors is not None else []
     if enough_seconds is None:
@@ -926,88 +926,8 @@ def _tag_queue(lib: Library) -> list[Item]:
 
 
 # --------------------------------------------------------------------------
-# 挑:按镜头取候选
+# 挑:素材干净程度
 # --------------------------------------------------------------------------
-def _group(view: str) -> str:
-    if view in _EXTERIOR:
-        return "ext"
-    if view in _INTERIOR:
-        return "int"
-    return "any" if view == "detail" else "none"
-
-
-def windows(items: Sequence[Item], seconds: float, angle: str) -> list[tuple[Item, float]]:
-    """从同一个文件里按时间排好的段,拼出能撑满 `seconds` 的连续窗口。
-
-    窗口从一个对口视角的好段开头,往后接同一大类(外观 / 内饰)的好段;
-    夹在中间的极短段(闪切、转场,没打标签)可以跨过。返回 (首段, 窗口里第一段的占比)。
-    """
-    wanted = ANGLE_VIEWS.get(angle, ())
-    segs = sorted(items, key=lambda i: i.start)
-    out: list[tuple[Item, float]] = []
-    for k, first in enumerate(segs):
-        if not first.usable or first.view not in wanted:
-            continue
-        group = _group(first.view)
-        covered = first.length
-        prev_end = first.end
-        for nxt in segs[k + 1:]:
-            if covered >= seconds:
-                break
-            if nxt.start - prev_end > 0.5:
-                break
-            if nxt.tagged:
-                g = _group(nxt.view)
-                if not nxt.usable or (g != group and "any" not in (g, group)):
-                    break
-            elif nxt.length >= MIN_TAG_SECONDS:
-                break   # 没看过的长段不敢用
-            covered = nxt.end - first.start
-            prev_end = nxt.end
-        if covered >= seconds:
-            out.append((first, min(1.0, first.length / seconds)))
-    return out
-
-
-def candidates(subject: str, angle: str, *, seconds: float | None = None,
-               exclude: Sequence[tuple[str, float, float]] = ()) -> list[clips_mod.ClipCandidate]:
-    """给一个镜头挑候选:视频窗口在前,官图在后。
-
-    排序:官方源 → 认出是这台车的 → 首段视角最对口的 → 首段越长越好(少快剪)。
-    `exclude` 是已经用掉的 (文件, 起, 止),与它重叠的窗口不再给。
-    """
-    seconds = float(seconds or config.SHOT_GRID_SECONDS)
-    lib = Library.load(subject)
-    if not lib.items or angle not in ANGLE_VIEWS:
-        return []
-    wanted = ANGLE_VIEWS[angle]
-    by_file: dict[str, list[Item]] = {}
-    for i in lib.items:
-        if i.kind == "video":
-            by_file.setdefault(i.path, []).append(i)
-
-    scored: list[tuple[tuple, clips_mod.ClipCandidate]] = []
-    for path, segs in by_file.items():
-        if not Path(path).is_file():
-            continue
-        for first, share in windows(segs, seconds, angle):
-            a, b = first.start, first.start + seconds
-            if any(p == path and a < e and s < b for p, s, e in exclude):
-                continue
-            key = (_dirt(first), not first.official, first.target != "yes",
-                   wanted.index(first.view), -share)
-            scored.append((key, _to_candidate(first, path)))
-    for i in lib.items:
-        if i.kind == "still" and i.usable and i.view in wanted and Path(i.path).is_file():
-            if any(p == i.path for p, _, _ in exclude):
-                continue
-            key = (_dirt(i), True, i.target != "yes", wanted.index(i.view), 0.0)
-            scored.append((key, _to_candidate(i, i.path)))
-    videos = sorted((x for x in scored if x[1].kind == "video"), key=lambda x: x[0])
-    stills = sorted((x for x in scored if x[1].kind == "still"), key=lambda x: x[0])
-    return [c for _, c in videos + stills]
-
-
 def _dirt(item: Item) -> int:
     """画面干净程度:干净 0、角标水印 1、烧录字幕 2。字幕会和成片自己的旁白、
     字幕打架,比角落台标严重得多,所以排最后但不拦。"""
@@ -1018,142 +938,12 @@ def _dirt(item: Item) -> int:
     return dirt
 
 
-def _to_candidate(item: Item, path: str) -> clips_mod.ClipCandidate:
-    return clips_mod.ClipCandidate(
-        url=path, page_url=item.url, origin=item.origin or "library", title=item.desc,
-        license=item.license, kind=item.kind, view=item.view, start=item.start,
-        official=item.official, local_path="", dirt=_dirt(item),
-    )
-
-
-MATCH_SYSTEM = """你在给解说视频的一个镜头挑真实素材。给你镜头想要的画面,和一组候选画面的描述
-(每条前面是编号、视角、出处)。挑出能用的,按合适程度排序。
-
-宽松原则 —— 真实素材比 AI 生成的可信,只要主体对得上就该用:
-- 角度、景别、光线、颜色、天气、时间、地点背景(影棚 / 赛道 / 公路 / 雪山)、动静、
-  具体是哪个部件(要中控屏给了座椅,同属座舱)都**不是**排除理由,只影响排序;
-- 只排除主体明显对不上的:要两车同框而候选只有一台、要特定人物而候选没人或反之、
-  要外观给了内饰或反之、候选描述里明确是别的车型;
-- 同样合适时,画面干净(没有字幕、没有主持人)的排前面。
-
-先想清楚这个镜头有没有**硬性要求**(几台车、有没有人、是外观还是车内),写进 need;
-再逐条对照,只挑满足硬性要求的。
-输出 JSON 对象 {"need": "一句话硬性要求", "picks": [编号, ...]},最多 8 个;
-一个都不能用就输出 {"need": "...", "picks": []}。"""
-
-#: 交给 LLM 挑的候选上限:按池子自己的排序取前若干条
-MATCH_POOL = 20
-
-
-def match_intent(cands: Sequence[clips_mod.ClipCandidate], intent: str, llm: Any,
-                 errors: list[str]) -> list[clips_mod.ClipCandidate] | None:
-    """按镜头意图从候选里挑、重排。文本对文本(候选描述是入池时打的),
-    比逐镜头让视觉模型判"对不对题"稳定得多,也便宜得多。
-
-    返回挑中的候选(可能为空 = 都不合适);没有 LLM、没有意图或调用失败返回 None,
-    调用方据此保留原排序。
-    """
-    if llm is None or not intent or not cands:
-        return None
-    pool = list(cands[:MATCH_POOL])
-    lines = []
-    for n, c in enumerate(pool, start=1):
-        tags = [c.view or "-", "官方" if c.official else "", "图片" if c.kind == "still" else "视频",
-                {1: "有台标", 2: "有字幕或主持人"}.get(c.dirt, "")]
-        lines.append(f"{n}. [{' / '.join(t for t in tags if t)}] {c.title or '(无描述)'}")
-    user = f"镜头想要的画面:{intent}\n\n候选:\n" + "\n".join(lines)
-    try:
-        data = llm.structured(MATCH_SYSTEM, user, required_keys=["picks"], temperature=0.0)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"素材池按意图挑选失败,按原排序:{str(exc)[:120]}")
-        return None
-    out: list[clips_mod.ClipCandidate] = []
-    for raw in data.get("picks") or []:
-        try:
-            n = int(raw)
-        except (TypeError, ValueError):
-            continue
-        if 1 <= n <= len(pool) and pool[n - 1] not in out:
-            out.append(pool[n - 1])
-    # LLM 只管"能不能用";顺序先看画面干净程度 —— 它会按字面贴合度排
-    # ("棚拍"对"影棚"),把带主持人和字幕的评测画面排到干净的官方广告前面
-    return sorted(out, key=lambda c: c.dirt)
-
-
-#: 素材视角 → 镜头 angle(参考图、兜底生成都按 angle 走)
+#: 素材视角 → 镜头 angle
 ANGLE_OF_VIEW: dict[str, str] = {
     "exterior_front": "exterior_45", "exterior_side": "exterior_45", "exterior_45": "exterior_45",
     "driving": "exterior_45", "aerial": "exterior_45", "rear": "rear",
     "interior": "interior", "seat": "interior", "screen": "screen_spec", "detail": "detail",
 }
-#: 给分镜看的素材清单上限。每条一行描述,60 条约 3k 字,够挑也不撑爆上下文
-CATALOG_LIMIT = 60
-#: 清单里官图最多占几条 —— 视频是主菜,图只在视频缺某个视角时补位
-CATALOG_STILLS = 12
-
-
-def catalog(subject: str, *, seconds: float | None = None,
-            limit: int = CATALOG_LIMIT) -> list[dict[str, Any]]:
-    """给分镜用的「池子里有什么」:每条是一个能撑满一个镜头的画面。
-
-    视频条目是能拼满 `seconds` 的窗口(以首段为代表),图片是可用官图。
-    按 干净 → 官方 → 认出是这台车 排序;同一视角最多占四分之一,免得
-    40 段细节特写把内饰挤出清单。返回 dict:id / kind / view / angle / desc /
-    official / dirt。
-    """
-    seconds = float(seconds or config.SHOT_GRID_SECONDS)
-    lib = Library.load(subject)
-    by_file: dict[str, list[Item]] = {}
-    for i in lib.items:
-        if i.kind == "video" and Path(i.path).is_file():
-            by_file.setdefault(i.path, []).append(i)
-    firsts: dict[str, Item] = {}
-    for segs in by_file.values():
-        for angle in ANGLE_VIEWS:
-            for first, _ in windows(segs, seconds, angle):
-                firsts.setdefault(first.id, first)
-
-    def rank(i: Item) -> tuple:
-        return (_dirt(i), not i.official, i.target != "yes", -i.length)
-
-    videos = sorted(firsts.values(), key=rank)
-    stills = sorted((i for i in lib.items if i.kind == "still" and i.usable
-                     and i.view in ANGLE_OF_VIEW and Path(i.path).is_file()), key=rank)
-    per_view = max(3, limit // 4)
-    out: list[Item] = []
-    seen: dict[str, int] = {}
-    for i in videos + stills[:CATALOG_STILLS]:
-        if len(out) >= limit:
-            break
-        if seen.get(i.view, 0) >= per_view:
-            continue
-        seen[i.view] = seen.get(i.view, 0) + 1
-        out.append(i)
-    return [{"id": i.id, "kind": i.kind, "view": i.view, "angle": ANGLE_OF_VIEW.get(i.view, ""),
-             "desc": i.desc, "official": i.official, "dirt": _dirt(i)} for i in out]
-
-
-def pick(subject: str, item_id: str, *, seconds: float | None = None,
-         exclude: Sequence[tuple[str, float, float]] = ()) -> clips_mod.ClipCandidate | None:
-    """分镜点名要的那条素材 → 候选。已经失效(文件没了、被重新打标签判不可用、
-    窗口跟别的镜头重叠)就返回 None,调用方退回按意图挑。"""
-    seconds = float(seconds or config.SHOT_GRID_SECONDS)
-    lib = Library.load(subject)
-    item = next((i for i in lib.items if i.id == item_id), None)
-    if item is None or not item.usable or not Path(item.path).is_file():
-        return None
-    if item.kind == "still":
-        if any(p == item.path for p, _, _ in exclude):
-            return None
-        return _to_candidate(item, item.path)
-    a, b = item.start, item.start + seconds
-    if any(p == item.path and a < e and s < b for p, s, e in exclude):
-        return None
-    segs = [i for i in lib.items if i.kind == "video" and i.path == item.path]
-    angle = ANGLE_OF_VIEW.get(item.view, "")
-    if not any(first.id == item.id for first, _ in windows(segs, seconds, angle)):
-        return None
-    return _to_candidate(item, item.path)
 
 
 # --------------------------------------------------------------------------
@@ -1288,16 +1078,6 @@ def fill(subject: str, seconds: float, *, hint: str = "",
     return out
 
 
-def has_usable_video(subject: str) -> bool:
-    """池子里有没有能用的视频段(文件还在)。"""
-    return any(i.kind == "video" and i.usable and Path(i.path).is_file()
-               for i in Library.load(subject).items)
-
-
-def is_library(candidate: clips_mod.ClipCandidate) -> bool:
-    return candidate.origin.startswith("library")
-
-
 # --------------------------------------------------------------------------
 # 预览:联系表
 # --------------------------------------------------------------------------
@@ -1399,7 +1179,7 @@ def _cli(argv: Sequence[str] | None = None) -> int:
 
         llm = _llm()
     errors: list[str] = []
-    stats = build(args.subject, profile=load_profile("auto"), brand=args.brand, llm=llm,
+    stats = build(args.subject, profile=load_profile("auto_long"), brand=args.brand, llm=llm,
                   budget=args.budget, max_sources=args.max_sources, errors=errors,
                   log=lambda m: print(m, flush=True))
     print(json.dumps(stats, ensure_ascii=False, indent=1))

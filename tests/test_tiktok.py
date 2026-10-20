@@ -1,4 +1,4 @@
-"""TikTok 数据源:官方号主页、DuckDuckGo 检索、链接规范化,以及接进素材池 / 取材的几处。
+"""TikTok 数据源:官方号主页、DuckDuckGo 检索、链接规范化,以及接进素材池的几处。
 
 不联网:yt-dlp 与网页请求全部打桩。
 """
@@ -8,7 +8,6 @@ import pytest
 
 from app import config
 from app.categories import load_profile
-from app.pipeline import clip_resolver
 from app.pipeline import library as lib_mod
 from app.providers import official
 from app.providers import platform_video as pv
@@ -182,12 +181,6 @@ def test_discover_pulls_official_tiktok_feeds(monkeypatch, tmp_path):
 
 
 def test_auto_profile_declares_verified_tiktok_handles():
-    sites = load_profile("auto").official_sites
+    sites = load_profile("auto_long").official_sites
     assert sites["byd"]["tiktok"] == ("byd_global",)
     assert "tiktok" not in sites["xiaomi"] or not sites["xiaomi"]["tiktok"]
-
-
-def test_english_queries_go_to_tiktok(monkeypatch):
-    monkeypatch.setattr(config, "MEDIA_PLATFORMS", ("bilibili", "youtube", "tiktok"))
-    assert clip_resolver._platforms_for("en") == ["youtube", "tiktok"]
-    assert clip_resolver._platforms_for("zh") == ["bilibili"]

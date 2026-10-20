@@ -83,40 +83,6 @@ def test_usable_rules():
 # --------------------------------------------------------------------------
 # 拼窗口
 # --------------------------------------------------------------------------
-def test_window_from_one_long_segment():
-    got = lib_mod.windows([_seg(1, 0.1, 7.9)], 6, "exterior_45")
-    assert [(w.id, round(share, 2)) for w, share in got] == [("s1", 1.0)]
-
-
-def test_window_joins_same_group_segments():
-    segs = [_seg(1, 0.1, 2.9, "exterior_front"), _seg(2, 3.1, 5.9, "driving"),
-            _seg(3, 6.1, 8.9, "exterior_side")]
-    got = lib_mod.windows(segs, 6, "exterior_45")
-    assert [w.id for w, _ in got] == ["s1"]   # s2 起只剩 5.8 秒,不够
-
-
-def test_window_breaks_on_group_change_and_bad_segment():
-    inside = [_seg(1, 0.1, 2.9), _seg(2, 3.1, 9.9, "interior")]
-    assert lib_mod.windows(inside, 6, "exterior_45") == []
-    poster = [_seg(1, 0.1, 2.9), _seg(2, 3.1, 9.9, problem="poster")]
-    assert lib_mod.windows(poster, 6, "exterior_45") == []
-    # 细节特写两边都能接
-    detail = [_seg(1, 0.1, 2.9), _seg(2, 3.1, 9.9, "detail")]
-    assert [w.id for w, _ in lib_mod.windows(detail, 6, "exterior_45")] == ["s1"]
-
-
-def test_window_skips_short_untagged_flash_but_not_long_untagged():
-    flash = [_seg(1, 0.1, 2.9), _seg(2, 3.1, 3.5, tagged=False), _seg(3, 3.7, 9.0)]
-    assert [w.id for w, _ in lib_mod.windows(flash, 6, "exterior_45")] == ["s1"]
-    unseen = [_seg(1, 0.1, 2.9), _seg(2, 3.1, 9.0, tagged=False)]
-    assert lib_mod.windows(unseen, 6, "exterior_45") == []
-
-
-def test_window_requires_matching_first_view():
-    assert lib_mod.windows([_seg(1, 0, 8, "interior")], 6, "exterior_45") == []
-    assert lib_mod.windows([_seg(1, 0, 8, "screen")], 6, "screen_spec")
-
-
 # --------------------------------------------------------------------------
 # 存取与挑选
 # --------------------------------------------------------------------------
@@ -158,38 +124,6 @@ def test_add_links_retries_failed(data_dir):
 def _write_lib(data_dir: Path, items: list[Item]) -> None:
     lib = Library(subject="小米YU7", items=items)
     lib.save()
-
-
-def test_candidates_rank_and_exclude(data_dir):
-    a = data_dir / "a.mp4"
-    b = data_dir / "b.mp4"
-    img = data_dir / "i.jpg"
-    for f in (a, b, img):
-        f.write_bytes(b"x")
-    still = Item(id="img1", kind="still", path=str(img), tagged=True, view="exterior_45",
-                 official=True, origin="library:autohome")
-    _write_lib(data_dir, [
-        _seg(1, 0.1, 7.9, "exterior_side", path=str(a)),
-        _seg(2, 0.1, 7.9, "exterior_45", path=str(b), official=True, target="yes"),
-        _seg(3, 8.1, 15.9, "exterior_45", path=str(b), official=True),
-        still,
-    ])
-    got = lib_mod.candidates("小米YU7", "exterior_45", seconds=6)
-    assert [(Path(c.url).name, c.start) for c in got] == [
-        ("b.mp4", 0.1), ("b.mp4", 8.1), ("a.mp4", 0.1), ("i.jpg", 0.0)]
-    assert got[0].kind == "video" and got[-1].kind == "still"
-    assert all(lib_mod.is_library(c) for c in got)
-
-    used = [(str(b), 0.1, 6.1)]
-    got = lib_mod.candidates("小米YU7", "exterior_45", seconds=6, exclude=used)
-    assert [(Path(c.url).name, c.start) for c in got][0] == ("b.mp4", 8.1)
-
-
-def test_candidates_empty_without_library(data_dir):
-    assert lib_mod.candidates("没建过的车", "exterior_45") == []
-    _write_lib(data_dir, [_seg(1, 0, 8, path=str(data_dir / "gone.mp4"))])
-    assert lib_mod.candidates("小米YU7", "exterior_45") == []   # 文件没了
-    assert lib_mod.candidates("小米YU7", "unknown_angle") == []
 
 
 def test_tag_queue_caps_per_source(data_dir, monkeypatch):
@@ -255,55 +189,6 @@ def test_junk_words_do_not_hit_common_names():
     assert len(lib_mod.rank_sources(hits, "丰田bZ3X")) == 1
 
 
-def test_candidates_prefer_clean_over_logo_over_subtitle(data_dir):
-    files = {n: data_dir / f"{n}.mp4" for n in ("sub", "logo", "clean")}
-    for f in files.values():
-        f.write_bytes(b"x")
-    _write_lib(data_dir, [
-        _seg(1, 0, 8, path=str(files["sub"]), problem="subtitle", official=True, target="yes"),
-        _seg(2, 0, 8, path=str(files["logo"]), problem="text_overlay", official=True),
-        _seg(3, 0, 8, path=str(files["clean"])),
-    ])
-    got = [Path(c.url).stem for c in lib_mod.candidates("小米YU7", "exterior_45", seconds=6)]
-    assert got == ["clean", "logo", "sub"]
-
-
-class _FakeLLM:
-    def __init__(self, picks=None, boom=False):
-        self.picks, self.boom, self.calls = picks, boom, []
-
-    def structured(self, system, user, **k):
-        self.calls.append(user)
-        if self.boom:
-            raise RuntimeError("down")
-        return {"picks": self.picks}
-
-
-def _cand(n):
-    from app.providers.clips import ClipCandidate
-
-    return ClipCandidate(url=f"F:/lib/{n}.mp4", origin="library:bilibili", title=f"画面{n}",
-                         view="exterior_45", start=float(n))
-
-
-def test_match_intent_reorders_and_filters():
-    cands = [_cand(n) for n in range(4)]
-    llm = _FakeLLM(picks=[3, "1", 99, "x", 3])
-    got = lib_mod.match_intent(cands, "夕阳下静止的 YU7", llm, [])
-    assert [c.title for c in got] == ["画面2", "画面0"]
-    assert "夕阳下静止的 YU7" in llm.calls[0] and "1. [exterior_45 / 视频] 画面0" in llm.calls[0]
-
-
-def test_match_intent_none_means_keep_order():
-    cands = [_cand(0)]
-    assert lib_mod.match_intent(cands, "x", None, []) is None
-    assert lib_mod.match_intent(cands, "", _FakeLLM([1]), []) is None
-    errors: list[str] = []
-    assert lib_mod.match_intent(cands, "x", _FakeLLM(boom=True), errors) is None
-    assert errors
-    assert lib_mod.match_intent(cands, "x", _FakeLLM(picks=[]), []) == []
-
-
 def test_dirt_counts_presenter_like_subtitle():
     assert lib_mod._dirt(_seg(1, 0, 3)) == 0
     assert lib_mod._dirt(_seg(1, 0, 3, problem="text_overlay")) == 1
@@ -313,60 +198,6 @@ def test_dirt_counts_presenter_like_subtitle():
     model = _seg(1, 0, 3)
     model.desc = "红裙女子站在红色SUV旁"
     assert lib_mod._dirt(model) == 0
-
-
-def test_match_intent_orders_clean_first():
-    cands = [_cand(n) for n in range(3)]
-    cands[0].dirt, cands[1].dirt, cands[2].dirt = 2, 0, 1
-    got = lib_mod.match_intent(cands, "x", _FakeLLM(picks=[1, 2, 3]), [])
-    assert [c.title for c in got] == ["画面1", "画面2", "画面0"]
-
-
-def test_catalog_lists_fillable_windows_clean_first(data_dir):
-    a = data_dir / "a.mp4"
-    b = data_dir / "b.mp4"
-    img = data_dir / "i.jpg"
-    for f in (a, b, img):
-        f.write_bytes(b"x")
-    _write_lib(data_dir, [
-        _seg(1, 0.1, 7.9, "interior", path=str(a), problem="subtitle"),
-        _seg(2, 0.1, 7.9, "exterior_45", path=str(b), official=True),
-        _seg(3, 8.1, 9.0, "rear", path=str(b)),            # 撑不满 6 秒,不进清单
-        Item(id="img1", kind="still", path=str(img), tagged=True, view="detail"),
-    ])
-    got = lib_mod.catalog("小米YU7", seconds=6)
-    assert [p["id"] for p in got] == ["s2", "s1", "img1"]
-    assert got[0]["angle"] == "exterior_45" and got[1]["angle"] == "interior"
-    assert got[1]["dirt"] == 2 and got[2]["kind"] == "still"
-
-
-def test_catalog_caps_one_view(data_dir):
-    a = data_dir / "a.mp4"
-    a.write_bytes(b"x")
-    items = [_seg(n, n * 10.0, n * 10.0 + 8, "detail", path=str(a)) for n in range(30)]
-    items.append(_seg(99, 400.0, 408.0, "interior", path=str(a)))
-    _write_lib(data_dir, items)
-    got = lib_mod.catalog("小米YU7", seconds=6, limit=12)
-    assert sum(p["view"] == "detail" for p in got) == 3
-    assert any(p["view"] == "interior" for p in got)
-
-
-def test_pick_by_id(data_dir):
-    a = data_dir / "a.mp4"
-    a.write_bytes(b"x")
-    _write_lib(data_dir, [
-        _seg(1, 0.1, 7.9, "exterior_45", path=str(a)),
-        _seg(2, 8.1, 9.0, "rear", path=str(a)),
-        _seg(3, 10.0, 18.0, "interior", path=str(a), problem="poster"),
-    ])
-    got = lib_mod.pick("小米YU7", "s1", seconds=6)
-    assert got is not None and (got.url, got.start) == (str(a), 0.1)
-    assert lib_mod.is_library(got)
-    assert lib_mod.pick("小米YU7", "s1", seconds=6, exclude=[(str(a), 3.0, 9.0)]) is None
-    assert lib_mod.pick("小米YU7", "s2", seconds=6) is None     # 撑不满
-    assert lib_mod.pick("小米YU7", "s3", seconds=6) is None     # 不可用
-    assert lib_mod.pick("小米YU7", "nope", seconds=6) is None
-
 
 
 # --------------------------------------------------------------------------

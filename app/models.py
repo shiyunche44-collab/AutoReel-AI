@@ -13,7 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-NarrationMode = Literal["tts", "native"]
+#: 旁白只走独立 TTS(数据库仍有 narration_mode 这一列)
+NarrationMode = Literal["tts"]
 ShotStatus = Literal[
     "pending",      # 尚未提交
     "submitted",    # 已提交,等待 provider 返回
@@ -95,7 +96,7 @@ class ShotSpec(BaseModel):
     #: visual_zh 描述的就是这段实拍;失效了再按画面描述挑
     pool_id: str = ""
     # ---- 以下只有横屏解说轨(track=explainer)用,见 pipeline/explainer.py ----
-    #: 版式:broll / panel / highlight / card。空 = 竖屏链路的普通镜头
+    #: 版式:broll / panel / highlight / card / stat
     layout: str = ""
     #: 叠加层数据(核对过事实):panel = {kind, title, rows, source};
     #: highlight = {kind, lines}
@@ -123,11 +124,9 @@ class Shot(BaseModel):
     #: 重试次数(已达上限则不再自动重试)
     attempts: int = 0
     error: str | None = None
-    #: 一致性链状态:ok = 共享参考图 + 尾帧串联均生效;degraded = 降级;
-    #: real = 该镜头用的是网上抓来的真实视频片段,没经过生成;
-    #: card = 数据卡片,由代码直接渲染(见 pipeline/cards.py)
+    #: 画面来源:real = 素材池实拍背景;card = 数据卡片,由代码直接渲染;ok = 还没渲染
     consistency: Consistency = "ok"
-    #: 所在链的序号与链内位置
+    #: 旧竖屏链路的链序号,数据库仍有这两列
     chain_id: int = 0
     chain_pos: int = 0
     #: 估算等效用量(美元,仅估算)
@@ -147,33 +146,15 @@ class Shot(BaseModel):
 
 
 # --------------------------------------------------------------------------
-# 提示词层
-# --------------------------------------------------------------------------
-class CompiledPrompt(BaseModel):
-    shot_idx: int
-    text: str
-    #: 校验错误列表,空列表表示通过
-    errors: list[str] = Field(default_factory=list)
-    #: 编译是否走了 LLM(False = 走了确定性兜底模板)
-    used_llm: bool = False
-    #: I2VA 前置对齐行是否注入
-    used_first_frame: bool = False
-
-    @property
-    def valid(self) -> bool:
-        return not self.errors
-
-
-# --------------------------------------------------------------------------
 # 项目
 # --------------------------------------------------------------------------
 class ProjectCreate(BaseModel):
     subject: str = Field(min_length=1, description="选题/车型,如 '比亚迪汉 EV 2026 款'")
-    category: str = "auto"
+    category: str = "auto_long"
     #: 内容方向名。为空时取品类默认方向(Profile 的 default_theme)。
     theme: str | None = Field(default=None, description="内容方向,如 'iteration'")
-    #: 目标时长(秒)。竖屏链路是精确时长;横屏解说轨是**目标**,成片跟着旁白走
-    duration: int = 60
+    #: 目标时长(秒)。成片跟着旁白走,这只是目标
+    duration: int = 240
     narration_mode: NarrationMode = "tts"
     quota_budget: float | None = None
     title: str | None = None
@@ -190,7 +171,7 @@ class ShotPatch(BaseModel):
 
 class GateRequest(BaseModel):
     gate: Literal["A", "B"]
-    #: GATE_B 可携带逐镜头决定:approved 的镜头才进成片
+    #: 旧前端的逐镜头批准列表;门禁 B 现在一次审完全片,这个字段被忽略
     approved: list[int] | None = None
 
 
@@ -226,11 +207,6 @@ class ProjectDetail(ProjectSummary):
     script: list[ScriptSegment] = Field(default_factory=list)
     shots: list[Shot] = Field(default_factory=list)
     #: 全片共享参考图集条目:{url, angle, origin, note}
-    refs: list[dict] = Field(default_factory=list)
-    #: 真实素材报告:哪些镜头用了网上抓来的视频片段、来源是什么、省了多少。
-    #: 空字典表示本项目没启用这条通路(老项目 / USE_REAL_CLIPS=0)。
-    clip_report: dict = Field(default_factory=dict)
-    prompt_errors: dict[str, list[str]] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------

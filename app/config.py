@@ -22,38 +22,17 @@ load_dotenv(BASE_DIR / ".env")
 
 
 # --------------------------------------------------------------------------
-# 视频模型常量(契约见计划 §2.3)
+# 画面与时长
 # --------------------------------------------------------------------------
-#: 镜头时间栅格。6 秒同时满足 Hailuo-2.3(仅 6/10 秒)与 H3(4-15 秒),
-#: 是草稿档与成片档唯一通用的片长。
+#: 静图做成推拉镜头、或缺省片长时用的秒数
 SHOT_GRID_SECONDS = 6
 
-#: 可选成片时长(秒)与其对应镜头数。
-#: 240 秒 = 40 镜头,与 180 秒同为 2 个一致性波次,成片档墙钟相同 ——
-#: 多出的 10 个镜头不增加等待时间,只多消耗等效用量。
-SUPPORTED_DURATIONS: tuple[int, ...] = (60, 90, 120, 180, 240)
+#: 品类没声明 durations 时的可选成片时长(秒)
+SUPPORTED_DURATIONS: tuple[int, ...] = (120, 240, 360, 480)
 
-DRAFT_MODEL = os.getenv("DRAFT_MODEL", "MiniMax-Hailuo-2.3")
-FINAL_MODEL = os.getenv("FINAL_MODEL", "MiniMax-H3")
-FINAL_RESOLUTION = os.getenv("FINAL_RESOLUTION", "768P")
-
-ASPECT_RATIO = "9:16"
+#: 归一化片段的缺省画幅(品类自己的 frame_size 优先)
 OUTPUT_WIDTH = 1080
 OUTPUT_HEIGHT = 1920
-
-#: 全片共享参考图集上限。H3 前 5 张参考图免费,品类 Profile 可覆盖此值。
-CATEGORY_REF_LIMIT = 5
-
-#: 是否允许用网上抓来的真实视频片段替换部分成片镜头。
-#:
-#: 做成开关而不是写死,是因为它会引入**网络抓取**这一类新的外部依赖 ——
-#: 有人只想跑纯生成,或者网络环境不通,需要一个明确的"关"的位置。
-#: 关掉时整条流水线行为与引入本特性之前完全一致。
-USE_REAL_CLIPS = os.getenv("USE_REAL_CLIPS", "1") not in ("0", "false", "False")
-
-#: 每个项目最多用多少个真实素材镜头。0 = 不设上限:能用真实就用真实,
-#: 找不到的镜头才回退 AI 生成。
-REAL_CLIP_LIMIT = int(os.getenv("REAL_CLIP_LIMIT", "0"))
 
 #: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin / tiktok。
 #: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接 —— 而 cn.bing
@@ -74,63 +53,17 @@ YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()
 #: Netscape 格式 cookie 文件(浏览器插件导出)。B 站高清、抖音下载需要。
 YTDLP_COOKIES = os.getenv("YTDLP_COOKIES", "").strip()
 
-#: 免费图库 API Key。没填的那一路自动跳过。
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
-PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
-COVERR_API_KEY = os.getenv("COVERR_API_KEY", "").strip()
-UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip()
-
-#: 逐镜头取材的总时长预算(秒)。取材在门禁 A 确认时同步执行,网络慢时
-#: 不能无限拖住确认请求 —— 超出预算后剩余镜头直接走生成。
-MEDIA_TIME_BUDGET = int(os.getenv("MEDIA_TIME_BUDGET", "900"))
-
 #: 素材池(`pipeline/library.py`):按车型预先攒素材、按剪辑点切段、打视角标签,
 #: 取材时最先从池子里挑。分镜阶段在后台增量构建,不拖住门禁确认。
 USE_LIBRARY = os.getenv("USE_LIBRARY", "1") not in ("0", "false", "False")
 #: 后台构建一次的时长预算(秒);超时停在当前进度,下次接着做。0 不限
 LIBRARY_BUILD_BUDGET = int(os.getenv("LIBRARY_BUILD_BUDGET", "1800"))
 
-#: 是否允许把网上的静态图片做成推拉动效镜头(Ken Burns)。
-#: 视频片段找不到时,真实图片动起来仍比 AI 编的车可信。
-USE_STILL_SHOTS = os.getenv("USE_STILL_SHOTS", "1") not in ("0", "false", "False")
-
-#: 一致性链分组大小:每链 N 个镜头,链内串行、链间并行。
-CHAIN_GROUP_SIZE = 3
-
-#: 门禁 B 分批审片:每批放行几条一致性链。
-#: 批次 = 连续若干条链,按链切分保证不会把一条链劈成两半(链内首帧依赖)。
-#: 40 镜头 / 3 = 14 链 → 4 批,每批 12 镜头。
-GATE_B_BATCH_CHAINS = int(os.getenv("GATE_B_BATCH_CHAINS", "4"))
-
-#: 只生成前 N 个镜头(0 = 全部)。用于链路冒烟测试:
-#: 先跑通一整条一致性链(通常正好 CHAIN_GROUP_SIZE 个镜头),
-#: 确认"生成 → 质检 → 拼接 → 字幕 → 混音"全程无误,再放开跑整片。
-SHOT_LIMIT = int(os.getenv("SHOT_LIMIT", "0"))
-
-#: H3 支持的画幅比例(竖屏 9:16 在列)。
-SUPPORTED_RATIOS = ("adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16")
-
-
-def shots_for_duration(duration: int) -> int:
-    """按 6 秒栅格计算镜头数。"""
-    if duration % SHOT_GRID_SECONDS != 0:
-        raise ValueError(f"时长必须是 {SHOT_GRID_SECONDS} 的整数倍,收到 {duration}")
-    return duration // SHOT_GRID_SECONDS
-
-
 # --------------------------------------------------------------------------
-# 并发与配额
+# 配额
 # --------------------------------------------------------------------------
-GEN_MAX_CONCURRENCY = int(os.getenv("GEN_MAX_CONCURRENCY", "8"))
-MAX_RETRY_DRAFT = int(os.getenv("MAX_RETRY_DRAFT", "2"))
-MAX_RETRY_FINAL = int(os.getenv("MAX_RETRY_FINAL", "2"))
 DEFAULT_QUOTA_BUDGET = float(os.getenv("DEFAULT_QUOTA_BUDGET", "40"))
 PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "2026-10-31")
-
-#: H3 长任务轮询参数(计划 §4.5)
-POLL_INTERVAL_SLOW = 60      # H3:15-30 分钟
-POLL_INTERVAL_FAST = 20      # H3-Max / Hailuo-2.3
-POLL_TIMEOUT_SECONDS = 7200  # 2 小时后标记超时
 
 
 # --------------------------------------------------------------------------
@@ -198,7 +131,7 @@ def ffmpeg_status() -> tuple[bool, str]:
 MCODE_TOOLS = os.getenv("MCODE_TOOLS") or shutil.which("mcode-tools") or ""
 
 #: M Plan 订阅 Key(sk-cp-…)。配了它就能不经 mcode-tools、直连 MiniMax 开放平台
-#: (视频 / 语音 / 音乐 / 生图 / 图片理解 / 网络搜索),额度从订阅套餐里扣。
+#: (语音 / 音乐 / 生图 / 图片理解 / 网络搜索),额度从订阅套餐里扣。
 MINIMAX_PLAN_KEY = os.getenv("MINIMAX_PLAN_KEY", "").strip()
 MINIMAX_API_HOST = os.getenv("MINIMAX_API_HOST", "https://api.minimax.cn").rstrip("/")
 
@@ -212,9 +145,8 @@ CONNECTOR_BACKEND = (
 TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
 MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
-#: Connector 调用的默认超时(视频提交快,查询快;生图/检索较慢)
+#: Connector 调用的默认超时
 CONNECTOR_TIMEOUT_DEFAULT = 180
-CONNECTOR_TIMEOUT_GENERATE = 600
 
 
 def deepseek_api_key() -> str:
@@ -229,7 +161,7 @@ def deepseek_model() -> str:
     return os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 
-DEFAULT_CATEGORY = os.getenv("DEFAULT_CATEGORY", "auto")
+DEFAULT_CATEGORY = os.getenv("DEFAULT_CATEGORY", "auto_long")
 
 
 def ensure_dirs() -> None:
@@ -248,6 +180,5 @@ def project_dir(project_id: str) -> Path:
     (path / "drafts").mkdir(exist_ok=True)
     (path / "refs").mkdir(exist_ok=True)
     (path / "audio").mkdir(exist_ok=True)
-    (path / "prompts").mkdir(exist_ok=True)
     (path / "facts_raw").mkdir(exist_ok=True)
     return path

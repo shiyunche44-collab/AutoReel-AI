@@ -113,9 +113,9 @@ class CategoryProfile:
     label: str
     aspect_ratio: str = "9:16"
     duration_grid: int = 6
-    #: 画面链路:footage = 逐镜头取实拍/AI 生成(竖屏短视频);
-    #: explainer = 横屏信息解说(实拍只当背景,信息靠叠加层,时长跟着旁白走)
-    track: str = "footage"
+    #: 画面链路。目前只有 explainer = 横屏信息解说(实拍只当背景,信息靠叠加层,
+    #: 时长跟着旁白走);竖屏逐镜头生成链路已删除
+    track: str = "explainer"
     #: 可选成片时长(秒)。空 = 全局 SUPPORTED_DURATIONS
     durations: tuple[int, ...] = ()
     fact_sources: tuple[str, ...] = ()
@@ -335,10 +335,7 @@ _ANGLE_NEGATIVE_EN = (
 
 #: 品类 → 英文品类名词,让相关性描述里的主体不至于太抽象。
 _CATEGORY_NOUN_EN: dict[str, str] = {
-    "auto": "electric car",
-    "beauty": "cosmetic product",
-    "digital": "consumer electronics device",
-    "home": "home furnishing product",
+    "auto_long": "electric car",
 }
 
 
@@ -420,7 +417,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         label=str(raw.get("label", name)),
         aspect_ratio=str(raw.get("aspect_ratio", "9:16")),
         duration_grid=int(raw.get("duration_grid", 6)),
-        track=str(raw.get("track", "footage") or "footage"),
+        track=str(raw.get("track", "explainer") or "explainer"),
         durations=tuple(int(d) for d in (raw.get("durations") or ())),
         fact_sources=tuple(raw.get("fact_sources") or ()),
         section_plan=plan,
@@ -461,8 +458,9 @@ EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "st
 
 
 def _validate(profile: CategoryProfile) -> None:
-    if profile.track not in ("footage", "explainer"):
-        raise ProfileError(f"品类 {profile.name}: track={profile.track!r} 只能是 footage / explainer")
+    if profile.track != "explainer":
+        raise ProfileError(f"品类 {profile.name}: track={profile.track!r} 只能是 explainer"
+                           "(竖屏链路已删除)")
     for sname, sec in profile.sections.items():
         bad = [x for x in sec.layouts if x not in EXPLAINER_LAYOUTS]
         if bad:
@@ -610,5 +608,5 @@ def default_category() -> str:
     try:
         load_profile(config.DEFAULT_CATEGORY)
     except ProfileError:
-        return "auto"
+        return "auto_long"
     return config.DEFAULT_CATEGORY

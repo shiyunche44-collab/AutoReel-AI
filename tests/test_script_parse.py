@@ -4,6 +4,8 @@ lint 是防止"模型编造参数"的最后一道闸门,这里对每条规则都
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.categories import load_profile
@@ -18,12 +20,32 @@ from app.pipeline.script_gen import (
 
 @pytest.fixture(scope="module")
 def auto_profile():
-    return load_profile("auto")
+    return load_profile("auto_long")
 
 
 @pytest.fixture(scope="module")
-def beauty_profile():
-    return load_profile("beauty")
+def beauty_profile(auto_profile):
+    """美妆式的医疗宣称红线:品类词表里写了就拦(原 beauty.yaml 的词表节选)。"""
+    return replace(auto_profile, name="beauty",
+                   forbidden_terms=("治疗", "根治", "治愈", "疗效", "最强", "第一"))
+
+
+def _theme(profile, name: str, **kw):
+    """在 buyguide 的基础上造一个方向,测 lint / 告警对方向配置的响应。"""
+    return replace(profile.theme_spec("buyguide"), name=name, label=kw.pop("label", name), **kw)
+
+
+@pytest.fixture(scope="module")
+def cost_theme(auto_profile):
+    return _theme(auto_profile, "cost", allow_subject_critique=True,
+                  extra_forbidden_terms=("智商税", "冤大头"))
+
+
+@pytest.fixture(scope="module")
+def brand_profile(auto_profile):
+    """多一个以公司 / 行业事实为主体的品牌方向。"""
+    brand = _theme(auto_profile, "brand", label="品牌历史", required_scopes=("company", "industry"))
+    return replace(auto_profile, themes={**auto_profile.themes, "brand": brand})
 
 
 @pytest.fixture
@@ -101,7 +123,7 @@ def test_product_gap_warning_triggers_when_no_product_facts(auto_profile):
     # 告警文案现在按**方向**描述,不再是写死的"产品级事实仅 N 条"
     msg = product_gap_warning(company_only, auto_profile)
     assert msg and "产品级 0 条" in msg
-    assert "通用车型概览" in msg
+    assert auto_profile.theme_spec(None).label in msg
 
     with_product = company_only + [
         Fact(id="p1", claim="续航 702 公里", source_tool="t", scope="product"),
@@ -111,7 +133,7 @@ def test_product_gap_warning_triggers_when_no_product_facts(auto_profile):
     assert product_gap_warning(with_product, auto_profile) is None
 
 
-def test_product_gap_warning_is_theme_aware(auto_profile):
+def test_product_gap_warning_is_theme_aware(brand_profile):
     """品牌历史方向的整片主体就是 company/industry 事实。
 
     product 少于 3 条对它完全正常,不该再报警 —— 否则每个品牌方向项目
@@ -129,14 +151,14 @@ def test_product_gap_warning_is_theme_aware(auto_profile):
         Fact(id="i2", claim="市场份额 12%", source_tool="t", scope="industry"),
         Fact(id="i3", claim="行业销量增长 20%", source_tool="t", scope="industry"),
     ]
-    assert product_gap_warning(brand_solid, auto_profile, "brand") is None
+    assert product_gap_warning(brand_solid, brand_profile, "brand") is None
 
     # 只给 company 不给 industry:brand 方向该报 industry 缺口,而不是 product 缺口
-    msg = product_gap_warning(brand_solid[:3], auto_profile, "brand")
+    msg = product_gap_warning(brand_solid[:3], brand_profile, "brand")
     assert msg and "行业级 0 条" in msg and "产品级" not in msg
 
     # 同一组事实,产品向方向就该报 product 缺口 —— 证明告警确实跟着方向走
-    overview_msg = product_gap_warning(brand_solid, auto_profile, "overview")
+    overview_msg = product_gap_warning(brand_solid, brand_profile, "buyguide")
     assert overview_msg and "产品级 0 条" in overview_msg
 
 
@@ -312,11 +334,10 @@ def test_total_chars_counts_all_segments(auto_profile):
 # --------------------------------------------------------------------------
 # 方向化 lint:允许讲本车缺点,禁止贬低竞品
 # --------------------------------------------------------------------------
-def test_cost_theme_allows_subject_critique(auto_profile):
-    """「优势、缺点与真实使用成本」方向的存在意义就是敢讲本车缺点,
+def test_cost_theme_allows_subject_critique(auto_profile, cost_theme):
+    """允许讲缺点的方向(allow_subject_critique)存在意义就是敢讲本车缺点,
     不能因为出现负面表述就拦下来。"""
-    theme = auto_profile.theme_spec("cost")
-    assert theme.allow_subject_critique is True
+    theme = cost_theme
 
     segments = [
         ScriptSegment(idx=0, section="缺点",
@@ -328,9 +349,9 @@ def test_cost_theme_allows_subject_critique(auto_profile):
     assert not [i for i in issues if i.is_error], [i.message for i in issues]
 
 
-def test_cost_theme_blocks_competitor_disparagement(auto_profile):
+def test_cost_theme_blocks_competitor_disparagement(auto_profile, cost_theme):
     """允许讲本车缺点 ≠ 可以拿别家当垫脚石。"""
-    theme = auto_profile.theme_spec("cost")
+    theme = cost_theme
     segments = [
         ScriptSegment(idx=0, section="缺点",
                       text="友商那台车就是智商税,买的人都是冤大头。"),
@@ -345,9 +366,9 @@ def test_cost_theme_blocks_competitor_disparagement(auto_profile):
     assert any("贬低" in i.message for i in errors)
 
 
-def test_cost_theme_allows_objective_competitor_statement(auto_profile):
+def test_cost_theme_allows_objective_competitor_statement(auto_profile, cost_theme):
     """客观差异陈述不该被误判为贬低 —— 否则对比方向没法写。"""
-    theme = auto_profile.theme_spec("cost")
+    theme = cost_theme
     segments = [
         ScriptSegment(idx=0, section="使用成本",
                       text="同级的竞品在保值率上不如它,这点得承认。"),
@@ -359,8 +380,8 @@ def test_cost_theme_allows_objective_competitor_statement(auto_profile):
 
 
 def test_non_cost_theme_blocks_disparagement_too(auto_profile):
-    """禁止贬低竞品对所有方向生效,不只 cost 方向。"""
-    theme = auto_profile.theme_spec("compare")
+    """禁止贬低竞品对所有方向生效,不只允许讲缺点的方向。"""
+    theme = auto_profile.theme_spec("buyguide")
     assert theme.allow_subject_critique is False
     segments = [
         ScriptSegment(idx=0, section="竞品对比", text="竞品那台车就是智商税。"),
@@ -369,13 +390,13 @@ def test_non_cost_theme_blocks_disparagement_too(auto_profile):
     assert [i for i in issues if i.is_error]
 
 
-def test_brand_theme_is_not_killed_by_scope_rule(auto_profile):
+def test_brand_theme_is_not_killed_by_scope_rule(auto_profile, brand_profile):
     """品牌历史方向的整片主体就是公司层事实。
 
     lint 规则 5(用公司事实讲产品参数)由**产品词**触发,品牌方向的文本
     不会命中 —— 锁定这个行为,防止以后有人"顺手加强"该规则时把品牌方向掐死。
     """
-    theme = auto_profile.theme_spec("brand")
+    theme = brand_profile.theme_spec("brand")
     assert theme.required_scopes == ("company", "industry")
 
     facts_list = [

@@ -154,7 +154,7 @@ def test_cancel_available_from_working_states():
 def _fake_project(state):
     return {
         "id": "p_test", "state": str(state), "subject": "测试",
-        "category": "auto", "duration": 60, "narration_mode": "tts",
+        "category": "auto_long", "duration": 60, "narration_mode": "tts",
         "shot_count": 10, "quota_budget": 40.0, "spent_cost": 0.0,
     }
 

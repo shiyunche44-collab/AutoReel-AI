@@ -34,16 +34,12 @@ class FakeLLM:
 # --------------------------------------------------------------------------
 # profile
 # --------------------------------------------------------------------------
-def test_auto_long_inherits_auto_and_is_landscape():
+def test_auto_long_is_landscape_and_self_contained():
     p = load_profile("auto_long")
-    base = load_profile("auto")
-    assert p.is_explainer and not base.is_explainer
+    assert p.is_explainer
     assert p.frame_size == (1920, 1080)
-    assert base.frame_size == (1080, 1920)
-    # 继承:官方渠道、合规词表来自 auto,不必复制
-    assert set(base.official_sites) <= set(p.official_sites)
-    assert p.forbidden_terms == base.forbidden_terms
-    # themes 不继承:auto 的方向是按 6 秒栅格写的
+    # 原先从竖屏 auto 继承的官方渠道、合规词表、BGM 现在直接写在 auto_long 里
+    assert "xiaomi" in p.official_sites and p.forbidden_terms and p.music_prompt
     assert set(p.themes) == {"buyguide"}
     for d in p.supported_durations():
         assert len(p.plan_for(d)) == p.shots_for(d)

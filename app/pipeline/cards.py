@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -397,67 +396,3 @@ def render(card: dict[str, Any], subject: str, dest: str | Path, *,
     if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
         raise RuntimeError(f"卡片渲染失败:{(proc.stderr or '')[-300:]}")
     return dest
-
-
-# --------------------------------------------------------------------------
-# 接入流水线
-# --------------------------------------------------------------------------
-def background_for(project_dir: Path, refs: Sequence[Any]) -> Path | None:
-    """取参考图集里第一张真实照片做卡片底图(虚化压暗),没有就用渐变底。"""
-    for i, r in enumerate(refs):
-        origin = r.get("origin") if isinstance(r, dict) else getattr(r, "origin", "")
-        p = project_dir / "refs" / f"ref_{i:02d}.jpg"
-        if origin != "generate" and p.is_file():
-            return p
-    return None
-
-
-def materialize(project_id: str, specs: Sequence[Any], refs: Sequence[Any], *,
-                stage: str, only: set[int] | None = None) -> tuple[int, list[str]]:
-    """渲染卡片镜头并写成该档位的 succeeded。返回 (生效镜头数, 错误列表)。
-
-    卡片只渲染一次(`cards/NNN.mp4`),草稿档与成片档共用同一个文件 ——
-    门禁 B 审到的就是最终会上屏的那张卡。单张失败只记错误,该镜头留在生成队列里。
-    """
-    from .. import db  # 延迟导入:本模块的纯函数部分不依赖数据库
-
-    project_dir = config.project_dir(project_id)
-    out_dir = project_dir / ("drafts" if stage == "draft" else "shots")
-    path_field = "draft_path" if stage == "draft" else "final_path"
-    project = db.get_project(project_id) or {}
-    subject = project.get("subject", "")
-    bg = background_for(project_dir, refs)
-
-    applied, errors = 0, []
-    for spec in specs:
-        if not spec.card or (only is not None and spec.idx not in only):
-            continue
-        cached = project_dir / "cards" / f"{spec.idx:03d}.mp4"
-        try:
-            if not cached.is_file():
-                render(spec.card, subject, cached, seconds=spec.duration, background=bg)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            dest = out_dir / f"{spec.idx:03d}.mp4"
-            shutil.copyfile(cached, dest)
-        except (RuntimeError, OSError, subprocess.SubprocessError, render_mod.RenderError) as exc:
-            errors.append(f"镜头 {spec.idx} 卡片渲染失败:{exc}")
-            continue
-        db.update_shot(project_id, spec.idx, stage, status="succeeded", provider_task_id=None,
-                       error=None, attempts=0, est_cost=0.0, consistency="card",
-                       **{path_field: str(dest)})
-        applied += 1
-    if applied:
-        db.add_event(project_id, "succeeded", src="cards",
-                     reason=f"{applied} 个数据卡片镜头已渲染({stage})")
-    for e in errors:
-        db.add_event(project_id, "pending", src="cards", reason=e)
-    return applied, errors
-
-
-def invalidate(project_id: str, idx: int | None = None) -> None:
-    """分镜被修改后丢掉缓存的卡片,下次 materialize 时重画。"""
-    d = config.project_dir(project_id) / "cards"
-    if not d.is_dir():
-        return
-    for p in d.glob("*.mp4" if idx is None else f"{idx:03d}.mp4"):
-        p.unlink(missing_ok=True)

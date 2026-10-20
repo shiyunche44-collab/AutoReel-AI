@@ -2,32 +2,27 @@
 
 mcode-tools 的登录由 MiniMax Code 应用托管(shared-broker),离开那个应用就调不通。
 这里按 **Connector 工具名** 逐个翻译成 HTTP 调用,并返回与 Connector 相同的结果形状 ——
-上层的 video / audio / images / facts / qa 一行不改,`cli.call()` 按配置分流过来。
+上层的 audio / images / facts 一行不改,`cli.call()` 按配置分流过来。
 
 | Connector 工具 | 直连实现 |
 |---|---|
-| submit / query_video_generation | H3 家族走 `/v2/video_generation`,Hailuo 走 `/v1/video_generation` |
 | batch_text_to_audio | `/v1/t2a_v2`(逐条) |
 | batch_text_to_music | `/v1/music_generation` |
 | generate_image | `/v1/image_generation` |
 | get_voice_list | `/v1/get_voice` |
 | describe_images | `/v1/coding_plan/vlm`(M Plan 的图片理解,逐张) |
-| videos_understand | 本地抽帧拼图 → `/v1/coding_plan/vlm` |
 | search_images | Bing 图片检索(开放平台没有图片检索接口) |
 | thsifind.search_news | `/v1/coding_plan/search`(M Plan 的网络搜索) |
 | 其余同花顺 / 企查查 / listen_audio | 不支持,抛 ConnectorError,由上层按"该来源失败"降级 |
 
-`upload_temp_url` 在直连模式下不上传任何东西:图片转成 data URI(开放平台的视频与
-图片理解接口都收 data URI),其他文件返回本地 `file://` URI,只给本模块的
-`videos_understand` 自己用。
+`upload_temp_url` 在直连模式下不上传任何东西:图片转成 data URI(开放平台的
+图片理解接口收 data URI),其他文件返回本地 `file://` URI。
 """
 from __future__ import annotations
 
 import base64
 import io
 import json
-import subprocess
-import tempfile
 import time
 import urllib.parse
 from pathlib import Path
@@ -167,95 +162,6 @@ def _local_path(url: str) -> Path:
 # --------------------------------------------------------------------------
 # 视频
 # --------------------------------------------------------------------------
-def _is_v2(model: str) -> bool:
-    return str(model).startswith("MiniMax-H3")
-
-
-def build_video_v2(args: dict) -> dict:
-    """Connector 的扁平参数 → V2 的 content 数组。
-
-    V2 规定**图生视频与多模态参考互斥**:出现首/尾帧时就不能再带参考图。
-    一致性链里非链首镜头两者都有,这里保首帧 —— 它管的是镜头间衔接,
-    参考图集管的车身外观已经体现在上一镜的尾帧里了。
-    """
-    content: list[dict] = [{"type": "text", "text": args["prompt"]}]
-    first, last = args.get("input_image"), args.get("last_frame_image")
-    if first:
-        content.append({"type": "image_url", "image_url": {"url": first}, "role": "first_frame"})
-    if last:
-        content.append({"type": "image_url", "image_url": {"url": last}, "role": "last_frame"})
-    if not (first or last):
-        for url in (args.get("reference_images") or [])[:9]:
-            content.append({"type": "image_url", "image_url": {"url": url},
-                            "role": "reference_image"})
-    body = {
-        "model": args["model"],
-        "content": content,
-        "resolution": args["resolution"],
-        "duration": int(args["duration"]),
-        # 图生视频的画幅由输入图决定,只能是 adaptive;文生视频必须给具体比例
-        "ratio": "adaptive" if (first or last) else (args.get("ratio") or "9:16"),
-    }
-    return body
-
-
-def build_video_v1(args: dict) -> dict:
-    body = {"model": args["model"], "prompt": args["prompt"][:2000],
-            "duration": int(args["duration"]), "resolution": args["resolution"]}
-    if args.get("input_image"):
-        body["first_frame_image"] = args["input_image"]
-    if args.get("last_frame_image"):
-        body["last_frame_image"] = args["last_frame_image"]
-    return body
-
-
-def submit_video(args: dict, timeout: float) -> dict:
-    tool = "submit_video_generation"
-    if _is_v2(args["model"]):
-        data = request("POST", "/v2/video_generation", tool=tool,
-                       json_body=build_video_v2(args), timeout=timeout, retries=0)
-    else:
-        data = request("POST", "/v1/video_generation", tool=tool,
-                       json_body=build_video_v1(args), timeout=timeout, retries=0)
-    task_id = data.get("task_id")
-    if not task_id:
-        raise ConnectorError(tool, f"提交结果中没有 task_id: {data}")
-    return {"task_id": str(task_id)}
-
-
-def parse_query_v2(data: dict) -> dict:
-    task = data.get("task") or {}
-    err = task.get("error") or {}
-    return {
-        "status": str(task.get("status", "unknown")).lower(),
-        "video_url": (task.get("content") or {}).get("url"),
-        "failure_reason": err.get("message") if isinstance(err, dict) else (str(err) or None),
-    }
-
-
-def query_video(args: dict, timeout: float) -> dict:
-    tool = "query_video_generation"
-    task_id = str(args["task_id"])
-    if _is_v2(args.get("model", "")):
-        data = request("GET", f"/v2/query/video_generation/{urllib.parse.quote(task_id)}",
-                       tool=tool, timeout=timeout)
-        return parse_query_v2(data)
-
-    data = request("GET", "/v1/query/video_generation", tool=tool,
-                   params={"task_id": task_id}, timeout=timeout)
-    status = _V1_STATUS.get(str(data.get("status", "")).lower(), "unknown")
-    out = {"status": status, "file_id": data.get("file_id"), "video_url": None,
-           "failure_reason": None if status != "failed" else str(data.get("status"))}
-    if status == "succeeded" and data.get("file_id"):
-        info = request("GET", "/v1/files/retrieve", tool=tool,
-                       params={"file_id": data["file_id"]}, timeout=timeout)
-        out["video_url"] = (info.get("file") or {}).get("download_url")
-    return out
-
-
-# --------------------------------------------------------------------------
-# 音频 / 图片生成
-# --------------------------------------------------------------------------
 def _audio_node(data: dict) -> str | None:
     """`output_format=url` 时 data.audio 是地址;万一回来的是 hex,落成临时文件不好追踪,
     直接当失败处理 —— 调用方会把这条当缺失,而不是拿到一个打不开的路径。"""
@@ -346,73 +252,6 @@ def describe_images(args: dict, timeout: float) -> dict:
     return {"content": "\n\n".join(f"图片 {i + 1}:{t}" for i, t in enumerate(texts))}
 
 
-def _frames(video: Path, points: list[float], out_dir: Path) -> list[Path]:
-    """按时长比例抽帧。抽不出的点跳过。"""
-    from ..pipeline import render
-
-    ffmpeg = render._ffmpeg()
-    probe = subprocess.run([str(config.FFPROBE_PATH), "-v", "error", "-show_entries",
-                            "format=duration", "-of", "csv=p=0", str(video)],
-                           capture_output=True, text=True, timeout=60)
-    try:
-        total = float(probe.stdout.strip())
-    except ValueError:
-        total = float(config.SHOT_GRID_SECONDS)
-    out = []
-    for i, p in enumerate(points):
-        dest = out_dir / f"{video.stem}_{i}.jpg"
-        subprocess.run([ffmpeg, "-y", "-v", "error", "-ss", f"{total * p:.2f}", "-i", str(video),
-                        "-frames:v", "1", "-vf", "scale=-2:720", str(dest)],
-                       capture_output=True, timeout=60)
-        if dest.is_file() and dest.stat().st_size:
-            out.append(dest)
-    return out
-
-
-def contact_sheet(frames: list[Path]) -> bytes:
-    from PIL import Image
-
-    ims = [Image.open(f).convert("RGB") for f in frames]
-    h = min(im.height for im in ims)
-    ims = [im.resize((round(im.width * h / im.height), h)) for im in ims]
-    sheet = Image.new("RGB", (sum(im.width for im in ims) + 8 * (len(ims) - 1), h), "white")
-    x = 0
-    for im in ims:
-        sheet.paste(im, (x, 0))
-        x += im.width + 8
-    buf = io.BytesIO()
-    sheet.save(buf, format="JPEG", quality=88)
-    return buf.getvalue()
-
-
-def videos_understand(args: dict, timeout: float) -> dict:
-    """没有视频理解接口:单个视频抽 3 帧、多个视频各抽中帧,拼成一张图交给图片理解。"""
-    urls = [i.get("url") for i in args.get("video_info") or [] if i.get("url")]
-    if not urls:
-        raise ConnectorError("videos_understand", "没有视频")
-    with tempfile.TemporaryDirectory(prefix="vu_") as tmp:
-        tmp_dir = Path(tmp)
-        frames: list[Path] = []
-        for n, url in enumerate(urls):
-            if url.startswith("file:"):
-                video = _local_path(url)
-            else:
-                video = tmp_dir / f"v{n}.mp4"
-                video.write_bytes(_fetch_bytes(url))
-            frames += _frames(video, [0.2, 0.5, 0.8] if len(urls) == 1 else [0.5], tmp_dir)
-        if not frames:
-            raise ConnectorError("videos_understand", "抽不出帧")
-        lead = (f"下图是从同一段视频按时间顺序截取的 {len(frames)} 帧,从左到右拼接。"
-                if len(urls) == 1 else
-                f"下图是 {len(frames)} 段视频各取一帧,从左到右按顺序拼接。")
-        text = vlm(image_data_uri(contact_sheet(frames)), f"{lead}\n\n{args.get('prompt', '')}",
-                   timeout)
-    return {"content": text}
-
-
-# --------------------------------------------------------------------------
-# 检索
-# --------------------------------------------------------------------------
 def search_images(args: dict, timeout: float) -> list[dict]:
     """开放平台没有图片检索。用 Bing 图片顶上,结果形状与 Connector 一致。"""
     from . import webassets
@@ -459,14 +298,11 @@ def web_search_news(args: dict, timeout: float) -> dict:
 # 分发
 # --------------------------------------------------------------------------
 HANDLERS: dict[str, Callable[[dict, float], Any]] = {
-    "connector__matrix__submit_video_generation": submit_video,
-    "connector__matrix__query_video_generation": query_video,
     "connector__matrix__batch_text_to_audio": tts_batch,
     "connector__matrix__batch_text_to_music": music_batch,
     "connector__matrix__generate_image": generate_image,
     "connector__matrix__get_voice_list": voice_list,
     "connector__matrix__describe_images": describe_images,
-    "connector__matrix__videos_understand": videos_understand,
     "connector__matrix__search_images": search_images,
     "connector__thsifind__search_news": web_search_news,
 }

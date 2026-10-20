@@ -131,7 +131,7 @@ def test_build_warns_when_narration_concat_fails(monkeypatch, tmp_path):
 
     monkeypatch.setattr(narration, "_concat_audio", boom)
 
-    result = narration.build("p_test", specs, narration_mode="tts",
+    result = narration.build("p_test", specs,
                              with_bgm=False, profile=None)
     assert result.narration_path is None
     assert any("旁白拼接失败" in w for w in result.warnings), result.warnings

@@ -43,7 +43,7 @@ _QUERIES = [
 
 
 def _pages(limit: int) -> list[str]:
-    profile = categories.load_profile("auto")
+    profile = categories.load_profile("auto_long")
     refs = images.search(
         _QUERIES,
         relevance_prompts={

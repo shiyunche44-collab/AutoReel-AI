@@ -1,9 +1,7 @@
 """横屏解说轨(profile `track: explainer`):对标「三驱兄弟」式的信息型长视频。
 
-和竖屏链路的根本区别是**画面的角色**:
-- 竖屏链路要求每个镜头的实拍精确对上画面描述,池子凑不满就转 AI 生成;
-- 这里实拍只是"这台车的背景画面" —— 随便哪段干净的都行,短镜头连拼
-  (`library.fill`),信息全部靠叠加层传达。
+核心是**画面的角色**:实拍只是"这台车的背景画面",不要求对上旁白 ——
+随便哪段干净的都行,短镜头连拼(`library.fill`),信息全部靠叠加层传达。
 
 一拍 = 一段旁白 = 一个版式:
 
@@ -299,7 +297,7 @@ def beat_durations(cues: Sequence[Any], count: int, gap: float | None = None) ->
 def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
                ) -> tuple[list[ShotSpec], narration.NarrationResult]:
     """跑 TTS(含字幕与 BGM),把每拍时长写回分镜。"""
-    nar = narration.build(project_id, specs, narration_mode="tts", profile=profile,
+    nar = narration.build(project_id, specs, profile=profile,
                           size=profile.frame_size, line_chars=SUBTITLE_LINE_CHARS)
     if not nar.ok or not nar.cues:
         raise RuntimeError("旁白生成失败:" + "; ".join(nar.warnings or ["未知原因"]))
@@ -504,6 +502,18 @@ def card_background(subject: str) -> Path | None:
     stills = [i for i in lib.items if i.kind == "still" and i.usable and Path(i.path).is_file()]
     stills.sort(key=lambda i: (i.view not in library.HINT_VIEWS["exterior"], library._dirt(i)))
     return Path(stills[0].path) if stills else None
+
+
+def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
+    """门禁 A 之后:清掉两档旧记录,按当前分镜重建 shots 行(全部 pending)。"""
+    for stage in ("draft", "final"):
+        db.delete_shots(project_id, stage)
+        db.upsert_shots(project_id, [
+            {"idx": s.idx, "stage": stage, "model": "explainer", "provider_task_id": None,
+             "submitted_at": None, "last_polled_at": None, "draft_path": None,
+             "final_path": None, "error": None}
+            for s in specs
+        ])
 
 
 def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,

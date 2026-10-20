@@ -1,11 +1,10 @@
-"""数据卡片:结构清洗、事实核对、绘制、分镜接入。不需要网络与额度。"""
+"""数据卡片:结构清洗、事实核对、绘制。不需要网络与额度。"""
 from __future__ import annotations
 
 import pytest
 
-from app.categories import load_profile
-from app.models import Fact, ScriptSegment
-from app.pipeline import cards, storyboard
+from app.models import Fact
+from app.pipeline import cards
 
 
 def _facts() -> list[Fact]:
@@ -124,39 +123,6 @@ def test_compare_lights_left_column_first():
         [(0, False), (1, True), (1, False)]
 
 
-class _FakeLLM:
-    def __init__(self, payload):
-        self.payload = payload
-        self.user = ""
-
-    def structured(self, system, user, **_):
-        self.user = user
-        return self.payload
-
-
-def test_storyboard_attaches_grounded_card_to_card_sections():
-    profile = load_profile("auto")
-    plan = list(profile.plan_for(60, "overview"))
-    card_idx = next(i for i, s in enumerate(plan) if profile.section(s).card)
-    segments = [ScriptSegment(idx=i, section=s, text=f"旁白 {i}") for i, s in enumerate(plan)]
-    shots = [{"idx": i + 1, "visual": "画面", "on_screen_text": []} for i in range(len(plan))]
-    shots[card_idx]["card"] = {"title": "核心参数", "rows": [
-        {"label": "续航", "values": ["702 公里"], "fact_id": "f_1"},
-        {"label": "加速", "values": ["3.5 秒"], "fact_id": "f_2"},
-    ]}
-    llm = _FakeLLM({"shots": shots})
-    log: list[dict] = []
-    specs = storyboard.build(subject="比亚迪汉 EV", profile=profile, segments=segments,
-                             facts=_facts(), duration=60, llm=llm, card_log=log)
-
-    assert specs[card_idx].card["rows"][0]["values"] == ["702 公里"]
-    assert len(specs[card_idx].card["rows"]) == 1
-    assert [s.idx for s in specs if s.card] == [card_idx]
-    assert log and log[0]["rendered"] and log[0]["dropped"]
-    # 卡片方向要看得到 medium 事实,低置信度永远不给
-    assert "f_2" in llm.user and "f_3" not in llm.user
-
-
 def test_profile_rejects_unknown_card_kind():
     import pytest
 
@@ -166,48 +132,3 @@ def test_profile_rejects_unknown_card_kind():
            "section_plan": {}}
     with pytest.raises(ProfileError):
         _validate(_build("x", raw))
-
-
-def test_storyboard_picks_from_pool():
-    """分镜看得到素材池:点名的素材要真在清单里、全片只用一次,卡片镜头不取材;
-    镜头 angle 跟着素材视角走。"""
-    profile = load_profile("auto")
-    plan = list(profile.plan_for(60, "overview"))
-    card_idx = next(i for i, s in enumerate(plan) if profile.section(s).card)
-    segments = [ScriptSegment(idx=i, section=s, text=f"旁白 {i}") for i, s in enumerate(plan)]
-    shots = [{"idx": i + 1, "visual": "画面", "on_screen_text": [], "pool": ""}
-             for i in range(len(plan))]
-    others = [i for i in range(len(plan)) if i != card_idx]
-    shots[others[0]]["pool"] = "v1"
-    shots[others[1]]["pool"] = "v1"          # 重复点名
-    shots[others[2]]["pool"] = "ghost"       # 清单里没有
-    shots[card_idx]["pool"] = "v2"           # 卡片镜头(卡片成立就不取材)
-    shots[card_idx]["card"] = {"title": "参数", "rows": [
-        {"label": "续航", "values": ["702 公里"], "fact_id": "f_1"}]}
-    pool = [{"id": "v1", "kind": "video", "view": "seat", "angle": "interior",
-             "desc": "橙色座椅", "official": True, "dirt": 0},
-            {"id": "v2", "kind": "video", "view": "rear", "angle": "rear",
-             "desc": "车尾", "official": False, "dirt": 2}]
-    llm = _FakeLLM({"shots": shots})
-    specs = storyboard.build(subject="小米YU7", profile=profile, segments=segments,
-                             facts=_facts(), duration=60, llm=llm, pool=pool)
-
-    assert specs[others[0]].pool_id == "v1" and specs[others[0]].angle == "interior"
-    assert specs[others[0]].visual_zh == "橙色座椅"     # 以素材描述为准
-    assert specs[others[1]].visual_zh == "画面"
-    assert specs[others[1]].pool_id == "" and specs[others[2]].pool_id == ""
-    assert specs[card_idx].pool_id == ""
-    assert "v1 [seat / 官方 / 视频] 橙色座椅" in llm.user
-    assert "有字幕或主持人" in llm.user
-
-
-def test_storyboard_without_pool_keeps_prompt_unchanged():
-    profile = load_profile("auto")
-    plan = list(profile.plan_for(60, "overview"))
-    segments = [ScriptSegment(idx=i, section=s, text="x") for i, s in enumerate(plan)]
-    llm = _FakeLLM({"shots": []})
-    specs = storyboard.build(subject="小米YU7", profile=profile, segments=segments,
-                             facts=[], duration=60, llm=llm)
-    assert "可用实拍素材" not in llm.user
-    assert all(s.pool_id == "" for s in specs)
-

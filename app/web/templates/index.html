@@ -75,32 +75,6 @@
         </div>
       </div>
 
-      <div class="field">
-        <span class="field-label">旁白方式</span>
-        <div class="choice-grid">
-          <label class="choice">
-            <input type="radio" name="narration_mode" value="tts" checked>
-            <span class="choice-body">
-              <span class="choice-radio"></span>
-              <span>
-                <span class="choice-title">{{ m.icon("mic", "i-sm") }}独立 TTS 音轨<span class="tag tone-brand">推荐</span></span>
-                <span class="choice-desc">发音准确、可单独替换,字幕与口播严格对齐。</span>
-              </span>
-            </span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="narration_mode" value="native">
-            <span class="choice-body">
-              <span class="choice-radio"></span>
-              <span>
-                <span class="choice-title">{{ m.icon("wave", "i-sm") }}H3 原生音频</span>
-                <span class="choice-desc">画面自带人声,更自然,但专有名词可能读错。</span>
-              </span>
-            </span>
-          </label>
-        </div>
-      </div>
-
       <details class="disclosure">
         <summary>{{ m.icon("chevron-right", "i-sm") }}高级设置</summary>
         <div class="field advanced">
@@ -121,19 +95,19 @@
     <aside class="card estimate-card" aria-live="polite">
       <div class="card-head"><h2>{{ m.icon("activity") }}预估</h2><span class="subtle small" id="est-dur">—</span></div>
       <div class="card-body estimate-grid">
-        <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}镜头数</span><span class="kpi-value" id="est-shots"><span class="skeleton sk-num"></span></span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}节拍数</span><span class="kpi-value" id="est-shots"><span class="skeleton sk-num"></span></span></div>
         <div class="kpi"><span class="kpi-label">{{ m.icon("wallet", "i-sm") }}等效用量</span><span class="kpi-value" id="est-cost"><span class="skeleton sk-num"></span></span><span class="kpi-sub">含重试预留</span></div>
-        <div class="kpi"><span class="kpi-label">{{ m.icon("clock", "i-sm") }}成片耗时</span><span class="kpi-value" id="est-time"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-time-sub">上界估计</span></div>
-        <div class="kpi"><span class="kpi-label">{{ m.icon("zap", "i-sm") }}真实素材最多省</span><span class="kpi-value" id="est-save"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-save-sub">&nbsp;</span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("clock", "i-sm") }}成片耗时</span><span class="kpi-value" id="est-time"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-time-sub">&nbsp;</span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("mic", "i-sm") }}其中旁白 TTS</span><span class="kpi-value" id="est-save"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-save-sub">&nbsp;</span></div>
       </div>
       <div class="flow">
         <div class="flow-title subtle small">流程</div>
         <ol class="flow-steps">
           <li><span class="flow-dot tone-brand">{{ m.icon("zap", "i-sm") }}</span><div><strong>自动</strong><span>事实 · 脚本 · 分镜</span></div></li>
           <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 A</strong><span>审脚本与分镜</span></div></li>
-          <li><span class="flow-dot tone-brand">{{ m.icon("film", "i-sm") }}</span><div><strong>草稿</strong><span>低成本预览</span></div></li>
-          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>分批审片</span></div></li>
-          <li><span class="flow-dot tone-success">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1080×1920 输出</span></div></li>
+          <li><span class="flow-dot tone-brand">{{ m.icon("film", "i-sm") }}</span><div><strong>逐拍渲染</strong><span>旁白定时长 · 本地合成</span></div></li>
+          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>整片审片</span></div></li>
+          <li><span class="flow-dot tone-success">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1920×1080 输出</span></div></li>
         </ol>
       </div>
     </aside>

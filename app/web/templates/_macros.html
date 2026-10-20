@@ -5,10 +5,10 @@
   {"key": "script", "label": "解说脚本"},
   {"key": "storyboard", "label": "分镜"},
   {"key": "gate_a", "label": "确认 A"},
-  {"key": "draft", "label": "草稿生成"},
+  {"key": "draft", "label": "逐拍渲染"},
   {"key": "gate_b", "label": "确认 B"},
-  {"key": "final", "label": "成片生成"},
-  {"key": "compose", "label": "质检合成"},
+  {"key": "final", "label": "转成片"},
+  {"key": "compose", "label": "拼接合成"},
 ] %}
 
 {% set STATE_META = {
@@ -17,12 +17,12 @@
   "SCRIPT_READY":     {"label": "生成分镜中",       "tone": "brand",   "step": 2, "live": true,  "group": "running"},
   "STORYBOARD_READY": {"label": "分镜已就绪",       "tone": "brand",   "step": 3, "live": false, "group": "running"},
   "GATE_A":           {"label": "待确认脚本与分镜", "tone": "warning", "step": 3, "live": false, "group": "gate"},
-  "ASSETS_READY":     {"label": "素材已就绪",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
-  "PROMPTS_READY":    {"label": "提示词已就绪",     "tone": "brand",   "step": 4, "live": true,  "group": "running"},
-  "DRAFT_RENDERING":  {"label": "草稿生成中",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
-  "GATE_B":           {"label": "待审核草稿",       "tone": "warning", "step": 5, "live": false, "group": "gate"},
-  "FINAL_RENDERING":  {"label": "成片生成中",       "tone": "brand",   "step": 6, "live": true,  "group": "running"},
-  "QA_PASSED":        {"label": "质检通过",         "tone": "brand",   "step": 7, "live": true,  "group": "running"},
+  "ASSETS_READY":     {"label": "旁白已就绪",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "PROMPTS_READY":    {"label": "准备渲染",         "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "DRAFT_RENDERING":  {"label": "逐拍渲染中",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "GATE_B":           {"label": "待审核各拍",       "tone": "warning", "step": 5, "live": false, "group": "gate"},
+  "FINAL_RENDERING":  {"label": "转成片中",         "tone": "brand",   "step": 6, "live": true,  "group": "running"},
+  "QA_PASSED":        {"label": "准备合成",         "tone": "brand",   "step": 7, "live": true,  "group": "running"},
   "COMPOSING":        {"label": "合成中",           "tone": "brand",   "step": 7, "live": true,  "group": "running"},
   "DONE":             {"label": "已完成",           "tone": "success", "step": 8, "live": false, "group": "done"},
   "PAUSED_BUDGET":    {"label": "额度不足已暂停",   "tone": "danger",  "step": -1, "live": false, "group": "error"},
@@ -31,10 +31,10 @@
 } %}
 
 {% set SHOT_STATUS = {
-  "pending":   {"label": "待提交", "tone": "neutral"},
+  "pending":   {"label": "待渲染", "tone": "neutral"},
   "submitted": {"label": "已提交", "tone": "brand"},
   "queued":    {"label": "排队中", "tone": "brand"},
-  "running":   {"label": "生成中", "tone": "brand"},
+  "running":   {"label": "渲染中", "tone": "brand"},
   "succeeded": {"label": "已完成", "tone": "success"},
   "failed":    {"label": "失败",   "tone": "danger"},
   "skipped":   {"label": "已跳过", "tone": "neutral"},

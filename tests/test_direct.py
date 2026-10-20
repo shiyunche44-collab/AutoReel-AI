@@ -7,7 +7,7 @@ import io
 import pytest
 
 from app import config
-from app.providers import audio, cli, direct, facts, images, video
+from app.providers import audio, cli, direct, facts, images
 
 
 @pytest.fixture
@@ -41,65 +41,6 @@ def _png(w=40, h=30) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (w, h), "red").save(buf, format="PNG")
     return buf.getvalue()
-
-
-# ---------------------------------------------------------------- 视频
-def test_v2_text_to_video_needs_concrete_ratio():
-    body = direct.build_video_v2({"model": "MiniMax-H3", "prompt": "p", "duration": 6,
-                                  "resolution": "768P", "ratio": "9:16",
-                                  "reference_images": ["u1", "u2"]})
-    assert body["ratio"] == "9:16"
-    assert [c.get("role") for c in body["content"]] == [None, "reference_image", "reference_image"]
-
-
-def test_v2_first_frame_drops_reference_images():
-    """V2 规定首尾帧与参考图互斥。"""
-    body = direct.build_video_v2({"model": "MiniMax-H3", "prompt": "p", "duration": 6,
-                                  "resolution": "768P", "ratio": "9:16",
-                                  "input_image": "data:image/jpeg;base64,xx",
-                                  "reference_images": ["u1"]})
-    assert body["ratio"] == "adaptive"
-    roles = [c.get("role") for c in body["content"]]
-    assert roles == [None, "first_frame"]
-
-
-def test_submit_routes_h3_to_v2_and_hailuo_to_v1(calls):
-    calls.replies["/v2/video_generation"] = {"task_id": "t2"}
-    calls.replies["/v1/video_generation"] = {"task_id": "t1", "base_resp": {"status_code": 0}}
-    assert video.submit(model="MiniMax-H3", prompt="p", duration=6, resolution="768P") == "t2"
-    assert video.submit(model="MiniMax-Hailuo-2.3", prompt="p", duration=6,
-                        resolution="768P") == "t1"
-    assert [c["path"] for c in calls] == ["/v2/video_generation", "/v1/video_generation"]
-    assert "ratio" not in calls[1]["json"]
-
-
-def test_query_v2_maps_status_and_url(calls):
-    calls.replies["/v2/query/"] = {"task": {"status": "succeeded",
-                                            "content": {"url": "https://x/v.mp4"}}}
-    st = video.query("t2", "MiniMax-H3")
-    assert st.is_success and st.video_url == "https://x/v.mp4"
-
-
-def test_query_v2_failure_reason(calls):
-    calls.replies["/v2/query/"] = {"task": {"status": "failed",
-                                            "error": {"code": "1026", "message": "sensitive"}}}
-    st = video.query("t2", "MiniMax-H3")
-    assert st.status == "failed" and st.error == "sensitive"
-
-
-def test_query_v1_resolves_download_url(calls):
-    calls.replies["/v1/query/"] = {"status": "Success", "file_id": "99",
-                                   "base_resp": {"status_code": 0}}
-    calls.replies["/v1/files/retrieve"] = {"file": {"download_url": "https://x/d.mp4"},
-                                           "base_resp": {"status_code": 0}}
-    st = video.query("t1", "MiniMax-Hailuo-2.3")
-    assert st.is_success and st.video_url == "https://x/d.mp4"
-    assert calls[-1]["params"] == {"file_id": "99"}
-
-
-def test_query_v1_processing(calls):
-    calls.replies["/v1/query/"] = {"status": "Processing", "base_resp": {"status_code": 0}}
-    assert video.query("t1", "MiniMax-Hailuo-2.3").status == "running"
 
 
 # ---------------------------------------------------------------- 音频 / 图片

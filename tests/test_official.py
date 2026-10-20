@@ -8,7 +8,7 @@ from app.categories import load_profile
 from app.providers import official, platform_video
 
 
-SITES = load_profile("auto").official_sites
+SITES = load_profile("auto_long").official_sites
 
 
 def test_profile_declares_official_sites():

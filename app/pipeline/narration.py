@@ -1,11 +1,8 @@
 """⑨ 旁白音轨:解说词 → TTS → 时间轴 → ASS 字幕。
 
-为什么要单独成轨(而不是让 H3 自己说):
-车型名、"702 公里"、"3.8 秒"由视频模型朗读时发音错误率不可控,
-且无法逐句微调语速与停顿。解说视频的旁白必须逐字准确,所以:
-    H3 出画面 + 环境音(无人声) → 本模块出旁白轨 → render.py 混音。
+旁白时长决定每拍时长(`explainer.time_beats`),所以旁白先于画面生成。
 
-长视频(10-30 镜头)的两个关键处理:
+长视频的两个关键处理:
 - 句子按 ≤30 字切分,TTS 语调才不会出现疲劳感;
 - 时间轴用 **TTS 实际输出时长** 累加,而不是预估 —— 预估必然漂移。
 """
@@ -87,7 +84,6 @@ def build(
     *,
     voice_id: str = audio.DEFAULT_VOICE_ID,
     speed: float = 1.0,
-    narration_mode: str = "tts",
     with_bgm: bool = True,
     profile=None,
     size: tuple[int, int] | None = None,
@@ -107,12 +103,6 @@ def build(
     pairs = collect_sentences(specs)
     if not pairs:
         result.warnings.append("分镜中没有解说词,成片将无旁白")
-        return result
-
-    # tts 模式下才需要独立音轨;native 模式下音频已烧进画面
-    if narration_mode == "native":
-        result.warnings.append("native 模式:旁白已由 H3 原生音频提供,跳过独立 TTS")
-        result.ok = True
         return result
 
     texts = [normalize_for_tts(t) for t, _ in pairs]

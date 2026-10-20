@@ -26,7 +26,7 @@
 {%- set failed_shots = p.shots | selectattr("status", "equalto", "failed") | list | length -%}
 {%- set lint_errors = lint | selectattr("severity", "equalto", "error") | list | length -%}
 {%- set editable = p.state in ('GATE_A', 'STORYBOARD_READY') -%}
-{%- set unit = '拍' if explainer else '镜头' -%}
+{%- set unit = '拍' -%}
 
 <!-- 项目头 -->
 <section class="phead">
@@ -41,7 +41,6 @@
       {% if p.theme_label or p.theme %}<span class="tag">方向 · {{ p.theme_label or p.theme }}</span>{% endif %}
       <span class="tag num">{{ m.icon("clock", "i-sm") }}{{ p.duration }} 秒</span>
       <span class="tag num">{{ m.icon("film", "i-sm") }}{{ p.shot_count }} {{ unit }}</span>
-      <span class="tag">{{ m.icon("mic", "i-sm") }}{{ '独立 TTS' if p.narration_mode == 'tts' else 'H3 原生音频' }}</span>
     </div>
   </div>
   <div class="phead-usage card">
@@ -52,15 +51,9 @@
     </div>
     <div class="progress tone-{{ tone }}" id="usage-bar" data-budget="{{ p.quota_budget }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></div>
     <div class="usage-sub subtle small">
-      {% if explainer %}
       <span>预计 <b class="num">{{ '%.2f' % estimate.with_retry }}</b>(TTS {{ '%.2f' % estimate.tts }} · BGM {{ '%.2f' % estimate.bgm }} · LLM {{ '%.2f' % estimate.llm }},缓存命中更少)</span>
       <span title="每台车一次性,跨项目复用">素材池 {{ estimate.library_vlm_calls }} 次视觉调用 ≈ <b class="num">{{ '%.2f' % estimate.library }}</b></span>
       <span>渲染约 <b class="num">{{ wall_clock.render_minutes }}</b> 分钟</span>
-      {% else %}
-      <span>预计总额 <b class="num">{{ '%.2f' % estimate.with_retry }}</b></span>
-      <span>草稿约 <b class="num">{{ wall_clock.draft_minutes }}</b> 分钟</span>
-      <span>成片约 <b class="num">{{ wall_clock.final_minutes_low }}–{{ wall_clock.final_minutes_high }}</b> 分钟</span>
-      {% endif %}
     </div>
   </div>
 </section>
@@ -98,7 +91,7 @@
   <div class="action-main">
     <div class="action-title">
       {%- if p.state == 'GATE_A' -%}请确认脚本与分镜
-      {%- elif p.state == 'GATE_B' -%}{{ '请审核各拍画面' if explainer else '请审核草稿镜头' }}
+      {%- elif p.state == 'GATE_B' -%}请审核各拍画面
       {%- elif p.state == 'DONE' -%}成片已完成
       {%- elif p.state == 'PAUSED_BUDGET' -%}已达到额度上限,项目暂停
       {%- elif p.state == 'FAILED' -%}流水线执行失败
@@ -106,9 +99,8 @@
     </div>
     <div class="action-desc muted" id="gate-hint">
       {%- if p.state_reason -%}{{ p.state_reason }}
-      {%- elif p.state == 'GATE_A' and explainer -%}确认后先合成旁白,按旁白时长逐拍渲染,不调用视频生成。可以先在「脚本」里修改文案。
-      {%- elif p.state == 'GATE_A' -%}确认后会开始生成草稿镜头并消耗套餐额度。可以先在「脚本」里修改文案。
-      {%- elif p.state == 'GATE_B' -%}正在读取分批审片进度…
+      {%- elif p.state == 'GATE_A' -%}确认后先合成旁白,按旁白时长逐拍渲染,不调用视频生成。可以先在「脚本」里修改文案。
+      {%- elif p.state == 'GATE_B' -%}各拍已渲染完成,确认后直接合成成片。
       {%- elif p.state == 'DONE' -%}{{ frame }} 成片已合成,可以预览和下载。
       {%- elif meta.live -%}后台每 20 秒自动推进一次,本页会实时刷新。
       {%- endif -%}
@@ -123,10 +115,10 @@
   <div class="action-btns">
     {% if p.state == 'GATE_A' %}
       <button class="btn btn-ghost" type="button" data-goto="script">{{ m.icon("pen", "i-sm") }}查看脚本</button>
-      <button class="btn btn-success btn-lg" id="btn-gate-a" type="button">{{ m.icon("check") }}{{ '确认并开始渲染' if explainer else '确认并开始生成' }}</button>
+      <button class="btn btn-success btn-lg" id="btn-gate-a" type="button">{{ m.icon("check") }}确认并开始渲染</button>
     {% elif p.state == 'GATE_B' %}
       <button class="btn btn-ghost" type="button" data-goto="board">{{ m.icon("grid", "i-sm") }}查看草稿</button>
-      <button class="btn btn-success btn-lg" id="btn-gate-b" type="button">{{ m.icon("check") }}<span id="gate-b-label">{{ '确认通过,合成成片' if explainer else '批准本批,开始成片' }}</span></button>
+      <button class="btn btn-success btn-lg" id="btn-gate-b" type="button">{{ m.icon("check") }}<span id="gate-b-label">确认通过,合成成片</span></button>
     {% elif p.state == 'DONE' %}
       <button class="btn btn-ghost" type="button" data-goto="output">{{ m.icon("play", "i-sm") }}预览</button>
       <a class="btn btn-primary btn-lg" href="/api/projects/{{ p.id }}/download">{{ m.icon("download") }}下载 MP4</a>
@@ -145,11 +137,11 @@
 {%- set default_tab = {"GATE_A": "script", "GATE_B": "board", "DONE": "output", "DRAFT_RENDERING": "board", "FINAL_RENDERING": "board"}.get(p.state, "overview") -%}
 <section class="card content-card" id="content" data-default-tab="{{ default_tab }}">
   <nav class="tabs" role="tablist">
-    <button class="tab" role="tab" data-tab="overview">{{ m.icon("layers", "i-sm") }}概览{% if lint_errors or p.prompt_errors or (facts_report and facts_report.product_gap) %}<span class="alert-dot"></span>{% endif %}</button>
+    <button class="tab" role="tab" data-tab="overview">{{ m.icon("layers", "i-sm") }}概览{% if lint_errors or (facts_report and facts_report.product_gap) %}<span class="alert-dot"></span>{% endif %}</button>
     <button class="tab" role="tab" data-tab="facts">{{ m.icon("database", "i-sm") }}事实<span class="count">{{ p.facts | length }}</span></button>
     <button class="tab" role="tab" data-tab="script">{{ m.icon("pen", "i-sm") }}脚本<span class="count">{{ p.script | length }}</span></button>
-    <button class="tab" role="tab" data-tab="storyboard">{{ m.icon("grid", "i-sm") }}分镜<span class="count">{{ p.shots | length }}</span>{% if p.prompt_errors %}<span class="alert-dot"></span>{% endif %}</button>
-    <button class="tab" role="tab" data-tab="board">{{ m.icon("film", "i-sm") }}生成看板{% if failed_shots %}<span class="alert-dot"></span>{% endif %}</button>
+    <button class="tab" role="tab" data-tab="storyboard">{{ m.icon("grid", "i-sm") }}分镜<span class="count">{{ p.shots | length }}</span></button>
+    <button class="tab" role="tab" data-tab="board">{{ m.icon("film", "i-sm") }}渲染看板{% if failed_shots %}<span class="alert-dot"></span>{% endif %}</button>
     <button class="tab" role="tab" data-tab="output">{{ m.icon("play", "i-sm") }}成片{% if p.has_output %}<span class="alert-dot is-ok"></span>{% endif %}</button>
     <button class="tab" role="tab" data-tab="events">{{ m.icon("list", "i-sm") }}事件</button>
   </nav>
@@ -164,24 +156,14 @@
           <span class="kpi-sub">{% if lint %}{{ lint | length }} 条合规提示{% elif p.script %}合规检查通过{% else %}&nbsp;{% endif %}</span></div>
         <div class="kpi"><span class="kpi-label">{{ unit }}完成</span><span class="kpi-value">{{ succeeded }}<small>/ {{ p.shots | length }}</small></span>
           <span class="kpi-sub">{% if failed_shots %}<span class="text-danger">{{ failed_shots }} 个失败</span>{% else %}&nbsp;{% endif %}</span></div>
-        <div class="kpi"><span class="kpi-label">质检</span>
-          {% if qa and qa.shots %}
-          <span class="kpi-value">{{ qa.pass_count }}<small>通过</small></span>
-          <span class="kpi-sub">{{ qa.fail_count }} 不通过 · {{ qa.unknown_count }} 未判定</span>
-          {% else %}<span class="kpi-value subtle">—</span><span class="kpi-sub">成片后进行</span>{% endif %}
+        <div class="kpi"><span class="kpi-label">渲染耗时</span>
+          <span class="kpi-value">{{ wall_clock.render_minutes }}<small>分钟</small></span>
+          <span class="kpi-sub">逐拍本地渲染,无生成排队</span>
         </div>
       </div>
 
       {% if facts_report and facts_report.product_gap %}
       <div class="callout tone-danger">{{ m.icon("alert-circle") }}<div><strong>产品级事实不足</strong> · {{ facts_report.product_gap }}</div></div>
-      {% endif %}
-
-      {% if p.prompt_errors %}
-      <div class="callout tone-danger">{{ m.icon("alert-circle") }}
-        <div><strong>{{ p.prompt_errors | length }} 个镜头的提示词校验未通过</strong>
-          <ul>{% for idx, errs in p.prompt_errors.items() %}<li>镜头 {{ idx }}:{{ errs | join(';') }}</li>{% endfor %}</ul>
-        </div>
-      </div>
       {% endif %}
 
       {% if lint %}
@@ -199,64 +181,6 @@
       </div>
       {% endif %}
 
-      {% if qa and qa.shots %}
-      <div>
-        <h3 class="section-title">{{ m.icon("check-circle", "i-sm") }}质检结果</h3>
-        {% if qa.cross_shot_consistency %}
-        <div class="callout {{ 'tone-success' if qa.cross_shot_consistency.consistent else 'tone-danger' }}">
-          {{ m.icon("check-circle" if qa.cross_shot_consistency.consistent else "alert-circle") }}
-          <div><strong>跨镜头一致性:{{ '一致' if qa.cross_shot_consistency.consistent else '不一致' }}</strong> · 抽检了 {{ qa.cross_shot_consistency.checked }} 个镜头</div>
-        </div>
-        {% endif %}
-        <div class="rows">
-          {% for s in qa.shots %}
-          <div class="rowline">
-            {%- set vt = {"pass": ("success", "通过"), "fail": ("danger", "不通过")}.get(s.verdict, ("neutral", "未判定")) -%}
-            <span class="badge tone-{{ vt[0] }}"><span class="dot"></span>{{ vt[1] }}</span>
-            <span class="num"><strong>镜头 {{ s.idx }}</strong></span>
-            <span class="grow subtle">{{ s.findings | join(' / ') }}</span>
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-      {% endif %}
-
-      {% if p.clip_report %}
-      <div>
-        <h3 class="section-title">{{ m.icon("image", "i-sm") }}真实素材
-          <span class="subtle small">{{ p.clip_report.get('selected', {}) | length }} / {{ p.shot_count }} 个镜头{% if p.clip_report.get('official_count') %} · 官方 {{ p.clip_report.official_count }}{% endif %}</span>
-        </h3>
-        {% if p.clip_report.get('savings_estimate') %}
-        <div class="callout tone-success">{{ m.icon("zap") }}<div>本片约省下 <strong>${{ '%.2f' | format(p.clip_report.savings_estimate) }}</strong> 等效用量 —— 真实素材跳过了草稿与成片的模型生成(成片每镜 $0.48 + 15–30 分钟等待)。</div></div>
-        {% endif %}
-        {% if p.clip_report.summary %}<p class="muted small">{{ p.clip_report.summary }}</p>{% endif %}
-        {% if p.clip_report.origin_counts %}
-        <div class="row wrap-row">{% for origin, n in p.clip_report.origin_counts.items() %}<span class="tag"><code>{{ origin }}</code> × {{ n }}</span>{% endfor %}</div>
-        {% endif %}
-        {% if p.clip_report.selected %}
-        <div class="rows">
-          {% for idx, c in p.clip_report.selected.items() %}
-          <div class="rowline">
-            <span class="tag tone-brand num">镜头 {{ idx }}</span>
-            {% if c.official %}<span class="tag tone-warning">官方</span>{% endif %}
-            <span class="grow ellipsis">{{ c.title or c.origin }}</span>
-            <code>{{ c.origin }}</code>
-            {% if c.kind == 'still' %}<span class="subtle small">图片动效</span>{% endif %}
-            {% if c.license %}<span class="subtle small">{{ c.license }}</span>{% endif %}
-            {% if c.page_url %}<a class="small row" href="{{ c.page_url }}" target="_blank" rel="noopener">来源{{ m.icon("external", "i-sm") }}</a>{% endif %}
-          </div>
-          {% endfor %}
-        </div>
-        {% endif %}
-        {% if p.clip_report.errors %}
-        <details class="disclosure log-detail">
-          <summary>{{ m.icon("chevron-right", "i-sm") }}取材日志({{ p.clip_report.errors | length }} 条)</summary>
-          <pre class="log-pre">{% for e in p.clip_report.errors[:30] %}{{ e }}
-{% endfor %}</pre>
-        </details>
-        {% endif %}
-      </div>
-      {% endif %}
     </div>
   </div>
 
@@ -352,8 +276,7 @@
       {%- set ns = namespace(t=0) -%}
       {% for s in p.shots %}
       {%- set t0 = ns.t -%}{%- set ns.t = ns.t + (s.spec.duration or 0) -%}
-      {%- set perr = p.prompt_errors.get(s.idx | string) -%}
-      <div class="sb-row{% if perr %} has-error{% endif %}" data-idx="{{ s.idx }}">
+      <div class="sb-row" data-idx="{{ s.idx }}">
         <div class="sb-side">
           <span class="sb-no num">#{{ '%02d' % s.idx }}</span>
           <span class="sb-tc num">{{ '%d:%02d' % ((t0 // 60) | int, (t0 % 60) | int) }}</span>
@@ -398,17 +321,10 @@
             {% if s.spec.layout %}<span class="tag tone-brand">版式 · {{ s.spec.layout }}</span>{% endif %}
             {% if s.spec.chapter %}<span class="tag">章节 · {{ s.spec.chapter }}</span>{% endif %}
             {% if s.spec.card %}<span class="tag tone-brand">数据卡片 · {{ s.spec.card.kind }}</span>{% endif %}
-            {% if s.consistency == 'real' %}<span class="tag tone-success">真实素材</span>{% endif %}
-            {% if s.spec.pool_id %}<span class="tag tone-success">素材池实拍</span>{% endif %}
-            {% if s.consistency == 'degraded' %}<span class="tag tone-warning">一致性降级</span>{% endif %}
             {% if s.spec.section %}<span class="tag">{{ s.spec.section }}</span>{% endif %}
             {% if s.spec.camera_zh %}<span class="tag">{{ s.spec.camera_zh }}</span>{% endif %}
             <span class="tag">{{ s.spec.view or s.spec.angle }}</span>
-            {% if not s.spec.layout %}<span class="tag">链 {{ s.chain_id }}-{{ s.chain_pos }}</span>{% endif %}
           </div>
-          {% if perr %}
-          <div class="sb-err">{{ m.icon("alert-circle", "i-sm") }}<span>{{ perr | join(';') }}</span></div>
-          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -419,7 +335,7 @@
   <!-- 生成看板 -->
   <div class="tab-panel" data-panel="board">
     {% if not p.shots %}
-    <div class="empty"><div class="empty-icon">{{ m.icon("film", "i-lg") }}</div><div class="empty-title">还没有镜头</div><div>分镜生成后,这里会显示每个镜头的生成进度。</div></div>
+    <div class="empty"><div class="empty-icon">{{ m.icon("film", "i-lg") }}</div><div class="empty-title">还没有镜头</div><div>分镜生成后,这里会显示每一拍的渲染进度。</div></div>
     {% else %}
     <div class="panel-toolbar">
       <div class="chips" id="shot-filters">
@@ -429,7 +345,7 @@
         <button class="chip" type="button" data-f="failed" aria-pressed="false">失败 <span class="count" data-c="failed">0</span></button>
         <button class="chip" type="button" data-f="pending" aria-pressed="false">待提交 <span class="count" data-c="pending">0</span></button>
       </div>
-      <span class="subtle small hide-sm">点击镜头查看详情</span>
+      <span class="subtle small hide-sm">点击查看详情</span>
     </div>
     <div class="shot-grid" id="shot-grid">
       {% for s in p.shots %}
@@ -442,18 +358,16 @@
           <span class="shot-zoom">{{ m.icon("maximize", "i-sm") }}</span>
           {% else %}
           <div class="shot-ph">
-            {%- if s.status in ('submitted', 'queued', 'running') -%}<svg class="i spin" aria-hidden="true"><use href="#i-loader"/></svg><span>生成中</span>
-            {%- elif s.status == 'failed' -%}{{ m.icon("alert-triangle") }}<span>生成失败</span>
+            {%- if s.status == 'failed' -%}{{ m.icon("alert-triangle") }}<span>渲染失败</span>
             {%- elif s.spec.card -%}{{ m.icon("grid") }}<span>数据卡片</span>
-            {%- else -%}{{ m.icon("film") }}<span>等待生成</span>{%- endif -%}
+            {%- else -%}{{ m.icon("film") }}<span>等待渲染</span>{%- endif -%}
           </div>
           {% endif %}
           <span class="shot-no num">#{{ '%02d' % s.idx }}</span>
-          {% if s.consistency == 'real' or s.spec.pool_id %}<span class="shot-flag">实拍</span>{% endif %}
         </div>
         <div class="shot-foot">
           {{ m.shot_badge(s.status) }}
-          <span class="subtle small num">{{ '%.2f' % s.est_cost }}</span>
+          <span class="subtle small num">{{ s.spec.layout }}</span>
         </div>
         <template class="shot-detail">
           <div class="lb-meta">
@@ -461,13 +375,11 @@
             <dl class="lb-dl">
               <dt>画面</dt><dd>{% if s.spec.card %}数据卡片 · {{ s.spec.card.title }}{% else %}{{ s.spec.visual_zh }}{% endif %}</dd>
               {% if s.spec.narration_zh %}<dt>解说</dt><dd>{{ s.spec.narration_zh }}</dd>{% endif %}
-              <dt>运镜</dt><dd>{{ s.spec.camera_zh or '—' }} · {{ s.spec.angle }}</dd>
-              <dt>模型</dt><dd>{{ s.model or '—' }}</dd>
-              <dt>尝试</dt><dd class="num">{{ s.attempts }} 次 · 预估 {{ '%.2f' % s.est_cost }}</dd>
+              <dt>版式</dt><dd>{{ s.spec.layout or '—' }} · {{ s.spec.view or s.spec.angle }}</dd>
             </dl>
             {% if s.error %}<div class="callout tone-danger small">{{ m.icon("alert-circle", "i-sm") }}<div>{{ s.error }}</div></div>{% endif %}
             {% if can_retry %}
-            <button class="btn btn-danger js-retry" type="button" data-idx="{{ s.idx }}">{{ m.icon("refresh", "i-sm") }}重拍这个镜头</button>
+            <button class="btn btn-danger js-retry" type="button" data-idx="{{ s.idx }}">{{ m.icon("refresh", "i-sm") }}换背景重拍</button>
             {% endif %}
           </div>
         </template>
@@ -504,7 +416,7 @@
       </div>
     </div>
     {% else %}
-    <div class="empty"><div class="empty-icon">{{ m.icon("play", "i-lg") }}</div><div class="empty-title">成片尚未生成</div><div>全部镜头通过质检并合成后,会出现在这里。</div></div>
+    <div class="empty"><div class="empty-icon">{{ m.icon("play", "i-lg") }}</div><div class="empty-title">成片尚未生成</div><div>门禁 B 确认、各拍合成后,会出现在这里。</div></div>
     {% endif %}
   </div>
 
@@ -543,7 +455,6 @@
   "succeeded": p.shots | selectattr("status", "equalto", "succeeded") | list | length,
   "total": p.shots | length,
   "shot_count": p.shot_count,
-  "explainer": explainer,
 } | tojson }}</script>
 {% endblock %}
 {% block script %}project{% endblock %}

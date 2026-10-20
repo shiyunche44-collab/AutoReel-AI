@@ -21,7 +21,7 @@ def main() -> int:
     from app.pipeline.orchestrator import _llm
 
     project_id = (ROOT / "data" / "_current_project.txt").read_text(encoding="utf-8").strip()
-    profile = categories.load_profile("auto")
+    profile = categories.load_profile("auto_long")
     llm = _llm()
     print(f"llm          : {type(llm).__name__ if llm else '不可用'}")
 

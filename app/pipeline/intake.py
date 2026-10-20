@@ -124,7 +124,7 @@ def collect_raw(
     真实成本要保险保养。走一份平铺的来源列表,会让每个方向都拿回一堆用不上的
     公司财经新闻,反而把该方向真正需要的挤掉。
     """
-    topic = "新能源汽车" if profile.name == "auto" else profile.label
+    topic = "新能源汽车" if profile.name == "auto_long" else profile.label
     return facts_provider.collect(
         list(profile.sources_for(theme)),
         subject,

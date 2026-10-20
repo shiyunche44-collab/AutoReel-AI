@@ -41,7 +41,7 @@ function syncThemeIntent() {
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
 }
 
-// 时长档位也跟着品类走:横屏解说轨(auto_long)是 2–8 分钟,竖屏是 60–240 秒
+// 时长档位跟着品类走(auto_long 是 2–8 分钟)
 function syncDurations() {
   const group = $('#duration-group');
   const cat = catInfo($('#category-select').value);
@@ -71,24 +71,14 @@ async function refreshEstimate() {
     const data = await api.get(`/api/estimate?duration=${encodeURIComponent(d)}&category=${encodeURIComponent(cat)}`);
     if (seq !== estSeq) return; // 用户连点时只认最后一次
     const wc = data.wall_clock;
-    const rc = data.real_clips || {};
+    const c = data.cost;
     $('#est-shots').textContent = data.shot_count;
-    $('#est-cost').textContent = data.cost.with_retry.toFixed(2);
-    if (data.track === 'explainer') {
-      // 横屏解说轨没有生成排队:实拍铺底 + 叠加层,几分钟就能渲完
-      $('#est-time').replaceChildren(`${wc.render_minutes}`, h('small', {}, '分钟'));
-      $('#est-time-sub').textContent = `约 ${data.shot_count} 拍 · 横屏 16:9 · 时长跟着旁白走`;
-    } else {
-      $('#est-time').replaceChildren(`${wc.final_minutes_low}–${wc.final_minutes_high}`, h('small', {}, '分钟'));
-      $('#est-time-sub').textContent = `${wc.chains} 条一致性链 · ${wc.waves} 个波次`;
-    }
-    if (rc.enabled) {
-      $('#est-save').textContent = `$${rc.max_savings.toFixed(2)}`;
-      $('#est-save-sub').textContent = `最多 ${rc.max_shots} 个外观镜头用实拍`;
-    } else {
-      $('#est-save').textContent = '—';
-      $('#est-save-sub').textContent = '真实素材未启用';
-    }
+    $('#est-cost').textContent = c.with_retry.toFixed(2);
+    // 没有生成排队:实拍铺底 + 叠加层,几分钟就能渲完
+    $('#est-time').replaceChildren(`${wc.render_minutes}`, h('small', {}, '分钟'));
+    $('#est-time-sub').textContent = `约 ${data.shot_count} 拍 · 横屏 16:9 · 时长跟着旁白走`;
+    $('#est-save').textContent = `$${c.tts.toFixed(2)}`;
+    $('#est-save-sub').textContent = `BGM $${c.bgm.toFixed(2)} · LLM $${c.llm.toFixed(2)}`;
   } catch {
     if (seq !== estSeq) return;
     for (const id of ['est-shots', 'est-cost', 'est-time', 'est-save']) $('#' + id).textContent = '—';
@@ -128,7 +118,6 @@ if (form) {
           category: fd.get('category'),
           theme: $('#theme-field').classList.contains('hidden') ? null : (fd.get('theme') || null),
           duration: parseInt(fd.get('duration'), 10),
-          narration_mode: fd.get('narration_mode'),
           quota_budget: fd.get('quota_budget') ? parseFloat(fd.get('quota_budget')) : null,
         });
         toast('项目已创建,正在采集事实…');

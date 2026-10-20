@@ -208,7 +208,7 @@ def test_error_list_is_optional(monkeypatch):
 # 与品类 profile 的接线
 # --------------------------------------------------------------------------
 def test_reference_prompt_is_english_and_names_the_view():
-    profile = load_profile("auto")
+    profile = load_profile("auto_long")
     prompt = profile.reference_prompt("BYD Han EV", "exterior_45")
     assert "BYD Han EV" in prompt
     assert "three-quarter" in prompt
@@ -218,7 +218,7 @@ def test_reference_prompt_is_english_and_names_the_view():
 
 
 def test_reference_prompt_handles_unknown_angle():
-    profile = load_profile("auto")
+    profile = load_profile("auto_long")
     prompt = profile.reference_prompt("BYD Han EV", "一个没收录的视角")
     assert "BYD Han EV" in prompt
     assert "一个没收录的视角" in prompt
@@ -226,7 +226,7 @@ def test_reference_prompt_handles_unknown_angle():
 
 def test_every_auto_angle_has_a_prompt():
     """auto profile 里用到的每个视角都要能生成相关性描述,不能退回原始标签。"""
-    profile = load_profile("auto")
+    profile = load_profile("auto_long")
     for angle in profile.angle_queries:
         prompt = profile.reference_prompt("BYD Han EV", angle)
         assert not any("\u4e00" <= c <= "\u9fff" for c in prompt), angle

@@ -29,14 +29,14 @@ def _sample_contexts() -> dict[str, dict]:
         narration_zh="这台车有点东西。", angle="exterior_45",
     )
     shot = Shot(spec=spec, status="succeeded", stage="final",
-                model="MiniMax-H3", final_path="shots/000.mp4", est_cost=0.48)
+                model="explainer", final_path="shots/000.mp4", consistency="real")
 
     detail = ProjectDetail(
-        id="p_test", title="测试项目", subject="比亚迪汉 EV", category="auto",
-        theme="iteration", theme_label="车型迭代史",
-        duration=60, shot_count=10, state="FINAL_RENDERING", est_cost=11.4,
+        id="p_test", title="测试项目", subject="比亚迪汉 EV", category="auto_long",
+        theme="buyguide", theme_label="单车选购深讲",
+        duration=60, shot_count=10, state="FINAL_RENDERING", est_cost=0.4,
         spent_cost=3.2, quota_budget=40.0, created_at=1.0, updated_at=2.0,
-        has_output=True, narration_mode="tts", state_reason="正在生成成片",
+        has_output=True, narration_mode="tts", state_reason="各拍转为成片",
         facts=[
             Fact(id="f_1", claim="续航 702 公里", source_tool="ifind.financials",
                  source_query="比亚迪 财务", retrieved_at="2026-10-19",
@@ -51,27 +51,12 @@ def _sample_contexts() -> dict[str, dict]:
         script=[ScriptSegment(idx=0, section="开场钩子", text="这台车有点东西。",
                               fact_refs=["f_1"])],
         shots=[shot],
-        refs=[{"url": "http://x/1.jpg", "angle": "exterior_45", "origin": "search"}],
-        prompt_errors={"3": ["时间戳超出片长"]},
-        clip_report={
-            "status": "ok", "summary": "2/10 个镜头用真实素材", "official_count": 1,
-            "savings_estimate": 0.96,
-            "origin_counts": {"official:bilibili": 1, "official:autohome": 1},
-            "selected": {
-                "0": {"origin": "official:bilibili", "kind": "video", "official": True,
-                      "title": "比亚迪汉 官方宣传片", "license": "bilibili:比亚迪汽车",
-                      "page_url": "https://www.bilibili.com/video/BV1"},
-                "3": {"origin": "official:autohome", "kind": "still", "official": True,
-                      "title": "汽车之家官图", "license": "", "page_url": ""},
-            },
-            "errors": ["youtube 搜索失败(比亚迪汉):timeout"],
-        },
     )
     summary = {
         "id": "p_test", "title": "测试项目", "subject": "比亚迪汉 EV",
-        "category": "auto", "theme": "iteration", "theme_label": "车型迭代史",
+        "category": "auto_long", "theme": "buyguide", "theme_label": "单车选购深讲",
         "duration": 60, "shot_count": 10,
-        "state": "FINAL_RENDERING", "est_cost": 11.4, "spent_cost": 3.2,
+        "state": "FINAL_RENDERING", "est_cost": 0.4, "spent_cost": 3.2,
         "quota_budget": 40.0, "created_at": 1.0, "updated_at": 2.0,
         "has_output": False,
     }
@@ -121,13 +106,11 @@ def _sample_contexts() -> dict[str, dict]:
                     "product_gap": "产品级事实仅 1 条(公司级 1 条,行业级 1 条)。",
                 },
                 "lint": [{"segment_idx": 1, "severity": "error", "message": "缺事实引用"}],
-                "qa": {"shots": [{"idx": 0, "verdict": "pass", "findings": ["无畸变"]}],
-                       "pass_count": 1, "fail_count": 0, "unknown_count": 0,
-                       "cross_shot_consistency": {"consistent": True, "checked": 3}},
                 "render": {"cover_path": "cover.jpg"},
                 "events": events,
-                "wall_clock": costs.wall_clock_estimate(60),
-                "estimate": costs.estimate_project(60),
+                "wall_clock": {"render_minutes": 6},
+                "estimate": {**costs.estimate_explainer(240), "library_vlm_calls": 120,
+                             "library": costs.estimate_library(120)},
                 "forbidden_terms": ["最强", "第一"],
             },
             {  # 事实充足,警告分支应消失
@@ -140,13 +123,11 @@ def _sample_contexts() -> dict[str, dict]:
                     "product_gap": None,
                 },
                 "lint": [{"segment_idx": 1, "severity": "error", "message": "缺事实引用"}],
-                "qa": {"shots": [{"idx": 0, "verdict": "pass", "findings": ["无畸变"]}],
-                       "pass_count": 1, "fail_count": 0, "unknown_count": 0,
-                       "cross_shot_consistency": {"consistent": True, "checked": 3}},
                 "render": {"cover_path": "cover.jpg"},
                 "events": events,
-                "wall_clock": costs.wall_clock_estimate(60),
-                "estimate": costs.estimate_project(60),
+                "wall_clock": {"render_minutes": 6},
+                "estimate": {**costs.estimate_explainer(240), "library_vlm_calls": 120,
+                             "library": costs.estimate_library(120)},
                 "forbidden_terms": ["最强", "第一"],
             },
         ],

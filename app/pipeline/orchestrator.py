@@ -1,7 +1,7 @@
 """流水线编排:把各阶段按状态机串起来,并提供给后台调度器轮询。
 
 分工:本模块只管"当前状态该做什么",不直接关心 HTTP。
-`advance()` 推进一个非阻塞步骤,`poll_running()` 供后台循环驱动长耗时生成。
+`advance()` 推进一个非阻塞步骤;后台调度循环在渲染态反复调用它,每次渲染几拍。
 
 两个设计约束贯穿全文件:
 1. **门禁态停下等人**。GATE_A / GATE_B 不做任何自动推进。
@@ -11,31 +11,15 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import config, costs, db
-from ..categories import load_profile
+from ..categories import ProfileError, load_profile
 from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
-from ..providers import clips as clips_mod
 from ..state import State, assert_transition
-from . import (  # noqa: F401 - 显式列出便于阅读依赖
-    asset_resolver,
-    cards,
-    clip_resolver,
-    explainer,
-    generate,
-    intake,
-    library,
-    media_query,
-    narration,
-    prompt_compiler,
-    qa,
-    render,
-    script_gen,
-    storyboard,
-)
+from . import explainer, intake, library, script_gen
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
@@ -95,31 +79,6 @@ def _save_specs(project_id: str, specs: list[ShotSpec]) -> None:
     db.write_json(project_id, "storyboard.json", [s.model_dump() for s in specs])
 
 
-def _refs(project_id: str) -> list:
-    import json
-
-    path = config.project_dir(project_id) / "refs.json"
-    if not path.is_file():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-
-
-def _ref_urls_for(project_id: str, angle: str) -> list[str]:
-    from .asset_resolver import references_for_angle
-
-    class _Ref:
-        def __init__(self, d: dict[str, Any]) -> None:
-            self.url = d.get("url", "")
-            self.angle = d.get("angle", "")
-            self.origin = d.get("origin", "search")
-            self.note = d.get("note", "")
-
-    return references_for_angle([_Ref(d) for d in _refs(project_id)], angle, config.CATEGORY_REF_LIMIT)
-
-
 # --------------------------------------------------------------------------
 # 内容方向
 # --------------------------------------------------------------------------
@@ -133,66 +92,18 @@ def _theme_of(project: dict[str, Any]):
     return profile, profile.theme_spec(project.get("theme") or None)
 
 
-def _approved_indices(project_id: str) -> set[int] | None:
-    """读回门禁 B 已批准的镜头集合。
-
-    ⚠️ 这段逻辑此前**写了却从不读**:`confirm_gate` 把批准列表写进
-    `approved_shots.json`,而 `poll_running` 调 `tick()` / `stage_complete()`
-    时都没传 `approved`,于是逐镜头批准完全失效。返回 None 表示"没有批准文件",
-    此时按全量放行(旧项目与首轮流程的语义)。
-    """
-    raw = db.read_json(project_id, "approved_shots.json", None)
-    if raw is None:
-        return None
-    try:
-        return {int(i) for i in raw}
-    except (TypeError, ValueError):
-        return None
-
-
-def _review_batches(project_id: str, shot_count: int, *,
-                    whole: bool = False) -> list[list[int]]:
-    """把镜头按一致性链切成审片批次。
-
-    批次边界必须对齐链边界 —— 把一条链劈成两半会让后半段的镜头拿不到前驱尾帧,
-    连续性直接断掉。`whole=True`(解说轨)整片一批:没有链,也没有第二遍生成可分批放行。
-    """
-    if whole:
-        return [list(range(shot_count))] if shot_count else []
-    batch_chains = max(1, config.GATE_B_BATCH_CHAINS)
-    per_batch = max(1, config.CHAIN_GROUP_SIZE) * batch_chains
-    return [
-        list(range(start, min(start + per_batch, shot_count)))
-        for start in range(0, shot_count, per_batch)
-    ]
-
-
-def _review_state(project_id: str, shot_count: int, *,
-                  whole: bool = False) -> dict[str, Any]:
-    """读取/初始化审片进度。幂等,可跨服务重启续用。"""
-    batches = _review_batches(project_id, shot_count, whole=whole)
-    saved = db.read_json(project_id, "review_state.json", None) or {}
-    return {
-        "batch_chains": config.GATE_B_BATCH_CHAINS,
-        "total_batches": len(batches),
-        "cursor": int(saved.get("cursor", 0)),
-        "approved": sorted(saved.get("approved", []) or []),
-        "batches": batches,
-    }
-
-
-def _save_review_state(project_id: str, state: dict[str, Any]) -> None:
-    payload = {k: v for k, v in state.items() if k != "batches"}
-    db.write_json(project_id, "review_state.json", payload)
-
-
 # --------------------------------------------------------------------------
 # 项目创建
 # --------------------------------------------------------------------------
 def create_project(payload: ProjectCreate) -> str:
     from ..models import new_id
 
-    profile = _profile({"category": payload.category})
+    try:
+        profile = _profile({"category": payload.category})
+    except ProfileError as exc:
+        raise PipelineError(str(exc)) from exc
+    if not profile.is_explainer:
+        raise PipelineError(f"品类「{profile.label}」不是横屏解说轨,已不再支持。")
     if profile.skeleton:
         raise PipelineError(
             f"品类「{profile.label}」目前是骨架配置,尚未完整实现。"
@@ -226,8 +137,7 @@ def create_project(payload: ProjectCreate) -> str:
     shot_count = expected_shots
     budget = payload.quota_budget or costs.default_budget_for(payload.duration)
     # 横屏解说轨不调视频生成,只有 TTS、BGM 与几次 LLM
-    est = (costs.estimate_explainer(payload.duration)["with_retry"] if profile.is_explainer
-           else costs.estimate_project(payload.duration)["with_retry"])
+    est = costs.estimate_explainer(payload.duration)["with_retry"]
     now = time.time()
     title = payload.title or f"{payload.subject} 解说视频"
 
@@ -260,6 +170,10 @@ def create_project(payload: ProjectCreate) -> str:
 # --------------------------------------------------------------------------
 # 单步推进
 # --------------------------------------------------------------------------
+#: 后台每轮渲染几拍(一拍约 5 秒;调度循环是同步的,一轮不能拖太久)
+EXPLAINER_BEATS_PER_TICK = 4
+
+
 def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
     """推进一个步骤。返回本次动作的描述。
 
@@ -317,189 +231,6 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         return {"state": str(State.SCRIPT_READY), "segments": len(segments),
                 "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
 
-    if profile.is_explainer and state in _EXPLAINER_STATES:
-        return _advance_explainer(project_id, project, state, profile, llm)
-
-    if state == State.SCRIPT_READY:
-        if llm is None:
-            raise PipelineError(LLM_REQUIRED_HINT)
-        _start_library(project_id, subject, profile, llm)
-        segments = _script(project_id)
-        facts = _facts(project_id)
-        card_log: list[dict] = []
-        pool = _library_catalog(project_id, subject, profile)
-        specs = storyboard.build(
-            subject=subject, profile=profile, segments=segments, facts=facts,
-            duration=project["duration"], llm=llm, card_log=card_log, pool=pool,
-        )
-        problems = storyboard.validate_specs(specs, project["duration"])
-        if problems:
-            raise PipelineError("分镜自检未通过:" + "; ".join(problems))
-        _save_specs(project_id, specs)
-        db.write_json(project_id, "cards.json", card_log)
-        cards.invalidate(project_id)
-        n_cards = sum(1 for s in specs if s.card)
-        n_pool = sum(1 for s in specs if s.pool_id)
-        _set_state(project_id, state, State.STORYBOARD_READY,
-                   reason=f"分镜 {len(specs)} 个镜头"
-                          + (f",其中 {n_cards} 个数据卡片" if card_log else "")
-                          + (f",{n_pool} 个按素材池实拍写" if pool else ""))
-        return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "cards": n_cards}
-
-    if state == State.STORYBOARD_READY:
-        _set_state(project_id, state, State.GATE_A, reason="等待确认脚本与分镜")
-        return {"state": str(State.GATE_A), "waiting": True}
-
-    if state == State.GATE_A:
-        # 确认后:素材 → 提示词 → 草稿
-        project_dir = config.project_dir(project_id)
-        refs, report = asset_resolver.build_reference_set(
-            subject=subject, profile=profile, specs=_specs(project_id),
-            project_dir=project_dir, limit=config.CATEGORY_REF_LIMIT, llm=llm,
-        )
-        _set_state(project_id, state, State.ASSETS_READY,
-                   reason=f"参考图 {len(refs)} 张(检索 {report['searched']})")
-
-        if llm is None:
-            raise PipelineError(LLM_REQUIRED_HINT)
-        # 真实镜头也照常编译提示词:门禁 B 不满意某个真实镜头时要能"重试"
-        # 回退生成,缺提示词就退不回去。几十次 LLM 调用比这条退路便宜。
-        specs = _specs(project_id)
-        # 卡片镜头不编译提示词、不取材:画面由代码渲染,两者都用不上
-        footage = [s.idx for s in specs if not s.card]
-        compiled, errors = compile_all_prompts(
-            project_id, profile=profile, subject=subject,
-            narration_mode=project["narration_mode"], llm=llm, stage="draft",
-            only_idx=footage,
-        )
-        db.write_json(project_id, "prompt_errors.json", errors)
-        generate.initialise_shots(project_id, specs, stage="draft", ref_limit=len(refs))
-        # 卡片与取材都必须在 initialise_shots 之后 —— 它们靠把镜头写成
-        # succeeded 来"顶掉"草稿生成,shot 行要先存在。
-        card_shots, _ = cards.materialize(project_id, specs, refs, stage="draft")
-        # 分镜阶段起的后台构建可能还没完:取材用池子里已有的,剩下的继续在后台攒
-        _start_library(project_id, subject, profile, llm)
-        real_shots = _collect_media(project_id, subject, profile,
-                                    [s for s in specs if not s.card], refs, llm)
-        _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
-                   reason=f"编译 {compiled} 条提示词,校验失败 {len(errors)} 条"
-                          + (f",{card_shots} 个数据卡片" if card_shots else "")
-                          + (f",{real_shots} 个镜头用真实素材" if real_shots else ""))
-        _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
-                   reason=f"开始草稿生成({config.DRAFT_MODEL})")
-        return {"state": str(State.DRAFT_RENDERING), "prompts": compiled,
-                "prompt_errors": len(errors), "real_clips": real_shots}
-
-    if state == State.PROMPTS_READY:
-        generate.initialise_shots(project_id, _specs(project_id), stage="draft")
-        _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始草稿生成")
-        return {"state": str(State.DRAFT_RENDERING)}
-
-    if state == State.DRAFT_RENDERING:
-        result = poll_running(project_id, "draft")
-        if result.get("stage_complete"):
-            _set_state(project_id, state, State.GATE_B, reason="草稿完成,等待审片")
-            return {"state": str(State.GATE_B), "waiting": True, **result}
-        return {"state": str(state), **result}
-
-    if state == State.GATE_B:
-        # 确认后:只把**新增批准**的镜头送进成片档。
-        # 40 镜头一次性审完再开跑毫无意义,分批审才有意义:审完一批就能开跑一批。
-        specs = _specs(project_id)
-        refs = _refs(project_id)
-        approved = _approved_indices(project_id)
-        if approved is None:
-            approved = set(range(len(specs)))
-
-        # 差集:已编译过的不再编译 —— 重复编译会重复烧 LLM 额度。
-        todo = [
-            s.idx for s in specs
-            if s.idx in approved and not s.card
-            and not generate.load_prompt(project_id, "final", s.idx)
-        ]
-        if llm is None and todo:
-            raise PipelineError(LLM_REQUIRED_HINT)
-        compiled, errors = compile_all_prompts(
-            project_id, profile=profile, subject=subject,
-            narration_mode=project["narration_mode"], llm=llm, stage="final",
-            has_first_frame=True, only_idx=todo,
-        )
-        db.write_json(project_id, "prompt_errors_final.json", errors)
-        generate.initialise_shots(project_id, specs, stage="final", ref_limit=len(refs))
-
-        # 真实素材:门禁 A 之后取好的素材,按批应用到成片档,省掉成片生成。
-        # 必须在 initialise_shots 之后 —— 它靠把镜头写成 succeeded 来"顶掉"
-        # 那次生成,而 initialise_shots 之前 shot 行还不存在。
-        cards.materialize(project_id, specs, refs, stage="final", only=approved)
-        real_shots = _inject_clips(project_id, subject, profile,
-                                   [s for s in specs if not s.card], approved, refs, llm)
-
-        review = _review_state(project_id, len(specs))
-        _set_state(project_id, State.GATE_B, State.FINAL_RENDERING,
-                   reason=f"开始成片生成({config.FINAL_MODEL}),编译 {compiled} 条提示词,"
-                          f"本批放行 {len(approved)} 个镜头"
-                          f"(第 {review['cursor'] + 1}/{review['total_batches']} 批)"
-                          + (f",{real_shots} 个镜头用真实素材" if real_shots else ""))
-        return {"state": str(State.FINAL_RENDERING), "prompts": compiled,
-                "approved": sorted(approved), "review": review,
-                "real_clips": real_shots}
-
-    if state == State.FINAL_RENDERING:
-        result = poll_running(project_id, "final")
-        if result.get("stage_complete"):
-            specs = _specs(project_id)
-            approved = _approved_indices(project_id) or set()
-            review = _review_state(project_id, len(specs))
-            unreviewed = [i for i in range(len(specs)) if i not in approved]
-            if unreviewed:
-                # 还有没审的批次:回门禁 B 等下一批审片,不要进 QA ——
-                # 否则会拿半片素材去合成,产出缺镜头的短片。
-                _set_state(project_id, state, State.GATE_B,
-                           reason=f"本批成片完成,还有 {len(unreviewed)} 个镜头待审"
-                                  f"(第 {min(review['cursor'] + 1, review['total_batches'])}"
-                                  f"/{review['total_batches']} 批)")
-                return {"state": str(State.GATE_B), "waiting": True,
-                        "review": review, **result}
-            report = qa.run(project_id, specs)
-            _set_state(project_id, state, State.QA_PASSED,
-                       reason=f"质检 {report['pass_count']} 通过 / {report['fail_count']} 不通过")
-            return {"state": str(State.QA_PASSED), "qa": report}
-        return {"state": str(state), **result}
-
-    if state == State.QA_PASSED:
-        _set_state(project_id, state, State.COMPOSING, reason="生成旁白与合成")
-        return finish(project_id)
-
-    if state == State.COMPOSING:
-        return finish(project_id)
-
-    return {"state": str(state), "action": "无可执行步骤"}
-
-
-# --------------------------------------------------------------------------
-# 横屏解说轨(profile track=explainer)
-# --------------------------------------------------------------------------
-#: 解说轨接管的状态。事实采集与脚本两步与竖屏链路完全相同,不在这里
-_EXPLAINER_STATES = frozenset({
-    State.SCRIPT_READY, State.STORYBOARD_READY, State.GATE_A, State.PROMPTS_READY,
-    State.DRAFT_RENDERING, State.GATE_B, State.FINAL_RENDERING, State.QA_PASSED,
-    State.COMPOSING,
-})
-#: 后台每轮渲染几拍(一拍约 5 秒;调度循环是同步的,一轮不能拖太久)
-EXPLAINER_BEATS_PER_TICK = 4
-
-
-def _advance_explainer(project_id: str, project: dict[str, Any], state: State,
-                       profile, llm) -> dict[str, Any]:
-    """解说轨的状态推进。状态机沿用竖屏链路,含义换成:
-
-    STORYBOARD_READY  逐拍版式与叠加数据(已核对事实)
-    GATE_A 确认后     先跑 TTS 定每拍时长 → DRAFT_RENDERING 逐拍渲染
-    GATE_B            审渲好的各拍(重拍 = 换一组背景)
-    确认后            草稿即成片,跳过生成与视觉质检 → 合成
-    """
-    subject = project["subject"]
-
     if state == State.SCRIPT_READY:
         _start_library(project_id, subject, profile, llm)
         segments = _script(project_id)
@@ -541,10 +272,7 @@ def _advance_explainer(project_id: str, project: dict[str, Any], state: State,
         spent = float((db.get_project(project_id) or {}).get("spent_cost") or 0.0)
         db.update_project(project_id,
                           spent_cost=round(spent + costs.explainer_spent(nar.to_dict()), 4))
-        db.delete_shots(project_id, "draft")
-        db.delete_shots(project_id, "final")
-        generate.initialise_shots(project_id, specs, stage="draft")
-        generate.initialise_shots(project_id, specs, stage="final")
+        explainer.init_beats(project_id, specs)
         cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
             (",BGM 复用曲库" if nar.bgm_reused else "")
         _set_state(project_id, state, State.ASSETS_READY,
@@ -608,200 +336,10 @@ def _advance_explainer(project_id: str, project: dict[str, Any], state: State,
     return {"state": str(state), "action": "无可执行步骤"}
 
 
-def missing_final_shots(project_id: str) -> list[int]:
-    """分镜里还没有成片的镜头序号。
-
-    分批审片下这个检查是必须的:用户可能只批了前两批就点完成,
-    而 `finish()` 过去只要有任一镜头成功就开渲,会静默产出一部缺镜头的短片 ——
-    内容少了但文件正常,发出去才发现。
-    """
-    specs = _specs(project_id)
-    rows = db.get_shots(project_id, "final") or []
-    done = {r["idx"] for r in rows if r["status"] == "succeeded" and r.get("final_path")}
-    return [s.idx for s in specs if s.idx not in done]
-
-
-def finish(project_id: str) -> dict[str, Any]:
-    """合成阶段:旁白 → BGM → 字幕 → 渲染 → 封面。"""
-    project = db.get_project(project_id)
-    if not project:
-        raise PipelineError("项目不存在")
-    profile = _profile(project)
-    specs = _specs(project_id)
-
-    missing = missing_final_shots(project_id)
-    if missing:
-        preview = ", ".join(str(i) for i in missing[:12])
-        more = f" 等 {len(missing)} 个" if len(missing) > 12 else ""
-        raise PipelineError(
-            f"还有 {len(missing)} 个镜头没有成片(镜头 {preview}{more})。"
-            f"请先在门禁 B 审完并生成这些批次,再合成 —— "
-            f"否则会产出一部缺镜头的短片。"
-        )
-
-    rows = [r for r in db.get_shots(project_id, "final") if r["status"] == "succeeded"]
-    rows.sort(key=lambda r: r["idx"])
-    shot_paths = [Path(r["final_path"]) for r in rows if r.get("final_path")]
-    if not shot_paths:
-        raise PipelineError("没有可用的成片镜头,无法合成")
-
-    nar = narration.build(
-        project_id, specs,
-        narration_mode=project["narration_mode"], profile=profile,
-    )
-    result = render.compose(
-        project_id, shot_paths,
-        ass_path=nar.ass_path,
-        narration_path=nar.narration_path,
-        bgm_path=nar.bgm_path,
-    )
-    if not result.ok or not result.output_path:
-        raise PipelineError("合成失败:" + "; ".join(result.warnings or []))
-
-    cover = render.build_cover(
-        result.output_path, project["title"],
-        config.project_dir(project_id) / "cover.jpg",
-        subtitle=f"{project['duration']}秒 · {profile.label}解说",
-    )
-    db.write_json(project_id, "render.json", {
-        **result.to_dict(),
-        "cover": str(cover) if cover else None,
-        "narration": nar.to_dict(),
-    })
-    _set_state(project_id, State.COMPOSING, State.DONE,
-               reason=f"成片完成:{result.output_path.name}")
-    return {"state": str(State.DONE), "output": str(result.output_path),
-            "cover": str(cover) if cover else None, "duration": result.duration}
-
-
-# --------------------------------------------------------------------------
-# 长耗时阶段轮询
-# --------------------------------------------------------------------------
-def poll_running(project_id: str, stage: str) -> dict[str, Any]:
-    """驱动一次生成 tick。供后台循环反复调用。"""
-    project = db.get_project(project_id)
-    if not project:
-        return {"error": "项目不存在"}
-    specs = _specs(project_id)
-    ref_urls = _ref_urls_for(project_id, specs[0].angle if specs else "exterior_45")
-
-    # 门禁 B 的逐镜头批准集合必须传下去,否则 `ready_shots` 会放行全部镜头 ——
-    # 分批审片就退化成了"一次性审完 40 条",而且批准语义直接失效。
-    approved = _approved_indices(project_id) if stage == "final" else None
-
-    result = generate.tick(project_id, stage, ref_urls=ref_urls, approved=approved)
-    payload = result.to_dict()
-    payload["degraded"] = generate.degraded_report(project_id, stage)
-    payload["stage_complete"] = generate.stage_complete(project_id, stage, approved)
-
-    if payload["stage_complete"]:
-        payload["action"] = f"{stage} 阶段完成"
-    elif payload["paused_budget"]:
-        db.update_project(project_id, state=str(State.PAUSED_BUDGET),
-                          state_reason=payload.get("reason") or "超出配额上限")
-    else:
-        payload["action"] = f"{stage}:轮询 {payload['polled']},提交 {len(payload['submitted'])}"
-    return payload
-
-
-# --------------------------------------------------------------------------
-# 提示词编译
-# --------------------------------------------------------------------------
-def compile_all_prompts(
-    project_id: str,
-    *,
-    profile,
-    subject: str,
-    narration_mode: str,
-    llm,
-    stage: str,
-    has_first_frame: bool = False,
-    only_idx: Sequence[int] | None = None,
-) -> tuple[int, dict[str, list[str]]]:
-    """编译分镜的提示词。返回 (成功数, {镜头序号: 错误列表})。
-
-    `only_idx` 限制本次编译的镜头范围 —— 分批审片时只为新增批准的镜头编译,
-    重复编译既浪费 LLM 额度,也会让已批准镜头的提示词被重写。
-    """
-    specs = _specs(project_id)
-    wanted = None if only_idx is None else set(only_idx)
-    compiled = 0
-    errors: dict[str, list[str]] = {}
-    for spec in specs:
-        if wanted is not None and spec.idx not in wanted:
-            continue
-        section = profile.section(spec.section)
-        try:
-            prompt, problems = prompt_compiler.compile_with_llm(
-                spec,
-                subject=subject,
-                profile=profile,
-                llm=llm,
-                narration_mode=narration_mode,
-                has_first_frame=has_first_frame,
-            )
-        except Exception as exc:  # noqa: BLE001 - 单镜头失败不阻断整体
-            errors[str(spec.idx)] = [f"编译失败:{exc}"]
-            continue
-        if problems:
-            errors[str(spec.idx)] = problems
-            continue
-        generate.save_prompt(project_id, stage, spec.idx, prompt)
-        compiled += 1
-    return compiled, errors
-
-
-# --------------------------------------------------------------------------
-# 人工干预
-# --------------------------------------------------------------------------
-def _merge_approved(project_id: str, shot_count: int,
-                    approved: list[int] | None) -> set[int]:
-    """把本批批准的镜头并入审片状态,返回全量已批准集合。
-
-    - `approved` 为 None:一次性批准全部(旧的单次门禁语义)。
-    - 否则只并入本批,并把游标推进到"第一个尚未整批批准"的批次。
-    """
-    state = _review_state(project_id, shot_count)
-    current = set(state["approved"])
-    if approved is None:
-        current = set(range(shot_count))
-    else:
-        current |= {int(i) for i in approved if 0 <= int(i) < shot_count}
-
-    cursor = 0
-    for batch in state["batches"]:
-        if all(i in current for i in batch):
-            cursor += 1
-        else:
-            break
-
-    state["approved"] = sorted(current)
-    state["cursor"] = cursor
-    _save_review_state(project_id, state)
-    # 同步给 generate 层:ready_shots / stage_complete 都读它
-    db.write_json(project_id, "approved_shots.json", sorted(current))
-    return current
-
-
-def _real_ref_images(refs: Sequence[Any]) -> list:
-    """参考图集里的**真实**图片(去掉 AI 兜底图),供静图镜头使用。
-
-    门禁 A 拿到的是 `ImageRef` 对象,门禁 B 从 refs.json 读回的是 dict,两种都要认。
-    """
-    ImageRef = asset_resolver.images.ImageRef
-    out: list = []
-    for r in refs:
-        if isinstance(r, dict):
-            r = ImageRef(**{k: v for k, v in r.items() if k in ImageRef.__dataclass_fields__})
-        if isinstance(r, ImageRef) and r.origin != "generate":
-            out.append(r)
-    return out
-
-
 def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
     """后台增量构建这台车的素材池(见 `library.py`)。只对有官方渠道配置的品类
     (汽车)生效;已经在建就什么都不做。失败只记事件,不影响主流程。"""
-    if not (config.USE_REAL_CLIPS and config.USE_LIBRARY and profile.official_sites):
+    if not (config.USE_LIBRARY and profile.official_sites):
         return
     try:
         if library.build_async(subject, profile=profile, llm=llm):
@@ -810,165 +348,38 @@ def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
 
-def _library_catalog(project_id: str, subject: str, profile) -> list[dict]:
-    """素材池清单,给分镜看「这台车已经有哪些实拍」。池子还没建好(第一次做
-    这台车,后台刚开始建)就给空,分镜照旧先写画面、取材时再按描述挑。"""
-    if not (config.USE_REAL_CLIPS and config.USE_LIBRARY and profile.official_sites):
-        return []
-    try:
-        if not library.has_usable_video(subject):
-            return []
-        return library.catalog(subject)
-    except Exception as exc:  # noqa: BLE001
-        db.add_event(project_id, "assets", reason=f"素材池清单读取失败:{exc}")
-        return []
-
-
-def _collect_media(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
-                   refs: Sequence[Any], llm=None) -> int:
-    """门禁 A 之后:逐镜头取材,命中的镜头直接顶掉草稿生成。返回生效的镜头数。
-
-    取材结果存成 `clips.json`(取材计划),门禁 B 复用它,不再重抓网络。
-    失败不阻断:任何异常都记进 clip_report.json,全片照常走生成。
-    """
-    if not config.USE_REAL_CLIPS:
-        return 0
-    try:
-        errors: list[str] = []
-        queries, brand = media_query.build(subject, profile, specs, llm=llm, errors=errors)
-        db.write_json(project_id, "media_queries.json",
-                      {"brand": brand, "shots": media_query.to_json(queries)})
-        ref_images = _real_ref_images(refs)
-        assignment, report = clip_resolver.collect(
-            subject=subject, profile=profile, specs=specs,
-            project_dir=config.project_dir(project_id),
-            page_urls=clips_mod.page_urls_from(ref_images),
-            limit=config.REAL_CLIP_LIMIT, queries=queries, brand=brand,
-            ref_images=ref_images, llm=llm,
-        )
-        report["errors"] = errors + report.get("errors", [])
-        applied = clip_resolver.apply_clips(project_id, assignment, stage="draft")
-        report.update({"status": "ok", "runs": 1, "applied_draft": applied, "applied": 0})
-        clip_resolver.persist(project_id, report, assignment)
-        db.add_event(project_id, "assets", reason=report.get("summary", ""))
-        return applied
-    except Exception as exc:  # noqa: BLE001 - 补充通路,失败不影响主流程
-        clip_resolver.persist(project_id, {
-            "enabled": False,
-            "status": "failed",
-            "runs": 1,
-            "applied": 0,
-            "errors": [f"真实素材采集异常:{type(exc).__name__}: {exc}"],
-            "summary": "真实素材采集异常,已全部退回生成",
-        }, {})
-        db.add_event(project_id, "assets", reason="真实素材采集异常,已全部退回生成")
-        return 0
-
-
-def _inject_clips(project_id: str, subject: str, profile, specs: Sequence[ShotSpec],
-                  approved: set[int], refs: Sequence[Any], llm=None) -> int:
-    """给已批准的镜头应用真实素材(成片档)。返回本次生效的镜头数。
-
-    三条自我约束:
-    1. **失败不阻断** —— 这一层是补充,任何异常都记进 clip_report.json 后
-       静默退回生成,不能因为"抓不到视频"卡住整条流水线;
-    2. **只碰已批准的镜头** —— 还没审的镜头不该提前被定死画面;
-    3. **不重复抓取** —— 门禁 A 之后已经取好素材(`clips.json`),每批门禁
-       只是把同一份计划应用到这一批;硬失败过的项目也不再重试。
-       只有门禁 A 时还没有这套逻辑的老项目,才在这里补抓一次。
-    """
-    if not config.USE_REAL_CLIPS:
-        return 0
-
-    previous = clip_resolver.load_report(project_id)
-    if previous.get("status") == "failed":
-        return 0
-
-    try:
-        if previous:
-            plan = clip_resolver.load_plan(project_id)
-            report = previous
-        else:
-            ref_images = _real_ref_images(refs)
-            plan, report = clip_resolver.collect(
-                subject=subject, profile=profile, specs=specs,
-                project_dir=config.project_dir(project_id),
-                page_urls=clips_mod.page_urls_from(ref_images),
-                limit=config.REAL_CLIP_LIMIT, ref_images=ref_images, llm=llm,
-            )
-            report.update({"status": "ok", "runs": 1})
-
-        done = {r["idx"] for r in db.get_shots(project_id, "final")
-                if r["status"] == "succeeded" and r.get("consistency") == "real"}
-        todo = {i: c for i, c in plan.items() if i in approved and i not in done}
-        applied = clip_resolver.apply_clips(project_id, todo, stage="final")
-        report["applied"] = int(report.get("applied", 0)) + applied
-        clip_resolver.persist(project_id, report, plan)
-        if applied:
-            db.add_event(project_id, "assets",
-                         reason=f"本批 {applied} 个已批准镜头使用真实素材")
-        return applied
-    except Exception as exc:  # noqa: BLE001 - 补充通路,失败不影响主流程
-        # 只写报告、不动 clips.json:取材计划可能是好的,坏的只是这一次应用
-        db.write_json(project_id, "clip_report.json", {
-            **previous,
-            "enabled": False,
-            "status": "failed",
-            "runs": int(previous.get("runs", 0)) + 1,
-            "errors": [*previous.get("errors", []),
-                       f"真实素材应用异常:{type(exc).__name__}: {exc}"],
-            "summary": "真实素材应用异常,其余镜头退回生成",
-        })
-        db.add_event(project_id, "assets", reason="真实素材采集异常,已全部退回生成")
-        return 0
-
-
 def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
-    """确认门禁,推进到下一阶段。"""
+    """确认门禁,推进到下一阶段。门禁 B 一次审完全片。"""
     project = db.get_project(project_id)
     if not project:
         raise PipelineError("项目不存在")
     state = State(project["state"])
-
-    if request.gate == "A":
-        if state != State.GATE_A:
-            raise PipelineError(f"当前状态 {state} 不在门禁 A")
-        return advance(project_id, confirmed=True)
-
-    if state != State.GATE_B:
-        raise PipelineError(f"当前状态 {state} 不在门禁 B")
-
-    shot_count = len(_specs(project_id))
-    # 解说轨一次审完全片:promote_all 本来就整片转成片,收下"部分批准"只会让记录和实际对不上
-    approved = None if _profile(project).is_explainer else request.approved
-    merged = _merge_approved(project_id, shot_count, approved)
-    if approved is not None:
-        db.add_event(project_id, str(State.GATE_B),
-                     reason=f"批准 {len(approved)} 个镜头,"
-                            f"累计 {len(merged)}/{shot_count}")
+    expected = State.GATE_A if request.gate == "A" else State.GATE_B
+    if state != expected:
+        raise PipelineError(f"当前状态 {state} 不在门禁 {request.gate}")
+    if expected == State.GATE_B:
+        _save_review_state(project_id, {"cursor": 1,
+                                        "approved": list(range(len(_specs(project_id))))})
     return advance(project_id, confirmed=True)
 
 
 def review_progress(project_id: str) -> dict[str, Any]:
-    """门禁 B 的批次进度,供前端渲染分批审片视图。解说轨整片一批。"""
+    """门禁 B 的审片进度,供前端渲染审片视图。整片一批。"""
     shot_count = len(_specs(project_id))
-    project = db.get_project(project_id)
-    whole = bool(project) and _profile(project).is_explainer
-    state = _review_state(project_id, shot_count, whole=whole)
-    approved = set(state["approved"])
-    batches = []
-    for n, batch in enumerate(state["batches"]):
-        done = [i for i in batch if i in approved]
-        batches.append({
-            "index": n,
-            "shots": batch,
-            "approved": done,
-            "pending": [i for i in batch if i not in approved],
-            "ready": bool(batch) and len(done) == len(batch),
-        })
-    state["batch_list"] = batches
-    state["pending_total"] = sum(len(b["pending"]) for b in batches)
-    return state
+    saved = db.read_json(project_id, "review_state.json", None) or {}
+    approved = {int(i) for i in saved.get("approved", []) or []}
+    batch = list(range(shot_count))
+    done = [i for i in batch if i in approved]
+    pending = [i for i in batch if i not in approved]
+    batches = [{"index": 0, "shots": batch, "approved": done, "pending": pending,
+                "ready": bool(batch) and not pending}] if batch else []
+    return {"total_batches": len(batches), "cursor": int(saved.get("cursor", 0)),
+            "approved": sorted(approved), "batches": [batch] if batch else [],
+            "batch_list": batches, "pending_total": len(pending)}
+
+
+def _save_review_state(project_id: str, state: dict[str, Any]) -> None:
+    db.write_json(project_id, "review_state.json", state)
 
 
 def update_script(project_id: str, segments: list[ScriptSegment], title: str | None) -> None:
@@ -988,36 +399,23 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
         raise PipelineError("项目不存在")
     if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
         raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
-    if _profile(project).is_explainer:
-        specs = explainer.enforce_rhythm(list(specs))
-        problems = explainer.validate_beats(specs)
-    else:
-        problems = storyboard.validate_specs(specs, project["duration"])
+    specs = explainer.enforce_rhythm(list(specs))
+    problems = explainer.validate_beats(specs)
     if problems:
         raise PipelineError("分镜自检未通过:" + "; ".join(problems))
     _save_specs(project_id, specs)
-    cards.invalidate(project_id)
 
 
 def retry(project_id: str, idx: int, stage: str) -> None:
+    """解说轨的"重拍" = 换一组背景重渲这一拍。渲染只在 DRAFT_RENDERING 里跑,
+    门禁 B 上点重拍要先退回去,渲完会自己回到门禁 B。"""
     project = db.get_project(project_id)
-    if project and _profile(project).is_explainer:
-        # 解说轨的"重拍" = 换一组背景重渲这一拍;渲染只在 DRAFT_RENDERING 里跑,
-        # 门禁 B 上点重拍要先退回去,渲完会自己回到门禁 B
-        explainer.rerender(project_id, idx)
-        if State(project["state"]) == State.GATE_B:
-            _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
-                       reason=f"重拍第 {idx} 拍(换背景)")
-        return
-    spec = next((s for s in _specs(project_id) if s.idx == idx), None)
-    if spec is not None and spec.card:
-        # 卡片没有生成任务可重试:重画一遍(比如改了 cards 的版式之后)
-        cards.invalidate(project_id, idx)
-        _, errs = cards.materialize(project_id, [spec], _refs(project_id), stage=stage)
-        if errs:
-            raise PipelineError(errs[0])
-        return
-    generate.retry_shot(project_id, idx, stage)
+    if not project:
+        raise PipelineError("项目不存在")
+    explainer.rerender(project_id, idx)
+    if State(project["state"]) == State.GATE_B:
+        _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                   reason=f"重拍第 {idx} 拍(换背景)")
 
 
 def run_until_waiting(project_id: str, max_steps: int = 12) -> list[dict[str, Any]]:

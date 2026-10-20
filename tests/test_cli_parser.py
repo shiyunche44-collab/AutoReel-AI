@@ -10,7 +10,6 @@ import json
 import pytest
 
 from app.llm.base import LLMOutputInvalid, extract_json, require_keys
-from app.providers import video
 from app.providers.cli import ConnectorError, _extract_json, _unwrap
 
 
@@ -145,78 +144,3 @@ def test_flatten_survives_deeply_nested_payload():
 
     payload = {"code": 1, "data": {"result": {"content": "正文"}}}
     assert _flatten(payload) == "正文"
-
-
-# --------------------------------------------------------------------------
-# 视频模型契约
-# --------------------------------------------------------------------------
-def test_h3_accepts_valid_params():
-    video.validate("MiniMax-H3", duration=6, resolution="768P", ref_count=5, has_last_frame=True)
-
-
-def test_h3_rejects_duration_below_4():
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-H3", duration=3, resolution="768P")
-
-
-def test_h3_max_rejects_4_seconds():
-    """H3-Max 最小 5 秒,这是与 H3 的真实差异之一。"""
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-H3-Max", duration=4, resolution="768P")
-
-
-def test_hailuo_rejects_unsupported_duration():
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-Hailuo-2.3", duration=7, resolution="768P")
-
-
-def test_hailuo_accepts_6_and_10_only():
-    video.validate("MiniMax-Hailuo-2.3", duration=6, resolution="768P")
-    video.validate("MiniMax-Hailuo-2.3", duration=10, resolution="768P")
-
-
-def test_h3_rejects_2k_on_h3_max():
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-H3-Max", duration=6, resolution="2K")
-
-
-def test_h3_max_rejects_reference_images():
-    """H3-Max 不支持多模态参考,提交前必须拦下,否则白白计费。"""
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-H3-Max", duration=6, resolution="768P", ref_count=3)
-
-
-def test_hailuo_rejects_last_frame():
-    with pytest.raises(video.VideoValidationError):
-        video.validate("MiniMax-Hailuo-2.3", duration=6, resolution="768P",
-                       has_last_frame=True)
-
-
-def test_unknown_model_rejected():
-    with pytest.raises(video.VideoValidationError):
-        video.validate("Some-Fake-Model", duration=6, resolution="768P")
-
-
-def test_native_audio_flags():
-    assert video.native_audio("MiniMax-H3") is True
-    assert video.native_audio("MiniMax-H3-Max") is True
-    assert video.native_audio("MiniMax-Hailuo-2.3") is False
-
-
-def test_poll_intervals_prioritise_fast_models():
-    """快模型轮询更频繁,H3 慢,轮询太勤只是浪费请求。"""
-    assert video.POLL_INTERVAL["MiniMax-H3"] > video.POLL_INTERVAL["MiniMax-Hailuo-2.3"]
-
-
-def test_task_id_extraction_variants():
-    assert video._extract_task_id("abc123") == "abc123"
-    assert video._extract_task_id({"task_id": "t1"}) == "t1"
-    assert video._extract_task_id({"taskId": "t2"}) == "t2"
-    assert video._extract_task_id([{"task_id": "t3"}]) == "t3"
-    assert video._extract_task_id({"success_items": [{"task_id": "t4"}]}) == "t4"
-    assert video._extract_task_id({"data": {"task_id": "t5"}}) == "t5"
-
-
-def test_task_id_extraction_raises_when_absent():
-    with pytest.raises(ConnectorError):
-        video._extract_task_id({"unexpected": 1})

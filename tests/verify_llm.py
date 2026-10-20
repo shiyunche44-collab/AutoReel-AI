@@ -60,15 +60,15 @@ def main() -> int:
                  source_tool="thsifind.search_news",
                  scope="product", confidence="high"),
         ]
-        profile = load_profile("auto")
+        profile = load_profile("auto_long")
         theme = profile.theme_spec()
-        plan = profile.plan_for(60, theme.name)
+        plan = profile.plan_for(120, theme.name)
         segs, title = generate(
             subject="比亚迪汉 EV 2026",
             profile=profile,
             facts=profile_facts,
             plan=plan,
-            duration=60,
+            duration=120,
             llm=provider,
             theme=theme,
         )
