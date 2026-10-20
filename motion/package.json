@@ -1,0 +1,12 @@
+{
+  "name": "aimovice-motion",
+  "private": true,
+  "description": "横屏解说轨的概念动画模板(HyperFrames 渲染),由 app/pipeline/motion.py 调用",
+  "scripts": {
+    "render": "hyperframes render"
+  },
+  "dependencies": {
+    "gsap": "3.14.2",
+    "hyperframes": "0.8.138"
+  }
+}

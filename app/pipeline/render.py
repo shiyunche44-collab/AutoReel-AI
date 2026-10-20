@@ -117,8 +117,15 @@ def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] |
     return proc.returncode == 0 and Path(dest).is_file() and Path(dest).stat().st_size > 0
 
 
-#: 静图镜头的动效,按镜头序号轮换,避免满屏都是同一种推近
-STILL_MOTIONS: tuple[str, ...] = ("zoom_in", "pan_right", "zoom_out", "pan_left")
+#: 静图镜头的动效。连拼背景里按片段 id 散开挑、且不与上一刀相同(explainer.motion_for),
+#: 避免满屏都是同一种推近:
+#:   zoom_in / zoom_out   居中推近 / 拉远
+#:   pan_left / pan_right / pan_up   放大后横移 / 上移
+#:   push_diag            左上 → 右下的对角推近
+#:   punch_in             0.45 秒内快推到 1.28 后停住(强调)
+#:   drift_zoom           边推近边往右漂
+STILL_MOTIONS: tuple[str, ...] = ("zoom_in", "pan_right", "zoom_out", "pan_left",
+                                  "push_diag", "punch_in", "pan_up", "drift_zoom")
 
 
 def still_filter(motion: str, seconds: float, size: tuple[int, int] | None = None) -> str:
@@ -139,6 +146,16 @@ def still_filter(motion: str, seconds: float, size: tuple[int, int] | None = Non
         z, x, y = "1.12", f"(iw-iw/zoom)*on/{frames}", center_y
     elif motion == "pan_right":
         z, x, y = "1.12", f"(iw-iw/zoom)*(1-on/{frames})", center_y
+    elif motion == "pan_up":
+        z, x, y = "1.12", center_x, f"(ih-ih/zoom)*(1-on/{frames})"
+    elif motion == "push_diag":
+        z, x, y = f"1.04+0.16*on/{frames}", f"(iw-iw/zoom)*on/{frames}", f"(ih-ih/zoom)*on/{frames}"
+    elif motion == "punch_in":
+        punch = max(1, min(frames, int(round(FPS * 0.45))))
+        z = f"1+0.28*(1-pow(1-min(1,on/{punch}),3))"
+        x, y = center_x, center_y
+    elif motion == "drift_zoom":
+        z, x, y = f"1.06+0.12*on/{frames}", f"(iw-iw/zoom)*(0.2+0.6*on/{frames})", center_y
     else:  # zoom_in
         z, x, y = f"1+0.15*on/{frames}", center_x, center_y
     return (

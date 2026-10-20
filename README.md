@@ -26,6 +26,7 @@
 | ffmpeg | **必需** | 已安装于 `C:\ffmpeg\bin`,不在系统 PATH,在 `.env` 里指定 |
 | M Plan 订阅 Key **或** `mcode-tools` CLI | 二选一 | 语音、音乐、图片理解、网络搜索的通道。订阅 Key 填 `.env` 的 `MINIMAX_PLAN_KEY`,任何终端可跑;`mcode-tools` 只能在 MiniMax Code 里跑 |
 | fastapi / uvicorn / pydantic / httpx / Pillow / PyYAML / python-dotenv | 已预装 | |
+| node 22+ + HyperFrames | 可选 | 概念动画(`concept` 版式)。在 `motion/` 下 `npm install`(版本锁在 `motion/package.json`);渲染用本机 Chrome / Edge,找不到时在 `.env` 配 `HYPERFRAMES_BROWSER_PATH`。没装就退回数据卡 |
 | jinja2 / pytest / yt-dlp | 需补装 | `pip install -r requirements.txt`。yt-dlp 给素材池从 B站 / YouTube / TikTok 拉素材,YouTube 还需要 PATH 上有 node 或 deno |
 
 ### 2. 配置
@@ -86,10 +87,16 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 | `highlight` | 宣传片缩成小窗 + 两行大字关键词 |
 | `card` | 整屏数据卡(spec / compare / bars / timeline),柱子生长、左右两列交替亮起等本地动画 |
 | `stat` | 宣传片压暗 + 中央一个大数字从 0 滚到目标值 |
+| `concept` | 概念动画(HyperFrames 渲染 `motion/scenes/*.html`,玻璃拟态风格):压在这一拍的实拍上,左侧毛玻璃数据卡 + 右侧示意图(电池包、补能、速度表、激光雷达、芯片、尺寸线稿、对比条)。品类在 `vocab.concept_scenes` 里声明可用模板 |
 
 - 面板、卡片、大数字的每个数字都逐行核对事实(`cards.ground`),核不过就退回 `broll`;
   大字里的数字、英文型号必须在旁白或事实里出现过。
-- 节奏约束:不连续两拍 `stat`,全片大约四成是 `broll`(`enforce_rhythm`)。
+- 节奏约束:不连续两拍 `stat` / `concept`,`concept` 全片最多 6 拍,全片大约四成是 `broll`(`enforce_rhythm`)。
+- `broll` 拍自动轮换样式(`assign_broll_styles`):全屏 / 左上角「车名 · 章名」角标 / 2–3 栏分屏依次滑入。
+- 拍内各段之间 xfade 转场(0.3 秒,6 种轮换);静图运镜 8 种,按片段散开挑且不与上一刀相同;
+  每章第一拍开头叠 1.2 秒章节标牌(「02 外观内饰」色条擦入)。
+- 概念动画的图形(刻度、曲线、线稿)只是示意,屏幕上的数字同样只来自核对过的事实;
+  按 (模板 + 数据 + 时长 + 实拍底) 缓存在 `data/_cache/motion/`,一段 6 秒约 15–20 秒渲染。
 - 底部章节条常驻(按段落的 `chapter` 分章,当前章高亮),直接烧进每一拍。
 - 卡片与大数字都是 PIL 关键帧 + ffmpeg concat 渲染,不依赖任何生成模型。
 
@@ -97,6 +104,10 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 从车型素材池挑干净片段连拼,2–4 秒一刀,不要求画面对上旁白。排序:干净的视频 → 官图 →
 带烧录字幕的段(裁掉底部 22% 后放大铺满)→ 用过的 → 有主持人的。跳过黑场和源片开头的淡入。
+
+防重复:用量按**近重复簇**算(代表帧 dHash 汉明距离 ≤ 10,跨来源;同角度的几张官图用掉一张就当整簇用过);
+最近 6 刀里出现过的簇、和上一刀同视角的往后排(全片共享,存 `beats_recent.json`)。
+数据卡底图按拍号在去重后的主视角官图里轮换。
 
 ### 素材池(`pipeline/library.py`)
 
@@ -254,7 +265,8 @@ app/
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 单元测试,无需网络与额度
+python -m pytest tests/ -q                  # 单元测试,无需网络与额度(装了 HyperFrames 会真渲染一个模板)
+AIMOVICE_MOTION_TESTS=1 python -m pytest tests/test_motion_visuals.py -q   # 7 个概念动画模板全部真渲染(约 2 分钟)
 python -m tests.verify_templates            # 模板语法 + 样例渲染(抓未定义字段)
 python -m tests.verify_llm                  # 真实 LLM 调用自检(消耗 API 额度)
 python -m tests.verify_direct               # direct 后端真实调用自检(消耗少量额度)

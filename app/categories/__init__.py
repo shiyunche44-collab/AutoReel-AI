@@ -202,6 +202,10 @@ class Vocab:
     showcase_words: tuple[str, ...] = ()
     official_markers: tuple[str, ...] = ()
 
+    # ---- 概念动画(解说轨 concept 版式,模板在 motion/scenes/<名>.html)----
+    #: 模板名 → 什么时候用(拼进分镜提示词)。空 = 这个品类不开 concept 版式
+    concept_scenes: dict[str, str] = field(default_factory=dict)
+
     # ---- 前端 ----
     ui_subject_label: str = "产品"
     ui_placeholder: str = "例如:某品牌某型号"
@@ -614,7 +618,7 @@ def _min_supported_shots(profile: CategoryProfile) -> int:
 
 
 #: 解说轨的版式名。与 pipeline/explainer.LAYOUTS 保持一致(这里不反向导入流水线)
-EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat")
+EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept")
 
 
 def _validate(profile: CategoryProfile) -> None:
@@ -625,6 +629,9 @@ def _validate(profile: CategoryProfile) -> None:
         bad = [x for x in sec.layouts if x not in EXPLAINER_LAYOUTS]
         if bad:
             raise ProfileError(f"品类 {profile.name} 段落 {sname}: 未知版式 {bad}")
+        if "concept" in sec.layouts and not profile.vocab.concept_scenes:
+            raise ProfileError(f"品类 {profile.name} 段落 {sname}: 用了 concept 版式,"
+                               "但 vocab.concept_scenes 没配任何动画模板")
 
     # 1. 老写法:手写 section_plan
     for duration, plan in profile.section_plan.items():

@@ -18,3 +18,10 @@ venv/
 # 浏览器导出的登录 cookies,含账号凭证,绝不能进仓库
 cookies/
 *cookies*.txt
+
+# 概念动画子工程的依赖(motion/ 下 npm install 生成)
+motion/node_modules/
+# 风格小样:素材是素材库的拷贝,字体从 C:\Windows\Fonts 拷来(17MB),出片可重渲
+motion/bakeoff/assets/
+motion/bakeoff/fonts/
+motion/bakeoff/out/

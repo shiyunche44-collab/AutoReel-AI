@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 风格 C · 极简科技 HUD(浅色工程图):发丝线网格、等宽数字、取景框 + 跟踪框、尺寸线绘制、色散/故障转场 -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/shader-transitions.global.js"></script>
+  <script src="shared/hf.js"></script>
+  <style>
+    @font-face { font-family: "Noto SC"; src: url("fonts/NotoSansSC-VF.ttf"); font-weight: 100 900; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #eceee9; }
+    #root { position: relative; width: 100%; height: 100%; font-family: "Noto SC", sans-serif; color: #12161a; }
+    .scene { position: absolute; inset: 0; overflow: hidden; background-color: #eceee9; }
+    .grid { position: absolute; inset: 0;
+      background-image: linear-gradient(rgba(18,22,26,0.07) 2px, rgba(18,22,26,0) 2px), linear-gradient(90deg, rgba(18,22,26,0.07) 2px, rgba(18,22,26,0) 2px);
+      background-size: 120px 120px; background-position: 0 30px; }
+    .mono { font-family: "JetBrains Mono"; font-variant-numeric: tabular-nums; }
+    .tag { font-family: "JetBrains Mono"; font-size: 22px; letter-spacing: 0.14em; color: #5d656e; }
+    .acc { color: #ff5a1f; }
+    .h1 { font-size: 66px; font-weight: 800; letter-spacing: -0.01em; }
+    .rule { height: 2px; background-color: #12161a; transform-origin: 0 50%; }
+    .view { position: absolute; overflow: hidden; background-color: #12161a; }
+    .view video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; filter: saturate(0.85) contrast(1.05); }
+    .br { position: absolute; width: 44px; height: 44px; border-color: #ff5a1f; border-style: solid; border-width: 0; }
+    .br.tl { left: -10px; top: -10px; border-left-width: 4px; border-top-width: 4px; }
+    .br.tr { right: -10px; top: -10px; border-right-width: 4px; border-top-width: 4px; }
+    .br.bl { left: -10px; bottom: -10px; border-left-width: 4px; border-bottom-width: 4px; }
+    .br.bb { right: -10px; bottom: -10px; border-right-width: 4px; border-bottom-width: 4px; }
+    .row { position: relative; padding: 26px 0 22px; }
+    .row .k { font-size: 30px; color: #3d444c; }
+    .row .v { font-family: "JetBrains Mono"; font-weight: 700; font-size: 128px; line-height: 1; letter-spacing: -0.04em; margin-top: 8px; font-variant-numeric: tabular-nums; }
+    .row .u { font-family: "JetBrains Mono"; font-size: 40px; font-weight: 500; color: #5d656e; margin-left: 14px; letter-spacing: 0; }
+    .ticks { display: flex; gap: 6px; margin-top: 18px; }
+    .ticks i { display: block; width: 8px; height: 26px; background-color: rgba(18,22,26,0.14); }
+    .chrome { position: absolute; z-index: 20; }
+    #trk { position: absolute; border: 3px solid #ff5a1f; z-index: 5; }
+    #trk span { position: absolute; left: -3px; top: -38px; height: 34px; padding: 0 12px; line-height: 34px; background-color: #ff5a1f; color: #fff;
+                font-family: "JetBrains Mono"; font-size: 20px; letter-spacing: 0.1em; white-space: nowrap; }
+    svg text { font-family: "JetBrains Mono"; }
+  </style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1920" data-height="1080">
+
+  <!-- 01 电池与续航 -->
+  <div id="s1" class="scene">
+    <div class="grid"></div>
+    <div class="tag" style="position:absolute; left:120px; top:196px;">CAM.01 / STUDIO <span class="acc">●</span> REC</div>
+    <div class="view" id="vw1" style="left:120px; top:240px; width:1000px; height:562px;">
+      <video id="v1" class="clip" src="assets/studio.mp4" data-start="0" data-duration="5.4" muted playsinline></video>
+    </div>
+    <div style="position:absolute; left:120px; top:240px; width:1000px; height:562px;" id="br1">
+      <i class="br tl"></i><i class="br tr"></i><i class="br bl"></i><i class="br bb"></i>
+    </div>
+    <div style="position:absolute; left:1240px; top:196px; width:560px;">
+      <div class="tag" id="t1a">SEC.01 — POWERTRAIN</div>
+      <div class="h1" id="t1h" style="margin-top:14px;">电池与续航</div>
+      <div class="row" id="r1"><div class="rule" id="r1l" style="position:absolute; left:0; top:0; width:560px;"></div>
+        <div class="k">CLTC 纯电续航</div><div class="v"><span id="n1">0</span><span class="u">km</span></div>
+        <div class="ticks" id="tk"></div></div>
+      <div class="row" id="r2"><div class="rule" id="r2l" style="position:absolute; left:0; top:0; width:560px;"></div>
+        <div class="k">电池容量</div><div class="v"><span id="n2">0</span><span class="u">kWh</span></div></div>
+    </div>
+  </div>
+
+  <!-- 02 零百加速 -->
+  <div id="s2" class="scene">
+    <div class="grid"></div>
+    <div class="tag" style="position:absolute; left:120px; top:136px;">CAM.02 / ROAD <span class="acc">●</span> TRACK</div>
+    <div class="view" style="left:120px; top:180px; width:960px; height:540px;">
+      <video id="v2" class="clip" src="assets/road.mp4" data-start="4.6" data-duration="5.8" muted playsinline></video>
+    </div>
+    <div style="position:absolute; left:120px; top:180px; width:960px; height:540px;"><i class="br tl"></i><i class="br tr"></i><i class="br bl"></i><i class="br bb"></i></div>
+    <div id="trk" style="left:440px; top:310px; width:520px; height:300px; opacity:0;"><span id="trkl">LOCK · YU7</span></div>
+    <div style="position:absolute; left:1200px; top:150px; width:600px;">
+      <div class="tag" id="t2a">SEC.02 — LAUNCH</div>
+      <div class="h1" style="margin-top:14px;">零百加速</div>
+      <div class="row"><div class="rule" style="position:absolute; left:0; top:0; width:600px;"></div>
+        <div class="k">车速 SPEED</div><div class="v"><span id="spd">0</span><span class="u">km/h</span></div></div>
+      <div class="row"><div class="rule" style="position:absolute; left:0; top:0; width:600px;"></div>
+        <div class="k">用时 TIME</div><div class="v acc"><span id="tms">0.00</span><span class="u">s</span></div></div>
+    </div>
+    <svg id="ruler" style="position:absolute; left:0; top:760px; width:1920px; height:200px;" viewBox="0 760 1920 200"></svg>
+  </div>
+
+  <!-- 03 外观尺寸 -->
+  <div id="s3" class="scene">
+    <div class="grid"></div>
+    <div style="position:absolute; left:120px; top:136px;">
+      <div class="tag">SEC.03 — SIDE ELEVATION</div>
+      <div class="h1" style="margin-top:14px;" id="t3h">外观尺寸</div>
+    </div>
+    <div id="thumbs" style="position:absolute; right:120px; top:150px; display:flex; gap:18px;"></div>
+    <div id="car" style="position:absolute; left:260px; top:300px; width:1400px; height:500px; overflow:hidden; mix-blend-mode: multiply;">
+      <img src="assets/stills/yu7_1edc31296e.jpg" style="position:absolute; left:-100px; top:-480px; width:1600px; height:1200px; filter: brightness(1.06) contrast(1.06);" />
+    </div>
+    <svg id="dims" style="position:absolute; left:0; top:0; width:1920px; height:1080px;" viewBox="0 0 1920 1080"></svg>
+  </div>
+
+  <!-- 常驻 HUD 外框 -->
+  <div class="chrome tag" style="left:120px; top:56px;">XIAOMI YU7 · SPEC/SHEET</div>
+  <div class="chrome tag" style="right:120px; top:56px;"><span style="font-family:'Noto SC'; letter-spacing:0.1em;">示例数据 · 非核对事实</span></div>
+  <div class="chrome" style="left:120px; right:120px; top:96px; height:2px; background-color:rgba(18,22,26,0.5);"></div>
+  <div class="chrome" style="left:120px; right:120px; bottom:84px; height:2px; background-color:rgba(18,22,26,0.5);"></div>
+  <div class="chrome tag" id="pg1" style="left:120px; bottom:40px;">01 / 03</div>
+  <div class="chrome tag" id="pg2" style="left:120px; bottom:40px; opacity:0;">02 / 03</div>
+  <div class="chrome tag" id="pg3" style="left:120px; bottom:40px; opacity:0;">03 / 03</div>
+  <div class="chrome tag" style="right:120px; bottom:40px;"><span style="font-family:'Noto SC'; letter-spacing:0.1em;">画面:小米汽车官方影像</span></div>
+  <div class="chrome" id="pgbar" style="left:300px; bottom:52px; width:1300px; height:6px; background-color:#ff5a1f; transform-origin:0 50%;"></div>
+  <div id="fade" style="position:absolute; inset:0; z-index:40; background-color:#eceee9; opacity:0;"></div>
+</div>
+<script>
+  var NS = "http://www.w3.org/2000/svg";
+  function svgEl(host, tag, attrs, text) { var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; host.appendChild(e); return e; }
+  // 40 格续航刻度(装饰,不代表比例)
+  var tk = document.getElementById("tk"); for (var i = 0; i < 40; i++) tk.appendChild(document.createElement("i"));
+
+  // 速度标尺:0–100 km/h
+  var ruler = document.getElementById("ruler"), X0 = 120, X1 = 1800, Y = 860;
+  svgEl(ruler, "line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "#12161a", "stroke-width": 3 });
+  for (var v = 0; v <= 100; v += 5) {
+    var x = X0 + (X1 - X0) * v / 100, major = v % 10 === 0;
+    svgEl(ruler, "line", { x1: x, y1: Y, x2: x, y2: Y - (major ? 34 : 18), stroke: "#12161a", "stroke-width": major ? 3 : 2 });
+    if (v % 20 === 0) svgEl(ruler, "text", { x: x, y: Y + 44, "text-anchor": "middle", "font-size": 26, fill: "#5d656e" }, String(v));
+  }
+  svgEl(ruler, "text", { x: X1, y: Y + 82, "text-anchor": "end", "font-size": 22, fill: "#5d656e" }, "km/h");
+  var prog = svgEl(ruler, "line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "#ff5a1f", "stroke-width": 9 });
+  prog.style.transformOrigin = X0 + "px " + Y + "px";
+  var mk = svgEl(ruler, "g", {});
+  svgEl(mk, "line", { x1: 0, y1: Y - 70, x2: 0, y2: Y + 8, stroke: "#ff5a1f", "stroke-width": 4 });
+  svgEl(mk, "polygon", { points: "-14,"+(Y-84)+" 14,"+(Y-84)+" 0,"+(Y-64), fill: "#ff5a1f" });
+
+  // 尺寸线:锚点按官图里的车轮中心与前后保险杠量出(见 survey)
+  var dims = document.getElementById("dims");
+  function dim(x1, x2, y, label, val, ext) {
+    var g = svgEl(dims, "g", {});
+    svgEl(g, "line", { x1: x1, y1: ext, x2: x1, y2: y + 16, stroke: "#5d656e", "stroke-width": 2, "stroke-dasharray": "6 6", class: "ext" });
+    svgEl(g, "line", { x1: x2, y1: ext, x2: x2, y2: y + 16, stroke: "#5d656e", "stroke-width": 2, "stroke-dasharray": "6 6", class: "ext" });
+    var ln = svgEl(g, "line", { x1: x1, y1: y, x2: x2, y2: y, stroke: "#ff5a1f", "stroke-width": 4 });
+    var len = x2 - x1; ln.style.strokeDasharray = len; ln.style.strokeDashoffset = len;
+    svgEl(g, "polygon", { points: x1+","+y+" "+(x1+18)+","+(y-8)+" "+(x1+18)+","+(y+8), fill: "#ff5a1f", class: "tip" });
+    svgEl(g, "polygon", { points: x2+","+y+" "+(x2-18)+","+(y-8)+" "+(x2-18)+","+(y+8), fill: "#ff5a1f", class: "tip" });
+    var mid = (x1 + x2) / 2;
+    svgEl(g, "rect", { x: mid - 190, y: y - 30, width: 380, height: 60, fill: "#eceee9", class: "chip" });
+    var t = svgEl(g, "text", { x: mid, y: y + 13, "text-anchor": "middle", "font-size": 36, "font-weight": 700, fill: "#12161a", class: "chip" });
+    var a = svgEl(t, "tspan", { "font-family": "Noto SC", "font-weight": 500, "font-size": 30 }, label + "  ");
+    var n = svgEl(t, "tspan", {}, "0"); svgEl(t, "tspan", { "font-size": 26, fill: "#5d656e" }, " mm");
+    return { g: g, ln: ln, len: len, num: n };
+  }
+  // 图内坐标 → 画面:x' = x - 100 + 260,y' = y - 480 + 300
+  var wb = dim(535, 1360, 838, "轴距", "3000", 670);
+  var lg = dim(286, 1623, 930, "车长", "4999", 760);
+
+  var thumbs = document.getElementById("thumbs");
+  ["6eda7a0e1b", "582eadc29c", "02d5420d37"].forEach(function (k) {
+    var d = document.createElement("div"); d.className = "thumb";
+    d.style.cssText = "width:220px; height:124px; overflow:hidden; border:2px solid #12161a; background-color:#12161a;";
+    d.innerHTML = '<img src="assets/stills/yu7_' + k + '.jpg" style="width:220px; height:124px; object-fit:cover; display:block;" />';
+    thumbs.appendChild(d);
+  });
+
+  var tl = HyperShader.init({
+    bgColor: "#eceee9", accentColor: "#ff5a1f", scenes: ["s1", "s2", "s3"],
+    transitions: [
+      { time: 4.6, shader: "chromatic-split", duration: 0.55 },
+      { time: 9.6, shader: "glitch", duration: 0.45 },
+    ],
+  });
+
+  // 页码与进度条
+  tl.fromTo("#pgbar", { scaleX: 0 }, { scaleX: 1, duration: 15, ease: "none" }, 0);
+  tl.set("#pg1", { opacity: 0 }, 4.9); tl.set("#pg2", { opacity: 1 }, 4.9); tl.set("#pg2", { opacity: 0 }, 9.9); tl.set("#pg3", { opacity: 1 }, 9.9);
+
+  // ---- 01 ----
+  tl.fromTo("#vw1", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.8, ease: "power3.inOut" }, 0.15);
+  tl.fromTo("#br1 .br", { opacity: 0, scale: 1.6 }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2)", stagger: 0.06 }, 0.75);
+  tl.fromTo("#t1a", { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.35);
+  tl.fromTo("#t1h", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.55, ease: "expo.out" }, 0.45);
+  tl.fromTo("#r1l", { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "power3.inOut" }, 0.7);
+  HF.countUp(tl, document.getElementById("n1"), "835", 0.85, 1.5, { ease: "power4.out" });
+  tl.to("#tk i", { backgroundColor: "#ff5a1f", duration: 0.05, stagger: 0.03, ease: "none" }, 0.9);
+  tl.fromTo("#r2l", { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "power3.inOut" }, 1.3);
+  tl.fromTo("#r2 .k, #r2 .v", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out", stagger: 0.08 }, 1.45);
+  HF.countUp(tl, document.getElementById("n2"), "96.3", 1.5, 1.2, { ease: "power4.out" });
+
+  // ---- 02 ----
+  // 真实时间 3.23 秒:车速 0→100,用时 0→3.23,标尺指针同步
+  var T0 = 5.5, DUR = 3.23;
+  var acc = function (p) { return 1 - Math.pow(1 - p, 1.6); }; // 车速随时间:先快后慢
+  HF.drive(tl, function (t) {
+    var p = Math.min(1, Math.max(0, t / DUR)), s = acc(p);
+    document.getElementById("spd").textContent = p >= 1 ? "100" : String(Math.floor(100 * s));
+    document.getElementById("tms").textContent = p >= 1 ? "3.23" : (DUR * p).toFixed(2);
+    mk.setAttribute("transform", "translate(" + (X0 + (X1 - X0) * s).toFixed(1) + ",0)");
+    prog.setAttribute("x2", (X0 + (X1 - X0) * s).toFixed(1));
+  }, T0 - 0.6, DUR + 0.6 + 1.2);
+  // 跟踪框:关键帧按 road.mp4 里车的位置量出(源坐标 ×0.5 + 取景框偏移)
+  var K = [[0.4, 640, 260, 1040, 600], [1.0, 360, 180, 1520, 760], [1.6, 320, 170, 1520, 770], [2.1, 280, 140, 1600, 800]];
+  function box(k) { return { left: 120 + k[1] * 0.5, top: 180 + k[2] * 0.5, width: k[3] * 0.5, height: k[4] * 0.5 }; }
+  tl.set("#trk", Object.assign({ opacity: 1 }, box(K[0])), 4.6 + K[0][0]);
+  for (var j = 1; j < K.length; j++) tl.to("#trk", Object.assign({ duration: K[j][0] - K[j - 1][0], ease: "sine.inOut" }, box(K[j])), 4.6 + K[j - 1][0]);
+  tl.to("#trk", { opacity: 0, duration: 0.2, ease: "power1.in" }, 4.6 + 2.2);
+
+  // ---- 03 ----
+  tl.fromTo("#car", { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: 0.8, ease: "expo.out" }, 9.95);
+  tl.fromTo("#t3h", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 10.0);
+  tl.fromTo(".thumb", { opacity: 0, y: -30 }, { opacity: 1, y: 0, duration: 0.45, ease: "back.out(1.7)", stagger: 0.1 }, 10.2);
+  [wb, lg].forEach(function (d, i) {
+    var at = 10.7 + i * 0.7;
+    tl.fromTo(d.g.querySelectorAll(".ext"), { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "none" }, at);
+    tl.fromTo(d.ln, { strokeDashoffset: d.len }, { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut" }, at + 0.1);
+    tl.fromTo(d.g.querySelectorAll(".tip, .chip"), { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power1.out" }, at + 0.6);
+    HF.countUp(tl, d.num, i === 0 ? "3000" : "4999", at + 0.6, 1.0, { ease: "power3.out" });
+  });
+  tl.fromTo("#fade", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.in" }, 14.5);
+  window.__timelines["main"] = tl;
+</script>
+</body>
+</html>

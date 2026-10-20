@@ -1,0 +1,62 @@
+/* 概念动画公用样式 —— 风格 A「玻璃拟态」:这一拍的实拍素材做底,数据放在毛玻璃卡上。
+   强调色 #b8f36b;数字用 Montserrat(HyperFrames 内置字体),中文用本机的 Noto Sans SC / 微软雅黑。 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0c0b; }
+#root {
+  position: relative; width: 100%; height: 100%; overflow: hidden;
+  font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; color: #f2f6ee;
+  background-color: #0a0c0b;
+}
+
+/* 底:实拍视频;没有素材时退回暗色径向底 */
+.bgwrap { position: absolute; inset: 0; }
+.bgwrap video { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; object-fit: cover; }
+.bgwrap.nobg {
+  background:
+    radial-gradient(ellipse 900px 700px at 1300px 420px, rgba(184, 243, 107, 0.16) 0%, rgba(184, 243, 107, 0) 100%),
+    radial-gradient(ellipse 1200px 900px at 400px 700px, rgba(70, 110, 120, 0.30) 0%, rgba(70, 110, 120, 0) 100%),
+    #0b0e0d;
+}
+.shade { position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(ellipse 1150px 1000px at 420px 540px, rgba(5, 7, 6, 0.66) 0%, rgba(5, 7, 6, 0) 100%),
+    radial-gradient(ellipse 1000px 900px at 1450px 540px, rgba(5, 7, 6, 0.40) 0%, rgba(5, 7, 6, 0) 100%); }
+.sweep-rot { position: absolute; left: 0; top: -240px; width: 1920px; height: 1560px; transform: rotate(18deg); pointer-events: none; }
+.sweep { position: absolute; top: 0; left: 0; width: 640px; height: 1560px; mix-blend-mode: screen;
+  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0) 100%); }
+
+/* 毛玻璃 */
+.glass {
+  border-radius: 40px; background-color: rgba(236, 246, 228, 0.11);
+  border: 2px solid rgba(236, 246, 228, 0.30);
+  box-shadow: 0 40px 90px rgba(0, 0, 0, 0.35), inset 0 2px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(30px) saturate(1.5); -webkit-backdrop-filter: blur(30px) saturate(1.5);
+}
+
+/* 左侧数据卡 */
+.card { position: absolute; left: 110px; top: 150px; width: 780px; padding: 56px 60px 52px; }
+.pill { display: inline-flex; align-items: center; height: 48px; padding: 0 24px; border-radius: 24px;
+  background-color: rgba(184, 243, 107, 0.16); color: #b8f36b; font-size: 24px; font-weight: 600; letter-spacing: 0.08em; }
+.ttl { margin-top: 26px; font-size: 72px; font-weight: 800; line-height: 1.12; letter-spacing: -0.01em; }
+.rule { height: 2px; margin: 32px 0 30px; background-color: rgba(236, 246, 228, 0.32); transform-origin: 0 50%; }
+.hlab { font-size: 30px; color: rgba(242, 246, 238, 0.74); }
+.hval { display: flex; align-items: baseline; gap: 14px; margin-top: 8px; white-space: nowrap; }
+.num { font-family: "Montserrat"; font-weight: 700; letter-spacing: -0.035em; line-height: 1; font-variant-numeric: tabular-nums; }
+.txt { font-weight: 800; line-height: 1.05; letter-spacing: -0.01em; }
+.unit { font-weight: 600; color: rgba(242, 246, 238, 0.82); }
+.rows { margin-top: 34px; }
+.r { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; padding: 18px 0;
+     border-top: 2px solid rgba(236, 246, 228, 0.16); white-space: nowrap; }
+.rl { font-size: 28px; color: rgba(242, 246, 238, 0.74); }
+.rv { font-weight: 700; color: #f2f6ee; }
+.rv .num { letter-spacing: -0.02em; }
+.src { position: absolute; right: 110px; top: 84px; height: 56px; line-height: 52px; padding: 0 26px; border-radius: 28px;
+       font-size: 22px; letter-spacing: 0.04em; color: rgba(242, 246, 238, 0.66); white-space: nowrap; max-width: 900px; overflow: hidden; }
+
+/* 右侧示意区:各模板往里画 */
+.stage { position: absolute; left: 960px; top: 160px; width: 850px; height: 800px; }
+.acc { color: #b8f36b; }
+
+#grain { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#grain div { position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; opacity: 0.07;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }

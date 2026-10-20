@@ -301,9 +301,9 @@
           </div>
           {% else %}
           <div class="sb-visual">{{ s.spec.visual_zh }}</div>
-          {% if s.spec.overlay and s.spec.overlay.kind == 'panel' %}
+          {% if s.spec.overlay and s.spec.overlay.kind in ('panel', 'concept') %}
           <div class="sb-card">
-            <div class="sb-card-title">{{ m.icon("grid", "i-sm") }}侧边面板 · {{ s.spec.overlay.title }}</div>
+            <div class="sb-card-title">{{ m.icon("grid", "i-sm") }}{% if s.spec.overlay.kind == 'concept' %}概念动画 {{ s.spec.overlay.scene }}{% else %}侧边面板{% endif %} · {{ s.spec.overlay.title }}</div>
             <table class="mini-table"><tbody>
             {% for r in s.spec.overlay.rows %}
               <tr><td class="subtle">{{ r.label }}</td>{% for v in r.get('values') or [] %}<td class="num">{{ v }}</td>{% endfor %}<td>{% if r.fact_id %}<code class="js-fact-ref" data-ref="{{ r.fact_id }}" title="查看事实">{{ r.fact_id }}</code>{% endif %}</td></tr>
@@ -312,6 +312,8 @@
           </div>
           {% elif s.spec.overlay and s.spec.overlay.kind == 'highlight' %}
           <div class="sb-card"><div class="sb-card-title">{{ m.icon("grid", "i-sm") }}大字:{{ s.spec.overlay.lines | join(' / ') }}</div></div>
+          {% elif s.spec.overlay and s.spec.overlay.kind == 'broll' %}
+          <div class="sb-card"><div class="sb-card-title">{{ m.icon("grid", "i-sm") }}{{ {'split': '分屏', 'lower_third': '角标'}.get(s.spec.overlay.style, '') }}</div></div>
           {% elif s.spec.overlay and s.spec.overlay.kind == 'stat' %}
           <div class="sb-card"><div class="sb-card-title">{{ m.icon("grid", "i-sm") }}大数字:{{ s.spec.overlay.label }} {{ s.spec.overlay.value }}{% if s.spec.overlay.fact_id %} <code class="js-fact-ref" data-ref="{{ s.spec.overlay.fact_id }}" title="查看事实">{{ s.spec.overlay.fact_id }}</code>{% endif %}</div></div>
           {% endif %}

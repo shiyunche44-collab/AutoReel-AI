@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 风格 A · 玻璃拟态:实拍视频做底,数据放在毛玻璃卡上;光扫 + 3D 展厅画廊 + 着色器转场 -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/three.r147.min.js"></script>
+  <script src="vendor/shader-transitions.global.js"></script>
+  <script src="shared/hf.js"></script>
+  <script src="shared/gallery3d.js"></script>
+  <style>
+    @font-face { font-family: "Noto SC"; src: url("fonts/NotoSansSC-VF.ttf"); font-weight: 100 900; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0c0b; }
+    #root { position: relative; width: 100%; height: 100%; font-family: "Noto SC", sans-serif; color: #f2f6ee; }
+    .scene { position: absolute; inset: 0; overflow: hidden; background-color: #0a0c0b; }
+    .bgwrap { position: absolute; inset: 0; }
+    .bgwrap video, .bgwrap canvas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; object-fit: cover; }
+    .shade { position: absolute; inset: 0; }
+    .glass { position: absolute; border-radius: 40px; background: rgba(236, 246, 228, 0.11);
+             border: 2px solid rgba(236, 246, 228, 0.30);
+             box-shadow: 0 40px 90px rgba(0, 0, 0, 0.35), inset 0 2px 0 rgba(255, 255, 255, 0.22);
+             backdrop-filter: blur(30px) saturate(1.5); -webkit-backdrop-filter: blur(30px) saturate(1.5); }
+    .pill { display: inline-flex; align-items: center; gap: 14px; height: 48px; padding: 0 22px; border-radius: 24px;
+            background: rgba(184, 243, 107, 0.16); color: #b8f36b; font-size: 24px; font-weight: 600; letter-spacing: 0.08em; }
+    .pill b { font-family: "Montserrat"; font-weight: 700; }
+    .h1 { font-size: 76px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.1; }
+    .rule { height: 2px; background-color: rgba(236, 246, 228, 0.32); transform-origin: 0 50%; }
+    .lab { font-size: 30px; font-weight: 400; color: rgba(242, 246, 238, 0.74); }
+    .num { font-family: "Montserrat"; font-weight: 700; letter-spacing: -0.035em; line-height: 1; font-variant-numeric: tabular-nums; }
+    .unit { font-family: "Montserrat"; font-weight: 600; color: rgba(242, 246, 238, 0.82); }
+    .src { position: absolute; font-size: 22px; color: rgba(242, 246, 238, 0.62); letter-spacing: 0.04em; }
+    .sweep { position: absolute; top: -200px; left: 0; width: 700px; height: 1480px; transform: rotate(18deg);
+             background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.20) 50%, rgba(255,255,255,0) 100%);
+             mix-blend-mode: screen; pointer-events: none; }
+    .cells { display: flex; gap: 10px; }
+    .cells i { display: block; width: 44px; height: 16px; border-radius: 5px; background-color: rgba(236, 246, 228, 0.16); }
+    .cells i.on { background-color: #b8f36b; }
+    #grain { position: absolute; inset: 0; z-index: 40; pointer-events: none; overflow: hidden; }
+    #grain div { position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; opacity: 0.07;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  </style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1920" data-height="1080">
+
+  <!-- 01 电池与续航 -->
+  <div id="s1" class="scene">
+    <div class="bgwrap" id="bg1"><video id="v1" class="clip" src="assets/studio.mp4" data-start="0" data-duration="5.4" muted playsinline></video></div>
+    <div class="shade" style="background: radial-gradient(ellipse 1100px 900px at 380px 540px, rgba(5,7,6,0.62) 0%, rgba(5,7,6,0) 100%);"></div>
+    <div class="sweep" id="sw1"></div>
+    <div class="glass" id="p1" style="left:110px; top:150px; width:820px; height:780px; padding:60px 64px;">
+      <div class="pill" id="p1pill"><b>01</b>三电系统</div>
+      <div class="h1" id="p1h" style="margin-top:30px;">电池与续航</div>
+      <div class="rule" id="p1r" style="margin:36px 0 34px; width:692px;"></div>
+      <div class="lab">CLTC 纯电续航</div>
+      <div style="display:flex; align-items:baseline; gap:16px; margin-top:10px;">
+        <div class="num" id="n1" style="font-size:196px;">0</div><div class="unit" style="font-size:58px;">km</div>
+      </div>
+      <div class="cells" id="cells" style="margin-top:28px;"></div>
+      <div id="m2" style="display:flex; align-items:baseline; gap:22px; margin-top:44px;">
+        <div class="lab">电池容量</div>
+        <div class="num" id="n2" style="font-size:92px;">0</div><div class="unit" style="font-size:40px;">kWh</div>
+      </div>
+    </div>
+    <div class="glass src" id="chip1" style="right:110px; top:110px; height:56px; line-height:52px; padding:0 26px; border-radius:28px;">示例数据 · 非核对事实</div>
+  </div>
+
+  <!-- 02 零百加速 -->
+  <div id="s2" class="scene">
+    <div class="bgwrap" id="bg2"><video id="v2" class="clip" src="assets/road.mp4" data-start="4.6" data-duration="5.8" muted playsinline></video></div>
+    <div class="shade" style="background: radial-gradient(ellipse 1000px 900px at 1520px 540px, rgba(5,7,6,0.58) 0%, rgba(5,7,6,0) 100%);"></div>
+    <div class="glass" id="p2" style="right:110px; top:190px; width:780px; height:700px; padding:60px 64px;">
+      <div class="pill"><b>02</b>动力性能</div>
+      <div class="h1" id="p2h" style="margin-top:30px;">零百加速</div>
+      <div style="display:flex; align-items:baseline; gap:14px; margin-top:26px;">
+        <div class="num" id="n3" style="font-size:250px;">0.00</div><div class="unit" style="font-size:84px;">s</div>
+      </div>
+      <div style="position:relative; margin-top:40px; width:652px; height:12px; border-radius:6px; background-color:rgba(236,246,228,0.18); overflow:hidden;">
+        <div id="fill" style="position:absolute; inset:0; border-radius:6px; background-color:#b8f36b; transform-origin:0 50%;"></div>
+      </div>
+      <div class="lab" style="display:flex; justify-content:space-between; width:652px; margin-top:16px; font-size:24px;">
+        <span>0</span><span>50</span><span>100 km/h</span>
+      </div>
+    </div>
+    <div class="glass src" id="chip2" style="left:110px; bottom:110px; height:56px; line-height:52px; padding:0 26px; border-radius:28px;">0–100 km/h · 示例数据</div>
+  </div>
+
+  <!-- 03 外观 -->
+  <div id="s3" class="scene">
+    <div class="bgwrap"><canvas id="gal" width="1920" height="1080"></canvas></div>
+    <div id="t3" style="position:absolute; left:120px; top:104px;">
+      <div class="pill"><b>03</b>外观设计</div>
+      <div class="h1" id="p3h" style="margin-top:26px;">官图 · 全角度</div>
+    </div>
+    <div style="position:absolute; left:120px; bottom:104px; display:flex; gap:28px;">
+      <div class="glass" id="c31" style="position:relative; padding:30px 44px; border-radius:32px;">
+        <div class="lab" style="font-size:26px;">车长</div>
+        <div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;"><div class="num" id="n4" style="font-size:96px;">0</div><div class="unit" style="font-size:36px;">mm</div></div>
+      </div>
+      <div class="glass" id="c32" style="position:relative; padding:30px 44px; border-radius:32px;">
+        <div class="lab" style="font-size:26px;">轴距</div>
+        <div style="display:flex; align-items:baseline; gap:10px; margin-top:6px;"><div class="num" id="n5" style="font-size:96px;">0</div><div class="unit" style="font-size:36px;">mm</div></div>
+      </div>
+    </div>
+    <div class="glass src" style="right:110px; bottom:120px; height:56px; line-height:52px; padding:0 26px; border-radius:28px;">示例数据 · 小米汽车官图</div>
+  </div>
+
+  <div id="grain"><div></div></div>
+  <div id="fade" style="position:absolute; inset:0; z-index:45; background-color:#000; opacity:0;"></div>
+</div>
+<script>
+  var cells = document.getElementById("cells");
+  for (var i = 0; i < 13; i++) { var c = document.createElement("i"); cells.appendChild(c); }
+  var S = "assets/stills/yu7_";
+  var gal = Gallery3D(document.getElementById("gal"),
+    ["6eda7a0e1b", "f9eff654b1", "582eadc29c", "2c15f5fa10", "9f7015bf57", "f4a9707ae7", "49288b66c9", "02d5420d37"].map(function (k) { return S + k + ".jpg"; }),
+    { duration: 5.4, bg: "#0a0c0b", radius: 6.4, panelW: 4.8, camFrom: { dist: 22, height: 3.4, look: 1.7 }, camTo: { dist: 16, height: 2.0, look: 1.95 }, spin: 0.9, startAngle: -0.5 });
+
+  var tl = HyperShader.init({
+    bgColor: "#0a0c0b", accentColor: "#b8f36b", scenes: ["s1", "s2", "s3"],
+    transitions: [
+      { time: 4.6, shader: "whip-pan", duration: 0.6 },
+      { time: 9.6, shader: "light-leak", duration: 0.8 },
+    ],
+  });
+
+  // ---- 01 ----
+  tl.fromTo("#bg1", { scale: 1.0 }, { scale: 1.07, duration: 5.4, ease: "sine.inOut" }, 0);
+  tl.fromTo("#p1", { opacity: 0, x: -90 }, { opacity: 1, x: 0, duration: 0.8, ease: "expo.out" }, 0.2);
+  tl.fromTo("#p1pill", { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.45);
+  tl.fromTo("#p1h", { opacity: 0, y: 36 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out" }, 0.5);
+  tl.fromTo("#p1r", { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: "power2.inOut" }, 0.65);
+  HF.countUp(tl, document.getElementById("n1"), "835", 0.8, 1.6, { ease: "expo.out" });
+  tl.to("#cells i", { backgroundColor: "#b8f36b", duration: 0.12, stagger: 0.07, ease: "none" }, 0.95);
+  tl.fromTo("#m2", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.6)" }, 1.55);
+  HF.countUp(tl, document.getElementById("n2"), "96.3", 1.6, 1.2);
+  tl.fromTo("#chip1", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(2)" }, 1.0);
+  tl.fromTo("#sw1", { x: -900 }, { x: 2300, duration: 1.7, ease: "power1.inOut" }, 2.3);
+
+  // ---- 02 ----
+  tl.fromTo("#bg2", { scale: 1.14 }, { scale: 1.0, duration: 5.8, ease: "power2.out" }, 4.6);
+  tl.fromTo("#p2", { opacity: 0, x: 90 }, { opacity: 1, x: 0, duration: 0.7, ease: "expo.out" }, 4.95);
+  tl.fromTo("#p2h", { opacity: 0, letterSpacing: "0.4em" }, { opacity: 1, letterSpacing: "-0.01em", duration: 0.7, ease: "power3.out" }, 5.1);
+  // 秒表:真实时间 3.23 秒从 0 走到 3.23,进度条同步走到 100 km/h
+  HF.countUp(tl, document.getElementById("n3"), "3.23", 5.45, 3.23, { ease: "none" });
+  tl.fromTo("#fill", { scaleX: 0 }, { scaleX: 1, duration: 3.23, ease: "power1.out" }, 5.45);
+  tl.fromTo("#n3", { scale: 1 }, { scale: 1.06, duration: 0.16, yoyo: true, repeat: 1, ease: "power2.out", transformOrigin: "0% 80%" }, 8.68);
+  tl.fromTo("#chip2", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 5.6);
+
+  // ---- 03 ----
+  HF.drive(tl, gal.render, 9.6, 5.4);
+  tl.fromTo("#t3", { opacity: 0, x: -50 }, { opacity: 1, x: 0, duration: 0.7, ease: "expo.out" }, 10.2);
+  tl.fromTo("#c31", { opacity: 0, y: 50 }, { opacity: 1, y: 0, duration: 0.6, ease: "back.out(1.5)" }, 10.6);
+  tl.fromTo("#c32", { opacity: 0, y: 50 }, { opacity: 1, y: 0, duration: 0.6, ease: "back.out(1.5)" }, 10.75);
+  HF.countUp(tl, document.getElementById("n4"), "4999", 10.7, 1.4);
+  HF.countUp(tl, document.getElementById("n5"), "3000", 10.85, 1.4);
+  // 末拍收尾:整体淡出
+  tl.fromTo("#fade", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power2.in" }, 14.5);
+  window.__timelines["main"] = tl;
+</script>
+</body>
+</html>

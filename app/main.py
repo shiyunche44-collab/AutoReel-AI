@@ -152,12 +152,14 @@ async def lifespan(app: FastAPI):
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()
     cli_ok, cli_msg = cli.health_check()
+    motion_ok, motion_msg = config.motion_status()
     deepseek = DeepSeekProvider()
     minimax = MiniMaxProvider()
     HEALTH.update(
         {
             "ffmpeg": {"ok": ffmpeg_ok, "message": ffmpeg_msg},
             "connector": {"ok": cli_ok, "message": cli_msg},
+            "motion": {"ok": motion_ok, "message": motion_msg},
             "llm": {
                 "deepseek": deepseek.available(),
                 "minimax": minimax.available(),

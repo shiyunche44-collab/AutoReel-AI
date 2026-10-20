@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .car { position: absolute; left: 0; top: 130px; width: 850px; height: 600px; }
+    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+    .dl { font-family: "Noto Sans SC","Microsoft YaHei"; fill: rgba(242,246,238,0.8); font-size: 26px; }
+    .dv { font-family: "Montserrat","Noto Sans SC"; font-weight: 700; fill: #b8f36b; font-size: 38px; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame();
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const car = HF.el("div", "car"); stage.appendChild(car);
+    const sv = HF.svg("svg", { width: 850, height: 600, viewBox: "0 0 850 600" }, car);
+    const body = HF.svg("path", { d: "M50 300 L50 250 Q50 228 92 222 L222 196 Q292 110 420 102 L560 102 Q650 116 704 200 L752 218 Q772 226 772 258 L772 300 Z", fill: "rgba(236,246,228,0.10)", stroke: "#f2f6ee", "stroke-width": 4, "stroke-linejoin": "round", pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+    const win = HF.svg("path", { d: "M268 196 Q320 128 430 122 L552 122 Q620 134 664 196 Z", fill: "rgba(236,246,228,0.10)", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, sv);
+    const wheels = [215, 615].map((x) => {
+      const w = HF.svg("g", {}, sv);
+      HF.svg("circle", { cx: x, cy: 308, r: 54, fill: "#0a0c0b", "fill-opacity": 0.7, stroke: "#f2f6ee", "stroke-width": 4 }, w);
+      HF.svg("circle", { cx: x, cy: 308, r: 22, fill: "none", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, w);
+      return w;
+    });
+    // 尺寸线:轴距(中)、长(下)、高(右)。文字按行标签里的关键字对应,原文照写
+    const find = (re) => HF.rows.find((r) => re.test(r.label));
+    const dim = (x1, y1, x2, y2, row, tx, ty, anchor) => {
+      const g = HF.svg("g", { opacity: 0 }, sv);
+      HF.svg("line", { x1: x1, y1: y1, x2: x2, y2: y2, stroke: "#b8f36b", "stroke-width": 4, "stroke-linecap": "round" }, g);
+      const horiz = y1 === y2;
+      [[x1, y1], [x2, y2]].forEach((p) => HF.svg("line", horiz ? { x1: p[0], y1: p[1] - 14, x2: p[0], y2: p[1] + 14, stroke: "#b8f36b", "stroke-width": 4 } : { x1: p[0] - 14, y1: p[1], x2: p[0] + 14, y2: p[1], stroke: "#b8f36b", "stroke-width": 4 }, g));
+      if (row) {
+        const t = HF.svg("text", { x: tx, y: ty, "text-anchor": anchor || "middle" }, g);
+        const a = HF.svg("tspan", { "class": "dl" }, t); a.textContent = row.label + "  ";
+        const b = HF.svg("tspan", { "class": "dv" }, t); b.textContent = row.value;
+      }
+      return g;
+    };
+    const dWheel = dim(215, 410, 615, 410, find(/轴距/), 415, 466);
+    const dLen = dim(50, 520, 772, 520, find(/长/), 411, 576);
+    const dH = dim(812, 102, 812, 362, find(/高/), 830, 66, "end");
+    tl.fromTo(car, { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
+    tl.to(body, { attr: { "stroke-dashoffset": 0 }, duration: T(1.4), ease: "power2.inOut" }, T(0.5));
+    tl.fromTo([win].concat(wheels), { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.4));
+    [dWheel, dLen, dH].forEach((g, n) => tl.fromTo(g, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.7) + n * 0.4 * F.K));
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

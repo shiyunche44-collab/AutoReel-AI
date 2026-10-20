@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .radar { position: absolute; left: 25px; top: 0; width: 800px; height: 800px; }
+    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame();
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const rd = HF.el("div", "radar"); stage.appendChild(rd);
+    const sv = HF.svg("svg", { width: 800, height: 800, viewBox: "0 0 800 800" }, rd);
+    const cx = 400, cy = 400;
+    const rings = [130, 235, 340].map((r) => HF.svg("circle", { cx: cx, cy: cy, r: r, fill: "rgba(236,246,228,0.06)", stroke: "rgba(236,246,228,0.34)", "stroke-width": 2 }, sv));
+    HF.svg("line", { x1: cx - 340, y1: cy, x2: cx + 340, y2: cy, stroke: "rgba(236,246,228,0.18)", "stroke-width": 2 }, sv);
+    HF.svg("line", { x1: cx, y1: cy - 340, x2: cx, y2: cy + 340, stroke: "rgba(236,246,228,0.18)", "stroke-width": 2 }, sv);
+    // 扫描扇面:60° 楔形,绕圆心匀速转(顺时针)
+    const ex = cx + 340 * Math.cos(-Math.PI / 3), ey = cy + 340 * Math.sin(-Math.PI / 3);
+    const wedge = HF.svg("path", { d: "M" + cx + " " + cy + " L" + (cx + 340) + " " + cy + " A340 340 0 0 0 " + ex + " " + ey + " Z", fill: "#b8f36b", "fill-opacity": 0.30 }, sv);
+    HF.svg("rect", { x: cx - 38, y: cy - 80, width: 76, height: 160, rx: 26, fill: "rgba(236,246,228,0.14)", stroke: "#b8f36b", "stroke-width": 4 }, sv);
+    HF.svg("rect", { x: cx - 26, y: cy - 38, width: 52, height: 40, rx: 10, fill: "none", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, sv);
+    const rnd = HF.rng(7);
+    const dots = [];
+    for (let n = 0; n < 30; n++) {
+      const ang = rnd() * Math.PI * 2, rr = 110 + rnd() * 215;
+      const d = HF.svg("circle", { cx: cx + rr * Math.cos(ang), cy: cy + rr * Math.sin(ang), r: 5 + rnd() * 4, fill: "#b8f36b", opacity: 0 }, sv);
+      dots.push({ d: d, ang: ang });
+    }
+    const period = Math.max(1.6, Math.min(2.6, HF.seconds / 2));
+    tl.fromTo(rd, { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: T(0.8), ease: "expo.out", transformOrigin: "50% 50%" }, T(0.3));
+    rings.forEach((r, n) => tl.fromTo(r, { attr: { "stroke-opacity": 0 } }, { attr: { "stroke-opacity": 1 }, duration: 0.4 }, T(0.5) + n * 0.15));
+    const turns = Math.max(1, Math.ceil((HF.seconds - T(0.8)) / period));
+    tl.to(wedge, { rotation: 360 * turns, svgOrigin: cx + " " + cy, duration: turns * period, ease: "none" }, T(0.8));
+    // 点在扇面扫过时亮起,然后慢慢暗下去。扇面的前缘 = 起始角 0 → 顺时针,所以点的"到达时刻"按角度算
+    dots.forEach((o) => {
+      const frac = ((o.ang % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+      for (let k = 0; k < turns; k++) {
+        const t0 = T(0.8) + k * period + frac * period;
+        tl.fromTo(o.d, { opacity: 1, scale: 1.8 }, { opacity: 0.12, scale: 1, duration: period * 0.9, ease: "power2.out", transformOrigin: "50% 50%" }, t0);
+      }
+    });
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

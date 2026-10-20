@@ -60,6 +60,8 @@ themes:
 #   highlight 宣传片缩成小窗 + 两行大字关键词
 #   card      整屏数据卡(spec / compare / bars / timeline,按 card 字段)
 #   stat      宣传片压暗 + 中央一个大数字从 0 滚到目标值(一个核对过的参数)
+#   concept   整屏概念动画(HyperFrames 渲染 motion/scenes/,模板见 vocab.concept_scenes),
+#             讲电池、补能、加速、智驾这类"看不见的东西";数字同样只来自核对过的事实
 # angle 在这里只决定背景画面偏外观还是偏车内,不要求逐镜对上。
 sections:
   开场:
@@ -78,7 +80,7 @@ sections:
     beat: 外观设计亮点与尺寸
     chapter: 外观内饰
     angle: exterior_45
-    layouts: [broll, highlight, panel, stat]
+    layouts: [broll, highlight, panel, stat, concept]
   内饰空间:
     beat: 座舱、空间、做工与实用性
     chapter: 外观内饰
@@ -88,14 +90,14 @@ sections:
     beat: 动力、续航、补能、底盘
     chapter: 三电性能
     angle: exterior_45
-    layouts: [card, stat, highlight, broll, panel]
+    layouts: [card, stat, concept, highlight, broll, panel]
     card: spec
     requires_fact: true
   智能配置:
     beat: 智驾硬件、座舱芯片与功能
     chapter: 智能配置
     angle: interior
-    layouts: [highlight, broll, panel, stat]
+    layouts: [highlight, broll, panel, stat, concept]
   版本选择:
     beat: 各版本价格与配置差异,推荐哪个
     chapter: 怎么选
@@ -107,7 +109,7 @@ sections:
     beat: 与最主要的对手比关键维度
     chapter: 怎么选
     angle: exterior_45
-    layouts: [card, broll]
+    layouts: [card, concept, broll]
     card: compare
   结论建议:
     beat: 适合谁、不适合谁
@@ -314,6 +316,16 @@ vocab:
                赛车计划, 车模, 模型, 申报图, 老鼠, 二手车, ota升级, ota 升级]
   showcase_words: [静态, 外观, 内饰, walkaround, exterior, interior]
   official_markers: [汽车, motors, motor, auto]
+
+  # 概念动画模板:名字 → 什么时候用(进分镜提示词)。模板只画示意,数字全部来自 rows
+  concept_scenes:
+    battery: 讲电池容量、电池包、续航(rows 放容量 / 续航 / 电压平台)
+    charging: 讲充电速度、补能时间(rows 放充电时间 / 充电功率)
+    accel: 讲零百加速、最高车速、功率(rows 第一行放零百加速)
+    lidar: 讲激光雷达、智驾感知硬件(rows 放雷达数量 / 探测距离 / 摄像头数)
+    chip: 讲智驾或座舱芯片、算力(rows 放芯片名 / 算力)
+    dims: 讲车身尺寸、轴距、空间(rows 放长宽高 / 轴距)
+    compare: 和对手比两三个关键数字(columns 给两个对象名,rows 每行两个值)
 
   ui_subject_label: 选题 / 车型
   ui_placeholder: 例:比亚迪汉 EV 2026 款

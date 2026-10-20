@@ -153,7 +153,9 @@ def test_build_beats_grounds_stat_and_rejects_invented_number():
     assert s.overlay == {"kind": "stat", "label": "CLTC续航", "value": "835公里",
                          "fact_id": "f_1", "source": s.overlay["source"]}
     if bad is not None and bad != good:
-        assert specs[bad].layout == "broll" and specs[bad].overlay is None
+        # 退回 broll 后只剩样式标记(assign_broll_styles),没有编出来的数字
+        assert specs[bad].layout == "broll"
+        assert specs[bad].overlay is None or specs[bad].overlay.get("kind") == "broll"
     assert not explainer.validate_beats(specs)
 
 

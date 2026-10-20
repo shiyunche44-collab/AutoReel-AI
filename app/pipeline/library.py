@@ -1089,8 +1089,38 @@ def _fill_tier(item: Item, used: int) -> int:
     return 1 if not used else 5
 
 
+#: 铺背景时的"长得差不多":比打标签去重(DUP_BITS)宽 —— 同角度的几张棚拍官图、
+#: 同一镜头切出来的前后段都算一簇,用掉一张就当整簇都用过
+FILL_DUP_BITS = 10
+#: 相邻多样性看最近几刀(跨节拍):这几刀里出现过的簇往后排
+RECENT_PIECES = 6
+
+
+def _probe(item: Item) -> str:
+    return item.frame or (item.path if item.kind == "still" else "")
+
+
+def near_dup_groups(items: Sequence[Item], bits: int = FILL_DUP_BITS) -> dict[str, str]:
+    """item_id → 所在簇的代表 id。跨来源比代表帧的 dHash,贪心入簇;
+    没有代表帧(读不了)的条目自成一簇。"""
+    heads: list[tuple[str, int]] = []
+    out: dict[str, str] = {}
+    for i in items:
+        probe = _probe(i)
+        h = _dhash(probe) if probe and Path(probe).is_file() else None
+        if h is None:
+            out[i.id] = i.id
+            continue
+        head = next((hid for hid, hh in heads if bin(h ^ hh).count("1") <= bits), None)
+        if head is None:
+            heads.append((i.id, h))
+            head = i.id
+        out[i.id] = head
+    return out
+
+
 def fill(subject: str, seconds: float, *, hint: str = "",
-         used: dict[str, int] | None = None) -> list[Piece]:
+         used: dict[str, int] | None = None, recent: list[str] | None = None) -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -1099,10 +1129,14 @@ def fill(subject: str, seconds: float, *, hint: str = "",
 
     `hint`(profile 的背景偏好,汽车是 exterior / interior / driving)只参与排序。`used` 是全片共享的
     已用计数(item_id → 次数),调用方跨节拍传同一个字典,尽量不重复。
+    计数按**近重复簇**算(`near_dup_groups`):同角度的几张官图用掉一张,其余也算用过。
+    `recent` 是全片最近用过的 item_id(调用方跨节拍传同一个列表,这里就地追加):
+    和最近几刀同簇的、和上一刀同视角的往后排 —— 只是排序,池子不够时照样铺满。
     返回空列表表示池子里什么都没有。
     """
     seconds = float(seconds)
     used = used if used is not None else {}
+    recent = recent if recent is not None else []
     lib = Library.load(subject)
     vocab = vocab_of(lib)
     want = vocab.hint_views(hint)
@@ -1110,19 +1144,32 @@ def fill(subject: str, seconds: float, *, hint: str = "",
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
 
-    def rank(i: Item) -> tuple:
+    group = near_dup_groups(pool)
+    by_id = {i.id: i for i in lib.items}
+    members: dict[str, list[str]] = {}
+    for iid, g in group.items():
+        members.setdefault(g, []).append(iid)
+
+    def group_used(i: Item) -> int:
+        return sum(used.get(m, 0) for m in members.get(group[i.id], [i.id]))
+
+    def rank(i: Item, recent_groups: set[str], last_view: str) -> tuple:
         # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
         # 混着 SU7 的赛道活动),背景里出现别的车比画面不对口严重得多
-        n = used.get(i.id, 0)
-        return (_fill_tier(i, n), i.target != "yes", bool(want) and i.view not in want, n,
+        n = group_used(i)
+        return (_fill_tier(i, n), i.target != "yes", group[i.id] in recent_groups,
+                bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
                 _dirt(i), not i.official, -i.length)
 
-    pool.sort(key=rank)
     out: list[Piece] = []
     covered = 0.0
-    for i in pool:
-        if covered >= seconds - 0.05:
-            break
+    left = list(pool)
+    while left and covered < seconds - 0.05:
+        window = recent[-RECENT_PIECES:]
+        recent_groups = {group.get(r, r) for r in window}
+        last = by_id.get(window[-1]) if window else None
+        i = min(left, key=lambda x: rank(x, recent_groups, last.view if last else ""))
+        left.remove(i)
         remaining = seconds - covered
         if i.kind == "still":
             take = min(remaining, FILL_MAX_PIECE)
@@ -1141,6 +1188,8 @@ def fill(subject: str, seconds: float, *, hint: str = "",
         out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0))
         used[i.id] = used.get(i.id, 0) + 1
+        recent.append(i.id)
+        del recent[:-RECENT_PIECES]
         covered += take
     if out and covered < seconds - 0.05:
         # 池子太小铺不满:把最后一段拉长到结尾(图片推拉 / 视频截到原片允许的长度)

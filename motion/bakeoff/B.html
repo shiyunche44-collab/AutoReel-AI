@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 风格 B · 电影暗调 3D:宽银幕遮幅、调色、颗粒;电池分层爆炸图;大数字带动态模糊砸入;推轨 + 移焦 -->
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/three.r147.min.js"></script>
+  <script src="vendor/shader-transitions.global.js"></script>
+  <script src="vendor/motion-blur.js"></script>
+  <script src="shared/hf.js"></script>
+  <script src="shared/battery3d.js"></script>
+  <style>
+    @font-face { font-family: "Noto SC"; src: url("fonts/NotoSansSC-VF.ttf"); font-weight: 100 900; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; overflow: hidden; background: #07080a; }
+    #root { position: relative; width: 100%; height: 100%; font-family: "Noto SC", sans-serif; color: #f3ede4; }
+    .scene { position: absolute; inset: 0; overflow: hidden; background-color: #07080a; }
+    .full { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+    video.full, img.full { object-fit: cover; }
+    .big { font-family: "League Gothic"; font-weight: 400; line-height: 0.86; letter-spacing: 0.005em; color: #f6efe4; }
+    .amber { color: #ff9a3c; }
+    .cn-thin { font-weight: 300; letter-spacing: 0.32em; }
+    .cn-bold { font-weight: 900; letter-spacing: 0.02em; }
+    .lab3d { position: absolute; left: 0; top: 0; white-space: nowrap; opacity: 0; display: flex; align-items: center; gap: 14px; font-size: 30px; font-weight: 500; }
+    .lab3d b { font-family: "League Gothic"; font-weight: 400; font-size: 34px; color: #ff9a3c; letter-spacing: 0.06em; }
+    #leaders line { stroke: rgba(255, 190, 120, 0.7); stroke-width: 2; }
+    #leaders circle { fill: #ff9a3c; }
+    .bar { position: absolute; left: 0; width: 1920px; height: 132px; background-color: #000; z-index: 30; }
+    .meta { position: absolute; z-index: 31; font-family: "League Gothic"; font-size: 30px; letter-spacing: 0.24em; color: rgba(243, 237, 228, 0.62); }
+    .meta.cn { font-family: "Noto SC"; font-size: 22px; letter-spacing: 0.2em; }
+    #grain { position: absolute; inset: 0; z-index: 28; pointer-events: none; overflow: hidden; }
+    #grain div { position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; opacity: 0.13;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      animation: grain 0.42s steps(1) infinite; }
+    @keyframes grain { 0%,100% { transform: translate(0,0); } 25% { transform: translate(-6%,4%); } 50% { transform: translate(5%,-7%); } 75% { transform: translate(-3%,-4%); } }
+    .vig { position: absolute; inset: 0; z-index: 27; pointer-events: none;
+           background: radial-gradient(ellipse 1250px 760px at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.62) 100%); }
+    .streak { position: absolute; height: 6px; width: 1700px; border-radius: 3px; mix-blend-mode: screen;
+              background: linear-gradient(90deg, rgba(255,154,60,0) 0%, rgba(255,190,120,0.85) 50%, rgba(255,154,60,0) 100%); }
+  </style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1920" data-height="1080">
+
+  <!-- 01 电池:分层爆炸图 -->
+  <div id="s1" class="scene">
+    <div class="full" style="background: radial-gradient(ellipse 900px 620px at 640px 560px, rgba(255,140,50,0.20) 0%, rgba(255,140,50,0) 100%);"></div>
+    <div class="full" id="ghost1" style="font-family:'League Gothic'; font-size:620px; line-height:1; color:rgba(255,255,255,0.05); top:150px; left:-40px; white-space:nowrap;">BATTERY</div>
+    <canvas id="bat" class="full" width="1920" height="1080"></canvas>
+    <svg id="leaders" class="full" viewBox="0 0 1920 1080"></svg>
+    <div id="labs"></div>
+    <div id="k1" style="position:absolute; right:150px; top:300px; text-align:right;">
+      <div class="cn-thin" id="k1a" style="font-size:30px; color:rgba(243,237,228,0.75);">电池容量</div>
+      <div style="display:flex; justify-content:flex-end; align-items:flex-end; gap:18px; margin-top:12px;">
+        <div class="big" id="k1n" data-hf-motion-blur style="font-size:360px;">96.3</div>
+        <div class="big amber" id="k1u" style="font-size:110px; padding-bottom:22px;">kWh</div>
+      </div>
+      <div id="k1b" style="margin-top:26px; font-size:32px; font-weight:500;">CLTC 纯电续航 <span class="big amber" style="font-size:64px; letter-spacing:0.02em;">835</span> km</div>
+    </div>
+  </div>
+
+  <!-- 02 零百加速:推轨 + 移焦 -->
+  <div id="s2" class="scene">
+    <div class="full" id="dolly2">
+      <video id="v2" class="full clip" src="assets/road.mp4" data-start="4.6" data-duration="5.8" muted playsinline
+             style="filter: contrast(1.18) saturate(0.78) brightness(0.86);"></video>
+    </div>
+    <div class="full" style="background: rgba(18, 28, 34, 0.35); mix-blend-mode: multiply;"></div>
+    <div class="full" id="glow2" style="background: radial-gradient(ellipse 820px 420px at 960px 560px, rgba(255,140,50,0.30) 0%, rgba(255,140,50,0) 100%); opacity:0;"></div>
+    <div class="streak" id="streak2" style="left:110px; top:590px; opacity:0;"></div>
+    <div id="k2" style="position:absolute; left:0; width:1920px; top:250px; text-align:center;">
+      <div class="big" id="k2n" data-hf-motion-blur style="font-size:520px;">3.23</div>
+      <div id="k2s" style="margin-top:6px; font-size:34px;"><span class="cn-bold">秒</span><span class="cn-thin" style="margin-left:26px; color:rgba(243,237,228,0.78);">零百加速 · 0–100 km/h</span></div>
+    </div>
+  </div>
+
+  <!-- 03 外观:官图推镜 + 移焦换图 -->
+  <div id="s3" class="scene">
+    <div class="full" id="d3a"><img id="i3a" class="full" src="assets/stills/yu7_582eadc29c.jpg" /></div>
+    <div class="full" id="d3b" style="opacity:0;"><img id="i3b" class="full" src="assets/stills/yu7_02d5420d37.jpg" /></div>
+    <div class="full" style="background: radial-gradient(ellipse 1000px 760px at 1560px 560px, rgba(5,6,8,0.78) 0%, rgba(5,6,8,0) 100%);"></div>
+    <div id="k3" style="position:absolute; right:150px; top:260px; text-align:right;">
+      <div class="cn-thin" style="font-size:30px; color:rgba(243,237,228,0.8);">车长</div>
+      <div style="display:flex; justify-content:flex-end; align-items:flex-end; gap:16px;">
+        <div class="big" id="k3n" data-hf-motion-blur style="font-size:300px;">4999</div><div class="big amber" style="font-size:90px; padding-bottom:18px;">mm</div>
+      </div>
+      <div id="k3b" style="margin-top:22px; font-size:32px; font-weight:500;">轴距 <span class="big amber" style="font-size:64px;">3000</span> mm</div>
+    </div>
+  </div>
+
+  <div class="vig"></div>
+  <div id="grain"><div></div></div>
+  <div class="bar" style="top:0;"></div><div class="bar" style="bottom:0;"></div>
+  <div class="meta" id="meta1" style="left:150px; top:52px;">CHAPTER 01 — BATTERY</div>
+  <div class="meta" id="meta2" style="left:150px; top:52px; opacity:0;">CHAPTER 02 — LAUNCH</div>
+  <div class="meta" id="meta3" style="left:150px; top:52px; opacity:0;">CHAPTER 03 — DESIGN</div>
+  <div class="meta cn" style="right:150px; top:56px;">示例数据 · 非核对事实</div>
+  <div class="meta cn" style="left:150px; bottom:52px;">小米 YU7 · 官方影像</div>
+  <div id="fade" style="position:absolute; inset:0; z-index:40; background-color:#000; opacity:0;"></div>
+</div>
+<script>
+  var names = ["上壳体", "电芯模组", "液冷板", "下护板"], labs = document.getElementById("labs"), els = [];
+  names.forEach(function (n, i) {
+    var d = document.createElement("div"); d.className = "lab3d";
+    d.innerHTML = "<b>0" + (i + 1) + "</b><span></span>"; d.lastChild.textContent = n;
+    labs.appendChild(d); els.push(d);
+  });
+  var bat = Battery3D(document.getElementById("bat"), { labelEls: els, leaders: document.getElementById("leaders"), duration: 5.4, lookX: 3.0, labelsOut: 2.7 });
+
+  var tl = HyperShader.init({
+    bgColor: "#07080a", accentColor: "#ff9a3c", scenes: ["s1", "s2", "s3"],
+    transitions: [
+      { time: 4.6, shader: "cinematic-zoom", duration: 0.7 },
+      { time: 9.6, shader: "flash-through-white", duration: 0.5 },
+    ],
+  });
+
+  // ---- 01 ----
+  HF.drive(tl, bat.render, 0, 5.4);
+  tl.fromTo("#ghost1", { x: 0 }, { x: -160, duration: 5.4, ease: "none" }, 0);
+  tl.fromTo("#k1a", { opacity: 0, letterSpacing: "0.9em" }, { opacity: 1, letterSpacing: "0.32em", duration: 0.8, ease: "power3.out" }, 2.85);
+  tl.fromTo("#k1n", { opacity: 0, scale: 1.7, x: 260 }, { opacity: 1, scale: 1, x: 0, duration: 0.42, ease: "expo.out", transformOrigin: "100% 80%" }, 2.95);
+  tl.fromTo("#k1u", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.5, ease: "back.out(1.8)" }, 3.2);
+  tl.fromTo("#k1b", { opacity: 0, x: 60 }, { opacity: 1, x: 0, duration: 0.6, ease: "power2.out" }, 3.45);
+
+  // ---- 02 ----
+  tl.set("#meta1", { opacity: 0 }, 4.9); tl.set("#meta2", { opacity: 1 }, 4.9);
+  tl.fromTo("#dolly2", { scale: 1.0 }, { scale: 1.16, duration: 5.8, ease: "sine.inOut" }, 4.6);
+  // 移焦:先清楚,数字砸入时背景失焦,把视线交给数字
+  tl.fromTo("#v2", { filter: "contrast(1.18) saturate(0.78) brightness(0.86) blur(0px)" },
+    { filter: "contrast(1.18) saturate(0.78) brightness(0.62) blur(10px)", duration: 0.7, ease: "power2.inOut" }, 6.3);
+  tl.fromTo("#k2n", { opacity: 0, scale: 2.2, y: -40 }, { opacity: 1, scale: 1, y: 0, duration: 0.38, ease: "expo.out", transformOrigin: "50% 60%" }, 6.55);
+  tl.fromTo("#glow2", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" }, 6.6);
+  tl.fromTo("#streak2", { opacity: 0, scaleX: 0.2 }, { opacity: 1, scaleX: 1, duration: 0.25, ease: "power3.out" }, 6.62);
+  tl.to("#streak2", { opacity: 0.35, duration: 1.2, ease: "power1.out" }, 6.9);
+  tl.fromTo("#k2s", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, 6.95);
+
+  // ---- 03 ----
+  tl.set("#meta2", { opacity: 0 }, 9.9); tl.set("#meta3", { opacity: 1 }, 9.9);
+  tl.fromTo("#d3a", { scale: 1.04, x: 0 }, { scale: 1.16, x: -60, duration: 3.1, ease: "none" }, 9.6);
+  tl.fromTo("#i3a", { filter: "blur(16px) brightness(0.8)" }, { filter: "blur(0px) brightness(1)", duration: 1.0, ease: "power2.out" }, 9.7);
+  // 移焦换图:前一张失焦,后一张从失焦对上焦
+  tl.to("#i3a", { filter: "blur(18px) brightness(0.7)", duration: 0.6, ease: "power2.in" }, 12.3);
+  tl.fromTo("#d3b", { opacity: 0, scale: 1.12 }, { opacity: 1, scale: 1.04, duration: 2.6, ease: "power1.out" }, 12.5);
+  tl.fromTo("#i3b", { filter: "blur(18px)" }, { filter: "blur(0px)", duration: 0.8, ease: "power2.out" }, 12.6);
+  tl.fromTo("#k3n", { opacity: 0, scale: 1.6, x: 220 }, { opacity: 1, scale: 1, x: 0, duration: 0.42, ease: "expo.out", transformOrigin: "100% 80%" }, 10.35);
+  tl.fromTo("#k3b", { opacity: 0, x: 60 }, { opacity: 1, x: 0, duration: 0.6, ease: "power2.out" }, 10.8);
+  tl.fromTo("#fade", { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power2.in" }, 14.4);
+  window.__timelines["main"] = tl;
+</script>
+</body>
+</html>

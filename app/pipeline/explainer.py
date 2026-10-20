@@ -10,6 +10,11 @@
     highlight  背景缩成小窗 + 两行大字关键词
     card       整屏数据卡(spec / compare / bars / timeline,沿用 cards.py)
     stat       背景压暗 + 中央一个大数字从 0 滚到目标值(核对过事实的一个参数)
+    concept    整屏概念动画(HyperFrames 渲染 motion/scenes/,电池、补能、雷达这类
+               "看不见的东西";数字同样只来自核对过的事实,渲染不了退回数据卡)
+
+broll 拍按规则自动轮换三种样式(不经 LLM):全屏 / 左上角角标 / 两三栏分屏。
+拍内各段之间用 xfade 转场,静图运镜按片段散开挑;每章第一拍开头叠 1.2 秒章节标牌。
 
 时长不再是 6 秒栅格:门禁 A 确认后**先跑 TTS**,每拍的时长 = 它那几句旁白的实际
 时长(含句间停顿),画面按这个时长去铺。所以字幕、旁白、画面天然对齐。
@@ -21,26 +26,38 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import zlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import cards, library, narration, overlays
+from . import cards, library, motion, narration, overlays
 from . import render as render_mod
 from .grounding import numbers_in
 
-LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat")
+LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept")
 #: 不需要任何数据就能成立的版式 —— 其它版式核对失败都退回它
 SAFE_LAYOUT = "broll"
 #: 连续几拍整屏卡片就太像 PPT 了
 MAX_CARD_RUN = 2
+#: 概念动画全片最多几拍(每拍要渲染半分钟左右,也不该喧宾夺主)
+MAX_CONCEPT = 6
+#: broll 拍的样式,按出现顺序轮换(见 assign_broll_styles)
+BROLL_STYLES: tuple[str, ...] = ("plain", "lower_third", "split")
+#: 分屏至少要这么长,太短的拍几栏还没滑完就切走了
+SPLIT_MIN_SECONDS = 2.5
+#: 拍内相邻两段之间的转场时长与样式(按段号轮换)
+XFADE = 0.3
+XFADE_KINDS: tuple[str, ...] = ("fade", "smoothleft", "slideleft", "circleopen", "zoomin",
+                                "fadewhite")
 #: 关键词每行最多几个字
 KEYWORD_CHARS = 12
 #: 横屏字幕单行字数(竖屏是 16)
 SUBTITLE_LINE_CHARS = 22
-#: 图片背景的推拉方式,按拍号轮换
+#: 图片背景的运镜(按片段散开挑,见 motion_for)
 STILL_MOTIONS = render_mod.STILL_MOTIONS
 #: 中间产物的编码参数:拼接用 -c copy,所以所有片段必须完全一致
 _ENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
@@ -59,7 +76,7 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
 - card:整屏数据卡。段落标了「卡片」时优先用。给 `card`:
   {{"title": "卡片标题(12 字内)", "columns": [两个对比对象名,仅对比卡需要],
     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
-- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}
+- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}{concept_guide}
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或解释文字。
@@ -139,6 +156,22 @@ def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]
             "fact_id": r["fact_id"], "source": grounded.get("source", "")}, dropped
 
 
+def concept_guide(vocab: Vocab) -> str:
+    """分镜提示词里 concept 版式的说明。品类没配动画模板时为空(提示词与之前一字不差)。
+    返回值作为 format 参数填进 SYSTEM,里面的花括号不会再被解析。"""
+    if not vocab.concept_scenes:
+        return ""
+    scenes = "\n".join(f"    {name}:{when}" for name, when in vocab.concept_scenes.items())
+    return (
+        f"\n- concept:整屏概念动画,讲{vocab.subject_noun}身上看不见、拍不出来的东西时用。给 `concept`:\n"
+        '  {"scene": "模板名", "title": "标题(12 字内)", "columns": [两个对比对象名,仅 compare 需要],\n'
+        '    "rows": [{"label": "参数名", "values": ["取值含单位"], "fact_id": "f_xxx"}]}\n'
+        "  rows 1–4 行,同样只能取自「可用事实」。scene 只能从下面选:\n"
+        f"{scenes}\n"
+        f"  不要连续两拍 concept,全片最多 {MAX_CONCEPT} 拍。"
+    )
+
+
 def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile) -> str:
     sec = profile.section(seg.section if seg else "")
     options = list(sec.layouts) or list(LAYOUTS)
@@ -162,7 +195,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
         system = SYSTEM.format(
             kw=KEYWORD_CHARS, domain=vocab.domain, subject_noun=vocab.subject_noun,
             keyword_examples=vocab.keyword_examples, stat_examples=vocab.stat_examples,
-            view_enum=vocab.view_enum, view_guide=vocab.view_guide)
+            view_enum=vocab.view_enum, view_guide=vocab.view_guide,
+            concept_guide=concept_guide(vocab))
         data = llm.structured(system, user,
                               required_keys=["beats"], temperature=0.5)
         raw = data.get("beats") or []
@@ -178,7 +212,7 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
 
     specs = [_ground_beat(i, seg, by_idx.get(i, {}), subject, profile, facts, card_log)
              for i, seg in enumerate(segments)]
-    return enforce_rhythm(specs)
+    return assign_broll_styles(enforce_rhythm(specs))
 
 
 def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: CategoryProfile,
@@ -208,6 +242,20 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         overlay, dropped = ground_stat(item.get("stat"), facts)
         if overlay is None:
             layout = SAFE_LAYOUT
+    elif layout == "concept":
+        raw = item.get("concept")
+        scene = str(raw.get("scene") or "").strip() if isinstance(raw, dict) else ""
+        if scene not in profile.vocab.concept_scenes:
+            dropped = [f"concept 模板 {scene or '(空)'} 不在可选模板里"]
+            layout = SAFE_LAYOUT
+        else:
+            kind = "compare" if scene == "compare" else "spec"
+            grounded, dropped = cards.ground(cards.normalise(raw, kind), facts)
+            if grounded:
+                overlay = {**grounded, "kind": "concept", "scene": scene,
+                           "rows": grounded["rows"][:4]}
+            else:
+                layout = SAFE_LAYOUT
     elif layout == "card":
         raw_card = item.get("card")
         kind = sec.card or (raw_card.get("kind") if isinstance(raw_card, dict) else "") or "spec"
@@ -232,13 +280,21 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
 
 def enforce_rhythm(specs: list[ShotSpec]) -> list[ShotSpec]:
     """连续超过 MAX_CARD_RUN 拍整屏卡片时,把多出来的那拍退回 broll;
-    连着两拍大数字也把后一拍退回 broll(一个接一个滚数字像在念参数表)。"""
+    连着两拍大数字也把后一拍退回 broll(一个接一个滚数字像在念参数表);
+    概念动画同理不连着放,全片超过 MAX_CONCEPT 拍的也退回 broll。"""
     run = 0
     prev = ""
+    concepts = 0
     for s in specs:
-        if s.layout == "stat" and prev == "stat":
+        if s.layout in ("stat", "concept") and prev == s.layout:
+            old = s.layout
             s.layout, s.overlay = SAFE_LAYOUT, None
-            s.visual_zh = re.sub(r"^\[stat\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+            s.visual_zh = re.sub(rf"^\[{old}\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+        if s.layout == "concept":
+            concepts += 1
+            if concepts > MAX_CONCEPT:
+                s.layout, s.overlay = SAFE_LAYOUT, None
+                s.visual_zh = re.sub(r"^\[concept\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
         prev = s.layout
         if s.layout == "card":
             run += 1
@@ -251,6 +307,37 @@ def enforce_rhythm(specs: list[ShotSpec]) -> list[ShotSpec]:
     return specs
 
 
+def assign_broll_styles(specs: list[ShotSpec]) -> list[ShotSpec]:
+    """给 broll 拍轮换样式(确定性,不经 LLM):全屏 → 左上角角标 → 分屏 → …
+
+    - 分屏不连着两拍(相邻 broll 都分屏就成了监控墙);
+    - 每章第一拍开头已经有章节标牌占着左上角,不再放角标;
+    - 别的版式的 overlay 不动;broll 的样式记在 overlay = {"kind": "broll", "style": ...}。
+    """
+    k = 0
+    prev_split = False
+    for n, s in enumerate(specs):
+        if s.layout != "broll":
+            prev_split = False
+            continue
+        style = BROLL_STYLES[k % len(BROLL_STYLES)]
+        k += 1
+        chapter = s.chapter or s.section
+        first = n == 0 or (specs[n - 1].chapter or specs[n - 1].section) != chapter
+        if (style == "split" and prev_split) or (style == "lower_third" and first):
+            style = "plain"
+        s.overlay = None if style == "plain" else {"kind": "broll", "style": style}
+        prev_split = style == "split"
+    return specs
+
+
+def broll_style(spec: ShotSpec) -> str:
+    if spec.layout != "broll" or not isinstance(spec.overlay, dict):
+        return "plain"
+    style = spec.overlay.get("style")
+    return style if style in BROLL_STYLES else "plain"
+
+
 def fallback_beats(*, subject: str, profile: CategoryProfile,
                    segments: Sequence[ScriptSegment]) -> list[ShotSpec]:
     """没有 LLM 时:全部 broll。结构、时间轴、合成链路照样能验。"""
@@ -261,7 +348,7 @@ def fallback_beats(*, subject: str, profile: CategoryProfile,
                             visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or subject}",
                             narration_zh=seg.text, angle=sec.angle, layout=SAFE_LAYOUT,
                             chapter=sec.chapter or sec.name, view=_hint(sec.angle, "", profile.vocab)))
-    return out
+    return assign_broll_styles(out)
 
 
 def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
@@ -275,7 +362,7 @@ def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
             errors.append(f"第 {s.idx} 拍没有旁白(时长由旁白决定,空拍无法定长)")
         if s.layout == "card" and not s.card:
             errors.append(f"第 {s.idx} 拍是 card 但没有卡片数据")
-        if s.layout in ("panel", "highlight", "stat") and not s.overlay:
+        if s.layout in ("panel", "highlight", "stat", "concept") and not s.overlay:
             errors.append(f"第 {s.idx} 拍是 {s.layout} 但没有叠加数据")
     return errors
 
@@ -360,25 +447,102 @@ def _solid(dest: Path, seconds: float, size: tuple[int, int]) -> Path:
     return dest
 
 
+def motion_for(item_id: str, n: int, prev: str = "") -> str:
+    """静图运镜:按片段 id 散开挑(同一张图在不同拍里动法也不同),不与上一刀相同。"""
+    k = (zlib.crc32(item_id.encode("utf-8")) + n) % len(STILL_MOTIONS)
+    motion = STILL_MOTIONS[k]
+    if motion == prev:
+        motion = STILL_MOTIONS[(k + 1) % len(STILL_MOTIONS)]
+    return motion
+
+
+def xfade_offsets(lengths: Sequence[float]) -> list[float]:
+    """各段原长 → 每个转场的起点。除最后一段外每段都加长 XFADE 去和下一段重叠,
+    所以第 k 个转场正好从前 k 段原长之和开始,拼完的总长仍是原长之和。"""
+    out, acc = [], 0.0
+    for length in lengths[:-1]:
+        acc += length
+        out.append(round(acc, 3))
+    return out
+
+
+def _xfade(parts: Sequence[Path], lengths: Sequence[float], seconds: float, dest: Path,
+           seed: int) -> Path:
+    inputs: list[str] = []
+    for p in parts:
+        inputs += ["-i", str(p)]
+    chain, prev = [], "[0:v]"
+    for k, offset in enumerate(xfade_offsets(lengths), start=1):
+        kind = XFADE_KINDS[(seed + k) % len(XFADE_KINDS)]
+        label = f"[x{k}]"
+        chain.append(f"{prev}[{k}:v]xfade=transition={kind}:duration={XFADE}:offset={offset:.3f}{label}")
+        prev = label
+    graph = ";".join(chain) + f";{prev}format=yuv420p[v]"
+    proc = _ff([*inputs, "-filter_complex", graph, "-map", "[v]", "-t", f"{seconds:.3f}",
+                "-an", *_ENC, str(dest)])
+    if proc.returncode != 0 or not dest.is_file():
+        raise render_mod.RenderError(f"背景转场失败:{(proc.stderr or '')[-300:]}")
+    return dest
+
+
 def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple[int, int],
                     work: Path, motion_seed: int = 0) -> Path:
-    """把几段背景拼成一条定长背景。没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
+    """把几段背景拼成一条定长背景:段与段之间 xfade 转场(失败退回硬切拼接)。
+    没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
     work.mkdir(parents=True, exist_ok=True)
     dest = work / "bg.mp4"
     if not pieces:
         return _solid(dest, seconds, size)
-    parts = []
+    lengths = [p.length for p in pieces]
+    blend = len(pieces) >= 2 and min(lengths) >= XFADE * 2
+    parts, prev = [], ""
     for n, p in enumerate(pieces):
-        motion = STILL_MOTIONS[(motion_seed + n) % len(STILL_MOTIONS)]
-        parts.append(_piece_clip(p, work / f"piece_{n:02d}.mp4", size, motion))
+        motion = motion_for(p.item_id, motion_seed + n, prev)
+        prev = motion
+        extra = XFADE if blend and n < len(pieces) - 1 else 0.0
+        parts.append(_piece_clip(replace(p, length=round(p.length + extra, 3)),
+                                 work / f"piece_{n:02d}.mp4", size, motion))
     if len(parts) == 1:
         shutil.copyfile(parts[0], dest)
         return dest
+    if blend:
+        try:
+            return _xfade(parts, lengths, seconds, dest, motion_seed)
+        except render_mod.RenderError:
+            pass  # 退回硬切:每段多出的 XFADE 秒被 -t 截在结尾,画面只是略早切
     listing = render_mod.timeline_mod.concat_list_file(parts, work / "pieces.txt")
     proc = _ff(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy",
                 "-t", f"{seconds:.3f}", str(dest)])
     if proc.returncode != 0 or not dest.is_file():
         raise render_mod.RenderError(f"背景拼接失败:{(proc.stderr or '')[-300:]}")
+    return dest
+
+
+def split_filter(count: int, seconds: float, size: tuple[int, int]) -> str:
+    """分屏:count 栏不同画面,各取中间一条,从下往上依次滑入(缓出)。"""
+    w, h = size
+    gap = 12
+    pw = (w - gap * (count - 1)) // count // 2 * 2
+    parts = [f"color=c=0x070c18:s={w}x{h}:r={render_mod.FPS}:d={seconds:.3f}[s0]"]
+    for k in range(count):
+        parts.append(f"[{k}:v]crop={pw}:{h}:(iw-{pw})/2:0,setsar=1[p{k}]")
+    for k in range(count):
+        delay = 0.12 * k
+        x = k * (pw + gap)
+        y = f"{h}*pow(1-min(1,max(0,(t-{delay:.2f})/0.45)),3)"
+        parts.append(f"[s{k}][p{k}]overlay=x={x}:y='{y}':eof_action=repeat[s{k + 1}]")
+    parts.append(f"[s{count}]format=yuv420p[v]")
+    return ";".join(parts)
+
+
+def split_clip(clips: Sequence[Path], seconds: float, size: tuple[int, int], dest: Path) -> Path:
+    inputs: list[str] = []
+    for c in clips:
+        inputs += ["-i", str(c)]
+    proc = _ff([*inputs, "-filter_complex", split_filter(len(clips), seconds, size),
+                "-map", "[v]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
+    if proc.returncode != 0 or not dest.is_file():
+        raise render_mod.RenderError(f"分屏合成失败:{(proc.stderr or '')[-300:]}")
     return dest
 
 
@@ -397,13 +561,17 @@ def chapters_of(specs: Sequence[ShotSpec]) -> tuple[list[tuple[str, float]], lis
 
 
 def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
-    """把背景 [0]、章节条 [1]、叠加层 [2] 合成 [out] 的滤镜图。"""
+    """把背景 [0]、章节条 [1]、叠加层 [2] 合成 [out] 的滤镜图。
+
+    `layout` 除了版式名,还可以是 broll 的样式 `lower_third`(角标从左擦入)。"""
     w, h = size
     if layout == "highlight" and has_layer:
         pip_w = int(w * 0.62) // 2 * 2
         pip_h = int(h * 0.62) // 2 * 2
+        # 模糊底用同一段画面的镜像放大版:和小窗里的画面错开,不像同一张图叠了两层
         return (
-            f"[0:v]split[a][b];[a]boxblur=22:2,eq=brightness=-0.18[bgb];"
+            f"[0:v]split[a][b];[a]hflip,scale=iw*1.3:-2,crop={w}:{h},"
+            f"boxblur=22:2,eq=brightness=-0.18[bgb];"
             f"[b]scale={pip_w}:{pip_h},pad={pip_w + 12}:{pip_h + 12}:6:6:color=white[pip];"
             f"[bgb][pip]overlay=(W-w)/2:{int(h * 0.05)}[v1];"
             f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
@@ -422,31 +590,86 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
             f"[0:v][2:v]overlay=x='-{slide}*(1-min(1,t/0.35))':y=0[v1];"
             f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
+    if layout == "lower_third" and has_layer:
+        slide = int(w * 0.45)
+        return (
+            f"[0:v][2:v]overlay=x='-{slide}*pow(1-min(1,max(0,(t-0.25)/0.4)),3)':y=0[v1];"
+            f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
+        )
     return "[0:v][1:v]overlay=0:0,format=yuv420p[out]"
+
+
+def with_sting(graph: str, index: int) -> str:
+    """在合成好的 [out] 上再叠章节标牌(输入 `index`,关键帧播完就透明露出下面)。"""
+    head, _, _ = graph.rpartition("[out]")
+    return (f"{head}[pre];[{index}:v]format=rgba[st];"
+            f"[pre][st]overlay=0:0:eof_action=pass,format=yuv420p[out]")
+
+
+def _frames_listing(frames: Sequence[tuple[Path, float]], listing: Path,
+                    hold_to: float | None = None) -> Path:
+    """关键帧写成 concat 清单。`hold_to` 给了就把最后一帧定格到这个总时长。"""
+    lines: list[str] = []
+    rolled = 0.0
+    for n, (path, dur) in enumerate(frames):
+        if hold_to is not None and n == len(frames) - 1:
+            dur = max(0.5, hold_to - rolled)
+        rolled += dur
+        lines += [f"file '{path.as_posix()}'", f"duration {dur:.3f}"]
+    lines.append(f"file '{frames[-1][0].as_posix()}'")  # concat 要求末帧重复一次
+    listing.write_text("\n".join(lines), encoding="utf-8")
+    return listing
 
 
 def _stat_listing(overlay: dict, subject: str, size: tuple[int, int], work: Path,
                   seconds: float) -> Path:
     """大数字滚动的关键帧写成 concat 清单:滚完后最后一帧定格到拍尾。"""
     frames = overlays.stat_frames(overlay, subject, size, work / "stat")
-    lines: list[str] = []
-    rolled = 0.0
-    for n, (path, dur) in enumerate(frames):
-        if n == len(frames) - 1:
-            dur = max(0.5, seconds - rolled)
-        rolled += dur
-        lines += [f"file '{path.as_posix()}'", f"duration {dur:.3f}"]
-    lines.append(f"file '{frames[-1][0].as_posix()}'")  # concat 要求末帧重复一次
-    listing = work / "stat.txt"
-    listing.write_text("\n".join(lines), encoding="utf-8")
-    return listing
+    return _frames_listing(frames, work / "stat.txt", hold_to=seconds)
+
+
+def concept_card(overlay: dict) -> dict:
+    """概念动画渲染不了时退回的数据卡(同一批核对过的行)。"""
+    kind = "compare" if overlay.get("scene") == "compare" else "spec"
+    return {"kind": kind, "title": overlay.get("title") or "", "rows": overlay.get("rows") or [],
+            "columns": list(overlay.get("columns") or []), "source": overlay.get("source", "")}
+
+
+def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
+                used: dict[str, int], recent: list[str], card_bg: Path | None
+                ) -> tuple[Path, list[library.Piece]]:
+    """broll / panel / highlight / stat 的背景。分屏样式铺 2–3 条不同的背景再并排。"""
+    if broll_style(spec) == "split" and seconds >= SPLIT_MIN_SECONDS:
+        count = 3 if seconds <= 5 else 2
+        clips, pieces = [], []
+        for k in range(count):
+            got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
+            if not got:
+                break
+            pieces += got
+            clips.append(background_clip(got, seconds, size, work / f"panel_{k}",
+                                         motion_seed=spec.idx * 7 + k))
+        if len(clips) >= 2:
+            return split_clip(clips, seconds, size, work / "split.mp4"), pieces
+        if clips:
+            return clips[0], pieces
+    pieces = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
+    if not pieces and card_bg:
+        pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
+    return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
 
 
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,
                 chapters: Sequence[tuple[str, float]], chapter_idx: int,
-                used: dict[str, int], card_bg: Path | None) -> tuple[Path, list[dict]]:
-    """渲染一拍,返回 (成品路径, 用到的背景片段)。"""
+                used: dict[str, int], card_bg: Path | None,
+                recent: list[str] | None = None,
+                sting: tuple[int, str] | None = None) -> tuple[Path, list[dict]]:
+    """渲染一拍,返回 (成品路径, 用到的背景片段)。
+
+    `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
+    `sting` = (章号, 章名) 时在开头叠章节标牌(每章第一拍)。"""
     seconds = max(0.5, spec.duration)
+    recent = recent if recent is not None else []
     work = out_dir / "_work" / f"{spec.idx:03d}"
     if work.exists():
         shutil.rmtree(work, ignore_errors=True)
@@ -456,15 +679,32 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     if spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
+    elif spec.layout == "concept" and spec.overlay:
+        # 动画压在这一拍的实拍上;没有素材就用动画自带的暗色底
+        got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
+        bg_clip = None
+        if got:
+            try:
+                bg_clip = background_clip(got, seconds, size, work / "concept_bg",
+                                          motion_seed=spec.idx)
+                pieces = got
+            except Exception:
+                bg_clip = None
+        try:
+            base = motion.render(spec.overlay.get("scene", ""),
+                                 motion.scene_data(spec.overlay, subject), seconds, size,
+                                 work / "concept.mp4", background=bg_clip)
+        except motion.MotionError:
+            # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败
+            base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
+                                seconds=seconds, background=card_bg, size=size)
     else:
-        pieces = library.fill(subject, seconds, hint=spec.view, used=used)
-        if not pieces and card_bg:
-            pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
-        base = background_clip(pieces, seconds, size, work, motion_seed=spec.idx)
+        base, pieces = _broll_base(spec, subject, seconds, size, work, used, recent, card_bg)
 
     bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png")
     layer: Path | None = None
     layer_input: list[str] = []
+    flt = spec.layout
     if spec.layout == "panel" and spec.overlay:
         layer = overlays.panel(spec.overlay, subject, size, work / "layer.png")
     elif spec.layout == "highlight" and spec.overlay:
@@ -472,18 +712,40 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     elif spec.layout == "stat" and spec.overlay:
         layer = _stat_listing(spec.overlay, subject, size, work, seconds)
         layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]
+    elif broll_style(spec) == "lower_third" and not sting:
+        name = chapters[chapter_idx][0] if 0 <= chapter_idx < len(chapters) else ""
+        layer = overlays.lower_third(subject, name, size, work / "layer.png")
+        flt = "lower_third"
     if layer and not layer_input:
         layer_input = ["-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(layer)]
 
     dest = out_dir / f"{spec.idx:03d}.mp4"
     inputs = ["-i", str(base), "-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(bar)]
     inputs += layer_input
-    proc = _ff([*inputs, "-filter_complex", layout_filter(spec.layout, size, bool(layer)),
+    graph = layout_filter(flt, size, bool(layer))
+    if sting:
+        frames = overlays.chapter_sting_frames(sting[0], sting[1], size, work / "sting")
+        inputs += ["-f", "concat", "-safe", "0", "-i",
+                   str(_frames_listing(frames, work / "sting.txt"))]
+        graph = with_sting(graph, 3 if layer else 2)
+    proc = _ff([*inputs, "-filter_complex", graph,
                 "-map", "[out]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
         raise render_mod.RenderError(f"第 {spec.idx} 拍合成失败:{(proc.stderr or '')[-400:]}")
     shutil.rmtree(work, ignore_errors=True)
     return dest, [p.__dict__ for p in pieces]
+
+
+def sting_for(specs: Sequence[ShotSpec], where: Sequence[int],
+              chapters: Sequence[tuple[str, float]], idx: int) -> tuple[int, str] | None:
+    """这一拍是不是某章(开头章除外)的第一拍:是就返回 (章号, 章名)。"""
+    pos = next((n for n, s in enumerate(specs) if s.idx == idx), None)
+    if pos is None or pos == 0:
+        return None
+    ch = where[pos]
+    if ch == 0 or where[pos - 1] == ch:
+        return None
+    return ch + 1, chapters[ch][0]
 
 
 # --------------------------------------------------------------------------
@@ -499,13 +761,30 @@ def _load_used(project_id: str) -> dict[str, int]:
     return db.read_json(project_id, "beats_used.json", {}) or {}
 
 
-def card_background(subject: str) -> Path | None:
-    """数据卡的底图:池子里一张干净的主视角官图(汽车是外观;虚化压暗后做底)。"""
+def _load_recent(project_id: str) -> list[str]:
+    return list(db.read_json(project_id, "beats_recent.json", []) or [])
+
+
+def card_backgrounds(subject: str) -> list[Path]:
+    """数据卡的底图候选:池子里干净的主视角官图(汽车是外观;虚化压暗后做底),
+    按视角散开排 —— 各张卡按拍号轮换,不再全片共用一张。"""
     lib = library.Library.load(subject)
     stills = [i for i in lib.items if i.kind == "still" and i.usable and Path(i.path).is_file()]
     primary = library.vocab_of(lib).primary_views
     stills.sort(key=lambda i: (i.view not in primary, library._dirt(i)))
-    return Path(stills[0].path) if stills else None
+    groups = library.near_dup_groups(stills)
+    seen: set[str] = set()
+    out: list[Path] = []
+    for i in stills:  # 同一簇(几乎同一张)只留一张
+        if groups[i.id] not in seen:
+            seen.add(groups[i.id])
+            out.append(Path(i.path))
+    return out
+
+
+def card_background(subject: str) -> Path | None:
+    bgs = card_backgrounds(subject)
+    return bgs[0] if bgs else None
 
 
 def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
@@ -531,16 +810,21 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
             and rows.get(s.idx, {}).get("status") != "succeeded"][:limit]
     chapters, where = chapters_of(specs)
     used = _load_used(project_id)
+    recent = _load_recent(project_id)
     beats_dir(project_id)  # 每拍的背景片段记录放这里
     # 成品放 drafts/:审片页按 /media/{项目}/drafts/{文件} 取草稿预览
     out_dir = config.project_dir(project_id) / "drafts"
-    bg = card_background(subject)
+    bgs = card_backgrounds(subject)
     done, errors = [], []
     for s in todo:
+        pos = next(n for n, x in enumerate(specs) if x.idx == s.idx)
         try:
             path, pieces = render_beat(s, subject=subject, size=profile.frame_size,
                                        out_dir=out_dir, chapters=chapters,
-                                       chapter_idx=where[s.idx], used=used, card_bg=bg)
+                                       chapter_idx=where[pos], used=used,
+                                       card_bg=bgs[s.idx % len(bgs)] if bgs else None,
+                                       recent=recent,
+                                       sting=sting_for(specs, where, chapters, s.idx))
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])
@@ -548,9 +832,10 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
         db.write_json(project_id, f"beats/{s.idx:03d}.json", pieces)
         db.update_shot(project_id, s.idx, "draft", status="succeeded", draft_path=str(path),
                        provider_task_id=None, error=None, est_cost=0.0,
-                       consistency="card" if s.layout == "card" else "real")
+                       consistency="card" if s.layout in ("card", "concept") else "real")
         done.append(s.idx)
     db.write_json(project_id, "beats_used.json", used)
+    db.write_json(project_id, "beats_recent.json", recent)
     rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
     remaining = [s.idx for s in specs if s.duration > 0
                  and rows.get(s.idx, {}).get("status") != "succeeded"]

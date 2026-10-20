@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .die { position: absolute; left: 25px; top: 0; width: 800px; height: 800px; }
+    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame();
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const die = HF.el("div", "die"); stage.appendChild(die);
+    const sv = HF.svg("svg", { width: 800, height: 800, viewBox: "0 0 800 800" }, die);
+    const cx = 400, cy = 400, half = 200;
+    const pins = [];
+    for (let k = 0; k < 8; k++) {
+      const o = -150 + k * 43;
+      [[cx + o, cy - half, cx + o, cy - half - 60], [cx + o, cy + half, cx + o, cy + half + 60],
+       [cx - half, cy + o, cx - half - 60, cy + o], [cx + half, cy + o, cx + half + 60, cy + o]].forEach((p) => {
+        pins.push(HF.svg("line", { x1: p[0], y1: p[1], x2: p[2], y2: p[3], stroke: "rgba(236,246,228,0.5)", "stroke-width": 6, "stroke-linecap": "round" }, sv));
+      });
+    }
+    // 数据流:从芯片向四周跑的虚线
+    const streams = [[cx, cy - half - 60, cx, 20], [cx, cy + half + 60, cx, 780], [cx - half - 60, cy, 20, cy], [cx + half + 60, cy, 780, cy]].map((p) =>
+      HF.svg("line", { x1: p[0], y1: p[1], x2: p[2], y2: p[3], stroke: "#b8f36b", "stroke-width": 5, "stroke-linecap": "round", "stroke-dasharray": "14 26", "stroke-opacity": 0.7 }, sv));
+    HF.svg("rect", { x: cx - half, y: cy - half, width: half * 2, height: half * 2, rx: 36, fill: "rgba(236,246,228,0.12)", stroke: "rgba(236,246,228,0.5)", "stroke-width": 3 }, sv);
+    const cells = [];
+    const N = 6, cw = 44, gap = 10, x0 = cx - (N * cw + (N - 1) * gap) / 2;
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++)
+      cells.push(HF.svg("rect", { x: x0 + c * (cw + gap), y: x0 + r * (cw + gap), width: cw, height: cw, rx: 8, fill: "rgba(236,246,228,0.10)" }, sv));
+    tl.fromTo(die, { opacity: 0, scale: 0.88 }, { opacity: 1, scale: 1, duration: T(0.8), ease: "expo.out", transformOrigin: "50% 50%" }, T(0.3));
+    tl.fromTo(pins, { attr: { "stroke-opacity": 0 } }, { attr: { "stroke-opacity": 1 }, duration: 0.3, stagger: 0.012 * F.K }, T(0.7));
+    // 核心按固定乱序依次点亮
+    const rnd = HF.rng(11);
+    const order = cells.map((c, i) => [rnd(), i]).sort((a, b) => a[0] - b[0]).map((o) => o[1]);
+    order.forEach((i, n) => tl.to(cells[i], { attr: { fill: "#b8f36b" }, duration: 0.2, ease: "power1.out" }, T(1.0) + n * 0.035 * F.K));
+    tl.to(streams, { attr: { "stroke-dashoffset": -600 }, duration: HF.seconds, ease: "none" }, 0);
+    tl.fromTo(streams, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.2));
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

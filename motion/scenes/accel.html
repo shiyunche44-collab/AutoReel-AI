@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .gauge { position: absolute; left: 30px; top: 40px; width: 790px; height: 720px; }
+    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+    .center { position: absolute; left: 0; width: 790px; top: 400px; text-align: center; }
+    .center .hval { justify-content: center; margin-top: 8px; }
+    .center .hlab { text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame({ heroInVisual: true, maxRows: 3 });
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const g = HF.el("div", "gauge glass"); stage.appendChild(g);
+    const sv = HF.svg("svg", { width: 790, height: 720, viewBox: "0 0 790 720" }, g);
+    const cx = 395, cy = 360, R = 290;
+    const pt = (deg, r) => [cx + r * Math.cos(deg * Math.PI / 180), cy + r * Math.sin(deg * Math.PI / 180)];
+    const arc = (a0, a1, r) => { const p0 = pt(a0, r), p1 = pt(a1, r); return "M" + p0[0] + " " + p0[1] + " A" + r + " " + r + " 0 " + (a1 - a0 > 180 ? 1 : 0) + " 1 " + p1[0] + " " + p1[1]; };
+    HF.svg("path", { d: arc(135, 404.9, R), fill: "none", stroke: "rgba(236,246,228,0.18)", "stroke-width": 26, "stroke-linecap": "round" }, sv);
+    const fill = HF.svg("path", { d: arc(135, 404.9, R), fill: "none", stroke: "#b8f36b", "stroke-width": 26, "stroke-linecap": "round", pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+    for (let k = 0; k <= 10; k++) {
+      const a = 135 + 27 * k, p0 = pt(a, R - 40), p1 = pt(a, R - (k % 5 === 0 ? 74 : 60));
+      HF.svg("line", { x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], stroke: "rgba(242,246,238,0.5)", "stroke-width": k % 5 === 0 ? 5 : 3, "stroke-linecap": "round" }, sv);
+    }
+    const needle = HF.svg("g", {}, sv);
+    HF.svg("line", { x1: cx, y1: cy, x2: cx + R - 60, y2: cy, stroke: "#f2f6ee", "stroke-width": 7, "stroke-linecap": "round" }, needle);
+    HF.svg("circle", { cx: cx, cy: cy, r: 16, fill: "#b8f36b" }, sv);
+    // 中心:第一行(零百秒数)。单位是秒就按真实时间走,不是就 1.8 秒滚完
+    const first = HF.rows[0] || { label: "", value: "" };
+    const p = HF.splitNumber(first.value);
+    const real = p && /秒|s/i.test(p.tail) && p.num > 0 && p.num <= 9;
+    const run = real ? Math.min(p.num, HF.seconds - 1.2) : Math.max(1.0, T(1.8));
+    const ctr = HF.el("div", "center"); g.appendChild(ctr);
+    const lab = HF.el("div", "hlab", first.label); const hv = HF.el("div", "hval");
+    ctr.appendChild(lab); ctr.appendChild(hv);
+    const hero = HF.heroInto(hv, first.value, HF.fitSize(first.value, 380, 150));
+    tl.fromTo(g, { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
+    tl.fromTo(ctr, { opacity: 0 }, { opacity: 1, duration: T(0.4) }, T(0.7));
+    const at = T(0.9);
+    HF.countHero(tl, hero, at, run, { ease: real ? "none" : "expo.out" });
+    tl.fromTo(fill, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: run, ease: "power2.out" }, at);
+    tl.fromTo(needle, { rotation: 135, svgOrigin: cx + " " + cy }, { rotation: 404.9, svgOrigin: cx + " " + cy, duration: run, ease: "power2.out" }, at);
+    tl.to(hv, { scale: 1.07, duration: 0.18, yoyo: true, repeat: 1, ease: "power2.out", transformOrigin: "50% 60%" }, at + run);
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

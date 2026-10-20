@@ -196,3 +196,86 @@ def stat_frames(overlay: dict[str, Any], subject: str, size: tuple[int, int],
                  progress=ease_out(k / COUNT_STEPS))
         out.append((p, step))
     return out
+
+
+# --------------------------------------------------------------------------
+# 章节标牌(每章第一拍开头 1.2 秒)与角标(broll 变体 lower_third)
+# --------------------------------------------------------------------------
+#: 标牌:色条擦入几帧 / 多久,停留多久,淡出几帧 / 多久
+STING_WIPE_STEPS = 8
+STING_WIPE_SECONDS = 0.32
+STING_HOLD_SECONDS = 0.55
+STING_FADE_STEPS = 6
+STING_FADE_SECONDS = 0.3
+
+
+def _sting(number: int, name: str, size: tuple[int, int], dest: Path, wipe: float,
+           alpha: float) -> Path:
+    """左上角章节标牌:强调色色块里是章号,右边白字章名。`wipe` 0–1 是色块擦开的进度,
+    `alpha` 0–1 是整体不透明度(淡出用)。"""
+    w, h = size
+    img, d = _canvas(size)
+    x0, y0 = int(w * 0.035), int(h * 0.075)
+    bh = int(h * 0.105)
+    num = f"{number:02d}"
+    nf = _font(int(bh * 0.62), bold=True)
+    tf = _font(int(bh * 0.46), bold=True)
+    num_w = int(d.textlength(num, font=nf)) + int(bh * 0.5)
+    name, tf = _fit(d, name, int(bh * 0.46), int(w * 0.40))
+    name_w = int(d.textlength(name, font=tf)) + int(bh * 0.6)
+    full = num_w + name_w
+    shown = int(full * max(0.0, min(1.0, wipe)))
+    if shown > 0:
+        layer, ld = _canvas(size)
+        ld.rectangle((x0, y0, x0 + min(shown, num_w), y0 + bh), fill=_ACCENT)
+        if shown > num_w:
+            ld.rectangle((x0 + num_w, y0, x0 + shown, y0 + bh), fill=(10, 16, 30, 215))
+        ld.text((x0 + num_w // 2, y0 + bh // 2), num, font=nf, anchor="mm", fill=_BAR_ON_TEXT)
+        ld.text((x0 + num_w + int(bh * 0.3), y0 + bh // 2), name, font=tf, anchor="lm", fill=_TEXT)
+        # 文字只在擦开的部分里显示
+        mask = Image.new("L", size, 0)
+        ImageDraw.Draw(mask).rectangle((x0, y0, x0 + shown, y0 + bh), fill=255)
+        img.paste(layer, (0, 0), mask)
+    if alpha < 1:
+        a = img.getchannel("A").point(lambda v: int(v * max(0.0, alpha)))
+        img.putalpha(a)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest)
+    return dest
+
+
+def chapter_sting_frames(number: int, name: str, size: tuple[int, int],
+                         out_dir: str | Path) -> list[tuple[Path, float]]:
+    """章节标牌关键帧:[(透明 PNG, 停留秒数)]。擦入 → 停留 → 淡出,最后一帧全透明。"""
+    from .cards import ease_out
+
+    out_dir = Path(out_dir)
+    frames: list[tuple[Path, float]] = []
+    step = STING_WIPE_SECONDS / STING_WIPE_STEPS
+    for k in range(1, STING_WIPE_STEPS + 1):
+        p = _sting(number, name, size, out_dir / f"sting_w{k:02d}.png", ease_out(k / STING_WIPE_STEPS), 1.0)
+        frames.append((p, step))
+    frames[-1] = (frames[-1][0], STING_HOLD_SECONDS)
+    fstep = STING_FADE_SECONDS / STING_FADE_STEPS
+    for k in range(1, STING_FADE_STEPS + 1):
+        p = _sting(number, name, size, out_dir / f"sting_f{k:02d}.png", 1.0, 1 - k / STING_FADE_STEPS)
+        frames.append((p, fstep))
+    return frames
+
+
+def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | Path) -> Path:
+    """左上角角标:强调色竖条 + 「车名 · 章名」。只用已有的文字,不需要任何数据。"""
+    w, h = size
+    img, d = _canvas(size)
+    x0, y0 = int(w * 0.035), int(h * 0.075)
+    bh = int(h * 0.07)
+    text = f"{subject} · {chapter}" if chapter else subject
+    text, f = _fit(d, text, int(bh * 0.5), int(w * 0.36), bold=True)
+    tw = int(d.textlength(text, font=f))
+    d.rounded_rectangle((x0, y0, x0 + tw + int(bh * 0.9), y0 + bh), radius=10, fill=(10, 16, 30, 200))
+    d.rectangle((x0, y0, x0 + int(bh * 0.14), y0 + bh), fill=_ACCENT)
+    d.text((x0 + int(bh * 0.45), y0 + bh // 2), text, font=f, anchor="lm", fill=_TEXT)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest)
+    return dest

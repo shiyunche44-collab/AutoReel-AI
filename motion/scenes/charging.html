@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .bat { position: absolute; left: 90px; top: 250px; width: 640px; height: 300px; padding: 28px; }
+    .nub { position: absolute; left: 730px; top: 340px; width: 34px; height: 120px; border-radius: 0 17px 17px 0; background-color: rgba(236,246,228,0.34); }
+    .lvl { position: absolute; left: 28px; top: 28px; bottom: 28px; width: 584px; border-radius: 22px; background-color: #b8f36b; transform-origin: 0 50%; }
+    .bolt { position: absolute; left: 90px; top: 250px; width: 640px; height: 300px; }
+    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame();
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const bat = HF.el("div", "bat glass"); const nub = HF.el("div", "nub");
+    const lvl = HF.el("div", "lvl"); bat.appendChild(lvl);
+    stage.appendChild(bat); stage.appendChild(nub);
+    const bolt = HF.el("div", "bolt"); stage.appendChild(bolt);
+    const sv = HF.svg("svg", { width: 640, height: 300, viewBox: "0 0 640 300" }, bolt);
+    HF.svg("path", { d: "M350 36 L246 166 L318 166 L290 264 L398 126 L324 126 Z", fill: "#0a0c0b", "fill-opacity": "0.78", stroke: "#f2f6ee", "stroke-width": "4", "stroke-linejoin": "round" }, sv);
+    // 充电线:从左边进来,虚线流动
+    const cab = HF.svg("svg", { width: 120, height: 40, viewBox: "0 0 120 40", style: "left:-40px; top:380px" }, stage);
+    const flow = HF.svg("line", { x1: 0, y1: 20, x2: 130, y2: 20, stroke: "#b8f36b", "stroke-width": 8, "stroke-linecap": "round", "stroke-dasharray": "22 18" }, cab);
+    tl.fromTo([bat, nub], { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
+    tl.fromTo(cab, { opacity: 0 }, { opacity: 1, duration: T(0.4) }, T(0.8));
+    tl.to(flow, { attr: { "stroke-dashoffset": -400 }, duration: HF.seconds, ease: "none" }, 0);
+    tl.fromTo(lvl, { scaleX: 0.04 }, { scaleX: 1, duration: Math.max(1.2, HF.seconds * 0.6), ease: "power2.inOut" }, T(1.0));
+    tl.fromTo(bolt, { opacity: 0, scale: 0.7 }, { opacity: 1, scale: 1, duration: T(0.5), ease: "back.out(2)", transformOrigin: "50% 50%" }, T(1.0));
+    tl.to(bolt, { scale: 1.06, duration: 0.7, yoyo: true, repeat: 3, ease: "sine.inOut", transformOrigin: "50% 50%" }, T(1.8));
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

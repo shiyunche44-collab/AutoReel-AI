@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .pack { position: absolute; left: 20px; top: 200px; width: 760px; height: 400px; padding: 36px; }
+    .nub { position: absolute; left: 780px; top: 330px; width: 36px; height: 140px; border-radius: 0 18px 18px 0;
+           background-color: rgba(236, 246, 228, 0.34); }
+    .cells { display: grid; grid-template-columns: repeat(10, 1fr); grid-template-rows: repeat(4, 1fr); gap: 12px; width: 100%; height: 100%; }
+    .cells i { display: block; border-radius: 10px; background-color: rgba(236, 246, 228, 0.12); }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame();
+    const tl = F.tl, T = F.T;
+    const stage = HF.stage();
+    const pack = HF.el("div", "pack glass"); const nub = HF.el("div", "nub");
+    const grid = HF.el("div", "cells"); pack.appendChild(grid);
+    const cells = [];
+    for (let n = 0; n < 40; n++) { const c = HF.el("i"); grid.appendChild(c); cells.push(c); }
+    stage.appendChild(pack); stage.appendChild(nub);
+    tl.fromTo([pack, nub], { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
+    // 电芯按列从左往右点亮
+    cells.forEach((c, n) => {
+      const col = n % 10, row = Math.floor(n / 10);
+      tl.to(c, { backgroundColor: "#b8f36b", duration: 0.2, ease: "power1.out" }, T(1.0) + (col * 0.1 + row * 0.03) * F.K);
+    });
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

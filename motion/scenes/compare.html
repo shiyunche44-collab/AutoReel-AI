@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <script src="gsap.min.js"></script>
+  <link rel="stylesheet" href="_base.css" />
+  <style>
+    .tbl { position: absolute; left: 160px; top: 140px; width: 1600px; height: 800px; }
+    .hd { position: absolute; top: 40px; width: 560px; font-size: 54px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hd.a { left: 60px; color: #b8f36b; } .hd.b { right: 60px; text-align: right; color: #7fd0ff; }
+    .vs { position: absolute; left: 700px; width: 200px; top: 36px; text-align: center; font-family: "Montserrat"; font-weight: 700; font-size: 44px; color: rgba(242,246,238,0.66); letter-spacing: 0.1em; }
+    .rw { position: absolute; left: 0; width: 1600px; height: 128px; }
+    .lb { position: absolute; left: 600px; width: 400px; top: 0; text-align: center; font-size: 28px; color: rgba(242,246,238,0.74); }
+    .bar { position: absolute; top: 48px; height: 40px; border-radius: 20px; }
+    .bar.a { background-color: #b8f36b; transform-origin: 100% 50%; }
+    .bar.b { background-color: #7fd0ff; transform-origin: 0 50%; }
+    .vl { position: absolute; top: 34px; font-size: 44px; font-weight: 700; white-space: nowrap; }
+    .vl.a { text-align: right; } .vl.b { text-align: left; }
+    .ln { position: absolute; left: 60px; width: 1480px; height: 2px; background-color: rgba(236,246,228,0.22); transform-origin: 0 50%; }
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+    const F = HF.frame({ noCard: true });
+    const tl = F.tl, T = F.T;
+    const D = HF.data, cols = D.columns || [];
+    const stage = HF.stage("glass");
+    stage.className = "tbl glass";
+    const hdA = HF.el("div", "hd a", cols[0] || D.subject || "");
+    const hdB = HF.el("div", "hd b", cols[1] || "");
+    const vs = HF.el("div", "vs", "VS");
+    stage.appendChild(hdA); stage.appendChild(hdB); stage.appendChild(vs);
+    const ln = HF.el("div", "ln"); ln.style.top = "150px"; stage.appendChild(ln);
+    tl.fromTo(stage, { opacity: 0, y: 50 }, { opacity: 1, y: 0, duration: T(0.8), ease: "expo.out" }, T(0.2));
+    tl.fromTo(hdA, { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: T(0.5), ease: "power3.out" }, T(0.45));
+    tl.fromTo(hdB, { opacity: 0, x: 60 }, { opacity: 1, x: 0, duration: T(0.5), ease: "power3.out" }, T(0.45));
+    tl.fromTo(vs, { opacity: 0, scale: 1.8 }, { opacity: 1, scale: 1, duration: T(0.4), ease: "back.out(2)" }, T(0.6));
+    tl.fromTo(ln, { scaleX: 0 }, { scaleX: 1, duration: T(0.7), ease: "power2.inOut" }, T(0.7));
+    const MAXW = 400, cx = 800;
+    HF.rows.slice(0, 4).forEach((r, n) => {
+      const vals = (r.values && r.values.length >= 2) ? r.values : [r.value, ""];
+      const pa = HF.splitNumber(vals[0]), pb = HF.splitNumber(vals[1]);
+      const top = Math.max(pa ? pa.num : 0, pb ? pb.num : 0) || 1;
+      const wa = pa ? Math.max(50, MAXW * pa.num / top) : MAXW * 0.5;
+      const wb = pb ? Math.max(50, MAXW * pb.num / top) : MAXW * 0.5;
+      const row = HF.el("div", "rw"); row.style.top = (178 + n * 142) + "px";
+      const lb = HF.el("div", "lb", r.label);
+      const ba = HF.el("div", "bar a"); ba.style.left = (cx - 14 - wa) + "px"; ba.style.width = wa + "px";
+      const bb = HF.el("div", "bar b"); bb.style.left = (cx + 14) + "px"; bb.style.width = wb + "px";
+      const va = HF.el("div", "vl a"); va.style.right = (1600 - (cx - 14 - wa - 18)) + "px";
+      const vb = HF.el("div", "vl b"); vb.style.left = (cx + 14 + wb + 18) + "px";
+      [lb, ba, bb, va, vb].forEach((e) => row.appendChild(e));
+      stage.appendChild(row);
+      const at = T(0.95 + n * 0.4);
+      tl.fromTo(lb, { opacity: 0 }, { opacity: 1, duration: T(0.3) }, at);
+      tl.fromTo(ba, { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);
+      tl.fromTo(bb, { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);
+      tl.fromTo([va, vb], { opacity: 0 }, { opacity: 1, duration: T(0.3) }, at + 0.15);
+      HF.countUp(tl, va, vals[0], at + 0.15, Math.max(0.6, T(0.9)));
+      HF.countUp(tl, vb, vals[1], at + 0.15, Math.max(0.6, T(0.9)));
+    });
+    HF.outro(tl);
+    HF.register(tl);
+  </script>
+</body>
+</html>

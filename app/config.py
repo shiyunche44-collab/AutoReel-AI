@@ -126,6 +126,39 @@ def ffmpeg_status() -> tuple[bool, str]:
 
 
 # --------------------------------------------------------------------------
+# 概念动画(HyperFrames,见 pipeline/motion.py)
+# --------------------------------------------------------------------------
+#: motion/ 子工程:package.json 锁了 hyperframes 与 gsap 的版本,`npm install` 后可用
+MOTION_DIR = Path(os.getenv("MOTION_DIR") or (BASE_DIR / "motion"))
+#: 渲染用的 Chrome。HyperFrames 默认自己下载 chrome-headless-shell,国内常下载中断;
+#: 任何本机 Chrome / Edge 都能走截图渲染路径。不填就按常见安装位置找
+_BROWSER_CANDIDATES = (
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+)
+MOTION_BROWSER = os.getenv("HYPERFRAMES_BROWSER_PATH") or next(
+    (p for p in _BROWSER_CANDIDATES if Path(p).is_file()), "")
+#: 单拍动画渲染的并发 worker 数(每个 worker 一个 Chrome 进程,约 256MB)
+MOTION_WORKERS = int(os.getenv("MOTION_WORKERS", "4"))
+#: 单次渲染的超时(秒)
+MOTION_TIMEOUT = int(os.getenv("MOTION_TIMEOUT", "300"))
+
+
+def motion_status() -> tuple[bool, str]:
+    """概念动画能不能渲染。不能也不拦流水线:concept 拍退回数据卡。"""
+    node = shutil.which("node")
+    cli = MOTION_DIR / "node_modules" / "hyperframes" / "bin" / "hyperframes.mjs"
+    if not node:
+        return False, "未找到 node(需要 22+),概念动画将退回数据卡"
+    if not cli.is_file():
+        return False, f"未安装 HyperFrames:在 {MOTION_DIR} 下运行 npm install,概念动画将退回数据卡"
+    if not MOTION_BROWSER:
+        return False, "未找到 Chrome / Edge,请在 .env 配 HYPERFRAMES_BROWSER_PATH"
+    return True, f"HyperFrames: {cli.parent.parent}(浏览器 {MOTION_BROWSER})"
+
+
+# --------------------------------------------------------------------------
 # 生成通道
 # --------------------------------------------------------------------------
 MCODE_TOOLS = os.getenv("MCODE_TOOLS") or shutil.which("mcode-tools") or ""
