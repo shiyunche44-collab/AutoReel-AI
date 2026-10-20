@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -42,6 +43,10 @@ from .pipeline import orchestrator
 from .pipeline import render as render_mod
 from .providers import cli
 from .state import State
+
+# Windows 注册表可能把 .js 登记成 text/plain,浏览器会拒绝按 ES Module 加载前端脚本
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))

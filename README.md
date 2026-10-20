@@ -38,8 +38,8 @@ copy .env.example .env
 |---|---|---|
 | `USE_REAL_CLIPS` | `1` | 是否用网上的真实素材替换镜头。设 `0` 后全片走 AI 生成 |
 | `REAL_CLIP_LIMIT` | `0` | 每个项目最多多少个镜头用真实素材,`0` = 不限(能用真实就用真实) |
-| `MEDIA_PLATFORMS` | `bilibili,youtube,douyin` | 视频平台及优先级。douyin(含西瓜)为实验性 |
-| `YTDLP_PROXY` | 空 | yt-dlp 代理,国内访问 YouTube 需要,如 `http://127.0.0.1:7890` |
+| `MEDIA_PLATFORMS` | `bilibili,youtube,tiktok` | 视频平台及优先级。可加 douyin(含西瓜,实验性) |
+| `YTDLP_PROXY` | 空 | yt-dlp 代理,国内访问 YouTube / TikTok 需要,如 `http://127.0.0.1:7890` |
 | `YTDLP_COOKIES` | 空 | 浏览器导出的 `cookies.txt`。B站高清 / 抖音下载需要 |
 | `PEXELS_API_KEY` / `PIXABAY_API_KEY` | 空 | 免费图库 Key,非车画面兜底用;没填自动跳过 |
 | `COVERR_API_KEY` / `UNSPLASH_ACCESS_KEY` | 空 | Coverr(视频)/ Unsplash(图片)免费图库 Key,同上 |
@@ -319,6 +319,8 @@ Readable on-screen text includes "[年款标识]"
 | **B站** | `platform_video.search_bilibili` | 直连站内搜索接口(拿得到标题 / UP 主 / 时长),失败退回 yt-dlp 的 `bilisearch` |
 | **YouTube** | `platform_video.search_youtube` | yt-dlp `ytsearch`。国内需配 `YTDLP_PROXY` |
 | **抖音 / 西瓜** | `platform_video.search_douyin` | **基本不可用**:靠 Bing 站内检索拿视频页,而 cn.bing 无视 `site:`,实测搜不到。抖音素材请手动贴链接进素材池(见下文),下载需 `YTDLP_COOKIES` |
+| **TikTok 官方号** | `official.tiktok_official` | TikTok 没有能直接调的站内搜索(网页接口要签名),改为拉品牌官方号主页(yt-dlp `tiktok:user`,取最近 60 条),只留文案里提到这台车的(中文名或英文名都认)。账号名单写在 `auto.yaml` 的 `official_sites.<品牌>.tiktok`,**人工核对过才写** —— 名字像官方的号不一定是(`bydglobal` 发油画)。源本身是 720×1280 竖屏,正好铺满 9:16。国内需配 `YTDLP_PROXY` |
+| **TikTok 检索** | `platform_video.search_tiktok` | 尽力而为:借 DuckDuckGo `site:tiktok.com`(Bing 国内会跳 cn.bing、无视 `site:`)。请求一密 DuckDuckGo 就回人机验证页,此时这一路跳过、不缓存空结果、不绕验证 |
 | 维基共享资源 / 车媒文章页 | `clips.py` | 原有来源,保留作补位。车媒页里嵌的 B站 / YouTube 播放器现在会还原成视频页交给 yt-dlp |
 | **网上图片** | 参考图集 + `webassets.bing_images` | `cn.bing.com` 图片检索,国内直连、免密钥 |
 | **Pexels / Pixabay / Coverr / Unsplash** | `stock.py` | 官方免费 API,无水印空镜,只给非车镜头用。Coverr 只出视频,Unsplash 只出图片 |

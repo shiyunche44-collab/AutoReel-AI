@@ -196,6 +196,8 @@ def offline(monkeypatch):
                         lambda *a, **k: list(box.get("official_platform", [])))
     monkeypatch.setattr(official, "gallery_images",
                         lambda *a, **k: list(box.get("gallery", [])))
+    monkeypatch.setattr(official, "tiktok_official",
+                        lambda *a, **k: list(box.get("official_tiktok", [])))
     monkeypatch.setattr(official, "site_media", lambda *a, **k: ([], []))
     monkeypatch.setattr(webassets, "bing_images_cached",
                         lambda *a, **k: list(box.get("bing", [])))

@@ -294,9 +294,9 @@ class _Ctx:
 
 
 def _platforms_for(lang: str) -> list[str]:
-    """中文检索词给国内平台,英文检索词给 YouTube。"""
+    """中文检索词给国内平台,英文检索词给 YouTube / TikTok。"""
     zh = [p for p in config.MEDIA_PLATFORMS if p in ("bilibili", "douyin")]
-    en = [p for p in config.MEDIA_PLATFORMS if p == "youtube"]
+    en = [p for p in config.MEDIA_PLATFORMS if p in ("youtube", "tiktok")]
     return zh if lang == "zh" else en
 
 
@@ -337,6 +337,11 @@ def _tier_candidates(ctx: _Ctx, tier: str, q: media_query.ShotQuery
             hits = official.platform_official(
                 ctx.subject, ctx.aliases, platforms=config.MEDIA_PLATFORMS,
                 errors=ctx.errors)
+            handles = ctx.brand_spec.get("tiktok", ())
+            if handles and "tiktok" in config.MEDIA_PLATFORMS:
+                hits += official.tiktok_official(
+                    ctx.subject, handles, names=[library.english_name(ctx.subject, ctx.aliases)],
+                    aliases=ctx.aliases, errors=ctx.errors)
             vids, _ = _site_media(ctx)
             return _hits_to_candidates(hits, seconds=ctx.seconds) + vids
         return ctx.memo("official_video", _official_video)

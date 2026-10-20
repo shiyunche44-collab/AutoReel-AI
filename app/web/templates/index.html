@@ -1,204 +1,228 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>aimovice · 解说视频自动化平台</title>
-  <link rel="icon" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <rect x="2" y="4" width="14" height="16" rx="2"/><path d="M22 8l-6 4 6 4V8z"/>
-    </svg>
-    <span>aimovice</span>
-  </div>
-  <div class="topbar-right">
-    <span class="pill" title="M Plan 套餐到期日">套餐到期 {{ plan_expires_on }}</span>
-    <a class="btn btn-ghost" href="/api/health" target="_blank">健康状态</a>
-  </div>
-</header>
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}aimovice · 解说视频自动化平台{% endblock %}
+{% block body_class %}page-index{% endblock %}
 
-<main class="wrap">
-  {% if not health.ffmpeg.ok or not health.connector.ok or not health.llm.active %}
-  <section class="banner banner-error">
-    <strong>环境未就绪,部分功能不可用</strong>
-    <ul>
-      {% if not health.ffmpeg.ok %}<li>ffmpeg:{{ health.ffmpeg.message }}</li>{% endif %}
-      {% if not health.connector.ok %}<li>生成通道:{{ health.connector.message }}</li>{% endif %}
-      {% if not health.llm.active %}<li>LLM:未配置 DEEPSEEK_API_KEY,脚本生成与提示词编译无法工作</li>{% endif %}
-    </ul>
-  </section>
-  {% endif %}
+{% block topbar_right %}
+<span class="badge tone-neutral plan-pill" id="plan-pill" data-expires="{{ plan_expires_on }}" title="M Plan 套餐到期日">
+  {{ m.icon("calendar", "i-sm") }}<span>套餐到期 {{ plan_expires_on }}</span>
+</span>
+{% endblock %}
 
-  <section class="card">
-    <h2>新建项目</h2>
-    <form id="create-form" class="form-grid">
-      <label>
-        <span>选题 / 车型</span>
-        <input name="subject" required placeholder="例:比亚迪汉 EV 2026 款">
-      </label>
-      <label>
-        <span>品类</span>
-        <select name="category" id="category-select">
-          {% for c in categories %}
-          <option value="{{ c.name }}" {% if c.skeleton %}disabled{% endif %}>
-            {{ c.label }}{% if c.skeleton %}(骨架,未实现){% endif %}
-          </option>
+{% block main %}
+{% set env_bad = not health.ffmpeg.ok or not health.connector.ok or not health.llm.active %}
+{% if env_bad %}
+<details class="callout tone-danger env-alert" open>
+  <summary class="row-between">
+    <span class="row">{{ m.icon("alert-triangle") }}<strong>环境未就绪,部分功能不可用</strong></span>
+    <span class="subtle small">展开 / 收起</span>
+  </summary>
+  <ul>
+    {% if not health.ffmpeg.ok %}<li><strong>ffmpeg</strong>:{{ health.ffmpeg.message }} <span class="subtle">· 安装 ffmpeg 并确保在 PATH 中</span></li>{% endif %}
+    {% if not health.connector.ok %}<li><strong>生成通道</strong>:{{ health.connector.message }} <span class="subtle">· 检查 .env 中的 MiniMax Key</span></li>{% endif %}
+    {% if not health.llm.active %}<li><strong>LLM</strong>:未配置可用的模型 Key,脚本生成与提示词编译无法工作 <span class="subtle">· 在 .env 中配置 MINIMAX 或 DEEPSEEK_API_KEY</span></li>{% endif %}
+  </ul>
+</details>
+{% endif %}
+
+<section class="hero">
+  <div class="hero-head">
+    <h1>把一个选题,变成一支<span class="grad">可溯源</span>的解说短片</h1>
+    <p class="muted">事实采集 → 脚本 → 分镜全自动完成;所有会消耗额度的步骤都需要你确认后才开始。</p>
+  </div>
+
+  <div class="create-layout">
+    <form id="create-form" class="card create-card" novalidate>
+      <div class="field">
+        <label class="field-label" for="subject">选题 / 车型</label>
+        <div class="input-group">
+          {{ m.icon("sparkles") }}
+          <input class="input input-lg" id="subject" name="subject" required autocomplete="off"
+                 placeholder="例:比亚迪汉 EV 2026 款">
+        </div>
+        <span class="field-help" id="subject-help">尽量写全品牌、车型和年款,事实采集会更准。</span>
+      </div>
+
+      <div class="form-grid-2">
+        <div class="field">
+          <label class="field-label" for="category-select">品类</label>
+          <select class="select" name="category" id="category-select">
+            {% for c in categories %}
+            <option value="{{ c.name }}" {% if c.skeleton %}disabled{% endif %}>
+              {{ c.label }}{% if c.skeleton %}(即将支持){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" id="theme-field">
+          <label class="field-label" for="theme-select">内容方向</label>
+          <select class="select" name="theme" id="theme-select">
+            {% for t in themes %}
+            <option value="{{ t.name }}" title="{{ t.intent }}">{{ t.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <p class="field-help theme-intent" id="theme-intent"></p>
+
+      <div class="field">
+        <span class="field-label">时长</span>
+        <div class="segmented" role="radiogroup" aria-label="时长">
+          {% for d in durations %}
+          <input type="radio" name="duration" id="dur-{{ d }}" value="{{ d }}" {% if loop.first %}checked{% endif %}>
+          <label for="dur-{{ d }}">{{ d }} 秒</label>
           {% endfor %}
-        </select>
-      </label>
-      <label id="theme-field">
-        <span>内容方向</span>
-        <select name="theme" id="theme-select">
-          {% for t in themes %}
-          <option value="{{ t.name }}" title="{{ t.intent }}">{{ t.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>时长</span>
-        <select name="duration" id="duration-select">
-          {% for d in durations %}<option value="{{ d }}">{{ d }} 秒</option>{% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>旁白方式</span>
-        <select name="narration_mode">
-          <option value="tts">独立 TTS 音轨(推荐,发音准确)</option>
-          <option value="native">H3 原生音频(画面自带人声)</option>
-        </select>
-      </label>
-      <label>
-        <span>配额节流上限(等效美元,留空自动)</span>
-        <input name="quota_budget" type="number" step="0.01" placeholder="自动">
-      </label>
-      <div class="form-actions">
-        <button class="btn btn-primary" type="submit">创建并开始采集</button>
-        <span id="estimate-hint" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">旁白方式</span>
+        <div class="choice-grid">
+          <label class="choice">
+            <input type="radio" name="narration_mode" value="tts" checked>
+            <span class="choice-body">
+              <span class="choice-radio"></span>
+              <span>
+                <span class="choice-title">{{ m.icon("mic", "i-sm") }}独立 TTS 音轨<span class="tag tone-brand">推荐</span></span>
+                <span class="choice-desc">发音准确、可单独替换,字幕与口播严格对齐。</span>
+              </span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="narration_mode" value="native">
+            <span class="choice-body">
+              <span class="choice-radio"></span>
+              <span>
+                <span class="choice-title">{{ m.icon("wave", "i-sm") }}H3 原生音频</span>
+                <span class="choice-desc">画面自带人声,更自然,但专有名词可能读错。</span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <details class="disclosure">
+        <summary>{{ m.icon("chevron-right", "i-sm") }}高级设置</summary>
+        <div class="field advanced">
+          <label class="field-label" for="quota_budget">配额节流上限 <span class="subtle">等效美元</span></label>
+          <input class="input" id="quota_budget" name="quota_budget" type="number" step="0.01" min="0" placeholder="留空则按时长自动设定">
+          <span class="field-help">达到上限后项目会自动暂停,不会继续消耗额度。</span>
+        </div>
+      </details>
+
+      <div class="create-actions">
+        <button class="btn btn-primary btn-lg" type="submit" id="create-btn">
+          {{ m.icon("arrow-right") }}创建并开始采集
+        </button>
+        <span class="subtle small">创建后自动跑到「确认 A」并停下等你</span>
       </div>
     </form>
-    <p class="note">
-      创建后会自动完成「事实采集 → 脚本 → 分镜」,然后停在
-      <strong>门禁 A</strong> 等待你确认。草稿与成片生成必须手动推进,避免在错误分镜上消耗额度。
-    </p>
-  </section>
 
-  <section class="card">
-    <div class="card-head">
-      <h2>项目列表</h2>
-      <span class="muted">{{ projects | length }} 个项目</span>
+    <aside class="card estimate-card" aria-live="polite">
+      <div class="card-head"><h2>{{ m.icon("activity") }}预估</h2><span class="subtle small" id="est-dur">—</span></div>
+      <div class="card-body estimate-grid">
+        <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}镜头数</span><span class="kpi-value" id="est-shots"><span class="skeleton sk-num"></span></span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("wallet", "i-sm") }}等效用量</span><span class="kpi-value" id="est-cost"><span class="skeleton sk-num"></span></span><span class="kpi-sub">含重试预留</span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("clock", "i-sm") }}成片耗时</span><span class="kpi-value" id="est-time"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-time-sub">上界估计</span></div>
+        <div class="kpi"><span class="kpi-label">{{ m.icon("zap", "i-sm") }}真实素材最多省</span><span class="kpi-value" id="est-save"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-save-sub">&nbsp;</span></div>
+      </div>
+      <div class="flow">
+        <div class="flow-title subtle small">流程</div>
+        <ol class="flow-steps">
+          <li><span class="flow-dot tone-brand">{{ m.icon("zap", "i-sm") }}</span><div><strong>自动</strong><span>事实 · 脚本 · 分镜</span></div></li>
+          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 A</strong><span>审脚本与分镜</span></div></li>
+          <li><span class="flow-dot tone-brand">{{ m.icon("film", "i-sm") }}</span><div><strong>草稿</strong><span>低成本预览</span></div></li>
+          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>分批审片</span></div></li>
+          <li><span class="flow-dot tone-success">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1080×1920 输出</span></div></li>
+        </ol>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section class="projects">
+  <div class="projects-head">
+    <div class="row">
+      <h2 class="h2">项目</h2>
+      <span class="count" id="proj-count">{{ projects | rejectattr("state", "equalto", "CANCELLED") | list | length }}</span>
     </div>
-    {% if not projects %}
-      <p class="empty">还没有项目。从上面新建一个开始吧。</p>
-    {% else %}
-    <div class="project-grid">
-      {% for p in projects %}
-      <a class="project-card" href="/project/{{ p.id }}">
-        <div class="pc-head">
-          <strong>{{ p.title }}</strong>
-          <span class="state state-{{ p.state }}">{{ p.state }}</span>
+    <div class="projects-tools">
+      <div class="input-group search">
+        {{ m.icon("search") }}
+        <input class="input" id="proj-search" type="search" placeholder="搜索标题或选题" autocomplete="off">
+        <span class="kbd hide-sm">Ctrl K</span>
+      </div>
+      <select class="select sort" id="proj-sort" aria-label="排序">
+        <option value="updated">最近更新</option>
+        <option value="created">最近创建</option>
+        <option value="cost">用量最高</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="chips" id="proj-filters" role="toolbar" aria-label="按状态筛选">
+    <button class="chip" type="button" data-group="all" aria-pressed="true">全部 <span class="count" data-count="all">0</span></button>
+    <button class="chip" type="button" data-group="gate" aria-pressed="false">待我确认 <span class="count" data-count="gate">0</span></button>
+    <button class="chip" type="button" data-group="running" aria-pressed="false">进行中 <span class="count" data-count="running">0</span></button>
+    <button class="chip" type="button" data-group="done" aria-pressed="false">已完成 <span class="count" data-count="done">0</span></button>
+    <button class="chip" type="button" data-group="error" aria-pressed="false">异常 <span class="count" data-count="error">0</span></button>
+  </div>
+
+  <div class="project-grid" id="project-grid">
+    {% for p in projects if p.state != 'CANCELLED' %}
+    {%- set meta = m.STATE_META.get(p.state, {"label": p.state, "tone": "neutral", "step": -1, "group": "other"}) -%}
+    <article class="pcard" data-id="{{ p.id }}" data-group="{{ meta.group }}"
+             data-search="{{ (p.title ~ ' ' ~ p.subject) | lower }}"
+             data-updated="{{ p.updated_at }}" data-created="{{ p.created_at }}" data-cost="{{ p.spent_cost }}">
+      <a class="pcard-link" href="/project/{{ p.id }}" aria-label="打开 {{ p.title }}"></a>
+      <div class="pcard-thumb">
+        {% if p.has_output %}
+        <img src="/api/projects/{{ p.id }}/cover" alt="" loading="lazy" onerror="this.remove()">
+        {% endif %}
+        {{ m.icon("film", "i-lg") }}
+      </div>
+      <div class="pcard-main">
+        <div class="pcard-top">
+          <h3 class="pcard-title">{{ p.title }}</h3>
+          {{ m.state_badge(p.state) }}
         </div>
-        <div class="pc-meta">
+        <div class="pcard-meta">
           <span>{{ p.subject }}</span>
-          {% if p.theme %}<span class="pc-theme">{{ p.theme_label or p.theme }}</span>{% endif %}
-          <span>{{ p.duration }}s · {{ p.shot_count }} 镜头</span>
+          {% if p.theme %}<span class="tag">{{ p.theme_label or p.theme }}</span>{% endif %}
+          <span class="num">{{ p.duration }}s · {{ p.shot_count }} 镜头</span>
         </div>
-        <div class="pc-bar" title="已用 / 上限">
-          <div class="pc-bar-fill"
-               style="width: {{ (100 * p.spent_cost / p.quota_budget) if p.quota_budget else 0 }}%"></div>
+        <div class="pcard-steps" title="流水线进度">
+          {%- set st = meta.step -%}
+          {% for s in m.STEPS %}
+          <span class="seg {% if st >= 0 and loop.index0 < st %}is-done{% elif loop.index0 == st %}is-cur tone-{{ meta.tone }}{% endif %}{% if st < 0 %} is-err{% endif %}"></span>
+          {% endfor %}
         </div>
-        <div class="pc-foot">
-          <span>等效用量 {{ '%.2f' % p.spent_cost }} / {{ '%.2f' % p.quota_budget }}</span>
-          {% if p.has_output %}<span class="ok">已出片</span>{% endif %}
+        <div class="pcard-foot">
+          {%- set tone = m.usage_tone(p.spent_cost, p.quota_budget) -%}
+          <span class="pcard-usage">
+            <span class="progress progress-sm tone-{{ tone }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></span>
+            <span class="num subtle">{{ '%.2f' % p.spent_cost }} / {{ '%.2f' % p.quota_budget }}</span>
+          </span>
+          <span class="subtle rel-time" data-ts="{{ p.updated_at }}"></span>
         </div>
-      </a>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </section>
-</main>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm pcard-del js-delete" type="button"
+              data-id="{{ p.id }}" data-title="{{ p.title }}" aria-label="删除项目" data-tip="删除项目" data-tip-pos="left">
+        {{ m.icon("trash", "i-sm") }}
+      </button>
+    </article>
+    {% endfor %}
+  </div>
 
-<script src="/static/app.js"></script>
-<script>
-  const DUR = {{ durations | tojson }};
-  const CATS = {{ categories | tojson }};
+  <div class="empty {% if projects | rejectattr('state', 'equalto', 'CANCELLED') | list %}hidden{% endif %}" id="proj-empty">
+    <div class="empty-icon">{{ m.icon("inbox", "i-lg") }}</div>
+    <div class="empty-title" id="proj-empty-title">还没有项目</div>
+    <div id="proj-empty-desc">在上面输入一个选题,几分钟后就能看到脚本和分镜。</div>
+  </div>
+</section>
+{% endblock %}
 
-  function catInfo(name) {
-    return CATS.find(c => c.name === name) || { themes: [], default_theme: '' };
-  }
-
-  // 方向下拉必须跟着品类走:不同品类的方向词表完全不同(auto 有 7 个,
-  // beauty 只有一个合成的 overview)。不联动的话,选了美妆再带上 auto
-  // 的方向名,建项目时会被 400 拒绝。
-  function syncThemeField() {
-    const field = document.getElementById('theme-field');
-    const sel = document.getElementById('theme-select');
-    const cat = catInfo(document.getElementById('category-select').value);
-    const themes = cat.themes || [];
-    const keep = sel.value;
-    sel.innerHTML = '';
-    for (const t of themes) {
-      const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.label;
-      opt.title = t.intent || '';
-      sel.appendChild(opt);
-    }
-    // 只有一个隐式默认方向时,单独展示一个下拉框没有意义
-    field.style.display = themes.length <= 1 ? 'none' : '';
-    if (keep && themes.some(t => t.name === keep)) sel.value = keep;
-  }
-
-  async function refreshEstimate() {
-    const d = document.getElementById('duration-select').value;
-    const res = await fetch('/api/estimate?duration=' + d);
-    if (!res.ok) return;
-    const data = await res.json();
-    const wc = data.wall_clock;
-    const rc = data.real_clips || {};
-    const clipText = rc.enabled
-      ? ` · 若 ${rc.max_shots} 个外观镜头取到真实素材,最多省 $${rc.max_savings.toFixed(2)}`
-      : '';
-    document.getElementById('estimate-hint').textContent =
-      `${data.shot_count} 个镜头 · 预计等效用量 ${data.cost.with_retry.toFixed(2)} · ` +
-      `成片档约 ${wc.final_minutes_low}-${wc.final_minutes_high} 分钟` +
-      `(${wc.chains} 条一致性链 / ${wc.waves} 个波次,上界)` +
-      clipText;
-  }
-  document.getElementById('duration-select').addEventListener('change', refreshEstimate);
-  document.getElementById('category-select').addEventListener('change', syncThemeField);
-  syncThemeField();
-  refreshEstimate();
-
-  document.getElementById('create-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const btn = e.target.querySelector('button');
-    btn.disabled = true; btn.textContent = '创建中…';
-    try {
-      const res = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subject: fd.get('subject'),
-          category: fd.get('category'),
-          theme: fd.get('theme') || null,
-          duration: parseInt(fd.get('duration'), 10),
-          narration_mode: fd.get('narration_mode'),
-          quota_budget: fd.get('quota_budget') ? parseFloat(fd.get('quota_budget')) : null
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || '创建失败');
-      location.href = '/project/' + data.id;
-    } catch (err) {
-      alert(err.message);
-      btn.disabled = false; btn.textContent = '创建并开始采集';
-    }
-  });
-</script>
-</body>
-</html>
+{% block page_data %}
+<script type="application/json" id="page-data">{{ {"categories": categories, "durations": durations} | tojson }}</script>
+{% endblock %}
+{% block script %}index{% endblock %}

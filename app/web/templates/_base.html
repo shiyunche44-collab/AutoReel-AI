@@ -1,0 +1,55 @@
+{% import "_macros.html" as m %}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}aimovice{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <script>
+    /* 主题要在首帧前定下来,否则会先闪一下深色 */
+    try { var t = localStorage.getItem('aimovice.theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/pages.css">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% include "_sprite.html" %}
+<header class="topbar">
+  <div class="topbar-left">
+    <a class="brand" href="/" aria-label="aimovice 首页">
+      <span class="brand-mark">{{ m.icon("clapper") }}</span>
+      <span class="hide-sm">aimovice</span>
+    </a>
+    {% block crumbs %}{% endblock %}
+  </div>
+  <div class="topbar-right">
+    {% block topbar_right %}{% endblock %}
+    {% if health is defined and health %}
+    {%- set h_ok = health.ffmpeg and health.ffmpeg.ok and health.connector and health.connector.ok and health.llm and health.llm.active -%}
+    <a class="btn btn-ghost btn-sm health-dot {{ 'is-ok' if h_ok else 'is-bad' }}" href="/api/health" target="_blank" rel="noopener"
+       data-tip-pos="left"
+       data-tip="ffmpeg:{{ '正常' if health.ffmpeg and health.ffmpeg.ok else '异常' }}&#10;生成通道:{{ '正常' if health.connector and health.connector.ok else '异常' }}&#10;LLM:{{ health.llm.active if health.llm and health.llm.active else '未配置' }}&#10;检测于 {{ health.checked_at }}">
+      <span class="dot"></span><span class="hide-sm">{{ '系统正常' if h_ok else '环境异常' }}</span>
+    </a>
+    {% endif %}
+    <button class="btn btn-ghost btn-icon btn-sm" id="theme-toggle" type="button" aria-label="切换主题" data-tip="切换浅色 / 深色" data-tip-pos="left">
+      <svg class="i theme-icon-dark" aria-hidden="true"><use href="#i-moon"/></svg>
+      <svg class="i theme-icon-light" aria-hidden="true"><use href="#i-sun"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+{% block main %}{% endblock %}
+</main>
+
+<div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
+<script type="application/json" id="state-meta">{{ m.STATE_META | tojson }}</script>
+{% block page_data %}{% endblock %}
+<script type="module" src="/static/js/pages/{% block script %}{% endblock %}.js"></script>
+</body>
+</html>

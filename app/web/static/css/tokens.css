@@ -1,0 +1,116 @@
+/* 设计令牌。组件只用这里的变量,换肤只改这一个文件。
+   深色为默认;浅色在 [data-theme=light] 或系统偏好下生效。 */
+:root {
+  --bg: #0b0d12;
+  --bg-grad: radial-gradient(1200px 600px at 10% -10%, rgba(99,123,255,.10), transparent 60%),
+             radial-gradient(900px 500px at 110% 0%, rgba(56,189,248,.06), transparent 60%);
+  --surface-1: #12151c;
+  --surface-2: #181c25;
+  --surface-3: #1f2430;
+  --surface-inset: #0e1117;
+  --border: rgba(255,255,255,.07);
+  --border-strong: rgba(255,255,255,.13);
+
+  --text-1: #eef0f5;
+  --text-2: #a4abbb;
+  --text-3: #6b7385;
+
+  --brand: #6e8bff;
+  --brand-2: #8f6bff;
+  --brand-hover: #839bff;
+  --brand-soft: rgba(110,139,255,.14);
+  --brand-ring: rgba(110,139,255,.45);
+  --success: #34d399;
+  --success-soft: rgba(52,211,153,.13);
+  --warning: #f5b544;
+  --warning-soft: rgba(245,181,68,.13);
+  --danger: #f87171;
+  --danger-soft: rgba(248,113,113,.13);
+  --neutral-soft: rgba(148,163,184,.12);
+
+  --on-brand: #fff;
+  --on-success: #052e1c;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-md: 0 4px 16px -4px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.3);
+  --shadow-lg: 0 24px 64px -12px rgba(0,0,0,.6), 0 2px 6px rgba(0,0,0,.3);
+
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --dur: 180ms;
+
+  --font: "Inter", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --topbar-h: 56px;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #f6f7fa;
+  --bg-grad: radial-gradient(1200px 600px at 10% -10%, rgba(99,123,255,.08), transparent 60%);
+  --surface-1: #ffffff;
+  --surface-2: #f8f9fb;
+  --surface-3: #eff1f5;
+  --surface-inset: #f3f4f7;
+  --border: rgba(15,23,42,.08);
+  --border-strong: rgba(15,23,42,.15);
+  --text-1: #0f172a;
+  --text-2: #4b5567;
+  --text-3: #8a93a6;
+  --brand: #4f6bff;
+  --brand-2: #7a52f5;
+  --brand-hover: #3e5cf5;
+  --brand-soft: rgba(79,107,255,.10);
+  --brand-ring: rgba(79,107,255,.35);
+  --success: #0f9f6e;
+  --success-soft: rgba(16,185,129,.11);
+  --warning: #c27c0e;
+  --warning-soft: rgba(245,158,11,.13);
+  --danger: #dc3a3a;
+  --danger-soft: rgba(239,68,68,.10);
+  --neutral-soft: rgba(100,116,139,.10);
+  --on-success: #fff;
+  --shadow-sm: 0 1px 2px rgba(15,23,42,.06);
+  --shadow-md: 0 4px 14px -4px rgba(15,23,42,.10), 0 1px 2px rgba(15,23,42,.05);
+  --shadow-lg: 0 24px 60px -12px rgba(15,23,42,.22), 0 2px 6px rgba(15,23,42,.06);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f7fa;
+    --bg-grad: radial-gradient(1200px 600px at 10% -10%, rgba(99,123,255,.08), transparent 60%);
+    --surface-1: #ffffff;
+    --surface-2: #f8f9fb;
+    --surface-3: #eff1f5;
+    --surface-inset: #f3f4f7;
+    --border: rgba(15,23,42,.08);
+    --border-strong: rgba(15,23,42,.15);
+    --text-1: #0f172a;
+    --text-2: #4b5567;
+    --text-3: #8a93a6;
+    --brand: #4f6bff;
+    --brand-2: #7a52f5;
+    --brand-hover: #3e5cf5;
+    --brand-soft: rgba(79,107,255,.10);
+    --brand-ring: rgba(79,107,255,.35);
+    --success: #0f9f6e;
+    --success-soft: rgba(16,185,129,.11);
+    --warning: #c27c0e;
+    --warning-soft: rgba(245,158,11,.13);
+    --danger: #dc3a3a;
+    --danger-soft: rgba(239,68,68,.10);
+    --neutral-soft: rgba(100,116,139,.10);
+    --on-success: #fff;
+    --shadow-sm: 0 1px 2px rgba(15,23,42,.06);
+    --shadow-md: 0 4px 14px -4px rgba(15,23,42,.10), 0 1px 2px rgba(15,23,42,.05);
+    --shadow-lg: 0 24px 60px -12px rgba(15,23,42,.22), 0 2px 6px rgba(15,23,42,.06);
+    color-scheme: light;
+  }
+}

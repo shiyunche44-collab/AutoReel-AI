@@ -125,7 +125,8 @@ class CategoryProfile:
     forbidden_terms: tuple[str, ...] = ()
     required_disclaimers: tuple[str, ...] = ()
     music_prompt: str = "instrumental background music, steady tempo, no vocals"
-    #: 官方素材渠道:品牌键 -> {aliases: [...], sites: [域名...], media: [媒体中心域名...]}。
+    #: 官方素材渠道:品牌键 -> {aliases: [...], sites: [域名...], media: [媒体中心域名...],
+    #: tiktok: [官方号...]}。
     #: 只声明**域名**,不写死车型页地址 —— 车型页靠 `site:域名 车型` 站内检索定位,
     #: 官网改版不会让配置失效。新增品牌只改 YAML,不改代码。
     official_sites: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
@@ -390,7 +391,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         official_sites={
             str(brand): {
                 key: tuple(str(x) for x in (spec or {}).get(key) or ())
-                for key in ("aliases", "sites", "media")
+                for key in ("aliases", "sites", "media", "tiktok")
             }
             for brand, spec in (raw.get("official_sites") or {}).items()
         },

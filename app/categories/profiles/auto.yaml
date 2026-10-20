@@ -378,12 +378,17 @@ angle_queries:
 # sites:  官网域名,用 `site:域名 车型` 站内检索找车型页,抓页面里的视频与大图。
 # media:  新闻 / 媒体中心域名,官方宣传片与高清官图常在这里。
 # 只写域名不写车型页地址:官网改版换路径很常见,站内检索不受影响。
+# tiktok: TikTok 官方号(不带 @)。TikTok 没有可用的站内搜索,只能拉官方号主页再按文案
+#         对题。名单必须人工核对,不能按名字猜:`bydglobal` 发的是油画、`xiaomi` 是个人号。
+#         2026-10-20 核对。没列的品牌是没找到官方号,或 yt-dlp 解析不了(极氪 / 吉利 /
+#         长城 / 小鹏 / 理想:报 "Unable to extract secondary user ID")。
 # --------------------------------------------------------------------------
 official_sites:
   byd:
     aliases: [比亚迪, BYD, 海豹, 海豚, 海狮, 腾势, 仰望, 方程豹]
     sites: [bydauto.com.cn, byd.com]
     media: [byd.com/cn/news]
+    tiktok: [byd_global]
   tesla:
     aliases: [特斯拉, Tesla, Model 3, Model Y, Model S, Model X, Cybertruck]
     sites: [tesla.cn, tesla.com]
@@ -396,6 +401,7 @@ official_sites:
     aliases: [蔚来, NIO, 乐道, 萤火虫]
     sites: [nio.cn, nio.com]
     media: []
+    tiktok: [nio]
   xpeng:
     aliases: [小鹏, XPENG, Xpeng]
     sites: [xiaopeng.com, heyxpeng.com]
@@ -408,10 +414,12 @@ official_sites:
     aliases: [问界, AITO, 赛力斯, 鸿蒙智行, 智界, 享界, 尊界]
     sites: [aito.auto, seres.cn]
     media: []
+    tiktok: [aito_global]
   geely:
     aliases: [吉利, Geely, 银河, 领克, Lynk, 极氪, Zeekr, ZEEKR]
     sites: [geely.com, zeekrlife.com, lynkco.com.cn]
     media: []
+    tiktok: [lynkcoglobal]
   gwm:
     aliases: [长城, 哈弗, 魏牌, 坦克, 欧拉, 长城炮, GWM, Haval, TANK]
     sites: [gwm.com.cn]
@@ -420,26 +428,32 @@ official_sites:
     aliases: [奇瑞, Chery, 星途, 捷途]
     sites: [chery.cn]
     media: []
+    tiktok: [chery_international]
   volkswagen:
     aliases: [大众, Volkswagen, VW, ID.3, ID.4, ID.7, 帕萨特, 迈腾, 朗逸]
     sites: [vw.com.cn, faw-vw.com, svw-volkswagen.com]
     media: [volkswagen-newsroom.com]
+    tiktok: [volkswagen]
   toyota:
     aliases: [丰田, Toyota, 凯美瑞, 卡罗拉, RAV4, 汉兰达, 雷克萨斯, Lexus]
     sites: [toyota.com.cn, gac-toyota.com.cn, ftms.com.cn]
     media: [pressroom.toyota.com, global.toyota]
+    tiktok: [toyota]
   honda:
     aliases: [本田, Honda, 雅阁, 思域, CR-V]
     sites: [honda.com.cn, ghac.cn, dongfeng-honda.com]
     media: [hondanews.com]
+    tiktok: [honda]
   bmw:
     aliases: [宝马, BMW, MINI]
     sites: [bmw.com.cn]
     media: [press.bmwgroup.com]
+    tiktok: [bmw]
   mercedes:
     aliases: [奔驰, Mercedes, Benz, 迈巴赫, Maybach, AMG]
     sites: [mercedes-benz.com.cn]
     media: [group-media.mercedes-benz.com]
+    tiktok: [mercedesbenz]
   audi:
     aliases: [奥迪, Audi]
     sites: [audi.cn]

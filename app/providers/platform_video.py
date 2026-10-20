@@ -1,4 +1,4 @@
-"""平台视频 Provider:B 站 / YouTube / 抖音(西瓜)按关键词搜索 + 分段下载。
+"""平台视频 Provider:B 站 / YouTube / 抖音(西瓜)/ TikTok 按关键词搜索 + 分段下载。
 
 为什么用 yt-dlp
 ---------------
@@ -17,6 +17,9 @@
 - **抖音 / 西瓜**:yt-dlp 没有这两家的搜索,只能先用 Bing `site:` 站内检索
   拿到视频页,再交给 yt-dlp 下。抖音下载多半要 cookie,所以是**实验性**来源:
   失败就安静跳过,不影响别的平台。
+- **TikTok**:主通路是**品牌官方号主页**(yt-dlp `tiktok:user`,账号名单在品类
+  YAML 里人工核对);关键词检索借 DuckDuckGo `site:tiktok.com`,遇到人机验证
+  就跳过。TikTok 源本身就是竖屏,正好铺满 9:16。国内需要 `YTDLP_PROXY`。
 
 所有函数都不向上抛网络异常 —— 素材层的第一原则是降级而不是阻断。
 """
@@ -280,10 +283,114 @@ def search_douyin(query: str, *, limit: int = 6) -> list[PlatformHit]:
     return hits[:limit]
 
 
+_TIKTOK_URL_RE = re.compile(
+    r"https?://(?:www\.|m\.)?tiktok\.com/@([\w.\-]+)/video/(\d+)", re.IGNORECASE
+)
+#: 官方号只看最近这么多条:品牌号发得勤,再往前多是旧车型
+TIKTOK_FEED_LIMIT = 60
+_DDG_HTML = "https://html.duckduckgo.com/html/"
+_DDG_RESULT_RE = re.compile(
+    r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.IGNORECASE | re.DOTALL
+)
+
+
+def tiktok_url(url: str) -> str:
+    """TikTok 视频页规范化成 `https://www.tiktok.com/@号/video/ID`,不是视频页返回空。"""
+    m = _TIKTOK_URL_RE.search(url)
+    return f"https://www.tiktok.com/@{m.group(1)}/video/{m.group(2)}" if m else ""
+
+
+def parse_tiktok_entries(info: dict[str, Any], handle: str = "") -> list[PlatformHit]:
+    """yt-dlp `tiktok:user` 的 flat 结果。标题为空时用描述(TikTok 的"标题"就是文案)。"""
+    hits: list[PlatformHit] = []
+    for e in info.get("entries") or []:
+        if not isinstance(e, dict):
+            continue
+        url = tiktok_url(str(e.get("url") or e.get("webpage_url") or ""))
+        if not url and e.get("id") and handle:
+            url = f"https://www.tiktok.com/@{handle}/video/{e['id']}"
+        if not url:
+            continue
+        hits.append(PlatformHit(
+            platform="tiktok",
+            url=url,
+            title=str(e.get("title") or e.get("description") or "").strip(),
+            uploader=str(e.get("uploader") or e.get("channel") or handle),
+            duration=float(e.get("duration") or 0.0),
+        ))
+    return hits
+
+
+def tiktok_account(handle: str, *, limit: int = TIKTOK_FEED_LIMIT) -> list[PlatformHit]:
+    """拉一个 TikTok 账号最近的视频(yt-dlp `tiktok:user`)。
+
+    TikTok 没有能直接调的关键词搜索(网页搜索接口要签名),品牌官方号的主页
+    却能稳定拉到,而且带文案、时长 —— 所以官方号是 TikTok 的主通路。
+    账号名单写在品类 YAML 的 `official_sites.<品牌>.tiktok`,由人核对过:
+    TikTok 上叫 `bydglobal` 的账号发的是油画,不能按名字猜。
+    国内访问需要 `YTDLP_PROXY`。失败抛 PlatformError。
+    """
+    handle = handle.strip().lstrip("@")
+
+    def _fetch() -> list[PlatformHit]:
+        try:
+            from yt_dlp import YoutubeDL
+        except ImportError as exc:
+            raise PlatformError("未安装 yt-dlp:pip install yt-dlp") from exc
+        opts = _base_opts()
+        opts.update(skip_download=True, extract_flat="in_playlist", playlistend=limit)
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(f"https://www.tiktok.com/@{handle}", download=False) or {}
+        except Exception as exc:  # noqa: BLE001
+            hint = "" if config.YTDLP_PROXY else ";国内访问需在 .env 配 YTDLP_PROXY"
+            raise PlatformError(f"TikTok 账号 @{handle} 拉取失败{hint}:{str(exc)[:120]}") from exc
+        return parse_tiktok_entries(info, handle)
+
+    return _cached_hits("tiktok_user", handle.lower(), limit, _fetch)
+
+
+def parse_ddg_results(body: str) -> list[tuple[str, str]]:
+    """DuckDuckGo HTML 版结果 → [(目标地址, 标题)]。结果链接是 `/l/?uddg=<目标>` 跳转。"""
+    out: list[tuple[str, str]] = []
+    for href, title in _DDG_RESULT_RE.findall(body):
+        href = html.unescape(href)
+        qs = urllib.parse.parse_qs(urllib.parse.urlsplit(href).query)
+        target = qs.get("uddg", [href])[0]
+        out.append((target, html.unescape(re.sub(r"<[^>]+>", "", title)).strip()))
+    return out
+
+
+def search_tiktok(query: str, *, limit: int = 8) -> list[PlatformHit]:
+    """TikTok 关键词检索:借 DuckDuckGo 的 `site:tiktok.com`。尽力而为。
+
+    Bing 在国内会被跳到 cn.bing,无视 `site:`,搜不到 TikTok;DuckDuckGo 能搜到,
+    但请求一密就回人机验证页 —— 这时**直接放弃**(抛错,不缓存空结果),
+    不去绕验证。拿不到结果时官方号通路(`tiktok_account`)照常工作。
+    """
+    url = f"{_DDG_HTML}?{urllib.parse.urlencode({'q': f'site:tiktok.com {query}', 'kl': 'us-en'})}"
+    try:
+        body = webassets._http_text(url)
+    except Exception as exc:  # noqa: BLE001
+        raise PlatformError(f"TikTok 检索(DuckDuckGo)不可用:{str(exc)[:80]}") from exc
+    if "anomaly" in body.lower() and "result__a" not in body:
+        raise PlatformError("TikTok 检索(DuckDuckGo)要求人机验证,本轮跳过")
+    hits: list[PlatformHit] = []
+    for target, title in parse_ddg_results(body):
+        clean = tiktok_url(target)
+        if clean and all(h.url != clean for h in hits):
+            # 结果标题形如 "文案 | TikTok",去掉站名尾巴
+            title = re.sub(r"\s*[|\-–]\s*TikTok\s*$", "", title)
+            hits.append(PlatformHit(platform="tiktok", url=clean, title=title,
+                                    uploader=_TIKTOK_URL_RE.search(clean).group(1)))
+    return hits[:limit]
+
+
 _SEARCHERS = {
     "bilibili": search_bilibili,
     "youtube": search_youtube,
     "douyin": search_douyin,
+    "tiktok": search_tiktok,
 }
 
 

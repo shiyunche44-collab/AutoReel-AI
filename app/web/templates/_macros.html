@@ -1,0 +1,85 @@
+{#- 展示层的唯一词表:状态 → 中文名 / 色调 / 流水线步骤。
+    模板直接用;JS 通过 page-data 拿同一份,避免两边各写一套。 -#}
+{% set STEPS = [
+  {"key": "facts", "label": "事实采集"},
+  {"key": "script", "label": "解说脚本"},
+  {"key": "storyboard", "label": "分镜"},
+  {"key": "gate_a", "label": "确认 A"},
+  {"key": "draft", "label": "草稿生成"},
+  {"key": "gate_b", "label": "确认 B"},
+  {"key": "final", "label": "成片生成"},
+  {"key": "compose", "label": "质检合成"},
+] %}
+
+{% set STATE_META = {
+  "DRAFT_INTENT":     {"label": "采集事实中",       "tone": "brand",   "step": 0, "live": true,  "group": "running"},
+  "FACTS_RESOLVED":   {"label": "生成脚本中",       "tone": "brand",   "step": 1, "live": true,  "group": "running"},
+  "SCRIPT_READY":     {"label": "生成分镜中",       "tone": "brand",   "step": 2, "live": true,  "group": "running"},
+  "STORYBOARD_READY": {"label": "分镜已就绪",       "tone": "brand",   "step": 3, "live": false, "group": "running"},
+  "GATE_A":           {"label": "待确认脚本与分镜", "tone": "warning", "step": 3, "live": false, "group": "gate"},
+  "ASSETS_READY":     {"label": "素材已就绪",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "PROMPTS_READY":    {"label": "提示词已就绪",     "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "DRAFT_RENDERING":  {"label": "草稿生成中",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
+  "GATE_B":           {"label": "待审核草稿",       "tone": "warning", "step": 5, "live": false, "group": "gate"},
+  "FINAL_RENDERING":  {"label": "成片生成中",       "tone": "brand",   "step": 6, "live": true,  "group": "running"},
+  "QA_PASSED":        {"label": "质检通过",         "tone": "brand",   "step": 7, "live": true,  "group": "running"},
+  "COMPOSING":        {"label": "合成中",           "tone": "brand",   "step": 7, "live": true,  "group": "running"},
+  "DONE":             {"label": "已完成",           "tone": "success", "step": 8, "live": false, "group": "done"},
+  "PAUSED_BUDGET":    {"label": "额度不足已暂停",   "tone": "danger",  "step": -1, "live": false, "group": "error"},
+  "FAILED":           {"label": "失败",             "tone": "danger",  "step": -1, "live": false, "group": "error"},
+  "CANCELLED":        {"label": "已删除",           "tone": "neutral", "step": -1, "live": false, "group": "cancelled"},
+} %}
+
+{% set SHOT_STATUS = {
+  "pending":   {"label": "待提交", "tone": "neutral"},
+  "submitted": {"label": "已提交", "tone": "brand"},
+  "queued":    {"label": "排队中", "tone": "brand"},
+  "running":   {"label": "生成中", "tone": "brand"},
+  "succeeded": {"label": "已完成", "tone": "success"},
+  "failed":    {"label": "失败",   "tone": "danger"},
+  "skipped":   {"label": "已跳过", "tone": "neutral"},
+} %}
+
+{% set SCOPE_LABEL = {"product": "产品级", "company": "公司级", "industry": "行业级"} %}
+{% set SCOPE_TONE = {"product": "brand", "company": "warning", "industry": "neutral"} %}
+{% set CONF_LABEL = {"high": "高可信", "medium": "中可信", "low": "低可信"} %}
+{% set CONF_TONE = {"high": "success", "medium": "warning", "low": "neutral"} %}
+
+{% macro icon(name, cls="") -%}
+<svg class="i {{ cls }}" aria-hidden="true"><use href="#i-{{ name }}"/></svg>
+{%- endmacro %}
+
+{% macro meta(state) -%}
+{{ STATE_META.get(state, {"label": state, "tone": "neutral", "step": -1, "live": false, "group": "other"}) | tojson }}
+{%- endmacro %}
+
+{% macro state_badge(state, id="") -%}
+{%- set m = STATE_META.get(state, {"label": state, "tone": "neutral", "live": false}) -%}
+<span class="badge tone-{{ m.tone }}{% if m.live %} is-live{% endif %}" title="{{ state }}" data-state="{{ state }}"{% if id %} id="{{ id }}"{% endif %}><span class="dot"></span>{{ m.label }}</span>
+{%- endmacro %}
+
+{% macro shot_badge(status) -%}
+{%- set m = SHOT_STATUS.get(status, {"label": status, "tone": "neutral"}) -%}
+<span class="badge tone-{{ m.tone }}{% if status in ('submitted','queued','running') %} is-live{% endif %}"><span class="dot"></span>{{ m.label }}</span>
+{%- endmacro %}
+
+{#- 当前步骤:FAILED / PAUSED 没有固定位置,按已有产物推断卡在哪一步 -#}
+{% macro step_of(p) -%}
+{%- set m = STATE_META.get(p.state, {"step": -1}) -%}
+{%- if m.step >= 0 -%}{{ m.step }}
+{%- elif not p.facts -%}0
+{%- elif not p.script -%}1
+{%- elif not p.shots -%}2
+{%- elif p.shots | selectattr("final_path") | list -%}6
+{%- else -%}4
+{%- endif -%}
+{%- endmacro %}
+
+{% macro usage_tone(spent, budget) -%}
+{%- set r = (spent / budget) if budget else 0 -%}
+{%- if r >= 1 -%}danger{%- elif r >= 0.8 -%}warning{%- else -%}brand{%- endif -%}
+{%- endmacro %}
+
+{% macro pct(spent, budget) -%}
+{{ [100, (100 * spent / budget) if budget else 0] | min | round(1) }}
+{%- endmacro %}

@@ -12,7 +12,8 @@
 1. **平台品牌官方号**:不需要逐品牌配置。在平台搜索结果上看上传者:
    名字含品牌名、并且被平台认证或带"官方 / 汽车 / Official"字样,就算官方。
    见 `platform_video.is_official`。这里额外补一轮"{品牌}官方 {车型}"检索,
-   专门把官方号的视频捞上来。
+   专门把官方号的视频捞上来。TikTok 例外:没有可用的站内搜索,改为直接拉
+   YAML `tiktok:` 里人工核对过的官方号主页(`tiktok_official`)。
 2. **车企官网 / 媒体中心**:域名声明在品类 YAML 的 `official_sites` 里。
    车型页靠 Bing `site:域名 车型` 站内检索定位,不写死页面地址 —— 官网改版
    换路径很常见,站内检索不受影响。页面里抓视频直链、嵌入播放器和大图。
@@ -31,6 +32,7 @@ import time
 import urllib.parse
 from typing import Any, Iterable, Sequence
 
+from .. import config
 from . import clips, platform_video, webassets
 from .images import ImageRef
 
@@ -92,6 +94,9 @@ def platform_official(subject: str, aliases: Sequence[str], *,
         return []
     primary = aliases[0]
     queries = [f"{primary}官方 {subject}", f"{subject} 官方宣传片"]
+    # TikTok 不靠"上传者名含品牌"判官方(叫 bydglobal 的号发的是油画),走 tiktok_official
+    platforms = [p for p in (config.MEDIA_PLATFORMS if platforms is None else platforms)
+                 if p != "tiktok"]
     out: list[platform_video.PlatformHit] = []
     seen: set[str] = set()
     for q in queries:
@@ -103,6 +108,55 @@ def platform_official(subject: str, aliases: Sequence[str], *,
                 hit.official = True
                 out.append(hit)
     return platform_video.rank(out)
+
+
+#: 判断"文案对不对题"时不算数的词:品牌号每条文案都带品牌名
+_GENERIC_TOKENS = {"ev", "car", "cars", "the", "new", "auto", "official", "global", "motors"}
+
+
+def tiktok_on_topic(title: str, subject: str, names: Sequence[str] = (),
+                    aliases: Sequence[str] = ()) -> bool:
+    """品牌号的一条文案是不是在说这台车。
+
+    比通用的 `title_relevant` 严:后者两个词元命中一半就算,而品牌号的文案
+    **每条**都带品牌名,"nio ET9" 只靠 "nio" 就会把 ES9、ET5 全收进来。
+    这里把品牌词去掉,要求剩下的型号词**全部**以整词出现;中文主体则要求
+    整串出现(TikTok 文案很少有中文,宁可漏也不错收)。
+    """
+    low = title.lower()
+    brand = {a.lower() for a in aliases if re.fullmatch(r"[A-Za-z]{3,}", a or "")}
+    for name in (subject, *names):
+        toks = [t for t in re.findall(r"[a-z0-9]+", (name or "").lower())
+                if t not in brand and t not in _GENERIC_TOKENS]
+        if toks and all(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", low)
+                        for t in toks):
+            return True
+    core = re.sub(r"\s+", "", subject or "").lower()
+    return bool(core) and core in re.sub(r"\s+", "", low)
+
+
+def tiktok_official(subject: str, handles: Sequence[str], *, names: Sequence[str] = (),
+                    aliases: Sequence[str] = (),
+                    errors: list[str] | None = None) -> list[platform_video.PlatformHit]:
+    """拉品牌 TikTok 官方号最近的视频,只留文案里提到这台车的。
+
+    账号是 YAML 里人工核对过的,所以直接算官方。品牌号什么车都发,
+    文案对题是必须的(`tiktok_on_topic`):`names` 是车型的其他叫法(英文名),
+    TikTok 文案几乎全是英文,只认中文主体会把它们全部筛掉。
+    """
+    out: list[platform_video.PlatformHit] = []
+    for handle in handles:
+        try:
+            hits = platform_video.tiktok_account(handle)
+        except Exception as exc:  # noqa: BLE001 - 一个账号挂了不影响别的
+            if errors is not None:
+                errors.append(f"tiktok 官方号 @{handle} 失败:{str(exc)[:120]}")
+            continue
+        for h in hits:
+            if h.title and tiktok_on_topic(h.title, subject, names, aliases):
+                h.official = True
+                out.append(h)
+    return out
 
 
 # --------------------------------------------------------------------------

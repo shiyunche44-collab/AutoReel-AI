@@ -279,13 +279,14 @@ def normalise_url(url: str) -> str:
     m = re.match(r"(https?://(?:www\.)?douyin\.com/video/\d+)", url)
     if m:
         return m.group(1)
-    return url
+    return platform_video.tiktok_url(url) or url
 
 
 def platform_of(url: str) -> str:
     host = platform_video.domain_of(url)
     for key, name in (("bilibili", "bilibili"), ("b23.tv", "bilibili"), ("youtu", "youtube"),
-                      ("douyin", "douyin"), ("ixigua", "douyin"), ("vimeo", "vimeo")):
+                      ("douyin", "douyin"), ("ixigua", "douyin"), ("tiktok", "tiktok"),
+                      ("vimeo", "vimeo")):
         if key in host:
             return name
     return "web"
@@ -314,23 +315,27 @@ def discovery_queries(subject: str, en: str) -> tuple[list[str], list[str]]:
 
 
 def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
-             max_sources: int = MAX_AUTO_SOURCES) -> int:
+             max_sources: int = MAX_AUTO_SOURCES, tiktok_handles: Sequence[str] = ()) -> int:
     """搜一轮新源加进池子。官方号的视频优先。返回新增的源数。"""
     subject = lib.subject
+    en = english_name(subject, aliases)
     hits: list[platform_video.PlatformHit] = []
     if aliases:
         hits += official.platform_official(subject, aliases, platforms=config.MEDIA_PLATFORMS,
                                            errors=errors)
-    zh_q, en_q = discovery_queries(subject, english_name(subject, aliases))
+    if tiktok_handles and "tiktok" in config.MEDIA_PLATFORMS:
+        hits += official.tiktok_official(subject, tiktok_handles, names=[en],
+                                         aliases=aliases, errors=errors)
+    zh_q, en_q = discovery_queries(subject, en)
     zh_platforms = [p for p in config.MEDIA_PLATFORMS if p == "bilibili"]
-    en_platforms = [p for p in config.MEDIA_PLATFORMS if p == "youtube"]
+    en_platforms = [p for p in config.MEDIA_PLATFORMS if p in ("youtube", "tiktok")]
     for q in zh_q:
         hits += platform_video.search(q, platforms=zh_platforms, errors=errors)
     for q in en_q:
         hits += platform_video.search(q, platforms=en_platforms, errors=errors)
     for h in hits:
         h.official = h.official or bool(aliases and platform_video.is_official(h, aliases))
-    ranked = rank_sources(_dedupe_hits(hits), subject)
+    ranked = rank_sources(_dedupe_hits(hits), subject, names=[en])
 
     have_auto = sum(1 for s in lib.sources if s.added_by == "auto")
     added = 0
@@ -362,16 +367,21 @@ SHOWCASE_TITLE_WORDS = (
 OFFICIAL_MAX_SECONDS = 3 * 3600
 
 
-def rank_sources(hits: Sequence[platform_video.PlatformHit], subject: str
-                 ) -> list[platform_video.PlatformHit]:
-    """过滤 + 排序:官方号 → 广告 / 宣传片 / 实拍类标题 → 其余;口播类和垃圾标题不要。"""
+def rank_sources(hits: Sequence[platform_video.PlatformHit], subject: str, *,
+                 names: Sequence[str] = ()) -> list[platform_video.PlatformHit]:
+    """过滤 + 排序:官方号 → 广告 / 宣传片 / 实拍类标题 → 其余;口播类和垃圾标题不要。
+
+    `names` 是车型的其他叫法(英文名):YouTube / TikTok 文案是英文的,
+    "比亚迪海豹06" 认不出 "BYD SEAL 06"。
+    """
     out: list[platform_video.PlatformHit] = []
     for h in hits:
         title = h.title.lower()
         limit = OFFICIAL_MAX_SECONDS if h.official else platform_video.MAX_SOURCE_SECONDS
         if h.duration and not (platform_video.MIN_SOURCE_SECONDS <= h.duration <= limit):
             continue
-        if h.title and not platform_video.title_relevant(h.title, subject):
+        if h.title and not any(platform_video.title_relevant(h.title, n)
+                               for n in (subject, *names) if n):
             continue
         if any(w in title for w in JUNK_TITLE_WORDS):
             continue
@@ -678,13 +688,16 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
 
     lib = Library.load(subject)
     aliases: list[str] = []
+    tiktok_handles: tuple[str, ...] = ()
     if profile is not None:
         key, spec = official.detect_brand(subject, profile.official_sites, hint=brand)
         aliases = official.brand_aliases(key, spec, brand) if (key or brand) else []
+        tiktok_handles = tuple(spec.get("tiktok", ()))
 
     try:
         if time.time() - lib.discovered_at > REDISCOVER_SECONDS:
-            n = discover(lib, aliases, errors, max_sources=max_sources)
+            n = discover(lib, aliases, errors, max_sources=max_sources,
+                         tiktok_handles=tiktok_handles)
             say(f"发现新源 {n} 个")
             lib.save()
         if not lib.gallery_at:

@@ -1,31 +1,52 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>日志 · aimovice</title>
-  <link rel="icon" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-<header class="topbar">
-  <div class="brand"><a class="brand-link" href="/"><span>aimovice</span></a></div>
-  <div class="topbar-right"><a class="btn btn-ghost" href="/project/{{ project_id }}">← 返回工作台</a></div>
-</header>
-<main class="wrap">
-  <section class="card">
-    <h2>事件流</h2>
-    <div class="events">
-      {% for e in events %}
-      <div class="event">
-        <span class="muted">#{{ e.id }}</span>
-        <span>{{ e.src or '—' }} → <strong>{{ e.dst }}</strong></span>
-        <span class="muted">{{ e.reason }}</span>
-        {% if e.cost %}<span class="badge">{{ '%.3f' % e.cost }}</span>{% endif %}
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}日志 · aimovice{% endblock %}
+{% block body_class %}page-logs{% endblock %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑">
+  <span class="sep">/</span><a href="/">项目</a><span class="sep">/</span><a href="/project/{{ project_id }}">工作台</a><span class="sep">/</span><span class="cur">事件日志</span>
+</nav>
+{% endblock %}
+
+{% block topbar_right %}
+<a class="btn btn-ghost btn-sm" href="/project/{{ project_id }}">{{ m.icon("chevron-left", "i-sm") }}返回工作台</a>
+{% endblock %}
+
+{% block main %}
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("list") }}事件日志 <span class="count">{{ events | length }}</span></h2>
+    <div class="input-group search-sm">{{ m.icon("search", "i-sm") }}<input class="input" id="log-search" type="search" placeholder="搜索状态或原因"></div>
+  </div>
+  {% if not events %}
+  <div class="empty"><div class="empty-icon">{{ m.icon("list", "i-lg") }}</div><div class="empty-title">暂无事件</div></div>
+  {% else %}
+  <ol class="timeline card-body" id="log-list">
+    {% for e in events %}
+    {%- set em = m.STATE_META.get(e.dst) or m.SHOT_STATUS.get(e.dst) or {"label": e.dst, "tone": "neutral"} -%}
+    {%- set sl = (m.STATE_META.get(e.src) or m.SHOT_STATUS.get(e.src) or {"label": e.src}).label if e.src else "" -%}
+    <li class="tl-item" data-text="{{ (sl ~ ' ' ~ em.label ~ ' ' ~ e.dst ~ ' ' ~ (e.reason or '')) | lower }}">
+      <span class="tl-dot tone-{{ em.tone }}"></span>
+      <div class="tl-body">
+        <div class="tl-head">
+          <span class="tl-trans">
+            <span class="subtle mono-id">#{{ e.id }}</span>
+            {% if e.src %}<span class="subtle">{{ sl }}</span>{{ m.icon("arrow-right", "i-sm") }}{% endif %}<strong title="{{ e.dst }}">{{ em.label }}</strong>
+          </span>
+          <span class="row">
+            {% if e.cost %}<span class="tag num">{{ m.icon("wallet", "i-sm") }}{{ '%.3f' % e.cost }}</span>{% endif %}
+            <span class="subtle small num">{{ e.created_at | datetime }}</span>
+          </span>
+        </div>
+        {% if e.reason %}<div class="tl-reason muted small">{{ e.reason }}</div>{% endif %}
       </div>
-      {% endfor %}
-    </div>
-  </section>
-</main>
-</body>
-</html>
+    </li>
+    {% endfor %}
+  </ol>
+  <div class="empty hidden" id="log-empty"><div class="empty-title">没有匹配的事件</div></div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block script %}logs{% endblock %}

@@ -55,13 +55,15 @@ USE_REAL_CLIPS = os.getenv("USE_REAL_CLIPS", "1") not in ("0", "false", "False")
 #: 找不到的镜头才回退 AI 生成。
 REAL_CLIP_LIMIT = int(os.getenv("REAL_CLIP_LIMIT", "0"))
 
-#: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin。
+#: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin / tiktok。
 #: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接 —— 而 cn.bing
 #: 会无视 `site:`,实测一条都搜不到(小米 YU7),白跑一趟,所以默认不开。
 #: 抖音素材请手动贴链接进素材池(`library add`)。
+#: tiktok 主通路是品牌官方号主页(名单在品类 YAML 的 `official_sites.*.tiktok`),
+#: 关键词检索借 DuckDuckGo,遇到人机验证就跳过。国内需要 YTDLP_PROXY。
 MEDIA_PLATFORMS: tuple[str, ...] = tuple(
     p.strip().lower()
-    for p in os.getenv("MEDIA_PLATFORMS", "bilibili,youtube").split(",")
+    for p in os.getenv("MEDIA_PLATFORMS", "bilibili,youtube,tiktok").split(",")
     if p.strip()
 )
 
