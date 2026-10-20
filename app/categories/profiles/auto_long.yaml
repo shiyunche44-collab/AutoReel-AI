@@ -222,3 +222,99 @@ required_disclaimers: ["数据来源:公开信息与官方渠道,仅供参考,�
 music_prompt: >
   instrumental electronic background music, steady mid tempo, clean modern
   automotive commercial feel, light percussion, no vocals, no lyrics
+
+# 旁白音色(MiniMax)
+voice_id: male-qn-jingying
+
+# 静图来源(providers/official.GALLERIES):汽车之家官图按视角分好类。
+# 懂车帝(dongchedi)也能用,图多是 640 宽的文章配图,暂不开
+galleries: [autohome]
+
+# 事实来源 → 检索词(接在车型名后面)。一条查询只表达一个意图,理由见 providers/facts.py
+fact_queries:
+  ifind.news: 新车 发布 销量 财报 重大事件
+  ifind.product_news: 车型 参数 续航 加速 售价 配置 上市
+  ifind.iteration_news: 历代车型 改款 换代 停产 升级
+  ifind.compare_news: 对比 竞品 同级 差异 相比
+  ifind.cost_news: 用车成本 保险 保养 电费 油耗 保值率
+  ifind.tech_news: 技术 架构 三电 智驾 平台 底盘 调校
+  ifind.market_news: 销量 市场份额 排名 行业格局 渗透率
+
+# --------------------------------------------------------------------------
+# 品类词表:引擎各层提示词里随品类变的文字(字段说明见 app/categories.Vocab)
+# --------------------------------------------------------------------------
+vocab:
+  domain: 汽车
+  subject_noun: 这台车
+  subject_label: 车型
+  subject_short: 车
+  subject_en: electric car
+  company_noun: 车企
+
+  number_examples: 续航、加速、价格、销量等
+  product_examples: 续航、加速、尺寸、配置、价格
+  product_examples_short: 续航、加速、配置、价格
+  spec_claim_example: 这台车续航 702 公里
+  keyword_examples: '"激光雷达"、"高通8650智驾芯片"'
+  stat_examples: 零百加速、续航、售价、功率
+  view_guide: 讲外观、尺寸、行驶给 exterior / driving,讲座舱、屏幕、空间给 interior。
+  subject_words: [这台车, 这辆车, 该车, 整车, 续航, 加速, 百公里, 配置, 售价, 电池, 充电]
+
+  views: [exterior_front, exterior_side, exterior_45, rear, driving, aerial,
+          interior, screen, seat, detail]
+  hint_groups:
+    exterior: [exterior_front, exterior_side, exterior_45, rear, driving, aerial]
+    interior: [interior, screen, seat, detail]
+    driving: [driving, aerial, exterior_side]
+  hint_of_angle: {interior: interior, screen_spec: interior, detail: interior}
+  default_hint: exterior
+  angle_of_view:
+    exterior_front: exterior_45
+    exterior_side: exterior_45
+    exterior_45: exterior_45
+    driving: exterior_45
+    aerial: exterior_45
+    rear: rear
+    interior: interior
+    seat: interior
+    screen: screen_spec
+    detail: detail
+
+  tag_variant_note: 注意同品牌的不同车系(如小米 SU7 与 YU7)是不同车型。
+  tag_identify: 画面主体是什么;有车的话是什么品牌和车型,依据是什么(车标、车尾字样、外形),看不出来就直说看不出来;
+  tag_angles: 车头正面、侧面、前 45 度、车尾、行驶中、航拍俯视、车内座舱、中控屏或仪表、座椅、局部特写(轮毂、车灯、门把手等),还是人物、文字卡、其它;
+  tag_target_rule: |-
+    描述明确认出是目标车型(同品牌同车系;年款、版本不同仍算)→ "yes";
+      明确认出是**别的品牌或别的车系** → "no";没点名车型 → "unknown"。
+  tag_target_cues: 车标、字样、外形
+  tag_view_guide: |2-
+      exterior_front(车头正面)、exterior_side(正侧面)、exterior_45(前 45 度 / 前侧)、
+      rear(车尾 / 后 45 度)、driving(行驶中的外观)、aerial(航拍俯视)、
+      interior(座舱全景)、screen(中控屏 / 仪表 / HUD)、seat(座椅 / 后排 / 后备厢)、
+      detail(轮毂、车灯、门把手、充电口等局部特写)、
+  tag_no_subject: 描述里没有任何车辆或车辆部件 → "no_subject"(座舱、局部特写都算有车);
+  tag_desc_example: 白色 YU7 前 45 度停在沙漠公路
+
+  product_hints: [续航, 加速, 百公里, 整备质量, 轴距, 长宽高, 电池, kWh, 充电, 油耗,
+                  扭矩, 马力, 落地价, 轮毂, 座椅, 智驾, 辅助驾驶, 驾驶辅助, 智能驾驶,
+                  天神之眼, 车型, 保值率, 二手车, 残值, 用车成本, 持有成本, 保险费, 保费,
+                  电费, 事故率]
+  industry_hints: [新能源]
+  industry_topic: 新能源汽车
+  extract_spec_examples: 续航 / 加速 / 售价 / 电耗 / 配置
+  extract_year_example: 2020 年上市的汉 EV 综合续航 605 公里
+  extract_topic_examples: 续航 / 销量 / 财务 / 品牌 / 智能驾驶
+
+  # 挑"车多人少"的视频类型
+  discovery_zh: ["{subject} 宣传片", "{subject} 官方", "{subject} 实拍 外观 内饰",
+                 "{subject} 静态体验", "{subject} 试驾 实拍"]
+  discovery_en: ["{en} official", "{en} exterior interior", "{en} walkaround"]
+  # 游戏 / 模组画面、车模玩具:视觉模型很可能把游戏里的 YU7 也认成 YU7
+  junk_words: [beamng, 模组, gta, 地平线, forza, 极品飞车, 神力科莎, assetto, gran turismo,
+               赛车计划, 车模, 模型, 申报图, 老鼠, 二手车, ota升级, ota 升级]
+  showcase_words: [静态, 外观, 内饰, walkaround, exterior, interior]
+  official_markers: [汽车, motors, motor, auto]
+
+  ui_subject_label: 选题 / 车型
+  ui_placeholder: 例:比亚迪汉 EV 2026 款
+  ui_help: 尽量写全品牌、车型和年款,事实采集会更准。

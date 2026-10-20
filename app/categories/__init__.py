@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 import yaml
 
@@ -70,6 +70,9 @@ class SectionSpec:
     layouts: tuple[str, ...] = ()
     #: 横屏解说轨:该段落归属的章节(底部章节条上的名字),空则用段落名
     chapter: str = ""
+    #: 该段落只讲某一主题的事实(如 quality = 召回 / 抽检记录)。事实里没有这个主题时
+    #: 整段跳过(名额让给前一段),不让脚本硬写"没有记录"之类查无实据的结论
+    fact_topic: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,138 @@ class ConsistencySpec:
     chain_group_size: int = 3
 
 
+#: 素材视角里品类无关的三个:人、文字卡、其它。永远在视角表里,也永远不可用作背景
+COMMON_VIEWS: tuple[str, ...] = ("people", "text", "other")
+
+
+@dataclass(frozen=True)
+class Vocab:
+    """品类词表:引擎各层提示词与规则里**随品类变**的那部分文字。
+
+    默认值是"通用消费品"口径,品类 YAML 的 `vocab:` 块按需覆盖。引擎代码里
+    不再出现任何品类专属的词 —— 汽车的词全在 auto_long.yaml 里。
+    """
+
+    # ---- 主体称呼 ----
+    #: 提示词里的品类名("你是中文{domain}品类的…")
+    domain: str = "消费品"
+    #: 指代主体的说法("只讲这台车")
+    subject_noun: str = "这款产品"
+    #: 主体的类别名("车型:小米YU7"、"目标车型")
+    subject_label: str = "产品"
+    #: 主体的单字简称("车是否完整在画面内")
+    subject_short: str = "产品"
+    #: 英文品类名词,进图片检索的相关性描述
+    subject_en: str = "product"
+    #: 公司的说法("这家车企成立于…")
+    company_noun: str = "企业"
+
+    # ---- 脚本 / 分镜提示词里的举例 ----
+    number_examples: str = "参数、价格、销量等"
+    product_examples: str = "规格、材质、尺寸、功能、价格"
+    product_examples_short: str = "规格、功能、价格"
+    spec_claim_example: str = "这款产品重量只有 5 公斤"
+    keyword_examples: str = '"核心卖点"、"关键材质"'
+    stat_examples: str = "售价、重量、容量"
+    #: 分镜提示词里 view 怎么选
+    view_guide: str = "讲产品本身、外观、细节给 product,讲使用、场景给 in_use。"
+    #: 合规 lint 规则 5 的触发词:出现这些词说明这句在讲产品本身
+    subject_words: tuple[str, ...] = ("这款", "该产品", "配置", "售价", "参数", "规格")
+
+    # ---- 素材视角 ----
+    #: 打标签用的视角表(不含 COMMON_VIEWS)
+    views: tuple[str, ...] = ("product_hero", "detail", "in_use", "scene", "packaging")
+    #: 背景偏好(分镜的 view 字段)→ 优先的素材视角。第一个是全片的主背景
+    hint_groups: dict[str, tuple[str, ...]] = field(default_factory=lambda: {
+        "product": ("product_hero", "detail", "packaging"),
+        "in_use": ("in_use", "scene"),
+    })
+    #: 段落 angle → 背景偏好,没列的用 default_hint
+    hint_of_angle: dict[str, str] = field(default_factory=lambda: {
+        "lifestyle": "in_use", "result": "in_use",
+    })
+    default_hint: str = "product"
+    #: 素材视角 → 镜头 angle。图片只有视角在这里的才当背景
+    angle_of_view: dict[str, str] = field(default_factory=lambda: {
+        "product_hero": "product_hero", "detail": "detail", "packaging": "product_hero",
+        "in_use": "lifestyle", "scene": "lifestyle",
+    })
+
+    # ---- 打标签提示词 ----
+    tag_variant_note: str = "注意同品牌的不同型号、不同代是不同产品。"
+    tag_identify: str = ("画面主体是什么;有产品的话是什么品牌和型号,依据是什么"
+                         "(logo、包装字样、外形),看不出来就直说看不出来;")
+    tag_angles: str = ("产品整体展示、局部或材质特写、有人在使用、家居或户外场景、包装盒,"
+                       "还是人物、文字卡、其它;")
+    tag_target_rule: str = (
+        '描述明确认出是目标产品(同品牌同系列;颜色、规格不同仍算)→ "yes";\n'
+        '  明确认出是**别的品牌或别的系列** → "no";没点名产品 → "unknown"。')
+    tag_target_cues: str = "logo、字样、外形"
+    tag_view_guide: str = (
+        "  product_hero(产品整体)、detail(局部 / 材质 / 做工特写)、\n"
+        "  in_use(有人在使用产品)、scene(产品在家居或户外场景里)、packaging(包装盒)、")
+    tag_no_subject: str = '描述里没有任何产品或产品部件 → "no_subject"(局部特写算有产品);'
+    tag_desc_example: str = "灰色推车折叠后立在客厅"
+
+    # ---- 事实层 ----
+    #: 事实分层的品类专属提示词,与 intake 的通用词表合并
+    product_hints: tuple[str, ...] = ()
+    industry_hints: tuple[str, ...] = ()
+    #: 行业指标检索用的行业名,空 = 品类 label
+    industry_topic: str = ""
+    extract_spec_examples: str = "规格 / 材质 / 售价 / 适用人群 / 配置"
+    extract_year_example: str = "2020 年上市的初代款售价 1999 元"
+    extract_topic_examples: str = "参数 / 价格 / 销量 / 财务 / 品牌"
+
+    # ---- 素材检索 ----
+    discovery_zh: tuple[str, ...] = ("{subject} 宣传片", "{subject} 官方", "{subject} 产品展示",
+                                     "{subject} 实拍")
+    discovery_en: tuple[str, ...] = ("{en} official", "{en} commercial", "{en} product video")
+    #: 品类专属的垃圾标题词 / 展示类标题词 / 官方号名字特征,与通用词表合并
+    junk_words: tuple[str, ...] = ()
+    showcase_words: tuple[str, ...] = ()
+    official_markers: tuple[str, ...] = ()
+
+    # ---- 前端 ----
+    ui_subject_label: str = "产品"
+    ui_placeholder: str = "例如:某品牌某型号"
+    ui_help: str = "填具体型号,越具体素材和事实越准。"
+
+    @property
+    def all_views(self) -> tuple[str, ...]:
+        return tuple(self.views) + COMMON_VIEWS
+
+    @property
+    def view_enum(self) -> str:
+        return "|".join(self.hint_groups)
+
+    def hint_views(self, hint: str) -> set[str]:
+        return set(self.hint_groups.get(hint, ()))
+
+    @property
+    def primary_views(self) -> set[str]:
+        """主背景的视角(第一组),数据卡底图从这里挑。"""
+        return set(next(iter(self.hint_groups.values()), ()))
+
+
+def _build_vocab(raw: dict[str, Any]) -> Vocab:
+    known = {f.name: f for f in Vocab.__dataclass_fields__.values()}
+    kwargs: dict[str, Any] = {}
+    for key, value in (raw or {}).items():
+        if key not in known:
+            raise ProfileError(f"vocab 里的未知字段 {key!r}")
+        default = getattr(Vocab(), key)
+        if isinstance(default, tuple):
+            kwargs[key] = tuple(str(x) for x in (value or ()))
+        elif isinstance(default, dict) and key == "hint_groups":
+            kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
+        elif isinstance(default, dict):
+            kwargs[key] = {str(k): str(v) for k, v in (value or {}).items()}
+        else:
+            kwargs[key] = str(value).rstrip("\n")
+    return Vocab(**kwargs)
+
+
 @dataclass(frozen=True)
 class CategoryProfile:
     name: str
@@ -140,6 +275,14 @@ class CategoryProfile:
     #: 官网改版不会让配置失效。新增品牌只改 YAML,不改代码。
     official_sites: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
     script_style: str = ""
+    #: 品类词表(见 Vocab)
+    vocab: Vocab = field(default_factory=Vocab)
+    #: 事实来源 → 检索词(主体名之后的部分)。没列的来源用 providers.facts 里的通用词
+    fact_queries: dict[str, str] = field(default_factory=dict)
+    #: 静图来源(providers.official.GALLERIES 里的名字),按顺序合并
+    galleries: tuple[str, ...] = ()
+    #: 旁白音色,空 = providers.audio.DEFAULT_VOICE_ID
+    voice_id: str = ""
     #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
     skeleton: bool = False
     todo: tuple[str, ...] = ()
@@ -286,6 +429,23 @@ class CategoryProfile:
             out.extend([str(block.get("section", ""))] * count)
         return tuple(out[:shots])
 
+    def drop_unbacked(self, plan: Sequence[str], topics: Iterable[str]) -> list[str]:
+        """声明了 fact_topic、但事实里没有该主题的段落,名额让给前一段(开头的让给后一段)。
+        段落数不变 —— 铺展好的节拍数和时长估算都还成立。"""
+        have = set(topics)
+        keep = [not self.section(s).fact_topic or self.section(s).fact_topic in have
+                for s in plan]
+        if all(keep) or not any(keep):
+            return list(plan)
+        out = list(plan)
+        for i, ok in enumerate(keep):
+            if ok:
+                continue
+            prev = next((out[j] for j in range(i - 1, -1, -1) if keep[j]), None)
+            nxt = next((plan[j] for j in range(i + 1, len(plan)) if keep[j]), None)
+            out[i] = prev or nxt or out[i]
+        return out
+
     def section(self, name: str) -> SectionSpec:
         return self.sections.get(name, SectionSpec(name=name))
 
@@ -302,7 +462,7 @@ class CategoryProfile:
         或销量柱状图 —— 这正是素材层最需要挡掉的两类噪音。
         """
         view = _ANGLE_PROMPT_EN.get(angle, f"{angle} view")
-        noun = _CATEGORY_NOUN_EN.get(self.name, "product")
+        noun = self.vocab.subject_en
         return (
             f"real photograph of {subject} ({noun}), {view}, "
             f"professional editorial photo, {_ANGLE_NEGATIVE_EN}"
@@ -332,11 +492,6 @@ _ANGLE_NEGATIVE_EN = (
     "no text overlays, no watermarks, no e-commerce product listings, "
     "no showroom price boards"
 )
-
-#: 品类 → 英文品类名词,让相关性描述里的主体不至于太抽象。
-_CATEGORY_NOUN_EN: dict[str, str] = {
-    "auto_long": "electric car",
-}
 
 
 # --------------------------------------------------------------------------
@@ -386,6 +541,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             card=str(value.get("card", "") or ""),
             layouts=tuple(str(x) for x in (value.get("layouts") or ())),
             chapter=str(value.get("chapter", "") or ""),
+            fact_topic=str(value.get("fact_topic", "") or ""),
         )
         for key, value in (raw.get("sections") or {}).items()
     }
@@ -432,10 +588,14 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         official_sites={
             str(brand): {
                 key: tuple(str(x) for x in (spec or {}).get(key) or ())
-                for key in ("aliases", "sites", "media", "tiktok")
+                for key in ("aliases", "sites", "media", "tiktok", "company")
             }
             for brand, spec in (raw.get("official_sites") or {}).items()
         },
+        vocab=_build_vocab(raw.get("vocab") or {}),
+        fact_queries={str(k): str(v) for k, v in (raw.get("fact_queries") or {}).items()},
+        galleries=tuple(str(g) for g in (raw.get("galleries") or ())),
+        voice_id=str(raw.get("voice_id") or ""),
         forbidden_terms=tuple(raw.get("forbidden_terms") or ()),
         required_disclaimers=tuple(raw.get("required_disclaimers") or ()),
         music_prompt=str(
@@ -535,6 +695,20 @@ def _validate(profile: CategoryProfile) -> None:
                     f"应为 {duration // profile.duration_grid} 个"
                 )
 
+    # 5. 视角表前后自洽:写错一个视角名,背景会静默挑不到图
+    v = profile.vocab
+    all_views = set(v.all_views)
+    for group, views in v.hint_groups.items():
+        bad = [x for x in views if x not in all_views]
+        if bad:
+            raise ProfileError(f"品类 {profile.name}: hint_groups.{group} 引用了未知视角 {bad}")
+    bad = [x for x in v.angle_of_view if x not in all_views]
+    if bad:
+        raise ProfileError(f"品类 {profile.name}: angle_of_view 引用了未知视角 {bad}")
+    bad = [x for x in (*v.hint_of_angle.values(), v.default_hint) if x not in v.hint_groups]
+    if bad:
+        raise ProfileError(f"品类 {profile.name}: hint_of_angle / default_hint 引用了未知偏好 {bad}")
+
     if profile.default_theme not in profile.themes:
         raise ProfileError(
             f"品类 {profile.name}: default_theme={profile.default_theme!r} 不在 themes 中"
@@ -543,7 +717,7 @@ def _validate(profile: CategoryProfile) -> None:
 
 #: `extends` 继承时按键合并(子 profile 只写增改的条目)的字典;其余键整体覆盖。
 #: themes 故意整体覆盖:父 profile 的方向是按它的栅格和版式写的,不该悄悄带过来。
-_MERGED_KEYS = ("sections", "official_sites", "angle_queries")
+_MERGED_KEYS = ("sections", "official_sites", "angle_queries", "vocab", "fact_queries")
 
 
 def _load_raw(name: str, chain: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -594,6 +768,11 @@ def available_categories() -> list[dict[str, Any]]:
             "track": profile.track,
             "aspect_ratio": profile.aspect_ratio,
             "default_theme": profile.default_theme,
+            "ui": {
+                "subject_label": profile.vocab.ui_subject_label,
+                "placeholder": profile.vocab.ui_placeholder,
+                "help": profile.vocab.ui_help,
+            },
             "themes": [
                 {"name": t.name, "label": t.label, "intent": t.intent}
                 for t in profile.themes.values()

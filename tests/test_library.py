@@ -63,11 +63,14 @@ def test_split_segments_trims_edges_and_drops_slivers():
 
 
 def test_apply_tag_normalises():
+    from app.categories import load_profile
+
+    views = load_profile("auto_long").vocab.all_views
     item = _seg(1, 0, 3, view="")
-    lib_mod.apply_tag(item, {"target": "NO", "view": "Rear", "problem": "", "desc": "x"})
+    lib_mod.apply_tag(item, {"target": "NO", "view": "Rear", "problem": "", "desc": "x"}, views)
     assert item.target == "no" and item.view == "rear"
     assert item.problem == "not_target_model" and not item.usable
-    lib_mod.apply_tag(item, {"target": "maybe", "view": "spaceship", "problem": "none"})
+    lib_mod.apply_tag(item, {"target": "maybe", "view": "spaceship", "problem": "none"}, views)
     assert item.target == "unknown" and item.view == "other" and item.problem == ""
 
 
@@ -175,7 +178,10 @@ def test_rank_sources_filters_junk_and_prefers_showcase():
         h("小米YU7 直播回放", dur=3483),
         h("理想L9 宣传片"),
     ]
-    got = [x.title for x in lib_mod.rank_sources(hits, "小米YU7")]
+    from app.categories import load_profile
+
+    got = [x.title for x in lib_mod.rank_sources(hits, "小米YU7",
+                                                 vocab=load_profile("auto_long").vocab)]
     assert got == ["Xiaomi YU7 | Debut", "一起回顾小米YU7预发布全程", "小米yu7宣传片",
                    "小米YU7 提车作业"]
 
@@ -286,3 +292,62 @@ def test_tag_items_stops_videos_when_enough(monkeypatch):
     assert calls == [2]                     # 第一批 20 秒就够了
     assert done == 2 and lib.vlm_calls == 2
     assert lib.stats()["vlm_calls"] == 2
+
+
+# --------------------------------------------------------------------------
+# 品类:静图来源按 profile 分派、手动加图、视角表跟着池子的品类走
+# --------------------------------------------------------------------------
+def _jpg(path: Path) -> Path:
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (640, 480), (200, 180, 160)).save(path, "JPEG")
+    return path
+
+
+def test_add_images_local_file(data_dir, tmp_path):
+    img = _jpg(tmp_path / "in" / "hero.jpg")
+    errors: list[str] = []
+    n = lib_mod.add_images("好孩子口袋车", [str(img), str(tmp_path / "nope.jpg")],
+                           category="baby_long", errors=errors)
+    assert n == 1 and len(errors) == 1
+    lib = Library.load("好孩子口袋车")
+    assert lib.category == "baby_long"
+    still = lib.items[0]
+    assert still.kind == "still" and not still.tagged and Path(still.path).is_file()
+    # 再加一次不重复
+    assert lib_mod.add_images("好孩子口袋车", [str(img)]) == 0
+
+
+def test_ingest_gallery_dispatches_by_profile(data_dir, tmp_path, monkeypatch):
+    from app.providers import images as images_mod
+    from app.providers import official
+    from app.providers.images import ImageRef
+
+    src = _jpg(tmp_path / "remote.jpg")
+    monkeypatch.setattr(images_mod, "download",
+                        lambda url, dest, **k: Path(dest).parent.mkdir(parents=True, exist_ok=True)
+                        or Path(dest).write_bytes(src.read_bytes()))
+    called: list[str] = []
+    monkeypatch.setitem(official.GALLERIES, "product_images", official.Gallery(
+        lambda subject, spec, errors: called.append(subject)
+        or [ImageRef(url="https://x/a.jpg"), ImageRef(url="https://x/b.jpg")]))
+    lib = Library(subject="好孩子口袋车", category="baby_long")
+    assert lib_mod.ingest_gallery(lib, []) == 2
+    assert called == ["好孩子口袋车"] and lib.gallery_at > 0
+    assert {i.platform for i in lib.items} == {"product_images"}
+
+
+def test_fill_uses_pool_category_views(data_dir, tmp_path):
+    """母婴池子里 in_use 的图能当背景;汽车的视角名在这里不认。"""
+    img = _jpg(tmp_path / "a.jpg")
+    lib = Library(subject="推车", category="baby_long")
+    lib.items = [
+        Item(id="i1", kind="still", path=str(img), frame=str(img), view="in_use",
+             target="yes", tagged=True),
+        Item(id="i2", kind="still", path=str(img), frame=str(img), view="exterior_45",
+             target="yes", tagged=True),
+    ]
+    lib.save()
+    pieces = lib_mod.fill("推车", 3.0, hint="in_use")
+    assert pieces and {p.item_id for p in pieces} == {"i1"}

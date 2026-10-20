@@ -114,14 +114,60 @@ def test_product_news_query_is_product_oriented(monkeypatch, tmp_path):
         seen.update(args)
         return {"code": 1, "data": {"data": "y" * 300}}
 
-    monkeypatch.setattr(facts.cli, "call", fake_call)
-    facts.ifind_product_news("比亚迪汉 EV", project_dir=tmp_path)
+    from app.categories import load_profile
 
+    monkeypatch.setattr(facts.cli, "call", fake_call)
+    # 通用检索词
+    facts.ifind_product_news("某品牌推车", project_dir=tmp_path)
+    for kw in ("参数", "售价", "配置"):
+        assert kw in seen["query"], f"产品向查询缺少 {kw}"
+    # 汽车的检索词来自 profile
+    terms = load_profile("auto_long").fact_queries["ifind.product_news"]
+    facts.ifind_product_news("比亚迪汉 EV", project_dir=tmp_path, terms=terms)
     q = seen["query"]
     for kw in ("续航", "加速", "售价", "配置"):
         assert kw in q, f"产品向查询缺少 {kw}"
     for kw in ("财报", "重大事件"):
         assert kw not in q, f"产品向查询混入了公司财经词 {kw}"
+
+
+@pytest.mark.parametrize("name,tool_key", [
+    ("qcc.product_recall", "product_recall"),
+    ("qcc.product_spot_check", "product_spot_check"),
+    ("qcc.counterfeit_cosmetics", "counterfeit_cosmetics"),
+])
+def test_quality_sources_query_by_company(monkeypatch, tmp_path, name, tool_key):
+    """召回 / 抽检 / 假冒化妆品按公司名查;没给公司名退回主体名。"""
+    calls: list = []
+
+    def fake_call(tool, args, **k):
+        calls.append((tool, args))
+        return {"code": 1, "data": {"data": "记录" * 100}}
+
+    monkeypatch.setattr(facts.cli, "call", fake_call)
+    res = facts.collect([name], "好孩子推车", company="好孩子儿童用品有限公司",
+                        project_dir=tmp_path)
+    assert calls[-1] == (facts.QCC[tool_key], {"searchKey": "好孩子儿童用品有限公司"})
+    assert res.docs[0].ok and facts.QCC[tool_key] in facts.QUALITY_TOOLS
+    facts.collect([name], "好孩子推车", project_dir=tmp_path)
+    assert calls[-1][1] == {"searchKey": "好孩子推车"}
+
+
+def test_quality_source_empty_result_is_failure(monkeypatch, tmp_path):
+    """查不到记录 = 来源失败,不会被当成"无召回记录"的事实。"""
+    monkeypatch.setattr(facts.cli, "call", lambda tool, args, **k: {"code": 1, "data": {}})
+    res = facts.collect(["qcc.product_recall"], "好孩子推车", project_dir=tmp_path)
+    assert not res.docs[0].ok
+    assert res.context.strip() == ""
+
+
+def test_collect_passes_profile_terms(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(facts, "invoke",
+                        lambda tool, args, *, query_label, **_: seen.append(query_label))
+    facts.collect(["ifind.product_news", "ifind.market_news"], "X",
+                  queries={"ifind.product_news": "甲 乙", "ifind.market_news": "丙"})
+    assert seen == ["X 甲 乙", "X 丙"]
 
 
 def test_news_window_is_wide_enough(monkeypatch, tmp_path):

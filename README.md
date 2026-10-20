@@ -1,6 +1,6 @@
 # aimovice
 
-**本地运行的汽车解说视频工厂**。输入一个车型,自动产出 16:9 横屏、2–8 分钟的信息型解说长视频,
+**本地运行的产品解说视频工厂**(汽车、母婴,其它品类按 YAML 加)。输入一个车型 / 产品型号,自动产出 16:9 横屏、2–8 分钟的信息型解说长视频,
 对标「三驱兄弟」式的做法:官方宣传片 / 实拍只当背景,信息靠叠加层(参数面板、大字关键词、
 数据卡、大数字、章节条)传达。
 
@@ -112,8 +112,10 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 池子按车型存在 `data/library/<车型>/`,**跨项目复用**。构建是增量的、有时长预算,超时停在当前进度,下次接着做。
 
 ```bash
-python -m app.pipeline.library build 小米YU7 --brand 小米      # 手动构建 / 续建
+python -m app.pipeline.library build 小米YU7 --brand 小米      # 手动构建 / 续建(--category baby_long 换品类)
 python -m app.pipeline.library add 小米YU7 <链接> [<链接>...]   # 加自动搜不到的好素材(抖音只能走这里)
+python -m app.pipeline.library add-images 好孩子口袋车 <图片地址|本地图片|详情页链接>... --category baby_long
+                                                               # 手动加图;京东 / 天猫页反爬抓不到时,把图存本地再加
 python -m app.pipeline.library show 小米YU7                      # 统计:源、段、各视角可用数、视觉调用次数
 python -m app.pipeline.library sheet 小米YU7 [--usable]          # 导出联系表,人工过一遍标签
 ```
@@ -158,7 +160,27 @@ python -m app.pipeline.library sheet 小米YU7 [--usable]          # 导出联�
 
 ## 品类与内容方向
 
-品类配置在 `app/categories/profiles/`,目前只有 `auto_long.yaml`(汽车横屏解说,`track: explainer`)。
+品类配置在 `app/categories/profiles/`,一个品类一份 YAML(都是 `track: explainer` 横屏解说):
+
+| 品类 | 文件 | 静图来源 | 专属事实来源 |
+|---|---|---|---|
+| 汽车 | `auto_long.yaml` | 汽车之家官图 | — |
+| 母婴 | `baby_long.yaml` | 品牌官网 + 图片检索 | 企查查召回、抽检(`qcc.product_recall` / `qcc.product_spot_check`) |
+
+**新增品类 = 新增一份 YAML,引擎不改。** 引擎里随品类变的文字全在 YAML 的 `vocab:` 块
+(字段说明见 `app/categories/__init__.py` 的 `Vocab`):提示词里的称呼和举例、素材视角表与背景偏好、
+打标签规则、搜片词、事实分层词。另外几个顶层字段:
+
+- `fact_queries`:每个 iFinD 新闻来源的检索词(接在主体名后面),一条查询只表达一个意图。
+- `galleries`:静图来源,可选 `autohome` / `dongchedi` / `product_images`(`providers/official.GALLERIES`)。
+- `voice_id`:旁白音色。
+- `official_sites.<品牌>.company`:企查查按工商主体名查召回 / 抽检,没写就拿主体名模糊查。
+- 段落的 `fact_topic`:该段只讲某主题的事实(母婴的「质量记录」= `quality`),查不到就整段跳过、名额让给前一段。
+
+质量记录(召回 / 抽检 / 假冒)是**品牌级**的:抽取时一律标成公司层、`topic=quality`,脚本只能说"该品牌曾……"。
+美妆 / 数码 / 家居还没做,起点是 `git show 9b7e42f:app/categories/profiles/{beauty,digital,home}.yaml`(竖屏时代的草稿)。
+`tests/test_profile_vocab.py` 锁着汽车提示词的快照(`tests/golden/`),并检查非汽车品类的提示词里没有汽车词。
+
 
 - **方向**(`themes`):一条视频只讲一个方向,当前是 `buyguide`(单车选购深讲)。每个方向声明自己的事实来源、
   所需事实层级、脚本规则和段落块。

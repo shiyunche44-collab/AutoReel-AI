@@ -70,7 +70,7 @@ def parse_one(text: str) -> dict[str, Any] | None:
 #: 回答只有 JSON 时追问用的后缀。
 PROSE_RETRY = ("\n\n上一次你只给了 JSON 结论,没有任何描述。这次**不要输出 JSON**,"
                "用几句中文逐条描述你在图里看到了什么:主体是什么、有哪些文字、"
-               "车是否完整。")
+               "主体是否完整。")
 
 
 def describe_each(urls: list[str], prompt: str | Sequence[str], errors: list[str], *,

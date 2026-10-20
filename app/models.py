@@ -149,7 +149,7 @@ class Shot(BaseModel):
 # 项目
 # --------------------------------------------------------------------------
 class ProjectCreate(BaseModel):
-    subject: str = Field(min_length=1, description="选题/车型,如 '比亚迪汉 EV 2026 款'")
+    subject: str = Field(min_length=1, description="选题/车型/产品型号,如 '比亚迪汉 EV 2026 款'")
     category: str = "auto_long"
     #: 内容方向名。为空时取品类默认方向(Profile 的 default_theme)。
     theme: str | None = Field(default=None, description="内容方向,如 'iteration'")

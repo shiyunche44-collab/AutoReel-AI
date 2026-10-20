@@ -48,28 +48,27 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .. import config
+from ..categories import CategoryProfile, Vocab, load_profile
 from ..providers import clips as clips_mod
 from ..providers import images, official, platform_video
 from . import vision_verdict
 
 LIB_ROOT_NAME = "library"
 
-#: 视角标签。比镜头的 angle 细:取材时一个 angle 可以接受几种 view
-VIEWS: tuple[str, ...] = (
-    "exterior_front", "exterior_side", "exterior_45", "rear", "driving", "aerial",
-    "interior", "screen", "seat", "detail", "people", "text", "other",
-)
-_EXTERIOR = {"exterior_front", "exterior_side", "exterior_45", "rear", "driving", "aerial"}
-_INTERIOR = {"interior", "screen", "seat"}
 
-#: 镜头 angle → 可接受的 view,按偏好排序(第一个是最对口的)
-ANGLE_VIEWS: dict[str, tuple[str, ...]] = {
-    "exterior_45": ("exterior_45", "exterior_front", "exterior_side", "driving", "aerial"),
-    "rear": ("rear", "driving"),
-    "interior": ("interior", "seat", "screen"),
-    "screen_spec": ("screen", "interior"),
-    "detail": ("detail",),
-}
+def profile_of(lib: "Library") -> CategoryProfile:
+    """建池的品类。旧池子没记品类的按汽车(当时只有汽车)。"""
+    try:
+        return load_profile(lib.category or "auto_long")
+    except Exception:  # noqa: BLE001 - profile 被删了也不能让取材崩掉
+        return load_profile("auto_long")
+
+
+def vocab_of(lib: "Library") -> Vocab:
+    return profile_of(lib).vocab
+
+#: 素材视角(打标签的 view)、视角 → 镜头 angle、背景偏好分组都随品类变,
+#: 在 profile 的 vocab 里(见 `vocab_of`)。池子记着自己是哪个品类建的。
 
 #: 整条下载的上限。更长的源分窗下载,免得一场两小时的发布会占满硬盘
 WHOLE_MAX_SECONDS = 6 * 60
@@ -85,7 +84,6 @@ MAX_TAGGED_PER_SOURCE = 60
 #: 自动发现最多收多少个源
 MAX_AUTO_SOURCES = 10
 #: 官图每个分类抓多少张
-GALLERY_PER_CATEGORY = 12
 #: 一次交给 LLM 结构化的描述条数。太多会超上下文、也更容易漏编号
 TAG_BATCH = 12
 #: 隔多久重新搜一次新源(新车上市后官方号会陆续发片)
@@ -175,6 +173,8 @@ class Library:
     discovered_at: float = 0.0
     gallery_at: float = 0.0
     updated_at: float = 0.0
+    #: 建池的品类(profile 名)。空 = 旧池子,按汽车处理
+    category: str = ""
     #: 累计花了多少次视觉模型调用(打标签),给项目页看素材池的成本
     vlm_calls: int = 0
 
@@ -205,6 +205,7 @@ class Library:
             discovered_at=float(raw.get("discovered_at") or 0.0),
             gallery_at=float(raw.get("gallery_at") or 0.0),
             updated_at=float(raw.get("updated_at") or 0.0),
+            category=str(raw.get("category") or ""),
             vlm_calls=int(raw.get("vlm_calls") or 0),
         )
 
@@ -221,6 +222,7 @@ class Library:
             "discovered_at": self.discovered_at,
             "gallery_at": self.gallery_at,
             "updated_at": self.updated_at,
+            "category": self.category or on_disk.category,
             "vlm_calls": self.vlm_calls,
             "sources": [asdict(s) for s in self.sources],
             "items": [asdict(i) for i in self.items],
@@ -327,11 +329,10 @@ def english_name(subject: str, aliases: Sequence[str]) -> str:
     return " ".join(x for x in (brand.split()[0] if brand else "", *latin) if x) or subject
 
 
-def discovery_queries(subject: str, en: str) -> tuple[list[str], list[str]]:
-    """(中文检索词, 英文检索词)。挑的都是"车多人少"的视频类型。"""
-    zh = [f"{subject} 宣传片", f"{subject} 官方", f"{subject} 实拍 外观 内饰",
-          f"{subject} 静态体验", f"{subject} 试驾 实拍"]
-    en_q = [f"{en} official", f"{en} exterior interior", f"{en} walkaround"]
+def discovery_queries(subject: str, en: str, vocab: Vocab) -> tuple[list[str], list[str]]:
+    """(中文检索词, 英文检索词)。挑的都是"主体多人少"的视频类型,模板在 profile 里。"""
+    zh = [q.format(subject=subject, en=en) for q in vocab.discovery_zh]
+    en_q = [q.format(subject=subject, en=en) for q in vocab.discovery_en]
     return zh, en_q
 
 
@@ -339,15 +340,16 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
              max_sources: int = MAX_AUTO_SOURCES, tiktok_handles: Sequence[str] = ()) -> int:
     """搜一轮新源加进池子。官方号的视频优先。返回新增的源数。"""
     subject = lib.subject
+    vocab = vocab_of(lib)
     en = english_name(subject, aliases)
     hits: list[platform_video.PlatformHit] = []
     if aliases:
         hits += official.platform_official(subject, aliases, platforms=config.MEDIA_PLATFORMS,
-                                           errors=errors)
+                                           errors=errors, markers=vocab.official_markers)
     if tiktok_handles and "tiktok" in config.MEDIA_PLATFORMS:
         hits += official.tiktok_official(subject, tiktok_handles, names=[en],
                                          aliases=aliases, errors=errors)
-    zh_q, en_q = discovery_queries(subject, en)
+    zh_q, en_q = discovery_queries(subject, en, vocab)
     zh_platforms = [p for p in config.MEDIA_PLATFORMS if p == "bilibili"]
     en_platforms = [p for p in config.MEDIA_PLATFORMS if p in ("youtube", "tiktok")]
     for q in zh_q:
@@ -355,8 +357,9 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
     for q in en_q:
         hits += platform_video.search(q, platforms=en_platforms, errors=errors)
     for h in hits:
-        h.official = h.official or bool(aliases and platform_video.is_official(h, aliases))
-    ranked = rank_sources(_dedupe_hits(hits), subject, names=[en])
+        h.official = h.official or bool(aliases and platform_video.is_official(
+            h, aliases, markers=vocab.official_markers))
+    ranked = rank_sources(_dedupe_hits(hits), subject, names=[en], vocab=vocab)
 
     have_auto = sum(1 for s in lib.sources if s.added_by == "auto")
     added = 0
@@ -371,30 +374,33 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
     return added
 
 
-#: 标题里出现这些词的源不要:游戏 / 模组画面、新闻事件、渲染猜想、车模玩具 ——
-#: 视觉模型很可能把游戏里的 YU7 也认成 YU7。
+#: 标题里出现这些词的源不要:游戏画面、新闻事件、渲染猜想、玩具手办。
+#: 品类专属的(汽车的 forza、车模……)在 profile 的 vocab.junk_words,两边合并
 JUNK_TITLE_WORDS = (
-    "beamng", "模组", "游戏", "gta", "地平线", "forza", "极品飞车", "神力科莎",
-    "assetto", "gran turismo", "赛车计划", "手办", "车模", "乐高", "lego", "模型",
-    "渲染", "申报图", "猜想", "曝光", "谍照", "老鼠", "事故", "起火", "维权",
-    "二手车", "系统更新", "ota升级", "ota 升级", "投屏", "教程", "怎么",
+    "游戏", "手办", "乐高", "lego", "渲染", "猜想", "曝光", "谍照", "事故", "起火",
+    "维权", "系统更新", "投屏", "教程", "怎么",
 )
-#: 标题里出现这些词的排前面:广告、宣传片、实拍展示,画面里车多人少
+#: 标题里出现这些词的排前面:广告、宣传片、实拍展示,画面里主体多人少。
+#: 品类专属的在 vocab.showcase_words
 SHOWCASE_TITLE_WORDS = (
     "宣传片", "广告", "tvc", "官方", "official", "commercial", "debut", "film",
-    "实拍", "静态", "外观", "内饰", "walkaround", "exterior", "interior", "首发",
+    "实拍", "首发",
 )
 #: 官方号的长视频(发布会)也收:分窗下载,发布会里放的宣传片正是好素材
 OFFICIAL_MAX_SECONDS = 3 * 3600
 
 
 def rank_sources(hits: Sequence[platform_video.PlatformHit], subject: str, *,
-                 names: Sequence[str] = ()) -> list[platform_video.PlatformHit]:
+                 names: Sequence[str] = (), vocab: Vocab | None = None
+                 ) -> list[platform_video.PlatformHit]:
     """过滤 + 排序:官方号 → 广告 / 宣传片 / 实拍类标题 → 其余;口播类和垃圾标题不要。
 
     `names` 是车型的其他叫法(英文名):YouTube / TikTok 文案是英文的,
     "比亚迪海豹06" 认不出 "BYD SEAL 06"。
     """
+    vocab = vocab or Vocab()
+    junk = (*JUNK_TITLE_WORDS, *vocab.junk_words)
+    showcase_words = (*SHOWCASE_TITLE_WORDS, *vocab.showcase_words)
     out: list[platform_video.PlatformHit] = []
     for h in hits:
         title = h.title.lower()
@@ -404,7 +410,7 @@ def rank_sources(hits: Sequence[platform_video.PlatformHit], subject: str, *,
         if h.title and not any(platform_video.title_relevant(h.title, n)
                                for n in (subject, *names) if n):
             continue
-        if any(w in title for w in JUNK_TITLE_WORDS):
+        if any(w in title for w in junk):
             continue
         # 口播 / 直播类 rank 只是排后面,这里直接不要:攒素材要的是车。官方发布会除外
         if not h.official and any(w in title for w in platform_video._TALKY_WORDS):
@@ -412,7 +418,7 @@ def rank_sources(hits: Sequence[platform_video.PlatformHit], subject: str, *,
         out.append(h)
 
     def _key(h: platform_video.PlatformHit) -> tuple[int, int]:
-        showcase = any(w in h.title.lower() for w in SHOWCASE_TITLE_WORDS)
+        showcase = any(w in h.title.lower() for w in showcase_words)
         return (0 if h.official else 1, 0 if showcase else 1)
 
     return sorted(out, key=_key)
@@ -444,6 +450,55 @@ def add_links(subject: str, urls: Iterable[str]) -> list[str]:
             for s in lib.sources:
                 if s.url == normalise_url(url) and s.status == "failed":
                     s.status, s.error = "pending", ""
+    lib.save()
+    return added
+
+
+#: 当图片直接收的扩展名
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+#: 一个详情页最多收几张(电商详情页动辄几十张长图,前面的主图最有用)
+PAGE_IMAGES_MAX = 20
+
+
+def add_images(subject: str, refs: Iterable[str], *, category: str = "",
+               errors: list[str] | None = None) -> int:
+    """手动加图:图片地址、本地图片文件,或商品详情页 / 官网产品页(抓页面里的大图)。
+    入池后还没打标签,下次 build 时打 —— 认不出是目标产品的不当背景。返回新增张数。
+
+    京东 / 天猫这类页面反爬重,抓不到就把图另存到本地再加。
+    """
+    errors = errors if errors is not None else []
+    lib = Library.load(subject)
+    if category:
+        lib.category = category
+    have = {i.url for i in lib.items if i.kind == "still"}
+    added = 0
+    for ref in refs:
+        ref = ref.strip()
+        if not ref:
+            continue
+        is_url = ref.startswith(("http://", "https://"))
+        if not is_url and not Path(ref).is_file():
+            errors.append(f"不是图片地址也不是本地文件:{ref[:80]}")
+            continue
+        path_part = ref.split("?", 1)[0].lower()
+        if not is_url or path_part.endswith(_IMAGE_EXTS):
+            urls, page = [ref if is_url else str(Path(ref).resolve())], ""
+        else:
+            body = clips_mod.fetch_page(ref)
+            urls = official.extract_images(body, ref)[:PAGE_IMAGES_MAX] if body else []
+            page = ref
+            if not urls:
+                errors.append(f"页面里没抓到图(可能有反爬,把图存到本地再加):{ref[:80]}")
+                continue
+        for url in urls:
+            if url in have:
+                continue
+            item = _add_still(lib, url, errors, platform="manual", referer=page,
+                              license=f"手动添加:{page or ref}")
+            if item is not None:
+                have.add(url)
+                added += 1
     lib.save()
     return added
 
@@ -549,38 +604,60 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
 
 
 def ingest_gallery(lib: Library, errors: list[str], *,
-                   per_category: int = GALLERY_PER_CATEGORY) -> int:
-    """汽车之家官图 → 池子里的图。返回新增张数。"""
-    try:
-        refs = official.autohome_images(lib.subject, per_category=per_category, errors=errors)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"素材池官图抓取失败:{str(exc)[:120]}")
-        return 0
+                   spec: dict[str, tuple[str, ...]] | None = None) -> int:
+    """profile 声明的静图来源(汽车之家官图、品牌官网 + 图片检索……)→ 池子里的图。
+    返回新增张数。"""
     have = {i.url for i in lib.items if i.kind == "still"}
-    still_dir = lib.dir / "stills"
     added = 0
-    for ref in refs:
-        if ref.url in have:
+    for name in profile_of(lib).galleries:
+        gallery = official.GALLERIES.get(name)
+        if gallery is None:
+            errors.append(f"未知静图来源:{name}")
             continue
-        item_id = "img_" + short_id(ref.url)
-        dest = still_dir / f"{item_id}.jpg"
         try:
-            images.download(ref.url, dest, headers={
-                "User-Agent": clips_mod.BROWSER_UA,
-                "Referer": "https://car.autohome.com.cn/",
-            })
+            refs = gallery.fetch(lib.subject, spec or {}, errors)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"官图下载失败({ref.url[:60]}):{str(exc)[:100]}")
+            errors.append(f"素材池静图抓取失败({name}):{str(exc)[:120]}")
             continue
-        frame = _thumb(dest, lib.dir / "frames" / f"{item_id}.jpg")
-        lib.items.append(Item(
-            id=item_id, kind="still", path=str(dest), frame=str(frame or dest), url=ref.url,
-            platform="autohome", official=True, origin="library:autohome",
-            license=ref.license, view=_GALLERY_VIEW.get(ref.angle, ""),
-        ))
-        added += 1
+        for ref in refs:
+            if ref.url in have:
+                continue
+            item = _add_still(lib, ref.url, errors, platform=name, referer=gallery.referer,
+                              official=name != "product_images" or ref.origin.startswith(
+                                  "official"),
+                              license=ref.license, view=_GALLERY_VIEW.get(ref.angle, ""))
+            if item is not None:
+                have.add(ref.url)
+                added += 1
     lib.gallery_at = time.time()
     return added
+
+
+def _add_still(lib: Library, url: str, errors: list[str], *, platform: str, referer: str = "",
+               official: bool = False, license: str = "", view: str = "") -> Item | None:
+    """下载一张图进池子(未打标签)。失败记一条错误,返回 None。"""
+    item_id = "img_" + short_id(url)
+    dest = lib.dir / "stills" / f"{item_id}.jpg"
+    headers = {"User-Agent": clips_mod.BROWSER_UA}
+    if referer:
+        headers["Referer"] = referer
+    try:
+        if url.startswith(("http://", "https://")):
+            images.download(url, dest, headers=headers)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(Path(url).read_bytes())
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"静图下载失败({url[:60]}):{str(exc)[:100]}")
+        return None
+    frame = _thumb(dest, lib.dir / "frames" / f"{item_id}.jpg")
+    item = Item(
+        id=item_id, kind="still", path=str(dest), frame=str(frame or dest), url=url,
+        platform=platform, official=official, origin=f"library:{platform}",
+        license=license, view=view,
+    )
+    lib.items.append(item)
+    return item
 
 
 #: 官图分类自带的视角,作为打标签前的初值(打标签会覆盖成更细的)
@@ -605,16 +682,13 @@ def _thumb(src: Path, dest: Path) -> Path | None:
 # --------------------------------------------------------------------------
 # 看:打标签
 # --------------------------------------------------------------------------
-def tag_prompt(subject: str) -> str:
+def tag_prompt(subject: str, vocab: Vocab) -> str:
     return (
         f"这张图来自「{subject}」相关的视频或图库。只依据图片内容回答,不要猜。"
-        "注意同品牌的不同车系(如小米 SU7 与 YU7)是不同车型。请用文字逐条说明:\n"
-        "1. 画面主体是什么;有车的话是什么品牌和车型,依据是什么(车标、车尾字样、外形),"
-        "看不出来就直说看不出来;\n"
-        "2. 拍的是哪个角度:车头正面、侧面、前 45 度、车尾、行驶中、航拍俯视、"
-        "车内座舱、中控屏或仪表、座椅、局部特写(轮毂、车灯、门把手等),"
-        "还是人物、文字卡、其它;\n"
-        "3. 车是否完整在画面内,画面是否清晰;\n"
+        f"{vocab.tag_variant_note}请用文字逐条说明:\n"
+        f"1. {vocab.tag_identify}\n"
+        f"2. 拍的是哪个角度:{vocab.tag_angles}\n"
+        f"3. {vocab.subject_short}是否完整在画面内,画面是否清晰;\n"
         "4. 有没有对白 / 解说字幕(画面下方的句子)、角落台标、水印、大段文字;"
         "是不是宣传海报、网页 / App 截图,或者是在拍大屏幕 / 电视里放的画面;\n"
         "5. 画面里有没有人,人占画面多大。\n"
@@ -622,30 +696,34 @@ def tag_prompt(subject: str) -> str:
     )
 
 
-TAG_SYSTEM = """你把视觉模型对若干图片的描述转成素材标签。目标车型是「{subject}」。
+TAG_SYSTEM = """你把视觉模型对若干图片的描述转成素材标签。目标{label}是「{subject}」。
 
 只依据描述里**明确写出**的内容,保守,不要推理补全:
-- target:描述明确认出是目标车型(同品牌同车系;年款、版本不同仍算)→ "yes";
-  明确认出是**别的品牌或别的车系** → "no";没点名车型 → "unknown"。
-  描述里视觉模型自己给的"是 / 不是目标车型"结论一律忽略,只看它对车标、字样、外形的描述。
+- target:{target_rule}
+  描述里视觉模型自己给的"是 / 不是目标{label}"结论一律忽略,只看它对{target_cues}的描述。
 - view,取最贴切的一个:
-  exterior_front(车头正面)、exterior_side(正侧面)、exterior_45(前 45 度 / 前侧)、
-  rear(车尾 / 后 45 度)、driving(行驶中的外观)、aerial(航拍俯视)、
-  interior(座舱全景)、screen(中控屏 / 仪表 / HUD)、seat(座椅 / 后排 / 后备厢)、
-  detail(轮毂、车灯、门把手、充电口等局部特写)、
+{view_guide}
   people(主体是人)、text(主体是文字卡 / 参数表 / 片头片尾)、other(风景、别的东西)。
 - problem,按顺序取第一条命中的:target 为 "no" → "not_target_model";
-  描述里没有任何车辆或车辆部件 → "no_subject"(座舱、局部特写都算有车);
-  明确说车被画面边缘切掉(局部特写不算)→ "cropped";明确说模糊、过暗、看不清 → "unclear";
-  宣传海报(大标题字、代言人摆拍)、网页 / App 截图,或车是**显示在大屏 / 屏幕 / 电视里**的
+  {no_subject}
+  明确说{short}被画面边缘切掉(局部特写不算)→ "cropped";明确说模糊、过暗、看不清 → "unclear";
+  宣传海报(大标题字、代言人摆拍)、网页 / App 截图,或{short}是**显示在大屏 / 屏幕 / 电视里**的
   翻拍画面(发布会舞台大屏、前景有观众)→ "poster";
   画面下方有对白或解说**字幕**(一行行句子)→ "subtitle";
   只有角落的台标、水印、小字标注 → "text_overlay";都没有 → ""。
-- desc:一句中文概括画面(20 字以内),例如"白色 YU7 前 45 度停在沙漠公路"。
+- desc:一句中文概括画面(20 字以内),例如"{desc_example}"。
 - 描述是报错、拒答或为空 → target "unknown",view "other",problem "unclear"。
 
 输出 JSON 对象 {{"verdicts": [...]}},每张一项,字段 index(与输入编号一致)、
 target、view、problem、desc。"""
+
+
+def tag_system(subject: str, vocab: Vocab) -> str:
+    return TAG_SYSTEM.format(
+        subject=subject, label=vocab.subject_label, short=vocab.subject_short,
+        target_rule=vocab.tag_target_rule, target_cues=vocab.tag_target_cues,
+        view_guide=vocab.tag_view_guide, no_subject=vocab.tag_no_subject,
+        desc_example=vocab.tag_desc_example)
 
 
 def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *,
@@ -656,8 +734,9 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
     每批之后检查各源的样本,废段太多的源剩下的段直接跳过(见 `reject_sources`)。
     """
     done = inherit_duplicates(lib)
-    prompt = tag_prompt(lib.subject)
-    system = TAG_SYSTEM.format(subject=lib.subject)
+    vocab = vocab_of(lib)
+    prompt = tag_prompt(lib.subject, vocab)
+    system = tag_system(lib.subject, vocab)
     queue = list(todo)
     while queue:
         if deadline and time.monotonic() > deadline:
@@ -682,7 +761,7 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
         for item, v in zip(slots, verdicts):
             if not v:
                 continue
-            apply_tag(item, v)
+            apply_tag(item, v, vocab.all_views)
             done += 1
         done += inherit_duplicates(lib)
         reject_sources(lib)
@@ -703,12 +782,13 @@ def is_waste(item: Item) -> bool:
 def usable_seconds(lib: Library) -> float:
     """池子里能当解说轨背景的总量(秒):可用视频的时长 + 可用官图 × STILL_SECONDS。"""
     total = 0.0
+    angle_of_view = vocab_of(lib).angle_of_view
     for i in lib.items:
         if not i.usable or _has_host(i):
             continue
         if i.kind == "video":
             total += i.length if i.length >= FILL_MIN_PIECE else 0.0
-        elif i.view in ANGLE_OF_VIEW:
+        elif i.view in angle_of_view:
             total += STILL_SECONDS
     return total
 
@@ -777,11 +857,11 @@ def inherit_duplicates(lib: Library) -> int:
     return n
 
 
-def apply_tag(item: Item, v: dict[str, Any]) -> None:
+def apply_tag(item: Item, v: dict[str, Any], views: Sequence[str]) -> None:
     target = str(v.get("target") or "unknown").lower()
     item.target = target if target in ("yes", "no", "unknown") else "unknown"
     view = str(v.get("view") or "other").lower()
-    item.view = view if view in VIEWS else "other"
+    item.view = view if view in views else "other"
     problem = str(v.get("problem") or "").lower()
     item.problem = "" if problem in ("", "none") else problem
     if item.target == "no":
@@ -816,7 +896,9 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
     lib = Library.load(subject)
     aliases: list[str] = []
     tiktok_handles: tuple[str, ...] = ()
+    spec: dict[str, tuple[str, ...]] = {}
     if profile is not None:
+        lib.category = profile.name
         key, spec = official.detect_brand(subject, profile.official_sites, hint=brand)
         aliases = official.brand_aliases(key, spec, brand) if (key or brand) else []
         tiktok_handles = tuple(spec.get("tiktok", ()))
@@ -828,8 +910,8 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
             say(f"发现新源 {n} 个")
             lib.save()
         if not lib.gallery_at:
-            n = ingest_gallery(lib, errors)
-            say(f"官图 {n} 张")
+            n = ingest_gallery(lib, errors, spec=spec)
+            say(f"静图 {n} 张")
             lib.save()
         # 手动加的源先下;同类里官方号优先
         pending = sorted((s for s in lib.sources if s.status == "pending"),
@@ -938,12 +1020,6 @@ def _dirt(item: Item) -> int:
     return dirt
 
 
-#: 素材视角 → 镜头 angle
-ANGLE_OF_VIEW: dict[str, str] = {
-    "exterior_front": "exterior_45", "exterior_side": "exterior_45", "exterior_45": "exterior_45",
-    "driving": "exterior_45", "aerial": "exterior_45", "rear": "rear",
-    "interior": "interior", "seat": "interior", "screen": "screen_spec", "detail": "detail",
-}
 
 
 # --------------------------------------------------------------------------
@@ -961,12 +1037,6 @@ class Piece:
     crop_bottom: float = 0.0
 
 
-#: 背景画面偏好 → 优先的视角
-HINT_VIEWS: dict[str, set[str]] = {
-    "exterior": set(_EXTERIOR),
-    "interior": set(_INTERIOR) | {"detail"},
-    "driving": {"driving", "aerial", "exterior_side"},
-}
 #: 一段最长用几秒就换下一段 —— 信息解说的背景是 2–4 秒一刀的节奏,
 #: 一个镜头拖太久反而像卡住了
 FILL_MAX_PIECE = 4.5
@@ -1027,17 +1097,18 @@ def fill(subject: str, seconds: float, *, hint: str = "",
     背景只需要"是这台车、画面干净"。快剪广告里 1.3–3 秒的短段正好拿来连拼,
     不再因为凑不满 6 秒窗口而被浪费。
 
-    `hint`(exterior / interior / driving)只参与排序。`used` 是全片共享的
+    `hint`(profile 的背景偏好,汽车是 exterior / interior / driving)只参与排序。`used` 是全片共享的
     已用计数(item_id → 次数),调用方跨节拍传同一个字典,尽量不重复。
     返回空列表表示池子里什么都没有。
     """
     seconds = float(seconds)
     used = used if used is not None else {}
     lib = Library.load(subject)
-    want = HINT_VIEWS.get(hint, set())
+    vocab = vocab_of(lib)
+    want = vocab.hint_views(hint)
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
-        or (i.kind == "still" and i.view in ANGLE_OF_VIEW)) and not is_dark(i)]
+        or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
 
     def rank(i: Item) -> tuple:
         # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
@@ -1128,17 +1199,22 @@ def contact_sheet(subject: str, dest: str | Path, *, usable_only: bool = False,
 # --------------------------------------------------------------------------
 def _cli(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.pipeline.library",
-                                     description="车型素材池:构建、加链接、查看")
+                                     description="素材池:构建、加链接、查看")
     sub = parser.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build", help="增量构建(发现源、下载、切段、打标签、抓官图)")
     b.add_argument("subject")
     b.add_argument("--brand", default="")
+    b.add_argument("--category", default="", help="品类 profile 名,默认 DEFAULT_CATEGORY")
     b.add_argument("--budget", type=float, default=None, help="时长预算(秒),0 不限")
     b.add_argument("--max-sources", type=int, default=MAX_AUTO_SOURCES)
     b.add_argument("--no-llm", action="store_true", help="不调 LLM(只认视觉模型自己的 JSON)")
     a = sub.add_parser("add", help="手动加视频链接")
     a.add_argument("subject")
     a.add_argument("urls", nargs="+")
+    ai = sub.add_parser("add-images", help="手动加图:图片地址、本地图片,或商品详情页链接")
+    ai.add_argument("subject")
+    ai.add_argument("refs", nargs="+")
+    ai.add_argument("--category", default="", help="品类 profile 名(新池子要给)")
     rt = sub.add_parser("retag", help="清掉已有标签,下次 build 重新打(改了打标签规则之后用)")
     rt.add_argument("subject")
     s = sub.add_parser("show", help="看统计")
@@ -1152,6 +1228,13 @@ def _cli(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "add":
         added = add_links(args.subject, args.urls)
         print(f"新加 {len(added)} 个:" + ", ".join(added))
+        return 0
+    if args.cmd == "add-images":
+        errs: list[str] = []
+        n = add_images(args.subject, args.refs, category=args.category, errors=errs)
+        print(f"新加 {n} 张图,下次 build 时打标签")
+        for e in errs:
+            print(" -", e)
         return 0
     if args.cmd == "retag":
         lib = Library.load(args.subject)
@@ -1171,7 +1254,7 @@ def _cli(argv: Sequence[str] | None = None) -> int:
         print(got or "池子里还没有帧")
         return 0
 
-    from ..categories import load_profile
+    from ..categories import default_category
 
     llm = None
     if not args.no_llm:
@@ -1179,7 +1262,8 @@ def _cli(argv: Sequence[str] | None = None) -> int:
 
         llm = _llm()
     errors: list[str] = []
-    stats = build(args.subject, profile=load_profile("auto_long"), brand=args.brand, llm=llm,
+    profile = load_profile(args.category or default_category())
+    stats = build(args.subject, profile=profile, brand=args.brand, llm=llm,
                   budget=args.budget, max_sources=args.max_sources, errors=errors,
                   log=lambda m: print(m, flush=True))
     print(json.dumps(stats, ensure_ascii=False, indent=1))

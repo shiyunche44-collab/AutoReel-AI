@@ -17,9 +17,8 @@ function catInfo(name) {
   return DATA.categories.find((c) => c.name === name) || { themes: [], default_theme: '' };
 }
 
-// 方向下拉必须跟着品类走:不同品类的方向词表完全不同(auto 有 7 个,
-// beauty 只有一个合成的 overview)。不联动的话,选了美妆再带上 auto
-// 的方向名,建项目时会被 400 拒绝。
+// 方向下拉必须跟着品类走:不同品类的方向词表不同。不联动的话,
+// 选了母婴再带上汽车的方向名,建项目时会被 400 拒绝。
 function syncThemeField() {
   const field = $('#theme-field');
   const sel = $('#theme-select');
@@ -39,6 +38,20 @@ function syncThemeIntent() {
   const opt = sel.selectedOptions[0];
   const hint = $('#theme-intent');
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
+}
+
+// 主体输入框的标签、占位和提示跟着品类走(profile 的 vocab.ui_*)
+function subjectHelp() {
+  return (catInfo($('#category-select').value).ui || {}).help || '尽量写全品牌和型号,事实采集会更准。';
+}
+
+function syncSubjectField() {
+  const ui = catInfo($('#category-select').value).ui || {};
+  if (ui.subject_label) $('label[for="subject"]').textContent = ui.subject_label;
+  if (ui.placeholder) $('#subject').placeholder = ui.placeholder;
+  const help = $('#subject-help');
+  help.classList.remove('text-danger');
+  help.textContent = subjectHelp();
 }
 
 // 时长档位跟着品类走(auto_long 是 2–8 分钟)
@@ -86,8 +99,11 @@ async function refreshEstimate() {
 }
 
 if (form) {
-  $('#category-select').addEventListener('change', () => { syncThemeField(); syncDurations(); refreshEstimate(); });
+  $('#category-select').addEventListener('change', () => {
+    syncSubjectField(); syncThemeField(); syncDurations(); refreshEstimate();
+  });
   $('#theme-select').addEventListener('change', syncThemeIntent);
+  syncSubjectField();
   syncDurations();
   syncThemeField();
   refreshEstimate();
@@ -96,7 +112,7 @@ if (form) {
   subject.addEventListener('input', () => {
     subject.classList.remove('is-invalid');
     $('#subject-help').classList.remove('text-danger');
-    $('#subject-help').textContent = '尽量写全品牌、车型和年款,事实采集会更准。';
+    $('#subject-help').textContent = subjectHelp();
   });
 
   form.addEventListener('submit', async (e) => {

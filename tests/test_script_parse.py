@@ -76,9 +76,10 @@ def facts() -> list[Fact]:
     ],
 )
 def test_classify_scope(claim, expected):
+    from app.categories import load_profile
     from app.pipeline.intake import classify_scope
 
-    assert classify_scope(claim) == expected
+    assert classify_scope(claim, vocab=load_profile("auto_long").vocab) == expected
 
 
 def test_company_facts_cannot_be_used_as_product_specs(auto_profile, facts):

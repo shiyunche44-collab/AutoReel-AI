@@ -47,9 +47,8 @@ _TALKY_WORDS = ("直播", "口播", "开箱", "访谈", "采访", "vlog", "podca
                 "回放", "合集", "盘点", "吐槽", "抽奖")
 
 #: 官方号的名字特征。命中其一且名字里含品牌,才算官方 —— 光有"汽车"二字的
-#: 自媒体太多,不能单凭它判。
-_OFFICIAL_MARKERS = ("官方", "汽车", "official", "motors", "motor", "auto", "global",
-                     "china", "中国", "集团")
+#: 自媒体太多,不能单凭它判。品类专属的(汽车的 motors、auto……)由调用方传 `markers`
+_OFFICIAL_MARKERS = ("官方", "official", "global", "china", "中国", "集团")
 
 
 class PlatformError(RuntimeError):
@@ -73,7 +72,8 @@ class PlatformHit:
 # --------------------------------------------------------------------------
 # 打分与过滤
 # --------------------------------------------------------------------------
-def is_official(hit: PlatformHit, brand_aliases: Iterable[str]) -> bool:
+def is_official(hit: PlatformHit, brand_aliases: Iterable[str],
+                markers: Iterable[str] = ()) -> bool:
     """判定上传者是不是品牌官方号。
 
     规则:上传者名里**含品牌名**,并且(平台认证过 或 名字带"官方 / 汽车 /
@@ -88,7 +88,7 @@ def is_official(hit: PlatformHit, brand_aliases: Iterable[str]) -> bool:
         return False
     if hit.verified:
         return True
-    return any(m in name for m in _OFFICIAL_MARKERS)
+    return any(m in name for m in (*_OFFICIAL_MARKERS, *markers))
 
 
 def title_relevant(title: str, subject: str) -> bool:

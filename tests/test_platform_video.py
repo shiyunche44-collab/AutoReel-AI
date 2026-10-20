@@ -67,7 +67,8 @@ ALIASES = ["比亚迪", "BYD", "byd"]
 ])
 def test_is_official(uploader, verified, expected):
     hit = pv.PlatformHit(platform="bilibili", url="u", uploader=uploader, verified=verified)
-    assert pv.is_official(hit, ALIASES) is expected
+    # "汽车"是汽车品类的官方号特征(profile 的 vocab.official_markers)
+    assert pv.is_official(hit, ALIASES, markers=("汽车",)) is expected
 
 
 @pytest.mark.parametrize("title,ok", [

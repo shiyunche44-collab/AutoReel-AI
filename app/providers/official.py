@@ -30,7 +30,8 @@ import json
 import re
 import time
 import urllib.parse
-from typing import Any, Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable, Sequence
 
 from .. import config
 from . import clips, platform_video, webassets
@@ -88,7 +89,8 @@ def brand_aliases(brand_key: str, spec: dict[str, tuple[str, ...]], hint: str = 
 # --------------------------------------------------------------------------
 def platform_official(subject: str, aliases: Sequence[str], *,
                       platforms: Iterable[str] | None = None, limit: int = 8,
-                      errors: list[str] | None = None) -> list[platform_video.PlatformHit]:
+                      errors: list[str] | None = None,
+                      markers: Sequence[str] = ()) -> list[platform_video.PlatformHit]:
     """补搜一轮官方号视频,只返回判定为官方的结果。"""
     if not aliases:
         return []
@@ -104,7 +106,7 @@ def platform_official(subject: str, aliases: Sequence[str], *,
             if hit.url in seen:
                 continue
             seen.add(hit.url)
-            if platform_video.is_official(hit, aliases):
+            if platform_video.is_official(hit, aliases, markers):
                 hit.official = True
                 out.append(hit)
     return platform_video.rank(out)
@@ -462,6 +464,57 @@ def gallery_images(subject: str, *, errors: list[str] | None = None) -> list[Ima
             if errors is not None:
                 errors.append(f"{kind} 官图抓取失败:{str(exc)[:100]}")
     return out
+
+
+# --------------------------------------------------------------------------
+# 4. 品牌官网 + 图片检索(非汽车品类的静图来源)
+# --------------------------------------------------------------------------
+#: 图片检索的查询词:官方主图、详情页图是电商和品牌站自己拍的产品照
+PRODUCT_IMAGE_QUERIES: tuple[str, ...] = ("{subject} 官方 主图", "{subject} 详情页")
+
+
+def product_images(subject: str, spec: dict[str, tuple[str, ...]] | None = None, *,
+                   per_query: int = 12, errors: list[str] | None = None) -> list[ImageRef]:
+    """品牌官网大图(站内检索产品页)+ Bing 大图检索。
+
+    不直接爬京东 / 天猫(反爬重、地址常变),电商详情页靠手动 `library add` 贴链接。
+    检索结果里混着别家的同类产品,入池后照常打标签,认不出是目标产品的不当背景。
+    """
+    out: list[ImageRef] = []
+    if spec and (spec.get("sites") or spec.get("media")):
+        try:
+            _, stills = site_media(subject, spec, errors=errors)
+            out += stills
+        except Exception as exc:  # noqa: BLE001
+            if errors is not None:
+                errors.append(f"品牌官网抓图失败:{str(exc)[:100]}")
+    for q in PRODUCT_IMAGE_QUERIES:
+        query = q.format(subject=subject)
+        try:
+            out += webassets.bing_images_cached(query, limit=per_query)
+        except Exception as exc:  # noqa: BLE001
+            if errors is not None:
+                errors.append(f"图片检索失败({query}):{str(exc)[:100]}")
+    return _dedupe(out)
+
+
+@dataclass(frozen=True)
+class Gallery:
+    """一个静图来源。`fetch(subject, spec, errors)` 返回 ImageRef;`referer` 下载时带上。"""
+    fetch: Callable[..., list[ImageRef]]
+    referer: str = ""
+
+
+#: profile 的 `galleries` 里可以写的名字
+GALLERIES: dict[str, Gallery] = {
+    "autohome": Gallery(lambda subject, spec, errors: autohome_images(
+        subject, per_category=12, errors=errors),
+                        referer="https://car.autohome.com.cn/"),
+    "dongchedi": Gallery(lambda subject, spec, errors: dongchedi_images(subject, errors=errors),
+                         referer="https://www.dongchedi.com/"),
+    "product_images": Gallery(lambda subject, spec, errors: product_images(
+        subject, spec, errors=errors)),
+}
 
 
 # --------------------------------------------------------------------------

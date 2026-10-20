@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .. import config, db
-from ..categories import CategoryProfile
+from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
 from . import cards, library, narration, overlays
 from . import render as render_mod
@@ -40,16 +40,14 @@ MAX_CARD_RUN = 2
 KEYWORD_CHARS = 12
 #: 横屏字幕单行字数(竖屏是 16)
 SUBTITLE_LINE_CHARS = 22
-#: 背景偏好:段落 angle → fill 的 hint
-HINT_OF_ANGLE = {"interior": "interior", "screen_spec": "interior", "detail": "interior"}
 #: 图片背景的推拉方式,按拍号轮换
 STILL_MOTIONS = render_mod.STILL_MOTIONS
 #: 中间产物的编码参数:拼接用 -c copy,所以所有片段必须完全一致
 _ENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
         "-r", str(render_mod.FPS)]
 
-SYSTEM = """你是信息型汽车解说视频(横屏 16:9,对标「三驱兄弟」)的剪辑导演。
-画面是这台车的官方宣传片做背景,信息靠叠加层传达。你的任务:给每一拍选**版式**并填叠加数据。
+SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄弟」)的剪辑导演。
+画面是{subject_noun}的官方宣传片做背景,信息靠叠加层传达。你的任务:给每一拍选**版式**并填叠加数据。
 
 版式:
 - broll:全屏宣传片,无叠加。旁白在讲感受、观点、过渡时用。
@@ -57,16 +55,15 @@ SYSTEM = """你是信息型汽车解说视频(横屏 16:9,对标「三驱兄弟�
   {{"title": "面板标题(10 字内)", "rows": [{{"label": "参数名", "values": ["取值含单位"], "fact_id": "f_xxx"}}]}}
   rows 2–5 行。
 - highlight:宣传片缩成小窗 + 两行大字。旁白在强调一个卖点 / 关键配置 / 结论时用。给 `keywords`:
-  1–2 行,每行 {kw} 字以内,是这一拍最想让观众记住的词(如 "激光雷达"、"高通8650智驾芯片")。
+  1–2 行,每行 {kw} 字以内,是这一拍最想让观众记住的词(如 {keyword_examples})。
 - card:整屏数据卡。段落标了「卡片」时优先用。给 `card`:
   {{"title": "卡片标题(12 字内)", "columns": [两个对比对象名,仅对比卡需要],
     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
-- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用(零百加速、续航、
-  售价、功率)。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}
+- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或解释文字。
-2. `beats` 数组,每项 {{"idx": 序号, "layout": 版式, "view": "exterior|interior|driving",
+2. `beats` 数组,每项 {{"idx": 序号, "layout": 版式, "view": "{view_enum}",
    "visual": "背景画面一句话(15 字内)", "panel": ..., "keywords": [...], "card": ...,
    "stat": ...}};
    用不到的键可以省略。数量与给定拍数一致,idx 从 1 开始连续。
@@ -76,11 +73,11 @@ SYSTEM = """你是信息型汽车解说视频(横屏 16:9,对标「三驱兄弟�
 5. keywords 里的型号、芯片名、英文和数字必须在这一拍的旁白或可用事实里出现过,不得自创。
 6. 节奏:不要连续 3 拍以上用 card;panel、highlight、stat 穿插着用,不要连续两拍 stat,
    全片大约四成是 broll。
-7. view:讲外观、尺寸、行驶给 exterior / driving,讲座舱、屏幕、空间给 interior。
+7. view:{view_guide}
 
 必需键: beats"""
 
-USER = """车型:{subject}
+USER = """{subject_label}:{subject}
 总拍数:{count}
 
 逐拍清单(版式要服务于这一拍的旁白):
@@ -95,11 +92,12 @@ USER = """车型:{subject}
 # --------------------------------------------------------------------------
 # 分镜:逐拍版式 + 叠加数据
 # --------------------------------------------------------------------------
-def _hint(sec_angle: str, view: str = "") -> str:
+def _hint(sec_angle: str, view: str, vocab: Vocab) -> str:
+    """背景偏好:分镜给的 view 合法就用,否则按段落 angle 推。"""
     view = (view or "").strip().lower()
-    if view in library.HINT_VIEWS:
+    if view in vocab.hint_groups:
         return view
-    return HINT_OF_ANGLE.get(sec_angle, "exterior")
+    return vocab.hint_of_angle.get(sec_angle, vocab.default_hint)
 
 
 def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact]) -> list[str]:
@@ -154,13 +152,18 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
     """一段脚本 = 一拍。LLM 挑版式、填叠加数据,这里逐项核对,核不过就降级成 broll。"""
     usable = [f for f in facts if f.enabled and f.confidence in ("high", "medium")]
     facts_payload = "\n".join(f"- {f.id}: {f.claim}" for f in usable)[:5000] or "(无)"
+    vocab = profile.vocab
     user = USER.format(
-        subject=subject, count=len(segments),
+        subject_label=vocab.subject_label, subject=subject, count=len(segments),
         beats="\n".join(_beat_line(i, s, profile) for i, s in enumerate(segments)),
         facts=facts_payload,
     )
     try:
-        data = llm.structured(SYSTEM.format(kw=KEYWORD_CHARS), user,
+        system = SYSTEM.format(
+            kw=KEYWORD_CHARS, domain=vocab.domain, subject_noun=vocab.subject_noun,
+            keyword_examples=vocab.keyword_examples, stat_examples=vocab.stat_examples,
+            view_enum=vocab.view_enum, view_guide=vocab.view_guide)
+        data = llm.structured(system, user,
                               required_keys=["beats"], temperature=0.5)
         raw = data.get("beats") or []
     except Exception:  # noqa: BLE001 - 版式选不出来也能出片:全部 broll
@@ -215,7 +218,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         card_log.append({"idx": i, "section": sec.name, "asked": item.get("layout"),
                          "layout": layout, "dropped": dropped})
 
-    view = _hint(sec.angle, str(item.get("view") or ""))
+    view = _hint(sec.angle, str(item.get("view") or ""), profile.vocab)
     visual = str(item.get("visual") or "").strip()[:30] or (sec.beat or f"{subject} 宣传画面")
     return ShotSpec(
         idx=i, duration=0.0, section=sec.name,
@@ -257,7 +260,7 @@ def fallback_beats(*, subject: str, profile: CategoryProfile,
         out.append(ShotSpec(idx=i, duration=0.0, section=sec.name,
                             visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or subject}",
                             narration_zh=seg.text, angle=sec.angle, layout=SAFE_LAYOUT,
-                            chapter=sec.chapter or sec.name, view=_hint(sec.angle)))
+                            chapter=sec.chapter or sec.name, view=_hint(sec.angle, "", profile.vocab)))
     return out
 
 
@@ -497,10 +500,11 @@ def _load_used(project_id: str) -> dict[str, int]:
 
 
 def card_background(subject: str) -> Path | None:
-    """数据卡的底图:池子里一张干净的外观官图(虚化压暗后做底)。"""
+    """数据卡的底图:池子里一张干净的主视角官图(汽车是外观;虚化压暗后做底)。"""
     lib = library.Library.load(subject)
     stills = [i for i in lib.items if i.kind == "still" and i.usable and Path(i.path).is_file()]
-    stills.sort(key=lambda i: (i.view not in library.HINT_VIEWS["exterior"], library._dirt(i)))
+    primary = library.vocab_of(lib).primary_views
+    stills.sort(key=lambda i: (i.view not in primary, library._dirt(i)))
     return Path(stills[0].path) if stills else None
 
 
@@ -605,7 +609,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
                                    subtitle=f"{int(total // 60)}分{int(total % 60)}秒 · {profile.label}",
                                    size=profile.frame_size)
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
-               "source_note": "画面素材:品牌官方宣传片与官方图片,仅作车型展示"}
+               "source_note": "画面素材:品牌官方宣传片与官方图片,仅作"
+               f"{profile.vocab.subject_label}展示"}
     db.write_json(project_id, "render.json", payload)
     return payload
 

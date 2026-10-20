@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from .. import db
-from ..categories import CategoryProfile
+from ..categories import CategoryProfile, Vocab
 from ..models import Fact
 from ..providers import facts as facts_provider
+from . import script_gen
 
 # ---------------------------------------------------------------------------
 # 事实层级判定
@@ -30,36 +31,25 @@ from ..providers import facts as facts_provider
 _COMPANY_HINTS = (
     "注册资本", "法定代表人", "法人代表", "注册地址", "办公地址", "成立日期",
     "上市日期", "证券代码", "股票代码", "证券简称", "统一社会信用代码",
-    "注册资本", "企业名称", "所属行业", "经营范围", "公司简介", "控股股东",
-    "实际控制人", "员工人数", "分支机构", "专利", "商标", "年报",
-)
-_PRODUCT_HINTS = (
-    "续航", "加速", "百公里", "整备质量", "轴距", "长宽高", "电池", "容量",
-    "kWh", "充电", "油耗", "功率", "扭矩", "马力", "配置", "选装",
-    "官方指导价", "售价", "落地价", "尺寸", "轮毂", "座椅", "屏幕",
-    "智驾", "辅助驾驶", "驾驶辅助", "智能驾驶", "天神之眼", "配色", "版本", "车型",
-    "上市", "改款",
-    # 真实使用成本方向:这些是**产品持有成本**,属于产品属性而非行业指标
-    "保值率", "二手车", "残值", "用车成本", "持有成本", "保养", "保险费",
-    "保费", "电费", "事故率", "投诉", "召回",
-)
-_INDUSTRY_HINTS = (
-    "行业", "市场", "渗透率", "销量排行", "新能源", "整体", "全国", "同比",
-    "环比", "份额", "政策", "补贴",
-    # 市场观察方向
-    "格局", "竞争", "排名", "保有量", "市场集中度",
-)
-_COMPANY_HINTS = (
-    "注册资本", "法定代表人", "法人代表", "注册地址", "办公地址", "成立日期",
-    "上市日期", "证券代码", "股票代码", "证券简称", "统一社会信用代码",
-    "注册资本", "企业名称", "所属行业", "经营范围", "公司简介", "控股股东",
+    "企业名称", "所属行业", "经营范围", "公司简介", "控股股东",
     "实际控制人", "员工人数", "分支机构", "专利", "商标", "年报",
     # 品牌历史与产品战略方向
     "技术路线", "研发投入",
 )
+#: 产品层的通用词。品类专属的(汽车的续航、马力……)在 profile 的 vocab.product_hints
+_PRODUCT_HINTS = (
+    "容量", "功率", "配置", "选装", "官方指导价", "售价", "尺寸", "屏幕",
+    "配色", "版本", "上市", "改款", "保养", "投诉", "召回",
+)
+_INDUSTRY_HINTS = (
+    "行业", "市场", "渗透率", "销量排行", "整体", "全国", "同比",
+    "环比", "份额", "政策", "补贴",
+    # 市场观察方向
+    "格局", "竞争", "排名", "保有量", "市场集中度",
+)
 
 
-def classify_scope(claim: str, topic: str = "") -> str:
+def classify_scope(claim: str, topic: str = "", vocab: Vocab | None = None) -> str:
     """判定一条事实属于 company / product / industry 哪一层。
 
     顺序有意为之:先判产品,再判行业,最后兜底为公司 ——
@@ -67,9 +57,10 @@ def classify_scope(claim: str, topic: str = "") -> str:
     也不能把一条产品参数误判成公司信息而被脚本忽略。
     """
     text = f"{claim} {topic}"
-    if any(h in text for h in _PRODUCT_HINTS):
+    vocab = vocab or Vocab()
+    if any(h in text for h in (*_PRODUCT_HINTS, *vocab.product_hints)):
         return "product"
-    if any(h in text for h in _INDUSTRY_HINTS):
+    if any(h in text for h in (*_INDUSTRY_HINTS, *vocab.industry_hints)):
         return "industry"
     if any(h in text for h in _COMPANY_HINTS):
         return "company"
@@ -124,39 +115,66 @@ def collect_raw(
     真实成本要保险保养。走一份平铺的来源列表,会让每个方向都拿回一堆用不上的
     公司财经新闻,反而把该方向真正需要的挤掉。
     """
-    topic = "新能源汽车" if profile.name == "auto_long" else profile.label
     return facts_provider.collect(
         list(profile.sources_for(theme)),
         subject,
-        topic=topic,
+        topic=industry_topic(profile),
         project_dir=project_dir,
+        queries=profile.fact_queries,
+        company=company_of(profile, subject),
     )
+
+
+def industry_topic(profile: CategoryProfile) -> str:
+    """行业指标检索用的行业名。"""
+    return profile.vocab.industry_topic or profile.label
+
+
+def company_of(profile: CategoryProfile, subject: str) -> str:
+    """企查查按公司名查。品牌配了 `company`(工商全称)就用它,否则退回主体名 ——
+    企查查的模糊检索拿型号名也常能命中,只是准度差一些。"""
+    from ..providers import official
+
+    _, spec = official.detect_brand(subject, profile.official_sites)
+    names = tuple(spec.get("company", ())) if spec else ()
+    return names[0] if names else subject
 
 
 EXTRACT_SYSTEM = """You extract atomic, verifiable facts from Chinese business/financial raw material about a product.
 
 Rules:
 1. Output ONE JSON object only. No markdown fences, no commentary.
-2. `facts` is an array. Each element: {claim, source_tool, source_query, retrieved_at, confidence, topic}
+2. `facts` is an array. Each element: {{claim, source_tool, source_query, retrieved_at, confidence, topic}}
    - claim: ONE factual sentence in Chinese. Include concrete numbers ONLY if they appear verbatim in the material.
    - source_tool / source_query / retrieved_at: copy EXACTLY from the material header for that fact.
    - confidence: "high" if a specific number or official record; "medium" if descriptive; "low" if vague.
-   - topic: a short label like 续航 / 销量 / 财务 / 品牌 / 智能驾驶.
+   - topic: a short label like {topic_examples}.
 3. NEVER invent, extrapolate, round, or estimate a number. If the material does not state it, do not create the fact.
 4. Keep 8-25 facts, ordered from most product-relevant to least.
 5. Required keys: facts
 
 RECENCY RULES (critical for product specifications):
-6. News material carries a 日期 field per article. A product specification (续航 / 加速 / 售价 / 电耗 / 配置)
+6. News material carries a 日期 field per article. A product specification ({spec_examples})
    is only valid for the CURRENT model if the article is recent. Today is given in the user message.
 7. If a product-spec fact comes from an article OLDER than 12 months, you MUST either
    (a) drop it, or (b) keep it but state the article's year explicitly in the claim
-       (e.g. "2020 年上市的汉 EV 综合续航 605 公里") and set confidence to "low".
+       (e.g. "{year_example}") and set confidence to "low".
    Never present an old article's numbers as the current configuration.
 8. When the same specification appears in several articles with different values, prefer the most
    recent article and mention the value's year. Do not average them and do not pick silently.
 9. Company-level facts (注册资本 / 法定代表人 / 证券代码 / 财报) are useful context but must never be
    phrased as product attributes."""
+
+#: 质量记录类事实的主题标签。脚本按它套"只能说成品牌曾…"的规则
+QUALITY_TOPIC = script_gen.QUALITY_TOPIC
+
+#: 材料里有召回 / 抽检 / 假冒记录时追加的抽取规则
+QUALITY_RULE = """
+10. Material from product recall / spot-check / counterfeit registries describes the BRAND or COMPANY,
+    not necessarily this exact product. Keep only records from the last 3 years that concern this
+    product category; phrase each claim with the record's date and the product named in the record
+    (e.g. "2024 年 3 月,该品牌一款婴儿推车因折叠锁扣缺陷被召回"). Set topic to "quality".
+    If the registry returned nothing relevant, output NO fact for it — never write "no recall records"."""
 
 EXTRACT_USER = """Product subject: {subject}
 Category: {category}
@@ -177,13 +195,20 @@ def extract_facts(
     category: str,
     llm,
     source_docs: list[dict[str, Any]] | None = None,
+    profile: CategoryProfile | None = None,
 ) -> list[Fact]:
     """把原始材料抽取为结构化事实。LLM 不可用时返回空列表(由上层决定降级)。"""
     if not context.strip():
         return []
 
+    vocab = profile.vocab if profile is not None else Vocab()
+    system = EXTRACT_SYSTEM.format(topic_examples=vocab.extract_topic_examples,
+                                   spec_examples=vocab.extract_spec_examples,
+                                   year_example=vocab.extract_year_example)
+    if any(d.get("tool") in facts_provider.QUALITY_TOOLS for d in source_docs or []):
+        system += QUALITY_RULE
     data = llm.structured(
-        EXTRACT_SYSTEM,
+        system,
         EXTRACT_USER.format(
             subject=subject,
             category=category,
@@ -218,10 +243,13 @@ def extract_facts(
                 raw_ref=ref_index.get((tool, query)),
                 topic=str(item.get("topic", "")).strip(),
                 scope=classify_scope(
-                    str(item["claim"]).strip(), str(item.get("topic", "")).strip()
+                    str(item["claim"]).strip(), str(item.get("topic", "")).strip(), vocab
                 ),
             )
         )
+        if tool in facts_provider.QUALITY_TOOLS:
+            # 召回 / 抽检 / 假冒记录是品牌级的,不是这一款产品的(见 QUALITY_RULE)
+            facts[-1].scope, facts[-1].topic = "company", QUALITY_TOPIC
     return facts
 
 
@@ -250,6 +278,7 @@ def run(
                 category=profile.label,
                 llm=llm,
                 source_docs=docs_payload,
+                profile=profile,
             )
         except Exception as exc:  # noqa: BLE001 - 事实层降级不应中断流水线
             error = str(exc)

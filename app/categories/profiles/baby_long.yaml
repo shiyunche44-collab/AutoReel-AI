@@ -1,0 +1,240 @@
+# 母婴横屏解说 —— 单品选购深讲(推车、安全座椅、餐椅、婴儿床这类硬件为主)
+#
+# 版式和汽车轨一样:官方宣传片 / 测评实拍 / 品牌官网与电商图只当背景,信息靠叠加层。
+# 婴儿配方奶粉不要拿来做:广告法第二十条禁止婴儿乳制品广告,合规没做之前别碰。
+name: baby_long
+label: 母婴(横屏解说)
+aspect_ratio: "16:9"
+track: explainer
+duration_grid: 8
+durations: [120, 240, 360]
+
+fact_sources:
+  - ifind.product_news
+  - ifind.news
+  - qcc.profile
+  - qcc.product_recall
+  - qcc.product_spot_check
+
+script_style: >
+  像带过娃的朋友当面给建议:口语化、短句、观点明确,每段只讲一个点。
+  参数必须来自事实层;不制造焦虑,不说"不买就是害了宝宝"这类话。
+  全片控制在 {chars} 字左右,平均每段 {per_shot} 字。
+
+default_theme: buyguide
+
+themes:
+  buyguide:
+    label: 单品选购深讲
+    intent: >
+      围绕"这款值不值得买、该买哪个规格"展开:定位与价格 → 材质与安全 → 品牌质量记录 →
+      核心功能与使用体验 → 适用月龄与场景 → 规格怎么选 → 和对手比 → 结论(适合谁、不适合谁)。
+      每段给出明确判断,参数只是论据。
+    required_scopes: [product]
+    fact_sources:
+      - ifind.product_news
+      - ifind.news
+      - qcc.profile
+      - qcc.product_recall
+      - qcc.product_spot_check
+    script_rules:
+      - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
+      - 适用月龄、承重、尺寸这类数字只能取自事实,查不到就不写数字。
+      - 结论段必须说清楚适合哪类家庭、不适合哪类家庭。
+    blocks:
+      - {section: 开场, weight: 1, remainder: false}
+      - {section: 定位与价格, weight: 2}
+      - {section: 材质与安全, weight: 2}
+      - {section: 质量记录, weight: 1, remainder: false}
+      - {section: 核心功能, weight: 3}
+      - {section: 适用月龄与场景, weight: 2}
+      - {section: 规格怎么选, weight: 2}
+      - {section: 竞品对比, weight: 1}
+      - {section: 结论建议, weight: 1, remainder: false}
+
+# 版式说明见 auto_long.yaml。angle 只决定背景偏产品本身还是偏使用场景。
+sections:
+  开场:
+    beat: 一句话抛出这款最值得聊的点或争议
+    chapter: 开头
+    angle: product_hero
+    layouts: [highlight, broll]
+  定位与价格:
+    beat: 卖多少钱、对标谁、在品牌里是什么档位
+    chapter: 定位价格
+    angle: product_hero
+    layouts: [panel, card, stat, broll]
+    card: spec
+    requires_fact: true
+  材质与安全:
+    beat: 材质、做工、安全设计与认证
+    chapter: 材质安全
+    angle: detail
+    layouts: [highlight, panel, broll]
+  质量记录:
+    beat: 品牌近年的召回与抽检记录(只说品牌,不说这一款)
+    chapter: 材质安全
+    angle: product_hero
+    layouts: [card, highlight, broll]
+    card: timeline
+    requires_fact: true
+    # 事实里没有召回 / 抽检记录就整段跳过
+    fact_topic: quality
+  核心功能:
+    beat: 最核心的几个功能和实际使用体验
+    chapter: 功能体验
+    angle: lifestyle
+    layouts: [broll, highlight, panel, stat]
+  适用月龄与场景:
+    beat: 适合多大的宝宝、什么场景用
+    chapter: 功能体验
+    angle: lifestyle
+    layouts: [highlight, panel, broll]
+  规格怎么选:
+    beat: 各规格 / 版本的价格与差异,推荐哪个
+    chapter: 怎么选
+    angle: product_hero
+    layouts: [card, panel, broll]
+    card: spec
+    requires_fact: true
+  竞品对比:
+    beat: 与最主要的对手比关键维度
+    chapter: 怎么选
+    angle: product_hero
+    layouts: [card, broll]
+    card: compare
+  结论建议:
+    beat: 适合谁、不适合谁
+    chapter: 结论
+    angle: lifestyle
+    layouts: [broll, highlight]
+
+visual_keywords: [母婴, 宝宝, 婴儿推车, 安全座椅, 育儿]
+reference_query_template: "{subject} {angle}"
+
+angle_queries:
+  product_hero: 产品 整体 展示
+  detail: 细节 材质 特写
+  lifestyle: 使用 场景 宝宝
+
+# --------------------------------------------------------------------------
+# 官方素材渠道(字段说明见 auto_long.yaml)
+# sites 只写人工核对过的域名(2026-10-20 能打开且是品牌官方页):核对不了的品牌
+# 只留 aliases —— 判品牌和判官方号照样用得上,只是不做官网站内检索。
+# company:企查查查召回 / 抽检用的工商主体名,只写查证过的。
+# --------------------------------------------------------------------------
+official_sites:
+  goodbaby:
+    aliases: [好孩子, goodbaby, gb好孩子, 小龙哈彼]
+    sites: []
+  babycare:
+    aliases: [Babycare, babycare, BC babycare]
+    sites: []
+    company: [杭州白贝壳实业股份有限公司]
+  pigeon:
+    aliases: [贝亲, Pigeon]
+    sites: [pigeon.cn]
+    company: [贝亲管理(上海)有限公司]
+  pampers:
+    aliases: [帮宝适, Pampers]
+    sites: [pampers.com]
+  cybex:
+    aliases: [CYBEX, Cybex, 赛百斯]
+    sites: [cybex-online.com]
+  stokke:
+    aliases: [Stokke, STOKKE, 思多嘉儿]
+    sites: [stokke.com]
+  merries:
+    aliases: [花王, 妙而舒, Merries]
+    sites: []
+  bebebus:
+    aliases: [BeBeBus, bebebus, 不不贝]
+    sites: []
+
+# 广告法绝对化用语(与汽车同一份)
+forbidden_terms: [最强, 第一, 顶级, 永久, 国家级, 唯一, 最先进, 100%安全, 无敌, 秒杀]
+required_disclaimers: ["数据来源:公开信息与官方渠道,仅供参考,以产品说明及实际购买为准"]
+
+music_prompt: >
+  warm soft instrumental background music, light acoustic guitar and piano,
+  gentle mid tempo, cozy family feel, no vocals, no lyrics
+
+# 旁白音色。female-yujie 是仓库里已在用的女声(audio.FEMALE_VOICE_ID);
+# 想换更柔和的,先用 `narration.health_check()` 拉一遍可用音色列表再改
+voice_id: female-yujie
+
+# 静图:品牌官网大图 + 图片检索;电商详情页手动 `library add` 贴链接
+galleries: [product_images]
+
+fact_queries:
+  ifind.news: 新品 发布 销量 财报 重大事件
+  ifind.product_news: 参数 材质 适用年龄 承重 售价 上市
+  ifind.compare_news: 对比 竞品 同类 差异 相比
+  ifind.cost_news: 价格 配件 耗材 售后 保修
+
+# --------------------------------------------------------------------------
+# 品类词表(字段说明见 app/categories.Vocab)
+# --------------------------------------------------------------------------
+vocab:
+  domain: 母婴用品
+  subject_noun: 这款产品
+  subject_label: 产品
+  subject_short: 产品
+  subject_en: baby product
+  company_noun: 品牌方
+
+  number_examples: 适用月龄、承重、重量、价格等
+  product_examples: 材质、尺寸、重量、适用月龄、功能、价格
+  product_examples_short: 材质、适用月龄、功能、价格
+  spec_claim_example: 这款推车净重只有 5.8 公斤
+  keyword_examples: '"一键收车"、"高景观座椅"'
+  stat_examples: 净重、承重、适用月龄、售价
+  view_guide: 讲产品本身、材质、做工给 product,讲宝宝使用、出行、家里场景给 in_use。
+  subject_words: [这款, 该产品, 这台推车, 这把座椅, 配置, 售价, 参数, 规格, 承重, 净重, 月龄]
+
+  views: [product_hero, detail, in_use, fold_demo, packaging, scene]
+  hint_groups:
+    product: [product_hero, detail, packaging, fold_demo]
+    in_use: [in_use, scene, fold_demo]
+  hint_of_angle: {lifestyle: in_use}
+  default_hint: product
+  angle_of_view:
+    product_hero: product_hero
+    packaging: product_hero
+    fold_demo: product_hero
+    detail: detail
+    in_use: lifestyle
+    scene: lifestyle
+
+  tag_variant_note: 注意同品牌的不同型号、不同代是不同产品(如同一品牌的两款推车)。
+  tag_identify: 画面主体是什么;有母婴产品的话是什么品牌和型号,依据是什么(logo、车架或包装上的字样、外形),看不出来就直说看不出来;
+  tag_angles: 产品整体展示、局部或材质特写、宝宝或家长在使用、折叠 / 安装演示、包装盒、家里或户外场景,还是人物、文字卡、其它;
+  tag_target_rule: |-
+    描述明确认出是目标产品(同品牌同系列;颜色、规格不同仍算)→ "yes";
+      明确认出是**别的品牌或别的系列** → "no";没点名产品 → "unknown"。
+  tag_target_cues: logo、字样、外形
+  tag_view_guide: |2-
+      product_hero(产品整体)、detail(局部 / 材质 / 做工特写)、
+      in_use(宝宝或家长在使用产品)、fold_demo(折叠 / 收车 / 安装演示)、
+      packaging(包装盒)、scene(产品在家里或户外场景里,没人在用)、
+  tag_no_subject: 描述里没有任何母婴产品或产品部件 → "no_subject"(局部特写算有产品;只有宝宝没有产品也算);
+  tag_desc_example: 灰色推车折叠后立在客厅
+
+  product_hints: [适用月龄, 适用年龄, 月龄, 承重, 净重, 重量, 材质, 面料, 安全带, 五点式,
+                  折叠, 收车, 遮阳篷, 避震, 坐躺, i-Size, ISOFIX, 3C 认证, 认证, 规格]
+  industry_hints: [母婴, 出生率, 新生儿]
+  industry_topic: 母婴用品
+  extract_spec_examples: 适用月龄 / 承重 / 净重 / 售价 / 材质
+  extract_year_example: 2020 年上市的初代款净重 6.5 公斤
+  extract_topic_examples: 参数 / 价格 / 安全 / 材质 / 品牌
+
+  discovery_zh: ["{subject} 宣传片", "{subject} 官方", "{subject} 测评 实拍",
+                 "{subject} 使用演示"]
+  discovery_en: ["{en} official", "{en} review", "{en} demo"]
+  junk_words: [二手, 转卖, 仿品, 高仿, 闲置]
+  showcase_words: [测评, 演示, 展示, review, demo]
+  official_markers: [母婴, baby, 旗舰店]
+
+  ui_subject_label: 选题 / 产品
+  ui_placeholder: 例:好孩子 口袋车 GB-POCKIT
+  ui_help: 尽量写全品牌和型号,事实采集和素材都会更准。

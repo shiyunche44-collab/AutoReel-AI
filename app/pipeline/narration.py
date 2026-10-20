@@ -82,7 +82,7 @@ def build(
     project_id: str,
     specs: Sequence[Any],
     *,
-    voice_id: str = audio.DEFAULT_VOICE_ID,
+    voice_id: str = "",
     speed: float = 1.0,
     with_bgm: bool = True,
     profile=None,
@@ -92,7 +92,9 @@ def build(
     """生成旁白、字幕与 BGM。任一环节失败都尽量降级而非抛出。
 
     `size` / `line_chars`:字幕画布尺寸与单行字数,横屏解说轨用(默认竖屏)。
+    `voice_id` 空 = 品类 profile 声明的音色,再没有就用全局默认。
     """
+    voice_id = voice_id or getattr(profile, "voice_id", "") or audio.DEFAULT_VOICE_ID
     project_dir = config.project_dir(project_id)
     audio_dir = project_dir / "audio"
     # 字幕在拼接之前就要落盘,目录必须先建好 —— 否则第一次跑就会

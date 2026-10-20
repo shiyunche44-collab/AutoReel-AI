@@ -225,7 +225,7 @@ def ifind_financials(subject: str, project_dir: Path | None = None,
 
 
 def ifind_news(subject: str, project_dir: Path | None = None,
-               size: int = 8, days: int = 540) -> RawDoc:
+               size: int = 8, days: int = 540, terms: str = "") -> RawDoc:
     """公司/销量/财报向的新闻检索。
 
     窗口从 180 天放宽到 540 天:车型上市/改款的硬参数(续航、售价、配置)
@@ -234,7 +234,7 @@ def ifind_news(subject: str, project_dir: Path | None = None,
     """
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 新车 发布 销量 财报 重大事件"
+    query = f"{subject} {terms or '新品 发布 销量 财报 重大事件'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -243,7 +243,7 @@ def ifind_news(subject: str, project_dir: Path | None = None,
 
 
 def ifind_product_news(subject: str, project_dir: Path | None = None,
-                       size: int = 10, days: int = 540) -> RawDoc:
+                       size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """产品参数向的新闻检索 —— 车型硬数据的主要来源。
 
     为什么必须和 ifind_news 分开:把"销量 财报 重大事件"和"续航 售价 配置"
@@ -252,7 +252,7 @@ def ifind_product_news(subject: str, project_dir: Path | None = None,
     """
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 车型 参数 续航 加速 售价 配置 上市"
+    query = f"{subject} {terms or '参数 规格 售价 配置 上市'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -278,7 +278,7 @@ def ifind_industry_indicator(topic: str, project_dir: Path | None = None) -> Raw
 
 
 def ifind_iteration_news(subject: str, project_dir: Path | None = None,
-                         size: int = 10, days: int = 1500) -> RawDoc:
+                         size: int = 10, days: int = 1500, terms: str = "") -> RawDoc:
     """车型迭代史方向:历代车型、改款、换代。
 
     窗口比其他来源宽得多(1500 天 ≈ 4 年):迭代史天然跨多年,540 天只够
@@ -286,7 +286,7 @@ def ifind_iteration_news(subject: str, project_dir: Path | None = None,
     """
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 历代车型 改款 换代 停产 升级"
+    query = f"{subject} {terms or '历代 改款 换代 停产 升级'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -295,11 +295,11 @@ def ifind_iteration_news(subject: str, project_dir: Path | None = None,
 
 
 def ifind_compare_news(subject: str, project_dir: Path | None = None,
-                       size: int = 10, days: int = 540) -> RawDoc:
+                       size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """横向对比方向:竞品、同级车型、差异。"""
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 对比 竞品 同级 差异 相比"
+    query = f"{subject} {terms or '对比 竞品 同级 差异 相比'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -308,7 +308,7 @@ def ifind_compare_news(subject: str, project_dir: Path | None = None,
 
 
 def ifind_cost_news(subject: str, project_dir: Path | None = None,
-                    size: int = 10, days: int = 540) -> RawDoc:
+                    size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """真实使用成本方向:能耗、保险、保养、折旧。
 
     注意与 `ifind_news` 的"销量 财报"完全不相干 —— 这里要的是持有成本,
@@ -316,7 +316,7 @@ def ifind_cost_news(subject: str, project_dir: Path | None = None,
     """
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 用车成本 保险 保养 电费 油耗 保值率"
+    query = f"{subject} {terms or '使用成本 耗材 保养 保修 二手价'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -325,11 +325,11 @@ def ifind_cost_news(subject: str, project_dir: Path | None = None,
 
 
 def ifind_tech_news(subject: str, project_dir: Path | None = None,
-                    size: int = 10, days: int = 540) -> RawDoc:
+                    size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """技术与设计拆解方向:平台、三电、智驾、底盘调校。"""
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{subject} 技术 架构 三电 智驾 平台 底盘 调校"
+    query = f"{subject} {terms or '技术 架构 工艺 材料 设计'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -338,11 +338,11 @@ def ifind_tech_news(subject: str, project_dir: Path | None = None,
 
 
 def ifind_market_news(topic: str, project_dir: Path | None = None,
-                      size: int = 10, days: int = 540) -> RawDoc:
+                      size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """市场观察方向:份额、排名、行业格局、渗透率。"""
     end = time.strftime("%Y-%m-%d")
     start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
-    query = f"{topic} 销量 市场份额 排名 行业格局 渗透率"
+    query = f"{topic} {terms or '销量 市场份额 排名 行业格局 渗透率'}"
     return invoke(
         IFIND["search_news"],
         {"query": query, "size": size, "time_start": start, "time_end": end},
@@ -365,6 +365,28 @@ def qcc_advertising(company: str, project_dir: Path | None = None) -> RawDoc:
                   query_label=company, project_dir=project_dir)
 
 
+# 质量记录(召回 / 抽检 / 假冒化妆品)。记录挂在**公司**名下,不是某一款产品 ——
+# 抽取层统一标成 company 层、topic=quality,脚本只能说"该品牌曾…"。
+def qcc_recall(company: str, project_dir: Path | None = None) -> RawDoc:
+    return invoke(QCC["product_recall"], {"searchKey": company},
+                  query_label=company, project_dir=project_dir)
+
+
+def qcc_spot_check(company: str, project_dir: Path | None = None) -> RawDoc:
+    return invoke(QCC["product_spot_check"], {"searchKey": company},
+                  query_label=company, project_dir=project_dir)
+
+
+def qcc_counterfeit_cosmetics(company: str, project_dir: Path | None = None) -> RawDoc:
+    return invoke(QCC["counterfeit_cosmetics"], {"searchKey": company},
+                  query_label=company, project_dir=project_dir)
+
+
+#: 返回质量记录的工具。抽取层据此把事实改标为品牌级
+QUALITY_TOOLS = frozenset(QCC[k] for k in ("product_recall", "product_spot_check",
+                                            "counterfeit_cosmetics"))
+
+
 #: 品类 Profile 里可以直接引用的来源名 → 函数
 SOURCES = {
     "ifind.stock_summary": ifind_stock_summary,
@@ -381,6 +403,9 @@ SOURCES = {
     "qcc.profile": qcc_profile,
     "qcc.trademark": qcc_trademark,
     "qcc.advertising": qcc_advertising,
+    "qcc.product_recall": qcc_recall,
+    "qcc.product_spot_check": qcc_spot_check,
+    "qcc.counterfeit_cosmetics": qcc_counterfeit_cosmetics,
 }
 
 
@@ -390,8 +415,15 @@ def collect(
     *,
     topic: str = "",
     project_dir: Path | None = None,
+    queries: dict[str, str] | None = None,
+    company: str = "",
 ) -> CollectionResult:
-    """按品类 Profile 声明的来源列表依次收集原始材料。"""
+    """按品类 Profile 声明的来源列表依次收集原始材料。
+
+    `queries`:来源名 → 检索词(profile 的 fact_queries),只对 iFinD 新闻类来源生效。
+    `company`:企查查来源按它查,空 = 用主体名。
+    """
+    queries = queries or {}
     result = CollectionResult()
     for name in source_names:
         fn = SOURCES.get(name)
@@ -403,9 +435,19 @@ def collect(
             continue
         if name == "ifind.industry_indicator" and topic:
             result.docs.append(fn(topic, project_dir))
+        elif name in _TERMED:
+            result.docs.append(fn(subject, project_dir, terms=queries.get(name, "")))
+        elif name.startswith("qcc."):
+            result.docs.append(fn(company or subject, project_dir))
         else:
             result.docs.append(fn(subject, project_dir))
     return result
+
+
+#: 接受 `terms`(品类检索词)的来源
+_TERMED = frozenset({"ifind.news", "ifind.product_news", "ifind.iteration_news",
+                     "ifind.compare_news", "ifind.cost_news", "ifind.tech_news",
+                     "ifind.market_news"})
 
 
 def health_check() -> dict[str, bool]:

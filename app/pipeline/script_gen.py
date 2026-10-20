@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, Sequence
 
-from ..categories import CategoryProfile
+from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment
 from .timeline import narration_budget_chars
 
@@ -58,14 +58,14 @@ class LintIssue:
         return f"[{self.severity}] seg{self.segment_idx}: {self.message}"
 
 
-SYSTEM = """你是中文汽车(/{category})品类的短视频解说编导。
+SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或任何解释文字。
 2. `segments` 数组,每项: {{"section": 段落名, "text": 解说词, "fact_refs": ["事实ID"]}}
    - segments 的数量与顺序必须严格对应给定的段落序列。
    - text 为口播文案,口语化、短句、有画面感,不要用书面语长句。
-3. **事实引用是强制的**:text 中每出现一个数字(续航、加速、价格、销量等),
+3. **事实引用是强制的**:text 中每出现一个数字({number_examples}),
    必须在 fact_refs 中列出支撑该数字的事实 ID。没有事实支撑的数字一律不许写。
    可以改写成不含数字的定性表述,而不是硬写。
 4. **本次内容方向**:
@@ -75,7 +75,7 @@ SYSTEM = """你是中文汽车(/{category})品类的短视频解说编导。
 5. **数字之外的硬红线**(所有方向都适用,不得因为方向而放宽):
    - 严禁编造任何未在事实清单中出现的信息,包括非数字的参数名与技术名词。
    - 禁止绝对化用语与无法证实的承诺。
-   - 只讲这台车/这个品牌本身,不评价其他无关产品。
+   - 只讲{subject_noun}/这个品牌本身,不评价其他无关产品。
 6. `title`:8-16 字的视频标题,要有吸引力但不得夸大。
 {title_policy}
 7. 字数:全片约 {chars} 字,平均每镜约 {per_shot} 字。
@@ -96,12 +96,12 @@ SYSTEM = """你是中文汽车(/{category})品类的短视频解说编导。
 #: 产品卖点讲、公司背景最多开场一句话、title 必须指向产品而非公司」的规则 ——
 #: 对**品牌历史与产品战略**、**市场观察**方向是反向错误的:那两个方向整片主体
 #: 恰恰就是公司层与行业层事实,照搬旧规则会让脚本被自己的合规规则掐死。
-_SCOPE_POLICY_PRODUCT = """   - `product` 层 = 产品本身(续航、加速、尺寸、配置、价格)。
+_SCOPE_POLICY_PRODUCT = """   - `product` 层 = 产品本身({product_examples})。
    - `company` 层 = 公司工商与财务(注册资本、成立日期、法定代表人、注册地址、
      证券代码、财报、销量总量)。
    - `industry` 层 = 行业与市场(渗透率、份额、政策)。
-   **严禁把 company 层事实当作产品卖点讲。** 不允许出现"这台车的证券代码是…"、
-   "这家车企成立于…"这类内容。公司背景最多在开场用一句话带过,
+   **严禁把 company 层事实当作产品卖点讲。** 不允许出现"{subject_noun}的证券代码是…"、
+   "这家{company_noun}成立于…"这类内容。公司背景最多在开场用一句话带过,
    且不占用任何 `product` 段落。
    若某个段落(如"参数硬数据")没有 product 层事实可用,就写定性体验描述,
    **绝对不要**用 company 层信息去填。宁可这一段平淡,也不能讲错对象。"""
@@ -109,22 +109,42 @@ _SCOPE_POLICY_PRODUCT = """   - `product` 层 = 产品本身(续航、加速、�
 _SCOPE_POLICY_COMPANY = """   - `company` 层 = 公司工商与财务(注册资本、成立日期、法定代表人、经营范围、
      证券代码、财报、销量结构)。
    - `industry` 层 = 行业与市场(渗透率、份额、排名、政策与热点)。
-   - `product` 层 = 产品参数(续航、加速、配置、价格)。
+   - `product` 层 = 产品参数({product_examples_short})。
    本方向的**主体就是 company 与 industry 层事实**,它们是正当素材,不是需要回避的内容。
    反过来,**严禁用 product 层参数去论证公司战略或行业结论** ——
-   不允许出现"这台车续航 702 公里,所以公司的战略是…"这类跳跃推理。
+   不允许出现"{spec_claim_example},所以公司的战略是…"这类跳跃推理。
    若某个段落没有 company/industry 层事实可用,就写定性描述,不要拿产品参数硬凑。"""
 
 _TITLE_POLICY_PRODUCT = "   标题必须指向产品本身,而不是公司或行业。"
 _TITLE_POLICY_COMPANY = "   标题可以指向品牌、公司或市场,但不得夸大。"
 
 
-def _scope_policy(theme) -> str:
-    """按方向所依赖的事实层级选择策略段。"""
-    required = set(getattr(theme, "required_scopes", ()) or ())
-    if required and "product" in required:
-        return _SCOPE_POLICY_PRODUCT
-    return _SCOPE_POLICY_COMPANY
+def _scope_policy(theme, vocab: Vocab) -> str:
+    """按方向所依赖的事实层级选择策略段。无方向时按产品向。"""
+    required = set(getattr(theme, "required_scopes", ("product",)) or ())
+    policy = _SCOPE_POLICY_PRODUCT if not required or "product" in required         else _SCOPE_POLICY_COMPANY
+    return policy.format(
+        product_examples=vocab.product_examples,
+        product_examples_short=vocab.product_examples_short,
+        subject_noun=vocab.subject_noun, company_noun=vocab.company_noun,
+        spec_claim_example=vocab.spec_claim_example,
+    )
+
+
+#: 质量记录(召回 / 抽检 / 假冒)类事实的主题标签,与 intake.QUALITY_TOPIC 一致
+QUALITY_TOPIC = "quality"
+
+#: 质量记录类事实的讲法。只在事实里有这类记录时追加
+_QUALITY_RULE = ("topic=quality 的事实是品牌 / 公司名下的召回、抽检、假冒记录,"
+                 "不是这一款产品本身的:只能说成\"该品牌曾……\"并带上记录里的时间和产品名,"
+                 "不得说成这款产品有问题,也不得据此下\"不安全\"\"质量差\"这类结论。")
+
+
+def _theme_rules(theme, facts: Sequence[Fact]) -> str:
+    rules = list(theme.script_rules) if theme is not None else []
+    if any(f.topic == QUALITY_TOPIC and f.enabled for f in facts):
+        rules.append(_QUALITY_RULE)
+    return "\n".join(f"   - {r}" for r in rules) if rules else "   (无方向专属规则)"
 
 
 def _title_policy(theme) -> str:
@@ -145,11 +165,13 @@ def generate(
     theme=None,
 ) -> tuple[list[ScriptSegment], str]:
     """生成解说脚本。返回 (段落列表, 标题)。"""
+    vocab = profile.vocab
     budget = narration_budget_chars(duration)
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts_payload = "\n".join(
-        f"- {f.id} [{scope_label.get(f.scope, 'company')}] | {f.claim} | "
+        f"- {f.id} [{scope_label.get(f.scope, 'company')}"
+        f"{' · topic=quality' if f.topic == QUALITY_TOPIC else ''}] | {f.claim} | "
         f"来源:{f.source_tool} | 可信度:{f.confidence}"
         for f in facts
     ) or "(无可用事实:请完全避免写出任何具体数字)"
@@ -166,6 +188,9 @@ def generate(
 
     data = llm.structured(
         SYSTEM.format(
+            domain=vocab.domain,
+            number_examples=vocab.number_examples,
+            subject_noun=vocab.subject_noun,
             category=profile.label,
             chars=budget,
             per_shot=max(20, budget // shot_count),
@@ -174,10 +199,8 @@ def generate(
             keywords=", ".join(profile.visual_keywords[:4]),
             theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
             else "   按品类惯例组织叙事。",
-            theme_rules="\n".join(f"   - {r}" for r in theme.script_rules)
-            if theme is not None and theme.script_rules
-            else "   (无方向专属规则)",
-            scope_policy=_scope_policy(theme) if theme is not None else _SCOPE_POLICY_PRODUCT,
+            theme_rules=_theme_rules(theme, facts),
+            scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
         ),
         user,
@@ -287,13 +310,7 @@ def compliance_lint(
         #    只在产品向方向生效,理由见 theme_requires_product 的注释。
         cited = [f for f in facts if f.id in seg.fact_refs]
         if theme_requires_product and cited and all(f.scope != "product" for f in cited):
-            if any(
-                keyword in text
-                for keyword in (
-                    "这台车", "这辆车", "该车", "整车", "续航", "加速",
-                    "百公里", "配置", "售价", "电池", "充电",
-                )
-            ):
+            if any(keyword in text for keyword in profile.vocab.subject_words):
                 issues.append(
                     LintIssue(
                         seg.idx,
@@ -315,7 +332,7 @@ def compliance_lint(
                             seg.idx,
                             "error",
                             f"在评价其他品牌时使用了贬义词「{term}」:{text[:40]}..."
-                            + ("本方向允许讲本车缺点,但" if allow_critique else "")
+                            + ("本方向允许讲自身缺点,但" if allow_critique else "")
                             + "不得贬低竞品,请改写为客观的差异陈述",
                         )
                     )

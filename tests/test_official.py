@@ -44,7 +44,7 @@ def test_platform_official_keeps_only_official(monkeypatch):
                                    title="比亚迪汉 试驾", duration=300),
     ]
     monkeypatch.setattr(platform_video, "search", lambda q, **k: list(hits))
-    got = official.platform_official("比亚迪汉", ["比亚迪", "BYD"])
+    got = official.platform_official("比亚迪汉", ["比亚迪", "BYD"], markers=("汽车",))
     assert [h.url for h in got] == ["a"]
     assert got[0].official
 

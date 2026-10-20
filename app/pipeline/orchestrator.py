@@ -214,7 +214,8 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
         facts = _facts(project_id)
-        plan = list(profile.plan_for(project["duration"], theme.name))
+        plan = profile.drop_unbacked(profile.plan_for(project["duration"], theme.name),
+                                     (f.topic for f in facts if f.enabled))
         segments, title = script_gen.generate(
             subject=subject, profile=profile, facts=facts, plan=plan,
             duration=project["duration"], llm=llm, theme=theme,
@@ -337,9 +338,10 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
 
 
 def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
-    """后台增量构建这台车的素材池(见 `library.py`)。只对有官方渠道配置的品类
-    (汽车)生效;已经在建就什么都不做。失败只记事件,不影响主流程。"""
-    if not (config.USE_LIBRARY and profile.official_sites):
+    """后台增量构建这个主体的素材池(见 `library.py`)。所有品类都建:平台搜片 +
+    profile 声明的静图来源,官方渠道配置只是额外补充。已经在建就什么都不做。
+    失败只记事件,不影响主流程。"""
+    if not config.USE_LIBRARY:
         return
     try:
         if library.build_async(subject, profile=profile, llm=llm):
