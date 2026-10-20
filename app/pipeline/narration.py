@@ -202,7 +202,7 @@ def build(
         result.warnings.append(f"旁白拼接失败,成片将没有解说声:{concat_err}")
 
     # ---- BGM ----
-    if with_bgm and profile is not None:
+    if with_bgm and profile is not None and config.BGM_ENABLED:
         bgm, reused = library_bgm(profile.music_prompt, audio_dir, project_id, profile)
         if bgm:
             result.bgm_path = bgm
