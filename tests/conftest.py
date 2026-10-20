@@ -10,3 +10,8 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     from app.pipeline import narration
 
     monkeypatch.setattr(narration, "cache_root", lambda: tmp_path / "_audio_cache")
+    # 自备 BGM 目录指到空的临时目录,且不联网自动收曲子
+    from app import config
+
+    monkeypatch.setattr(config, "BGM_DIR", tmp_path / "_bgm")
+    monkeypatch.setattr(config, "BGM_AUTO_COLLECT", False)

@@ -225,6 +225,9 @@ music_prompt: >
   instrumental electronic background music, steady mid tempo, clean modern
   automotive commercial feel, light percussion, no vocals, no lyrics
 
+# 自动收集 BGM 的 Mixkit 风格(免费商用无需署名),收进 data/bgm/auto_long/
+bgm_genres: [tech, corporate-music, documentary]
+
 # 旁白音色(MiniMax)
 voice_id: male-qn-jingying
 

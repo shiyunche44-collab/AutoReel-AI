@@ -273,6 +273,8 @@ class CategoryProfile:
     forbidden_terms: tuple[str, ...] = ()
     required_disclaimers: tuple[str, ...] = ()
     music_prompt: str = "instrumental background music, steady tempo, no vocals"
+    #: 自动收集 BGM 的 Mixkit 风格页 slug(https://mixkit.co/free-stock-music/<slug>/),空 = 不自动收
+    bgm_genres: tuple[str, ...] = ()
     #: 官方素材渠道:品牌键 -> {aliases: [...], sites: [域名...], media: [媒体中心域名...],
     #: tiktok: [官方号...]}。
     #: 只声明**域名**,不写死车型页地址 —— 车型页靠 `site:域名 车型` 站内检索定位,
@@ -605,6 +607,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         music_prompt=str(
             raw.get("music_prompt", "instrumental background music, no vocals")
         ),
+        bgm_genres=tuple(str(g) for g in (raw.get("bgm_genres") or ())),
         script_style=str(raw.get("script_style", "")),
         skeleton=bool(raw.get("skeleton", False)),
         todo=tuple(str(t) for t in (raw.get("todo") or ())),

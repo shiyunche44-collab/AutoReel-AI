@@ -203,7 +203,7 @@ def build(
 
     # ---- BGM ----
     if with_bgm and profile is not None:
-        bgm, reused = library_bgm(profile.music_prompt, audio_dir, project_id)
+        bgm, reused = library_bgm(profile.music_prompt, audio_dir, project_id, profile)
         if bgm:
             result.bgm_path = bgm
             result.bgm_reused = reused
@@ -278,19 +278,31 @@ def bgm_library_dir(prompt: str) -> Path:
     return cache_root() / "bgm" / key
 
 
-def _own_bgm(project_id: str) -> Path | None:
-    """自备曲库(config.BGM_DIR,默认 data/bgm)按项目 id 轮换挑一首;没有则 None。"""
+def _own_bgm(project_id: str, profile: Any = None) -> Path | None:
+    """自备曲库按项目 id 轮换挑一首:先看 `<BGM_DIR>/<品类>/`,再看 `<BGM_DIR>/` 根目录。
+    都没有、且 profile 声明了 bgm_genres,就从 Mixkit 自动收一批(失败当没有)。"""
     root = config.BGM_DIR or (config.DATA_DIR / "bgm")
-    if not root.is_dir():
-        return None
-    tracks = sorted(p for p in root.iterdir()
-                    if p.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac") and p.stat().st_size > 0)
+    exts = (".mp3", ".m4a", ".wav", ".aac")
+
+    def _tracks(d: Path) -> list[Path]:
+        if not d.is_dir():
+            return []
+        return sorted(p for p in d.iterdir() if p.suffix.lower() in exts and p.stat().st_size > 0)
+
+    sub = root / getattr(profile, "name", "") if profile is not None else root
+    tracks = _tracks(sub) or _tracks(root)
+    genres = getattr(profile, "bgm_genres", ()) if profile is not None else ()
+    if not tracks and genres and config.BGM_AUTO_COLLECT:
+        from ..providers import bgm_source
+
+        bgm_source.collect(genres, sub)
+        tracks = _tracks(sub)
     if not tracks:
         return None
     return tracks[int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)]
 
 
-def library_bgm(prompt: str, audio_dir: Path, project_id: str) -> tuple[Path | None, bool]:
+def library_bgm(prompt: str, audio_dir: Path, project_id: str, profile: Any = None) -> tuple[Path | None, bool]:
     """给项目一首 BGM。返回 (路径, 是否复用)。
 
     - 这个项目已经有 bgm.mp3(门禁 A 重新确认)→ 原样复用;
@@ -300,7 +312,7 @@ def library_bgm(prompt: str, audio_dir: Path, project_id: str) -> tuple[Path | N
     dest = audio_dir / "bgm.mp3"
     if dest.is_file() and dest.stat().st_size > 0:
         return dest, True
-    own = _own_bgm(project_id)
+    own = _own_bgm(project_id, profile)
     if own:
         try:
             shutil.copyfile(own, dest)

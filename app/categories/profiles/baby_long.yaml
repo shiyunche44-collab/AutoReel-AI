@@ -159,6 +159,9 @@ music_prompt: >
   warm soft instrumental background music, light acoustic guitar and piano,
   gentle mid tempo, cozy family feel, no vocals, no lyrics
 
+# 自动收集 BGM 的 Mixkit 风格(免费商用无需署名),收进 data/bgm/baby_long/
+bgm_genres: [children, acoustic, ambient]
+
 # 旁白音色。female-yujie 是仓库里已在用的女声(audio.FEMALE_VOICE_ID);
 # 想换更柔和的,先用 `narration.health_check()` 拉一遍可用音色列表再改
 voice_id: female-yujie

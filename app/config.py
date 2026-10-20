@@ -178,6 +178,8 @@ CONNECTOR_BACKEND = (
 TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
 MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
 #: 自备 BGM 目录(放 mp3/m4a/wav)。MiniMax 音乐接口已对新用户关闭(HTTP 410),有曲子就优先用这里的
+#: 自备目录没曲子时,是否按 profile.bgm_genres 从 Mixkit 自动收一批
+BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
 #: Connector 调用的默认超时
