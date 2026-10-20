@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import mimetypes
 import time
 from contextlib import asynccontextmanager
@@ -305,11 +306,29 @@ def index(request: Request):
     )
 
 
+#: 解说轨每拍的墙钟(秒),含 TTS 分摊与最终合成。YU7 实测 27 拍 5.4 分钟 ≈ 12 秒/拍
+EXPLAINER_SECONDS_PER_BEAT = 12
+
+
+def _explainer_minutes(beats: int) -> int:
+    return max(1, math.ceil(beats * EXPLAINER_SECONDS_PER_BEAT / 60))
+
+
 @app.get("/project/{project_id}", response_class=HTMLResponse)
 def project_page(request: Request, project_id: str):
     detail = build_detail(project_id, stage="final")
     if not detail.shots:
         detail = build_detail(project_id, stage="draft")
+    profile = load_profile(detail.category)
+    w, h = profile.frame_size
+    if profile.is_explainer:
+        # 解说轨不调视频生成:H3 的成本与草稿/成片墙钟对它没有意义
+        beats = len(detail.shots) or detail.shot_count
+        estimate = {"with_retry": 0.0}
+        wall_clock = {"render_minutes": _explainer_minutes(beats)}
+    else:
+        estimate = costs.estimate_project(detail.duration)
+        wall_clock = costs.wall_clock_estimate(detail.duration)
     return templates.TemplateResponse(
         request,
         "project.html",
@@ -322,9 +341,11 @@ def project_page(request: Request, project_id: str):
             "qa": db.read_json(project_id, "qa.json", {}) or {},
             "render": db.read_json(project_id, "render.json", {}) or {},
             "events": db.get_events(project_id, limit=40),
-            "wall_clock": costs.wall_clock_estimate(detail.duration),
-            "estimate": costs.estimate_project(detail.duration),
-            "forbidden_terms": list(load_profile(detail.category).forbidden_terms),
+            "wall_clock": wall_clock,
+            "estimate": estimate,
+            "explainer": profile.is_explainer,
+            "frame": f"{w} × {h}",
+            "forbidden_terms": list(profile.forbidden_terms),
         },
     )
 
@@ -360,7 +381,8 @@ def estimate(duration: int = 60, category: str = "auto"):
         return {
             "duration": duration,
             "cost": {"draft": 0.0, "final": 0.0, "with_retry": 0.0},
-            "wall_clock": {"note": "逐拍渲染约 5 秒/拍,无生成排队"},
+            "wall_clock": {"render_minutes": _explainer_minutes(profile.shots_for(duration)),
+                           "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
             "shot_count": profile.shots_for(duration),
             "track": "explainer",
             "real_clips": {"enabled": False, "max_shots": 0, "max_savings": 0.0},

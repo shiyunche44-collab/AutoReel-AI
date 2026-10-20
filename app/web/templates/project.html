@@ -26,6 +26,7 @@
 {%- set failed_shots = p.shots | selectattr("status", "equalto", "failed") | list | length -%}
 {%- set lint_errors = lint | selectattr("severity", "equalto", "error") | list | length -%}
 {%- set editable = p.state in ('GATE_A', 'STORYBOARD_READY') -%}
+{%- set unit = '拍' if explainer else '镜头' -%}
 
 <!-- 项目头 -->
 <section class="phead">
@@ -39,7 +40,7 @@
       <span class="tag">{{ p.category }}</span>
       {% if p.theme_label or p.theme %}<span class="tag">方向 · {{ p.theme_label or p.theme }}</span>{% endif %}
       <span class="tag num">{{ m.icon("clock", "i-sm") }}{{ p.duration }} 秒</span>
-      <span class="tag num">{{ m.icon("film", "i-sm") }}{{ p.shot_count }} 镜头</span>
+      <span class="tag num">{{ m.icon("film", "i-sm") }}{{ p.shot_count }} {{ unit }}</span>
       <span class="tag">{{ m.icon("mic", "i-sm") }}{{ '独立 TTS' if p.narration_mode == 'tts' else 'H3 原生音频' }}</span>
     </div>
   </div>
@@ -51,9 +52,14 @@
     </div>
     <div class="progress tone-{{ tone }}" id="usage-bar" data-budget="{{ p.quota_budget }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></div>
     <div class="usage-sub subtle small">
+      {% if explainer %}
+      <span>不调用视频生成,只用 TTS 与 BGM</span>
+      <span>渲染约 <b class="num">{{ wall_clock.render_minutes }}</b> 分钟</span>
+      {% else %}
       <span>预计总额 <b class="num">{{ '%.2f' % estimate.with_retry }}</b></span>
       <span>草稿约 <b class="num">{{ wall_clock.draft_minutes }}</b> 分钟</span>
       <span>成片约 <b class="num">{{ wall_clock.final_minutes_low }}–{{ wall_clock.final_minutes_high }}</b> 分钟</span>
+      {% endif %}
     </div>
   </div>
 </section>
@@ -91,7 +97,7 @@
   <div class="action-main">
     <div class="action-title">
       {%- if p.state == 'GATE_A' -%}请确认脚本与分镜
-      {%- elif p.state == 'GATE_B' -%}请审核草稿镜头
+      {%- elif p.state == 'GATE_B' -%}{{ '请审核各拍画面' if explainer else '请审核草稿镜头' }}
       {%- elif p.state == 'DONE' -%}成片已完成
       {%- elif p.state == 'PAUSED_BUDGET' -%}已达到额度上限,项目暂停
       {%- elif p.state == 'FAILED' -%}流水线执行失败
@@ -99,26 +105,27 @@
     </div>
     <div class="action-desc muted" id="gate-hint">
       {%- if p.state_reason -%}{{ p.state_reason }}
+      {%- elif p.state == 'GATE_A' and explainer -%}确认后先合成旁白,按旁白时长逐拍渲染,不调用视频生成。可以先在「脚本」里修改文案。
       {%- elif p.state == 'GATE_A' -%}确认后会开始生成草稿镜头并消耗套餐额度。可以先在「脚本」里修改文案。
       {%- elif p.state == 'GATE_B' -%}正在读取分批审片进度…
-      {%- elif p.state == 'DONE' -%}1080×1920 成片已合成,可以预览和下载。
+      {%- elif p.state == 'DONE' -%}{{ frame }} 成片已合成,可以预览和下载。
       {%- elif meta.live -%}后台每 20 秒自动推进一次,本页会实时刷新。
       {%- endif -%}
     </div>
     {% if (meta.live or p.state == 'GATE_B') and p.shots %}
     <div class="action-progress">
       <div class="progress {{ 'is-live' if meta.live }}" id="gen-progress"><span style="width: {{ (100 * succeeded / (p.shots | length)) | round(1) }}%"></span></div>
-      <span class="subtle small num" id="gen-summary">{{ succeeded }} / {{ p.shots | length }} 镜头完成</span>
+      <span class="subtle small num" id="gen-summary">{{ succeeded }} / {{ p.shots | length }} {{ unit }}完成</span>
     </div>
     {% endif %}
   </div>
   <div class="action-btns">
     {% if p.state == 'GATE_A' %}
       <button class="btn btn-ghost" type="button" data-goto="script">{{ m.icon("pen", "i-sm") }}查看脚本</button>
-      <button class="btn btn-success btn-lg" id="btn-gate-a" type="button">{{ m.icon("check") }}确认并开始生成</button>
+      <button class="btn btn-success btn-lg" id="btn-gate-a" type="button">{{ m.icon("check") }}{{ '确认并开始渲染' if explainer else '确认并开始生成' }}</button>
     {% elif p.state == 'GATE_B' %}
       <button class="btn btn-ghost" type="button" data-goto="board">{{ m.icon("grid", "i-sm") }}查看草稿</button>
-      <button class="btn btn-success btn-lg" id="btn-gate-b" type="button">{{ m.icon("check") }}<span id="gate-b-label">批准本批,开始成片</span></button>
+      <button class="btn btn-success btn-lg" id="btn-gate-b" type="button">{{ m.icon("check") }}<span id="gate-b-label">{{ '确认通过,合成成片' if explainer else '批准本批,开始成片' }}</span></button>
     {% elif p.state == 'DONE' %}
       <button class="btn btn-ghost" type="button" data-goto="output">{{ m.icon("play", "i-sm") }}预览</button>
       <a class="btn btn-primary btn-lg" href="/api/projects/{{ p.id }}/download">{{ m.icon("download") }}下载 MP4</a>
@@ -154,7 +161,7 @@
           <span class="kpi-sub">{% if facts_report and facts_report.sources_ok %}{{ facts_report.sources_ok | length }} 个来源 · {{ facts_report.raw_chars }} 字原始素材{% else %}&nbsp;{% endif %}</span></div>
         <div class="kpi"><span class="kpi-label">脚本段落</span><span class="kpi-value">{{ p.script | length }}</span>
           <span class="kpi-sub">{% if lint %}{{ lint | length }} 条合规提示{% elif p.script %}合规检查通过{% else %}&nbsp;{% endif %}</span></div>
-        <div class="kpi"><span class="kpi-label">镜头完成</span><span class="kpi-value">{{ succeeded }}<small>/ {{ p.shots | length }}</small></span>
+        <div class="kpi"><span class="kpi-label">{{ unit }}完成</span><span class="kpi-value">{{ succeeded }}<small>/ {{ p.shots | length }}</small></span>
           <span class="kpi-sub">{% if failed_shots %}<span class="text-danger">{{ failed_shots }} 个失败</span>{% else %}&nbsp;{% endif %}</span></div>
         <div class="kpi"><span class="kpi-label">质检</span>
           {% if qa and qa.shots %}
@@ -479,7 +486,7 @@
       <div class="output-side">
         <div>
           <h3 class="output-title">{{ p.title }}</h3>
-          <p class="subtle small">1080 × 1920 · {{ p.duration }} 秒 · {{ p.shot_count }} 镜头</p>
+          <p class="subtle small">{{ frame }} · {{ p.duration }} 秒 · {{ p.shot_count }} {{ unit }}</p>
         </div>
         {% if render.cover_path %}
         <div class="output-cover">
@@ -533,6 +540,7 @@
   "succeeded": p.shots | selectattr("status", "equalto", "succeeded") | list | length,
   "total": p.shots | length,
   "shot_count": p.shot_count,
+  "explainer": explainer,
 } | tojson }}</script>
 {% endblock %}
 {% block script %}project{% endblock %}

@@ -76,7 +76,7 @@ async function refreshEstimate() {
     $('#est-cost').textContent = data.cost.with_retry.toFixed(2);
     if (data.track === 'explainer') {
       // 横屏解说轨没有生成排队:实拍铺底 + 叠加层,几分钟就能渲完
-      $('#est-time').replaceChildren(`${Math.max(1, Math.round(data.shot_count * 5 / 60))}`, h('small', {}, '分钟'));
+      $('#est-time').replaceChildren(`${wc.render_minutes}`, h('small', {}, '分钟'));
       $('#est-time-sub').textContent = `约 ${data.shot_count} 拍 · 横屏 16:9 · 时长跟着旁白走`;
     } else {
       $('#est-time').replaceChildren(`${wc.final_minutes_low}–${wc.final_minutes_high}`, h('small', {}, '分钟'));

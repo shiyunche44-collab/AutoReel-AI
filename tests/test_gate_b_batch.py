@@ -227,3 +227,60 @@ def test_out_of_range_indices_are_dropped(live_project):
 
     merged = orchestrator._merge_approved(live_project, 40, [0, 39, 99, -1])
     assert merged == {0, 39}
+
+
+# ---------------------------------------------------------------------------
+# 横屏解说轨:草稿即成片,门禁 B 整片一次审完,不分批
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def explainer_project(live_project):
+    from app import db
+
+    db.update_project(live_project, category="auto_long", theme="buyguide", shot_count=27)
+    db.write_json(live_project, "storyboard.json", [
+        {"idx": i, "duration": 7.0, "section": "开场", "visual_zh": "x",
+         "camera_zh": "Static Shot", "layout": "broll"} for i in range(27)
+    ])
+    return live_project
+
+
+def test_explainer_review_is_one_batch(explainer_project):
+    from app.pipeline import orchestrator
+
+    rv = orchestrator.review_progress(explainer_project)
+    assert rv["total_batches"] == 1
+    assert rv["batch_list"][0]["shots"] == list(range(27))
+    assert rv["pending_total"] == 27
+
+
+def test_explainer_gate_b_ignores_partial_approval(explainer_project, monkeypatch):
+    """promote_all 整片转成片 —— 记录里只批准一部分会和实际产出对不上。"""
+    from app.models import GateRequest
+    from app.pipeline import orchestrator
+
+    monkeypatch.setattr(orchestrator, "advance", lambda pid, confirmed=False: {"ok": True})
+    orchestrator.confirm_gate(explainer_project, GateRequest(gate="B", approved=[0, 1, 2]))
+    assert orchestrator._approved_indices(explainer_project) == set(range(27))
+    assert orchestrator.review_progress(explainer_project)["pending_total"] == 0
+
+
+def test_explainer_project_page_has_no_generation_estimate(explainer_project):
+    """项目页不能拿 H3 的成本与草稿/成片墙钟去估一条不调视频生成的片子。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    html = TestClient(app).get(f"/project/{explainer_project}").text
+    assert "渲染约" in html
+    assert "草稿约" not in html and "成片约" not in html
+    assert '"explainer": true' in html
+
+
+def test_footage_project_page_keeps_generation_estimate(live_project):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    html = TestClient(app).get(f"/project/{live_project}").text
+    assert "草稿约" in html and "成片约" in html
+    assert '"explainer": false' in html

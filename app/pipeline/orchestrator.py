@@ -150,12 +150,15 @@ def _approved_indices(project_id: str) -> set[int] | None:
         return None
 
 
-def _review_batches(project_id: str, shot_count: int) -> list[list[int]]:
+def _review_batches(project_id: str, shot_count: int, *,
+                    whole: bool = False) -> list[list[int]]:
     """把镜头按一致性链切成审片批次。
 
     批次边界必须对齐链边界 —— 把一条链劈成两半会让后半段的镜头拿不到前驱尾帧,
-    连续性直接断掉。
+    连续性直接断掉。`whole=True`(解说轨)整片一批:没有链,也没有第二遍生成可分批放行。
     """
+    if whole:
+        return [list(range(shot_count))] if shot_count else []
     batch_chains = max(1, config.GATE_B_BATCH_CHAINS)
     per_batch = max(1, config.CHAIN_GROUP_SIZE) * batch_chains
     return [
@@ -164,9 +167,10 @@ def _review_batches(project_id: str, shot_count: int) -> list[list[int]]:
     ]
 
 
-def _review_state(project_id: str, shot_count: int) -> dict[str, Any]:
+def _review_state(project_id: str, shot_count: int, *,
+                  whole: bool = False) -> dict[str, Any]:
     """读取/初始化审片进度。幂等,可跨服务重启续用。"""
-    batches = _review_batches(project_id, shot_count)
+    batches = _review_batches(project_id, shot_count, whole=whole)
     saved = db.read_json(project_id, "review_state.json", None) or {}
     return {
         "batch_chains": config.GATE_B_BATCH_CHAINS,
@@ -928,19 +932,22 @@ def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
         raise PipelineError(f"当前状态 {state} 不在门禁 B")
 
     shot_count = len(_specs(project_id))
-    merged = _merge_approved(project_id, shot_count, request.approved)
-    review = _review_state(project_id, shot_count)
-    if request.approved is not None:
+    # 解说轨一次审完全片:promote_all 本来就整片转成片,收下"部分批准"只会让记录和实际对不上
+    approved = None if _profile(project).is_explainer else request.approved
+    merged = _merge_approved(project_id, shot_count, approved)
+    if approved is not None:
         db.add_event(project_id, str(State.GATE_B),
-                     reason=f"批准 {len(request.approved)} 个镜头,"
+                     reason=f"批准 {len(approved)} 个镜头,"
                             f"累计 {len(merged)}/{shot_count}")
     return advance(project_id, confirmed=True)
 
 
 def review_progress(project_id: str) -> dict[str, Any]:
-    """门禁 B 的批次进度,供前端渲染分批审片视图。"""
+    """门禁 B 的批次进度,供前端渲染分批审片视图。解说轨整片一批。"""
     shot_count = len(_specs(project_id))
-    state = _review_state(project_id, shot_count)
+    project = db.get_project(project_id)
+    whole = bool(project) and _profile(project).is_explainer
+    state = _review_state(project_id, shot_count, whole=whole)
     approved = set(state["approved"])
     batches = []
     for n, batch in enumerate(state["batches"]):

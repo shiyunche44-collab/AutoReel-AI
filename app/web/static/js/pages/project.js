@@ -12,6 +12,9 @@ const PID = DATA.pid;
 const RESTORE_KEY = `aimovice.restore.${PID}`;
 let lastState = DATA.state;
 let lastSucceeded = DATA.succeeded || 0;
+// 横屏解说轨:不调视频生成,一拍 = 一段旁白;门禁 B 整片一次审完
+const EXPLAINER = !!DATA.explainer;
+const UNIT = EXPLAINER ? '拍' : '镜头';
 
 // ---------------------------------------------------------------------------
 // Tabs:hash 记住当前页,刷新后不丢
@@ -100,9 +103,11 @@ if (btnGateA) {
     const ok = await confirmDialog({
       title: '确认脚本与分镜?',
       body: h('div', {},
-        h('p', {}, '确认后会开始生成草稿镜头,并消耗套餐额度。'),
-        h('p', {}, `本项目共 ${DATA.shot_count} 个镜头,确认后脚本与分镜将不能再修改。`)),
-      confirmText: '确认并开始生成',
+        h('p', {}, EXPLAINER
+          ? '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'
+          : '确认后会开始生成草稿镜头,并消耗套餐额度。'),
+        h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`)),
+      confirmText: EXPLAINER ? '确认并开始渲染' : '确认并开始生成',
       tone: 'success',
     });
     if (ok) await act(btnGateA, `/api/projects/${PID}/gate`, { gate: 'A' }, '确认 A');
@@ -122,7 +127,19 @@ async function currentBatch() {
 }
 
 const btnGateB = $('#btn-gate-b');
-if (btnGateB) {
+if (btnGateB && EXPLAINER) {
+  // 解说轨:草稿就是成片,没有第二遍生成,也就没有分批放行
+  $('#gate-hint').textContent = `共 ${DATA.total || DATA.shot_count} 拍。不满意的拍可以单独「重拍」换一组背景,全部满意后确认,直接拼接混音出成片。`;
+  btnGateB.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: '各拍都审过了?',
+      body: '确认后把这些拍直接拼接、混入旁白与 BGM,合成成片。不调用视频生成。',
+      confirmText: '确认并合成',
+      tone: 'success',
+    });
+    if (ok) await act(btnGateB, `/api/projects/${PID}/gate`, { gate: 'B' }, '确认 B');
+  });
+} else if (btnGateB) {
   // 门禁 B 时把批次进度显示出来
   currentBatch().then((b) => {
     if (!b) { $('#gate-hint').textContent = '确认草稿通过后,会用 H3 生成成片镜头。'; return; }
@@ -418,8 +435,10 @@ shots.forEach((s) => {
 async function retryShot(btn) {
   const idx = btn.dataset.idx;
   const ok = await confirmDialog({
-    title: `重拍镜头 #${String(idx).padStart(2, '0')}?`,
-    body: '会重新提交这个镜头的生成任务,并再次消耗额度。',
+    title: `重拍${UNIT} #${String(idx).padStart(2, '0')}?`,
+    body: EXPLAINER
+      ? '会给这一拍换一组背景画面重新渲染,叠加层与旁白不变,不消耗生成额度。'
+      : '会重新提交这个镜头的生成任务,并再次消耗额度。',
     confirmText: '重拍',
     tone: 'danger',
   });
@@ -427,7 +446,7 @@ async function retryShot(btn) {
   await withLoading(btn, async () => {
     try {
       await api.post(`/api/projects/${PID}/shots/${idx}/retry`, { stage: 'final' });
-      toast(`镜头 #${idx} 已重新排队`);
+      toast(`${UNIT} #${idx} 已重新排队`);
       setTimeout(reloadPreserving, 700);
     } catch (err) {
       toast(err.message, { type: 'danger', title: '重拍失败' });
@@ -478,9 +497,9 @@ async function refreshStatus() {
     const done = c.succeeded || 0;
     const summary = $('#gen-summary');
     if (summary && s.total) {
-      const parts = [`${done} / ${s.total} 镜头完成`];
+      const parts = [`${done} / ${s.total} ${UNIT}完成`];
       const live = (c.submitted || 0) + (c.queued || 0) + (c.running || 0);
-      if (live) parts.push(`${live} 个生成中`);
+      if (live) parts.push(`${live} 个${EXPLAINER ? '渲染' : '生成'}中`);
       if (c.failed) parts.push(`${c.failed} 个失败`);
       summary.textContent = parts.join(' · ');
       const prog = $('#gen-progress');
@@ -497,7 +516,7 @@ async function refreshStatus() {
       // 有新镜头出片:不打断用户,给个可点的提示
       const n = done - lastSucceeded;
       lastSucceeded = done;
-      toast(`${n} 个镜头已生成完成`, { type: 'brand', action: { label: '刷新查看', onClick: reloadPreserving } });
+      toast(`${n} 个${UNIT}已${EXPLAINER ? '渲染' : '生成'}完成`, { type: 'brand', action: { label: '刷新查看', onClick: reloadPreserving } });
     }
   } catch { /* 轮询失败静默重试 */ }
 }
