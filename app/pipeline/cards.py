@@ -143,6 +143,9 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         if kind == "compare" and len(row["values"]) != 2:
             dropped.append(f"「{text}」对比卡每行需要两个值")
             continue
+        if kind == "compare" and row["values"][0].strip() == row["values"][1].strip():
+            dropped.append(f"「{text}」两边取值相同,算不上对比(多半是一条事实被抄了两遍)")
+            continue
         if kind == "bars" and _bar_value(row["values"][0]) is None:
             dropped.append(f"「{text}」柱状图取值不是数字")
             continue

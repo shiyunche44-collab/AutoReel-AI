@@ -40,7 +40,7 @@ def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: st
     w, h = size
     img, d = _canvas(size)
     x0, x1 = int(w * 0.035), int(w * 0.335)
-    y0, y1 = int(h * 0.10), int(h * 0.76)
+    y0, y1 = int(h * 0.14), int(h * 0.78)
     d.rounded_rectangle((x0, y0, x1, y1), radius=22, fill=_PANEL_BG)
     d.rectangle((x0, y0 + 26, x0 + 8, y0 + 96), fill=_PANEL_EDGE)
     pad = int(w * 0.018)
@@ -215,8 +215,8 @@ def _sting(number: int, name: str, size: tuple[int, int], dest: Path, wipe: floa
     `alpha` 0–1 是整体不透明度(淡出用)。"""
     w, h = size
     img, d = _canvas(size)
-    x0, y0 = int(w * 0.035), int(h * 0.075)
-    bh = int(h * 0.105)
+    x0, y0 = int(w * 0.035), int(h * 0.04)
+    bh = int(h * 0.085)
     num = f"{number:02d}"
     nf = _font(int(bh * 0.62), bold=True)
     tf = _font(int(bh * 0.46), bold=True)
@@ -267,7 +267,7 @@ def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | P
     """左上角角标:强调色竖条 + 「车名 · 章名」。只用已有的文字,不需要任何数据。"""
     w, h = size
     img, d = _canvas(size)
-    x0, y0 = int(w * 0.035), int(h * 0.075)
+    x0, y0 = int(w * 0.035), int(h * 0.04)
     bh = int(h * 0.07)
     text = f"{subject} · {chapter}" if chapter else subject
     text, f = _fit(d, text, int(bh * 0.5), int(w * 0.36), bold=True)

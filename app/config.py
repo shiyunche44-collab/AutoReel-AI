@@ -177,6 +177,8 @@ CONNECTOR_BACKEND = (
 #: 直连后端用到的模型(mcode 后端由 Connector 自己选)
 TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
 MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
+#: 自备 BGM 目录(放 mp3/m4a/wav)。MiniMax 音乐接口已对新用户关闭(HTTP 410),有曲子就优先用这里的
+BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
 #: Connector 调用的默认超时
 CONNECTOR_TIMEOUT_DEFAULT = 180

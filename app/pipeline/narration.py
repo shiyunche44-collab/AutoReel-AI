@@ -278,6 +278,18 @@ def bgm_library_dir(prompt: str) -> Path:
     return cache_root() / "bgm" / key
 
 
+def _own_bgm(project_id: str) -> Path | None:
+    """自备曲库(config.BGM_DIR,默认 data/bgm)按项目 id 轮换挑一首;没有则 None。"""
+    root = config.BGM_DIR or (config.DATA_DIR / "bgm")
+    if not root.is_dir():
+        return None
+    tracks = sorted(p for p in root.iterdir()
+                    if p.suffix.lower() in (".mp3", ".m4a", ".wav", ".aac") and p.stat().st_size > 0)
+    if not tracks:
+        return None
+    return tracks[int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)]
+
+
 def library_bgm(prompt: str, audio_dir: Path, project_id: str) -> tuple[Path | None, bool]:
     """给项目一首 BGM。返回 (路径, 是否复用)。
 
@@ -287,6 +299,13 @@ def library_bgm(prompt: str, audio_dir: Path, project_id: str) -> tuple[Path | N
     """
     dest = audio_dir / "bgm.mp3"
     if dest.is_file() and dest.stat().st_size > 0:
+        return dest, True
+    own = _own_bgm(project_id)
+    if own:
+        try:
+            shutil.copyfile(own, dest)
+        except OSError:
+            return own, True
         return dest, True
     lib = bgm_library_dir(prompt)
     tracks = sorted(p for p in lib.glob("*.mp3") if p.stat().st_size > 0) if lib.is_dir() else []

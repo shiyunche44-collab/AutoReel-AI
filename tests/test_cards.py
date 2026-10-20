@@ -68,6 +68,15 @@ def test_ground_compare_needs_two_columns_and_values():
     assert grounded["columns"] == ["汉 EV", "海豹 07"]
 
 
+def test_ground_compare_drops_identical_sides():
+    raw = {"title": "同级对比", "columns": ["汉 EV", "海豹 07"], "rows": [
+        {"label": "续航", "values": ["702 公里", "702 公里"], "fact_id": "f_1"},
+    ]}
+    grounded, dropped = cards.ground(cards.normalise(raw, "compare"), _facts())
+    assert grounded is None
+    assert "取值相同" in dropped[0]
+
+
 def test_ground_bars_requires_numeric_values():
     raw = {"title": "对比", "rows": [
         {"label": "汉 EV", "values": ["702 公里"], "fact_id": "f_1"},

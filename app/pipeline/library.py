@@ -1078,11 +1078,22 @@ def _croppable(item: Item) -> bool:
 
 
 def _fill_tier(item: Item, used: int) -> int:
-    """取用的先后档:干净视频 → 官图 → 裁掉字幕的视频 → 用过的干净视频 →
+    """非官方来源、车型没确认(target 不是 yes)的素材整体排到确认过的后面,
+    池子里确认过的够用时就不会选到它们(YU7 池里混的 SU7 片段多是这类)。"""
+    base = _fill_tier_base(item, used)
+    if not item.official and item.target != "yes":
+        return base + 10
+    return base
+
+
+def _fill_tier_base(item: Item, used: int) -> int:
+    """取用的先后档:干净视频 → 带角标水印的视频(与官图同档) → 官图 → 裁掉字幕的视频 → 用过的干净视频 →
     主持人出镜的视频 → 其余。主持人裁不掉,会和成片自己的旁白打架,排最后。"""
     if item.kind == "video":
-        if _dirt(item) < 2:
+        if _dirt(item) == 0:
             return 0 if not used else 3
+        if _dirt(item) == 1:  # 角落台标 / 第三方水印:干净视频不够才用
+            return 1 if not used else 3
         if _croppable(item):
             return 2 if not used else 5
         return 4 if not used else 6
