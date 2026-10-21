@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>汽车解说视频 · 样片复盘与突围方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:#f7f5f0;
+  --card:#ffffff;
+  --line:#e9e3d6;
+  --line-soft:#f0ece2;
+  --ink:#14171e;
+  --ink-2:#3a4256;
+  --muted:#7c7a72;
+  --accent:#c97b3f;
+  --accent-soft:rgba(201,123,63,.10);
+  --good:#2f6f5e;
+  --bad:#b06367;
+  --shadow:0 2px 8px rgba(0,0,0,.04);
+  --shadow-lift:0 4px 16px -2px rgba(0,0,0,.06);
+  --sans:'Outfit','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Source Han Sans SC',sans-serif;
+  --serif:'DM Serif Display','Songti SC','SimSun',serif;
+  --mono:'JetBrains Mono','SFMono-Regular',Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:15px;line-height:1.62;font-weight:400;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:
+    radial-gradient(520px 320px at 88% -4%, rgba(201,123,63,.07), transparent 70%),
+    radial-gradient(420px 300px at -4% 18%, rgba(47,111,94,.06), transparent 70%);
+}
+.wrap{position:relative;z-index:1;max-width:1000px;margin:0 auto;padding:52px 24px 96px}
+@media (min-width:768px){.wrap{padding:72px 40px 120px}}
+
+/* ---------- 排版 ---------- */
+h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-.005em;margin:0}
+h1{font-size:31px;line-height:1.24}
+h2{font-size:23px;line-height:1.3}
+h3{font-size:17px;line-height:1.4;font-family:var(--sans);font-weight:600;letter-spacing:0}
+p{margin:0 0 10px}
+a{color:var(--accent)}
+.eyebrow{
+  font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);
+  font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:9px;
+}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+.lede{font-size:16.5px;line-height:1.62;color:var(--ink-2);margin-top:16px;max-width:62ch}
+.muted{color:var(--muted)}
+.small{font-size:13px;line-height:1.55;color:var(--muted)}
+.mono{font-family:var(--mono);font-size:12.5px}
+section{margin-top:52px}
+@media (min-width:768px){section{margin-top:64px}}
+
+/* ---------- 卡片 ---------- */
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:16px;
+  padding:20px;box-shadow:var(--shadow);
+}
+@media (min-width:768px){.card{padding:24px}}
+.grid2{display:grid;gap:14px}
+@media (min-width:768px){.grid2{grid-template-columns:1fr 1fr}}
+.stack{display:grid;gap:14px}
+
+/* ---------- 指标条 ---------- */
+.metrics{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-top:26px;
+}
+.metrics div{background:var(--card);padding:16px 14px}
+.metrics b{display:block;font-family:var(--mono);font-size:24px;font-weight:500;line-height:1.15;color:var(--ink)}
+.metrics span{display:block;font-size:12px;color:var(--muted);margin-top:5px;line-height:1.4}
+
+/* ---------- Hero 结论块 ---------- */
+.verdict{
+  margin-top:28px;background:var(--card);border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:0 14px 14px 0;
+  padding:18px 22px;box-shadow:var(--shadow);
+}
+.verdict p{font-family:var(--serif);font-size:19px;line-height:1.5;margin:0;color:var(--ink)}
+.verdict em{font-style:normal;color:var(--accent)}
+
+/* ---------- 表格 ---------- */
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{
+  text-align:left;font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:0 12px 9px 0;border-bottom:1px solid var(--line);
+}
+td{padding:11px 12px 11px 0;border-bottom:1px solid var(--line-soft);vertical-align:top;line-height:1.5}
+tr:last-child td{border-bottom:0}
+td.dim{color:var(--muted)}
+td b{font-weight:600}
+
+/* ---------- bench 条 ---------- */
+.bench{display:grid;grid-template-columns:148px 1fr 92px;gap:12px;align-items:center;padding:5px 0}
+.bench-label{font-size:13.5px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bench-track{height:14px;background:var(--line-soft);border-radius:5px;overflow:hidden;position:relative}
+.bench-fill{height:100%;background:var(--accent);border-radius:5px}
+.bench-fill.dim{background:#cfc8b8}
+.bench-val{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right}
+.bench-val.zero{color:var(--bad)}
+
+/* ---------- 漏斗 ---------- */
+.funnel{width:100%;height:auto;display:block}
+
+/* ---------- 代码块 ---------- */
+pre{
+  margin:0;background:#1e222b;color:#e6e3db;border-radius:12px;padding:14px 16px;
+  overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.75;
+}
+pre .c{color:#8a91a0}
+pre .hl{color:#e8a56a}
+pre .ok{color:#7cc0a4}
+
+/* ---------- 时间轴 ---------- */
+.timeline{list-style:none;padding:0;margin:0;position:relative}
+.timeline::before{content:"";position:absolute;left:8px;top:6px;bottom:6px;width:2px;background:var(--accent);opacity:.35}
+.timeline li{position:relative;padding:0 0 22px 30px}
+.timeline li:last-child{padding-bottom:0}
+.timeline li::before{
+  content:"";position:absolute;left:2px;top:5px;width:13px;height:13px;border-radius:50%;
+  background:var(--bg);border:2px solid var(--accent);
+}
+.timeline li.now::before{background:var(--accent)}
+.timeline h4{margin:0 0 3px;font-size:14.5px;font-weight:600;font-family:var(--sans)}
+.timeline p{margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55}
+.timeline .tag{
+  display:inline-block;font-family:var(--mono);font-size:11px;color:var(--muted);
+  background:var(--line-soft);border-radius:5px;padding:1px 7px;margin-left:8px;
+  vertical-align:1px;
+}
+
+/* ---------- 对比面板 ---------- */
+.compare{display:grid;gap:12px}
+@media (min-width:768px){.compare{grid-template-columns:1fr 1fr}}
+.cmp-box{border:1px solid var(--line);border-radius:14px;padding:16px 18px;background:var(--card)}
+.cmp-box.bad{background:#fdf8f6;border-color:#eddcd8}
+.cmp-box.good{background:#f5faf8;border-color:#d9e8e2}
+.cmp-head{
+  display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;
+  letter-spacing:.05em;text-transform:uppercase;margin-bottom:11px;
+}
+.cmp-head svg{flex:none}
+.cmp-box.good .cmp-head{color:var(--good)}
+.cmp-box.bad .cmp-head{color:var(--bad)}
+.cmp-line{
+  font-size:14px;line-height:1.6;padding:8px 0;border-bottom:1px dashed var(--line);
+}
+.cmp-line:last-child{border-bottom:0}
+.cmp-line .n{font-family:var(--mono);font-weight:500}
+.cmp-box.good .n{color:var(--good)}
+.cmp-box.bad .n{color:var(--bad)}
+
+/* ---------- 护城河行 ---------- */
+.moat{display:grid;gap:12px;grid-template-columns:44px 1fr;align-items:start}
+@media (min-width:768px){.moat{grid-template-columns:44px 1fr;gap:18px}}
+.moat-ico{
+  width:38px;height:38px;border-radius:11px;background:var(--accent-soft);
+  color:var(--accent);display:flex;align-items:center;justify-content:center;
+}
+.moat-body h3{margin-bottom:5px}
+.moat-body p{margin:0 0 6px;font-size:14px;color:var(--ink-2);line-height:1.58}
+.moat-body .file{font-family:var(--mono);font-size:11.5px;color:var(--accent)}
+
+/* ---------- 行动清单 ---------- */
+.prio{display:inline-block;font-family:var(--mono);font-size:11px;font-weight:500;
+  padding:2px 8px;border-radius:5px;letter-spacing:.04em}
+.prio.p0{background:#fbeee8;color:#a2572a}
+.prio.p1{background:#eef3f1;color:var(--good)}
+.prio.p2{background:var(--line-soft);color:var(--muted)}
+
+/* ---------- 尺寸示意 ---------- */
+.size-row{display:flex;align-items:baseline;gap:14px;padding:10px 0;border-bottom:1px dashed var(--line)}
+.size-row:last-child{border-bottom:0}
+.size-bar{height:22px;background:var(--accent-soft);border-radius:4px;display:flex;align-items:center;padding:0 8px}
+.size-bar span{font-family:var(--mono);font-size:11.5px;color:var(--accent);white-space:nowrap}
+.size-bar.muted{background:var(--line-soft)}
+.size-bar.muted span{color:var(--muted)}
+
+footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+footer code{font-family:var(--mono);font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ HERO ============ -->
+  <header>
+    <div class="eyebrow">汽车解说视频 · 样片复盘</div>
+    <h1>你的片子和满屏的「参数解说号」，<br>差的不是画质，是<span style="color:var(--accent)">可信度</span></h1>
+    <p class="lede">
+      复盘对象：<code class="mono">yu7_landscape_demo.mp4</code>（3:09 / 24 拍 / 小米 YU7 选购向）、
+      <code class="mono">demo_motion.mp4</code>（概念动画段）、
+      <code class="mono">motion/bakeoff</code>（A/B/C 三版风格小样）。
+      素材统计取自 <code class="mono">data/library/小米yu7/library.json</code>。
+    </p>
+
+    <div class="metrics">
+      <div><b>200</b><span>视频素材段总数</span></div>
+      <div><b>3</b><span>干净且确认是本车的可用段</span></div>
+      <div><b>24</b><span>成片拍数（平均 8 秒一拍）</span></div>
+    </div>
+
+    <div class="verdict">
+      <p>六种版式已经搭好了，但<em>「参数面板」这个视觉，满屏都是</em>。真正把这条片子拉下来的只有两件事：<em>画面里全是别人的台标</em>，以及<em>字幕里的数字全变成了中文</em>。</p>
+    </div>
+  </header>
+
+  <!-- ============ 1 定位 ============ -->
+  <section>
+    <div class="eyebrow">01 · 定位</div>
+    <h2>别在「参数面板」这条赛道上卷</h2>
+    <p class="lede" style="font-size:15px">
+      「三驱兄弟」那批号已经把「宣传片铺底 + 左侧参数面板 + 底部章节条」做成了这个品类的视觉惯例。
+      你现在的产线几乎逐帧复刻了这套语言——这在早期是捷径，现在成了天花板：<b style="font-weight:600">越像他，越不会被记住</b>。
+    </p>
+
+    <div class="card" style="margin-top:18px">
+      <table>
+        <thead>
+          <tr><th style="width:16%">维度</th><th style="width:40%">满屏的 AI 参数解说号</th><th>你手上已经有、但没亮出来的</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>视觉</b></td>
+            <td class="dim">同一套左参数面板 + 底部章节条</td>
+            <td><b>概念动画</b>（电池包 / 加速表 / 尺寸线稿 / 激光雷达）+ <b>HUD 版式</b>——bakeoff B/C 的完成度比现有叠加层高一个维度</td>
+          </tr>
+          <tr>
+            <td><b>数据</b></td>
+            <td class="dim">数字直接写，不给来源，错了也没人管</td>
+            <td><b>事实可追溯</b>：<code class="mono">fact_refs</code> 强制引用 + <code class="mono">cards.ground</code> 逐行核对 + <code class="mono">verify_number_grounding</code></td>
+          </tr>
+          <tr>
+            <td><b>结论</b></td>
+            <td class="dim">参数罗列，念完就忘</td>
+            <td><b>观点前置</b>已经生效（"先给结论""标准版闭眼入"），可以再往前推一步做冲突式钩子</td>
+          </tr>
+          <tr>
+            <td><b>合规</b></td>
+            <td class="dim">靠人自查，夸大用语过不了审</td>
+            <td><b>机械 lint</b>：绝对化用语、编造数据、贬低竞品、层级混用全部拦下——这是接商单和投流的准入证</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:14px;background:var(--accent-soft);border-color:#ecd9c4">
+      <p style="margin:0;font-size:14.5px;line-height:1.6">
+        <b>一句话结论：</b>你缺的不是更多版式，是把「我能证明的东西」摆到台面上。
+        别人在拼画面数量，你在拼<b>证据密度</b>——这才是 AI 号短期内抄不走的。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 2 致命问题 ============ -->
+  <section>
+    <div class="eyebrow">02 · 诊断</div>
+    <h2>三个致命问题，按影响排序</h2>
+
+    <!-- 2.1 素材 -->
+    <div class="card" style="margin-top:20px">
+      <h3>2.1　素材：200 段视频里，能直接用的只有 3 段</h3>
+      <p class="small" style="margin:8px 0 18px">
+        标签口径：<code class="mono">problem</code> 为空即「干净」（无烧录字幕／台标／海报／非车），
+        <code class="mono">target=="yes"</code> 即「视觉模型确认是这台车」。
+      </p>
+
+      <svg class="funnel" viewBox="0 0 720 250" role="img" aria-label="素材漏斗：200 段视频 → 48 段干净 → 43 段确认是本车 → 3 段两者皆备">
+        <defs>
+          <linearGradient id="fg" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#c97b3f" stop-opacity=".16"/>
+            <stop offset="100%" stop-color="#c97b3f" stop-opacity=".05"/>
+          </linearGradient>
+        </defs>
+        <g font-family="JetBrains Mono, monospace" font-size="12" fill="#7c7a72">
+          <text x="0" y="22">全部视频素材段</text>
+          <text x="0" y="86">无字幕 / 台标 / 海报</text>
+          <text x="0" y="150">确认是这台车</text>
+          <text x="0" y="214">干净 AND 是这台车</text>
+        </g>
+        <g>
+          <rect x="210" y="4"  width="500" height="30" rx="7" fill="url(#fg)" stroke="#e9e3d6"/>
+          <text x="222" y="24" font-family="JetBrains Mono, monospace" font-size="13" fill="#3a4256">200 段</text>
+
+          <rect x="210" y="68"  width="290" height="30" rx="7" fill="url(#fg)" stroke="#e9e3d6"/>
+          <text x="222" y="88" font-family="JetBrains Mono, monospace" font-size="13" fill="#3a4256">48 段　24%</text>
+
+          <rect x="210" y="132" width="260" height="30" rx="7" fill="url(#fg)" stroke="#e9e3d6"/>
+          <text x="222" y="152" font-family="JetBrains Mono, monospace" font-size="13" fill="#3a4256">43 段　22%</text>
+
+          <rect x="210" y="196" width="120" height="30" rx="7" fill="#c97b3f" fill-opacity=".9"/>
+          <text x="222" y="216" font-family="JetBrains Mono, monospace" font-size="13" fill="#fff">3 段　1.5%</text>
+        </g>
+        <g stroke="#cfc8b8" stroke-width="1" stroke-dasharray="3 4">
+          <line x1="330" y1="34" x2="330" y2="66"/>
+          <line x1="330" y1="98" x2="330" y2="130"/>
+          <line x1="330" y1="162" x2="330" y2="194"/>
+        </g>
+      </svg>
+
+      <p class="small" style="margin:6px 0 20px">
+        这 3 段分别是 <b>航拍 ×2</b> 和 <b>车尾 ×1</b>——<b>内饰干净视频是 0 段</b>。所以成片里「内饰空间」章节只能靠一张静图撑住。
+      </p>
+
+      <h3 style="font-size:15px;margin-bottom:10px">各来源视频的干净率</h3>
+      <div class="bench">
+        <span class="bench-label">Soda゜（第三方）</span>
+        <div class="bench-track"><div class="bench-fill" style="width:50%"></div></div>
+        <span class="bench-val">25/50</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">Xiaomi YouTube（官方）</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:36.1%"></div></div>
+        <span class="bench-val">13/36</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">爱吃葡萄的沈漂亮</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:33.3%"></div></div>
+        <span class="bench-val">1/3</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">小米汽车 B站（官方）</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:15%"></div></div>
+        <span class="bench-val">3/20</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">AUTOSEMIFOX</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:14.3%"></div></div>
+        <span class="bench-val">1/7</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">相信品牌的力量</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:7.7%"></div></div>
+        <span class="bench-val">1/13</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">杨坨Alpaca</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:6.8%"></div></div>
+        <span class="bench-val">4/59</span>
+      </div>
+      <div class="bench">
+        <span class="bench-label">阳光男孩是东北人</span>
+        <div class="bench-track"><div class="bench-fill dim" style="width:0%"></div></div>
+        <span class="bench-val zero">0/12</span>
+      </div>
+
+      <p class="small" style="margin:16px 0 0">
+        官方号反而没被用起来：小米汽车 B 站 20 段只干净 3 段，Xiaomi 官方 YouTube 36 段里
+        「干净且确认是本车」是 <b>0 段</b>——官方片里的产品特写、其它车系、人物被标成了
+        <code class="mono">no_subject</code> 或 <code class="mono">unknown</code>。
+        <b>素材池的问题不在「搜得少」，在「筛得狠」和「标签判得太死」。</b>
+      </p>
+
+      <div class="card" style="margin-top:16px;background:#fdf6f4;border-color:#eddcd8;box-shadow:none">
+        <p style="margin:0;font-size:14px;line-height:1.6">
+          <b>代价是双重的：</b>成片右上角的「CCTV 1 综合」台标、右下角的「黄金展位 制作机构」角标、
+          以及航拍镜头上方的「Soda' bilibili」水印，都是这 197 段素材的代价。
+          <b>它不只是难看——是在二次转载别人的视频做商业内容。</b>这是比观感更硬的问题。
+        </p>
+      </div>
+    </div>
+
+    <!-- 2.2 脱钩 -->
+    <div class="card" style="margin-top:14px">
+      <h3>2.2　画面和旁白各走各的</h3>
+      <p style="margin:8px 0 12px;font-size:14px;color:var(--ink-2);line-height:1.6">
+        README 里那句「<b>不要求画面对上旁白</b>」，是这套产线早期最快的捷径，也是现在最明显的天花板。
+        素材池明明打好了 9 种视角标签（<code class="mono">exterior_45 / interior / driving / screen / detail / seat / aerial / rear / exterior_front</code>），
+        但分镜只用 <code class="mono">sec.angle</code> 里的<b>两档</b>去取景——「偏外观」和「偏车内」。
+      </p>
+      <div class="card" style="background:var(--line-soft);border:0;box-shadow:none;padding:14px 16px">
+        <p style="margin:0;font-size:13.5px;line-height:1.6;color:var(--ink-2)">
+          实际发生的：讲「风阻系数 0.245Cd，高速省电」时，画面是一个<b>无关的内饰特写</b>；
+          讲「GT 版 1003 匹」时，画面是<b>静态官图</b>。
+          观众的感觉不是「这视频糊弄」，是「<b>这视频跟我想买的那台车没关系</b>」。
+        </p>
+      </div>
+      <p class="small" style="margin:12px 0 0">
+        改法很轻：把这一拍讲的东西映射到具体 <code class="mono">view</code>（讲电池 → <code class="mono">detail</code>，
+        讲加速 → <code class="mono">driving</code>，讲智驾 → <code class="mono">screen</code>），
+        取景时按 view 检索而不是按角度档位。标签已经在库里了，只是没接上。
+      </p>
+    </div>
+
+    <!-- 2.3 字幕 -->
+    <div class="card" style="margin-top:14px">
+      <h3>2.3　字幕里的数字，全变成了中文</h3>
+      <p style="margin:8px 0 14px;font-size:14px;color:var(--ink-2);line-height:1.6">
+        这条最扎眼，也最好修。<b>TTS 用的中文读法被复用成了字幕文本</b>——
+        旁白读得对，但屏幕上打出来的全是「六百四十三公里」。而你的画面上同时写着「835 公里」「38.99 万元」。
+      </p>
+
+      <div class="compare">
+        <div class="cmp-box good">
+          <div class="cmp-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            应该是
+          </div>
+          <div class="cmp-line">标准版 <span class="n">73</span> 度磷酸铁锂，CLTC 续航 <span class="n">643</span> 公里</div>
+          <div class="cmp-line">它用 <span class="n">752V</span> 碳化硅高压平台，<span class="n">15</span> 分钟补能 <span class="n">405</span> 公里</div>
+          <div class="cmp-line">想要性能，GT 版 <span class="n">1003</span> 匹马力，零百 <span class="n">3.93</span> 秒，最高时速 <span class="n">300</span></div>
+        </div>
+        <div class="cmp-box bad">
+          <div class="cmp-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            成片实际
+          </div>
+          <div class="cmp-line">标准版 <span class="n">七十三</span> 度磷酸铁锂，CLTC 续航 <span class="n">六百四十三</span> 公里</div>
+          <div class="cmp-line">它用 <span class="n">七百五十二</span> 伏碳化硅高压平台，<span class="n">十五</span> 分钟补能 <span class="n">四百零五</span> 公里</div>
+          <div class="cmp-line">想要性能，GT 版 <span class="n">一千零三</span> 匹马力，零百 <span class="n">三点九三</span> 秒，最高时速 <span class="n">三百</span></div>
+        </div>
+      </div>
+
+      <p class="small" style="margin:16px 0 8px">根因：一份文本同时喂给了 TTS 和字幕。</p>
+      <pre><span class="c"># app/pipeline/narration.py</span>
+texts = [normalize_for_tts(t) <span class="ok">for</span> t, _ in pairs]   <span class="c">:110  ← TTS 专用（中文读法）</span>
+used_texts = [texts[i] <span class="ok">for</span> i in order]              <span class="c">:168</span>
+cues = build_subtitle_cues(used_texts, ...)                 <span class="c">:184  ← 字幕复用了它</span></pre>
+      <p class="small" style="margin:10px 0 0">
+        修法是一行：字幕改用<b>原始文本</b>（<code class="mono">pairs[i][0]</code>），TTS 继续用归一化文本。
+        顺带的好处是 <code class="mono">kWh</code>、<code class="mono">km/h</code> 这些行业符号也留在屏幕上，而不是变成「千瓦时」「公里每小时」。
+      </p>
+
+      <div class="card" style="margin-top:16px;background:var(--accent-soft);border-color:#ecd9c4;box-shadow:none">
+        <p style="margin:0;font-size:14px;line-height:1.6">
+          <b>为什么这条排在最前面：</b>汽车视频的一切都建立在数字上。
+          字幕全变中文之后，观众没法扫读、没法截图、没法在评论区引用，
+          而画面上的大字又和你自己的字幕对不上——<b>这会让人怀疑整条片子是 AI 拼的</b>。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 护城河 ============ -->
+  <section>
+    <div class="eyebrow">03 · 护城河</div>
+    <h2>三条你已经有了、但还没摆到台面上的东西</h2>
+    <p class="lede" style="font-size:15px">
+      前面全是减法。下面是加法——这三条别人抄不走，而且<b>都已经在代码里跑着</b>，只是没被观众看见。
+    </p>
+
+    <div class="stack" style="margin-top:22px">
+      <div class="card moat">
+        <div class="moat-ico">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+        </div>
+        <div class="moat-body">
+          <h3>事实可追溯 —— 把「每个数字都能查」变成可见的卖点</h3>
+          <p>现在这行「数据来源：公开信息与官方渠道 · 2026-10」在面板角落，20px 灰字，手机上基本看不见。
+          但它是<b>你唯一无法被模仿的能力</b>——参数号编数字，你每个数字都有 fact_id 和来源工具。
+          把它做成显式设计：数字旁边标「官方 / 媒体 / 实测」，标年份与版本，把「我们不编数据」变成片子的信任状。</p>
+          <span class="file">app/pipeline/script_gen.py · cards.py · grounding.py</span>
+        </div>
+      </div>
+
+      <div class="card moat">
+        <div class="moat-ico">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 3-3 4 4 5-6"/></svg>
+        </div>
+        <div class="moat-body">
+          <h3>概念动画 —— 全片视觉质量最高的部分，只用了 1 段</h3>
+          <p>电池包格子图、「835 公里」大字版式、尺寸线稿——<code class="mono">demo_motion.mp4</code> 里的这些镜头，
+          完成度明显高于叠加层版式，而这正是「看不见的东西」（电池、补能、智驾感知）唯一能讲清楚的方式。
+          满屏的 AI 号做不到这个，<b>这是最容易做出差异化的杠杆</b>。</p>
+          <span class="file">motion/bakeoff（B 电影暗调 / C 极简 HUD）· app/pipeline/motion.py</span>
+        </div>
+      </div>
+
+      <div class="card moat">
+        <div class="moat-ico">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="moat-body">
+          <h3>合规 —— 别人过不了审的地方你能过</h3>
+          <p>广告法绝对化用语、编造数据、贬低竞品、用公司事实讲产品参数，这四类全被机械拦截。
+          市面上大量 AI 号在投放时被拒、被告、被限流；<b>你这套产线天然能接商单、能投流</b>。
+          这是「更多人喜欢看」之外的第二条变现路径，值得当成产品能力去经营，而不是当成约束。</p>
+          <span class="file">app/pipeline/script_gen.py · compliance_lint</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 留存 ============ -->
+  <section>
+    <div class="eyebrow">04 · 留存</div>
+    <h2>「让别人更喜欢看」：三件具体的事</h2>
+
+    <div class="card" style="margin-top:20px">
+      <h3 style="margin-bottom:16px">开头 15 秒该发生什么</h3>
+      <ol class="timeline">
+        <li>
+          <h4>0–3 秒：先给冲突，不是先给结论<span class="tag">当前：分屏小窗 + 大字</span></h4>
+          <p>现在是「小米YU7 值不值得买」——一个正确但平的问题标题。
+          换成一句带判断的冲突：<b>「这车最贵的地方不是配置，是它的电池」</b>，观众才会想往下看。</p>
+        </li>
+        <li>
+          <h4>3–10 秒：立刻兑现承诺<span class="tag">当前：环境镜头空转</span></h4>
+          <p>承诺了「三个数决定你买不买」，就要在 10 秒内把第一个数拍在脸上。
+          <b>首屏必须出现一个大数字或大字</b>，而不是让人等背景音乐铺满。</p>
+        </li>
+        <li>
+          <h4>10–15 秒：建立可信度<span class="tag">当前：只有一行 20px 灰字</span></h4>
+          <p>把「每个数字都可追溯」在这里亮一次——这是全片唯一一次「自我担保」的位置，
+          说完就恢复正常解说。</p>
+        </li>
+        <li>
+          <h4>结尾：给行动，不只给总结<span class="tag">当前：标准版闭眼入</span></h4>
+          <p>现在结尾停在「标准版闭眼入」，没有下一步。
+          补一句<b>提问</b>（你在纠结哪台？评论区说车型，我下期做横评）或<b>下期预告</b>——
+          评论区互动和连看都靠这一句。</p>
+        </li>
+      </ol>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3 style="margin-bottom:6px">画面和字幕的「可读性」在手机上被判死刑</h3>
+      <p class="small" style="margin:0 0 14px">成片是 1920×1080 烧进平台后按手机屏宽缩放，44px 的字到手机上约等于 10px。</p>
+
+      <div class="size-row">
+        <span class="bench-label">字幕字号</span>
+        <div class="size-bar muted" style="width:132px"><span>45px 无底条</span></div>
+        <span class="bench-val">现状</span>
+      </div>
+      <div class="size-row">
+        <span class="bench-label">建议</span>
+        <div class="size-bar" style="width:200px"><span>58–64px + 半透明底条</span></div>
+        <span class="bench-val">P0</span>
+      </div>
+      <div class="size-row">
+        <span class="bench-label">章节条文字</span>
+        <div class="size-bar muted" style="width:96px"><span>28px</span></div>
+        <span class="bench-val">现状</span>
+      </div>
+      <div class="size-row">
+        <span class="bench-label">建议</span>
+        <div class="size-bar" style="width:150px"><span>34px + 加高条</span></div>
+        <span class="bench-val">P1</span>
+      </div>
+
+      <p class="small" style="margin:14px 0 0">
+        参数出处：<code class="mono">timeline.py:246</code> 字号 <code class="mono">h*0.042</code>、
+        <code class="mono">MarginV</code> <code class="mono">h*0.14</code>、仅描边无底条；
+        <code class="mono">overlays.py:30</code> 章节条 <code class="mono">BAR_HEIGHT=0.05</code>、字 <code class="mono">bar_h*0.52</code>。
+      </p>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>节奏：24 拍、平均 8 秒一拍</h3>
+      <p style="margin:8px 0 12px;font-size:14px;color:var(--ink-2);line-height:1.6">
+        移动端观众每 3 秒有一次滑动机会。8 秒一拍，而分镜提示词只对 LLM <i>说</i>了「全片大约四成是 broll」，
+        <code class="mono">enforce_rhythm</code> 实际只管了「别连着两拍大数字 / 别连着三拍卡片 / 概念动画全片 6 拍上限」，
+        <b>并不校验 broll 占比，也不保证每几秒一次视觉变化</b>。样片 9 个采样点里有 5 个是全屏宣传片。
+      </p>
+      <p class="small" style="margin:0">
+        建议加一条硬约束：<b>每 5–6 秒必须有一次画面变化</b>（换镜头 / 换版式 / 进大字 / 进动画），
+        且全片 <code class="mono">broll</code> 占比从四成压到三成以内，腾出来的位置给
+        <code class="mono">concept</code> 和 <code class="mono">stat</code>。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 5 行动清单 ============ -->
+  <section>
+    <div class="eyebrow">05 · 行动</div>
+    <h2>优先级清单</h2>
+    <p class="lede" style="font-size:15px">
+      按「影响力 ÷ 改动成本」排的序。P0 全部是<b>不改架构、不花额外额度</b>的改动。
+    </p>
+
+    <div class="card" style="margin-top:20px;padding-top:6px">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:52px">级别</th>
+            <th style="width:30%">动作</th>
+            <th>落点</th>
+            <th style="width:20%">为什么这条排这个位置</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="prio p0">P0</span></td>
+            <td><b>字幕用原始文本</b>，TTS 仍用归一化文本</td>
+            <td class="mono" style="font-size:12px">narration.py:168,184</td>
+            <td class="dim">一行改动，收益最大</td>
+          </tr>
+          <tr>
+            <td><span class="prio p0">P0</span></td>
+            <td><b>禁用带台标 / 海报 / 烧录字幕的第三方视频</b>做背景</td>
+            <td class="mono" style="font-size:12px">library.py · library.fill 排序</td>
+            <td class="dim">合规风险，不只是观感</td>
+          </tr>
+          <tr>
+            <td><span class="prio p0">P0</span></td>
+            <td><b>官方号素材提权</b>，放宽「是不是这台车」的判定</td>
+            <td class="mono" style="font-size:12px">library.py · vision_verdict.py</td>
+            <td class="dim">官方片里认错车是标签问题</td>
+          </tr>
+          <tr>
+            <td><span class="prio p0">P0</span></td>
+            <td><b>按 view 取景</b>，让画面跟上旁白</td>
+            <td class="mono" style="font-size:12px">explainer.py · _hint / library.fill</td>
+            <td class="dim">标签已存在，只是没接线</td>
+          </tr>
+          <tr>
+            <td><span class="prio p0">P0</span></td>
+            <td><b>字幕加底条并加大</b></td>
+            <td class="mono" style="font-size:12px">timeline.py:246</td>
+            <td class="dim">手机端可读性</td>
+          </tr>
+          <tr>
+            <td><span class="prio p1">P1</span></td>
+            <td><b>脚本加「钩子三段式」与「冲突式开场」规则</b></td>
+            <td class="mono" style="font-size:12px">script_gen.py SYSTEM · auto_long.yaml</td>
+            <td class="dim">决定前 15 秒能不能留住人</td>
+          </tr>
+          <tr>
+            <td><span class="prio p1">P1</span></td>
+            <td><b>把 bakeoff C 的 HUD 版式</b>作为 panel 的默认外观</td>
+            <td class="mono" style="font-size:12px">overlays.py · motion/scenes</td>
+            <td class="dim">整体质感跃升</td>
+          </tr>
+          <tr>
+            <td><span class="prio p1">P1</span></td>
+            <td><b>概念动画提到每片 4–6 拍</b>，覆盖电池 / 补能 / 智驾</td>
+            <td class="mono" style="font-size:12px">auto_long.yaml · MAX_CONCEPT</td>
+            <td class="dim">最难被抄的差异点</td>
+          </tr>
+          <tr>
+            <td><span class="prio p1">P1</span></td>
+            <td><b>每个数字标注来源与口径</b>，把可追溯做成设计</td>
+            <td class="mono" style="font-size:12px">cards.py · overlays.py</td>
+            <td class="dim">信任护城河</td>
+          </tr>
+          <tr>
+            <td><span class="prio p1">P1</span></td>
+            <td><b>结尾加提问 / 下期预告</b></td>
+            <td class="mono" style="font-size:12px">script_gen.py · auto_long.yaml</td>
+            <td class="dim">评论区互动与连看</td>
+          </tr>
+          <tr>
+            <td><span class="prio p2">P2</span></td>
+            <td><b>封面改成人工指定帧 + 不硬切标题</b></td>
+            <td class="mono" style="font-size:12px">narration.py:426,464</td>
+            <td class="dim">当前固定抽第 1 秒（开场黑底小窗）</td>
+          </tr>
+          <tr>
+            <td><span class="prio p2">P2</span></td>
+            <td><b>恢复竖屏 9:16 切片</b>做流量入口</td>
+            <td class="mono" style="font-size:12px">git 9b7e42f（2026-10-20 删除）</td>
+            <td class="dim">短视频引流，长视频留存</td>
+          </tr>
+          <tr>
+            <td><span class="prio p2">P2</span></td>
+            <td><b>多车横评</b>（尚未实现）</td>
+            <td class="mono" style="font-size:12px">README 已知限制</td>
+            <td class="dim">对比张力天然出圈</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 6 封面 ============ -->
+  <section>
+    <div class="eyebrow">06 · 包装</div>
+    <h2>封面：现在抽的是最不该抽的那一帧</h2>
+    <div class="card" style="margin-top:20px">
+      <p style="margin:0 0 12px;font-size:14px;color:var(--ink-2);line-height:1.6">
+        <code class="mono">make_cover()</code> 固定从第 <b>1.0 秒</b>抽帧——而第 1 秒恰好是开场的<b>黑底分屏小窗</b>，
+        构图是「中间一个小方块 + 四周黑边」，作为封面几乎是最差选择。标题还按 <code class="mono">title[:14]</code> 硬切，
+        「小米YU7值不值得买，该怎么选」会被切掉最后一个字。
+      </p>
+      <p class="small" style="margin:0">
+        建议：抽帧改为「扫描全片选<b>构图最完整且有全车</b>的一帧」，或专门渲染一张封面帧（大字 + 全车 45° + 一个爆点数字）；
+        标题改成<b>自适应缩排</b>而不是硬截断。
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    复盘依据：<code>yu7_landscape_demo.mp4</code>（抽帧 30+ 张逐段看）·
+    <code>demo_motion.mp4</code> · <code>motion/bakeoff/{A,B,C}.mp4</code> ·
+    <code>data/library/小米yu7/library.json</code>（260 段素材全量统计）·
+    <code>app/pipeline/{narration,script_gen,explainer,overlays,timeline,library}.py</code>
+  </footer>
+
+</div>
+</body>
+</html>
