@@ -131,8 +131,15 @@ def ffmpeg_status() -> tuple[bool, str]:
 #: motion/ 子工程:package.json 锁了 hyperframes 与 gsap 的版本,`npm install` 后可用
 MOTION_DIR = Path(os.getenv("MOTION_DIR") or (BASE_DIR / "motion"))
 #: 渲染用的 Chrome。HyperFrames 默认自己下载 chrome-headless-shell,国内常下载中断;
-#: 任何本机 Chrome / Edge 都能走截图渲染路径。不填就按常见安装位置找
+#: 任何本机 Chrome / Edge 都能走截图渲染路径。不填就先找已下载的 headless shell
+#: (无窗口),再按常见安装位置找。注意:Windows 上 `chrome.exe --version` 会直接弹出
+#: 浏览器窗口(HyperFrames 渲染前会探测一次),所以有 headless shell 时一定要优先用它
+_HEADLESS_SHELLS = [
+    str(p) for root in (MOTION_DIR / ".browser" / "chrome-headless-shell",
+                        Path.home() / ".cache" / "hyperframes" / "chrome" / "chrome-headless-shell")
+    for p in sorted(root.glob("*/chrome-headless-shell-*/chrome-headless-shell.exe"), reverse=True)]
 _BROWSER_CANDIDATES = (
+    *_HEADLESS_SHELLS,
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
