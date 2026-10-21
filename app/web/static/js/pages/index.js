@@ -1,5 +1,5 @@
 /* 首页:新建项目表单 + 项目列表筛选 / 搜索 / 删除。 */
-import { $, $$, readJSON, withLoading, relTime, debounce, h } from '../ui/dom.js';
+import { $, $$, readJSON, withLoading, relTime, debounce, h, icon } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/modal.js';
 import { initChrome } from '../ui/chrome.js';
@@ -38,10 +38,81 @@ function syncThemeIntent() {
   const opt = sel.selectedOptions[0];
   const hint = $('#theme-intent');
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
+  syncRoster();
+}
+
+// ---------------------------------------------------------------------------
+// 多车横评车单:方向是 roundup 时出现,每行一台车 + 可选分组
+// ---------------------------------------------------------------------------
+function currentTheme() {
+  if ($('#theme-field').classList.contains('hidden')) return null;
+  const name = $('#theme-select').value;
+  return (catInfo($('#category-select').value).themes || []).find((t) => t.name === name) || null;
+}
+
+function rosterRange() {
+  const t = currentTheme();
+  return t && t.subject_count && t.subject_count[1] ? t.subject_count : [3, 5];
+}
+
+function rosterRow(name = '', group = '') {
+  const row = h('div', { class: 'roster-row' },
+    h('span', { class: 'roster-no' }),
+    h('input', { class: 'input roster-name', maxlength: '40', autocomplete: 'off',
+                 placeholder: '车型,例:小米YU7', value: name }),
+    h('input', { class: 'input roster-group', maxlength: '20', autocomplete: 'off',
+                 placeholder: '分组(可选)', value: group }),
+    h('button', { type: 'button', class: 'btn btn-ghost btn-sm btn-icon roster-del',
+                  title: '移除这台车', 'aria-label': '移除这台车' }, icon('x', 'i-sm')));
+  row.querySelector('.roster-del').addEventListener('click', () => { row.remove(); renumberRoster(); });
+  row.querySelector('.roster-name').addEventListener('input', (e) => e.target.classList.remove('is-invalid'));
+  return row;
+}
+
+function renumberRoster() {
+  const rows = $$('.roster-row', $('#roster'));
+  const [lo, hi] = rosterRange();
+  rows.forEach((r, i) => { r.querySelector('.roster-no').textContent = String(i + 1); });
+  rows.forEach((r) => { r.querySelector('.roster-del').disabled = rows.length <= lo; });
+  $('#roster-add').disabled = rows.length >= hi;
+  $('#roster-count').textContent = `${rows.length} 台 · 需要 ${lo}–${hi} 台`;
+}
+
+function syncRoster() {
+  const t = currentTheme();
+  const on = !!(t && t.roundup);
+  $('#roster-field').classList.toggle('hidden', !on);
+  const label = $('label[for="subject"]');
+  if (on) {
+    label.textContent = '横评选题';
+    $('#subject').placeholder = '例:25 万级纯电 SUV 横评';
+    $('#subject-help').textContent = subjectHelp();
+    const roster = $('#roster');
+    while ($$('.roster-row', roster).length < rosterRange()[0]) roster.append(rosterRow());
+    renumberRoster();
+  } else {
+    syncSubjectField();
+  }
+}
+
+function setRoster(names) {
+  const roster = $('#roster');
+  roster.replaceChildren(...names.map((n) => rosterRow(n)));
+  while ($$('.roster-row', roster).length < rosterRange()[0]) roster.append(rosterRow());
+  renumberRoster();
+}
+
+function rosterValues() {
+  return $$('.roster-row', $('#roster'))
+    .map((r) => ({ name: r.querySelector('.roster-name').value.trim(),
+                   group: r.querySelector('.roster-group').value.trim() }))
+    .filter((x) => x.name);
 }
 
 // 主体输入框的标签、占位和提示跟着品类走(profile 的 vocab.ui_*)
 function subjectHelp() {
+  const t = currentTheme();
+  if (t && t.roundup) return '这是视频的选题和标题,车型写在下面的车单里。';
   return (catInfo($('#category-select').value).ui || {}).help || '尽量写全品牌和型号,事实采集会更准。';
 }
 
@@ -100,9 +171,14 @@ async function refreshEstimate() {
 
 if (form) {
   $('#category-select').addEventListener('change', () => {
-    syncSubjectField(); syncThemeField(); syncDurations(); refreshEstimate();
+    syncSubjectField(); syncThemeField(); syncDurations(); refreshEstimate(); syncTopicsSource();
   });
   $('#theme-select').addEventListener('change', syncThemeIntent);
+  $('#roster-add').addEventListener('click', () => {
+    $('#roster').append(rosterRow());
+    renumberRoster();
+    $$('.roster-name', $('#roster')).at(-1).focus();
+  });
   syncSubjectField();
   syncDurations();
   syncThemeField();
@@ -126,6 +202,18 @@ if (form) {
       subject.focus();
       return;
     }
+    const theme = currentTheme();
+    const roundup = !!(theme && theme.roundup);
+    const roster = roundup ? rosterValues() : [];
+    if (roundup) {
+      const [lo, hi] = rosterRange();
+      const unique = new Set(roster.map((x) => x.name.replace(/\s+/g, '').toLowerCase()));
+      if (unique.size < lo || unique.size > hi) {
+        $$('.roster-name', $('#roster')).forEach((el) => { if (!el.value.trim()) el.classList.add('is-invalid'); });
+        toast(`车单需要 ${lo}–${hi} 台不同的车,现在是 ${unique.size} 台`, { type: 'danger', title: '车单不完整' });
+        return;
+      }
+    }
     const btn = $('#create-btn');
     await withLoading(btn, async () => {
       try {
@@ -134,6 +222,12 @@ if (form) {
           category: fd.get('category'),
           theme: $('#theme-field').classList.contains('hidden') ? null : (fd.get('theme') || null),
           duration: parseInt(fd.get('duration'), 10),
+          angle: String(fd.get('angle') || '').trim() || null,
+          ...(roundup ? { subjects: roster } : {}),
+          // 选题附带的检索词和热点依据只在车型没被改掉时才有效
+          ...(pickedTopic && pickedTopic.subject === subj && String(fd.get('angle') || '').trim()
+            ? { angle_search: pickedTopic.search_terms || null, angle_evidence: pickedTopic.evidence || null }
+            : {}),
           quota_budget: fd.get('quota_budget') ? parseFloat(fd.get('quota_budget')) : null,
         });
         toast('项目已创建,正在采集事实…');
@@ -144,6 +238,98 @@ if (form) {
       }
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// 热点选题:抓热点 → LLM 出单车 / 横评选题 → 点一个填进表单(横评连车单一起填)
+// ---------------------------------------------------------------------------
+const SOURCE_LABEL = {
+  dongchedi: '懂车帝', news: '新闻', douyin: '抖音', bilibili: 'B站', llm: '选题生成',
+};
+const sourceLabel = (s) => SOURCE_LABEL[String(s || '').split('.')[0]] || s;
+
+function renderTopics(data) {
+  const grid = $('#topics-grid');
+  const topics = data.topics || [];
+  grid.replaceChildren(...(topics.length ? topics.map((t) => {
+    const card = h('button', { type: 'button', class: 'topic', 'aria-pressed': 'false' },
+      h('div', { class: 'topic-head' },
+        h('span', { class: 'topic-subject' }, t.subject),
+        h('span', { class: 'topic-heat', title: `热度 ${t.heat}/5` }, '🔥'.repeat(t.heat || 1))),
+      (t.subjects || []).length
+        ? h('div', { class: 'topic-roster' }, h('span', { class: 'tag tone-brand' }, '横评'), t.subjects.join(' / '))
+        : null,
+      h('div', { class: 'topic-angle' }, t.angle),
+      t.hook ? h('div', { class: 'topic-hook' }, `开场:「${t.hook}」`) : null,
+      t.why_hot ? h('div', { class: 'topic-why' }, t.why_hot) : null,
+      (t.sources || []).length ? h('div', { class: 'topic-links' }, ...t.sources.slice(0, 3).map((u, i) =>
+        h('a', { href: u, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, `来源 ${i + 1}`))) : null,
+    );
+    card.addEventListener('click', () => pickTopic(t, card));
+    return card;
+  }) : [h('div', { class: 'topics-empty' }, '没有生成出选题,可以在下面的原始热点里自己挑。')]));
+
+  const trends = data.trends || [];
+  $('#topics-raw-count').textContent = `(${trends.length})`;
+  $('#topics-raw-list').replaceChildren(...trends.map((it) => h('div', {},
+    h('span', { class: 'src' }, `[${sourceLabel(it.source)}]`),
+    it.url ? h('a', { href: it.url, target: '_blank', rel: 'noopener' }, it.title) : it.title,
+    it.metric ? h('span', { class: 'subtle' }, ` · ${it.metric}`) : null)));
+  $('#topics-raw').open = !topics.length;
+
+  const when = new Date((data.fetched_at || Date.now() / 1000) * 1000);
+  $('#topics-meta').textContent = `${topics.length} 个选题 · ${trends.length} 条热点 · ${when.toLocaleTimeString().slice(0, 5)} 抓取`;
+  $('#topics-body').classList.remove('hidden');
+  $('#topics-refresh').classList.remove('hidden');
+
+  const failed = Object.entries(data.errors || {});
+  if (failed.length) {
+    toast(failed.map(([k, v]) => `${sourceLabel(k)}:${v}`).join(';'), { type: 'warning', title: '部分热点来源不可用' });
+  }
+}
+
+let pickedTopic = null;
+
+// 热点口径跟着品类走:切品类时换来源说明,上一个品类的选题收起来
+function syncTopicsSource() {
+  if (!$('#topics-card')) return;
+  const ui = catInfo($('#category-select').value).ui || {};
+  $('#topics-meta').textContent = ui.trends_label || '新闻 · 抖音热榜 · B站热门';
+  $('#topics-body').classList.add('hidden');
+  $('#topics-refresh').classList.add('hidden');
+  pickedTopic = null;
+}
+
+function pickTopic(t, card) {
+  pickedTopic = t;
+  $$('.topic', $('#topics-grid')).forEach((c) => c.setAttribute('aria-pressed', String(c === card)));
+  // 先切方向(横评会换出车单和选题标签),再填内容
+  const sel = $('#theme-select');
+  if ([...sel.options].some((o) => o.value === t.theme)) { sel.value = t.theme; syncThemeIntent(); }
+  if ((t.subjects || []).length) setRoster(t.subjects);
+  const subject = $('#subject');
+  subject.value = t.subject;
+  subject.dispatchEvent(new Event('input'));
+  $('#angle').value = t.angle;
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function loadTopics(btn, refresh) {
+  await withLoading(btn, async () => {
+    try {
+      const cat = $('#category-select').value;
+      const data = await api.get(`/api/topics?category=${encodeURIComponent(cat)}&refresh=${refresh ? 1 : 0}`);
+      renderTopics(data);
+    } catch (err) {
+      toast(err.message, { type: 'danger', title: '热点抓取失败' });
+    }
+  });
+}
+
+if ($('#topics-card') && form) {
+  syncTopicsSource();
+  $('#topics-btn').addEventListener('click', (e) => loadTopics(e.currentTarget, false));
+  $('#topics-refresh').addEventListener('click', (e) => loadTopics(e.currentTarget, true));
 }
 
 // ---------------------------------------------------------------------------

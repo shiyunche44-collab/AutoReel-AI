@@ -1,0 +1,107 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ lib.subject }} · 素材库 · aimovice{% endblock %}
+{% block body_class %}page-library{% endblock %}
+{% set active_nav = 'library' %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑">
+  <span class="sep">/</span><a href="/library">素材库</a><span class="sep">/</span><span class="cur">{{ lib.subject }}</span>
+</nav>
+{% endblock %}
+
+{% block main %}
+{%- set views = {} -%}
+{%- for i in items if i.usable -%}{%- set _ = views.update({i.view: views.get(i.view, 0) + 1}) -%}{%- endfor -%}
+
+<section class="page-head">
+  <div>
+    <div class="phead-title-row">
+      <h1 class="page-title">{{ lib.subject }}</h1>
+      {% if building %}<span class="badge tone-brand is-live"><span class="dot"></span>构建中</span>{% endif %}
+    </div>
+    <p class="muted">可用素材合计 <b class="num">{{ '%d:%02d' % ((stats.usable_seconds // 60) | int, (stats.usable_seconds % 60) | int) }}</b>,解说轨按分镜的视角从中挑背景。灰掉的是被视觉模型判为不可用的片段。</p>
+  </div>
+</section>
+
+<div class="kpi-row pool-kpis">
+  <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}视频片段</span><span class="kpi-value">{{ stats.video_usable }}<small>/ {{ stats.video_segments }} 可用</small></span></div>
+  <div class="kpi"><span class="kpi-label">{{ m.icon("image", "i-sm") }}图片</span><span class="kpi-value">{{ stats.stills_usable }}<small>/ {{ stats.stills }} 可用</small></span></div>
+  <div class="kpi"><span class="kpi-label">{{ m.icon("link", "i-sm") }}来源</span><span class="kpi-value">{{ stats.sources_done }}<small>/ {{ stats.sources }} 已下载</small></span>
+    <span class="kpi-sub">{% if stats.sources_failed %}<span class="text-danger">{{ stats.sources_failed }} 个失败</span>{% else %}&nbsp;{% endif %}</span></div>
+  <div class="kpi"><span class="kpi-label">{{ m.icon("sparkles", "i-sm") }}视觉调用</span><span class="kpi-value">{{ stats.vlm_calls }}<small>次</small></span>
+    <span class="kpi-sub">{% if stats.untagged %}{{ stats.untagged }} 个待打标签{% else %}&nbsp;{% endif %}</span></div>
+</div>
+
+<section class="card content-card">
+  <div class="panel-toolbar">
+    <div class="chips" id="view-filters" role="toolbar" aria-label="按视角筛选">
+      <button class="chip" type="button" data-view="all" aria-pressed="true">全部 <span class="count">{{ items | length }}</span></button>
+      <button class="chip" type="button" data-view="usable" aria-pressed="false">可用 <span class="count">{{ items | selectattr("usable") | list | length }}</span></button>
+      {% for v, n in views | dictsort(by="value", reverse=true) %}
+      <button class="chip" type="button" data-view="{{ v }}" aria-pressed="false">{{ m.VIEW_LABEL.get(v, v) }} <span class="count">{{ n }}</span></button>
+      {% endfor %}
+    </div>
+    <div class="input-group search-sm">{{ m.icon("search", "i-sm") }}<input class="input" id="asset-search" type="search" placeholder="搜索画面描述"></div>
+  </div>
+
+  {% if items %}
+  <div class="asset-grid" id="asset-grid">
+    {% for i in items %}
+    <figure class="asset {{ '' if i.usable else 'is-unusable' }}" data-view="{{ i.view }}" data-usable="{{ 1 if i.usable else 0 }}"
+            data-text="{{ (i.desc ~ ' ' ~ i.view ~ ' ' ~ i.platform) | lower }}">
+      <div class="asset-media">
+        <img src="/library/{{ slug }}/frame/{{ i.id }}" alt="{{ i.desc }}" loading="lazy" onerror="this.remove()">
+        <span class="asset-kind">
+          {%- if i.kind == 'video' -%}{{ m.icon("film", "i-sm") }}<span class="num">{{ '%.1f' % i.length }}s</span>
+          {%- else -%}{{ m.icon("image", "i-sm") }}图{%- endif -%}
+        </span>
+        {% if i.official %}<span class="asset-flag">官方</span>{% endif %}
+        {% if not i.usable %}<span class="asset-reason">
+          {%- if i.skipped -%}{{ m.PROBLEM_LABEL.get(i.skipped, i.skipped) }}
+          {%- elif not i.tagged -%}未打标签
+          {%- elif i.target == 'no' -%}非目标车型
+          {%- elif i.problem in m.PROBLEM_LABEL -%}{{ m.PROBLEM_LABEL[i.problem] }}
+          {%- else -%}视角不适用{%- endif -%}
+        </span>{% endif %}
+      </div>
+      <figcaption>
+        <div class="asset-tags">
+          {% if i.view %}<span class="tag">{{ m.VIEW_LABEL.get(i.view, i.view) }}</span>{% endif %}
+          {% if i.platform %}<span class="subtle small">{{ i.platform }}</span>{% endif %}
+        </div>
+        {% if i.desc %}<p class="asset-desc" title="{{ i.desc }}">{{ i.desc }}</p>{% endif %}
+      </figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  <div class="empty hidden" id="asset-empty"><div class="empty-title">没有符合条件的素材</div></div>
+  {% else %}
+  <div class="empty"><div class="empty-icon">{{ m.icon("image", "i-lg") }}</div><div class="empty-title">池子还是空的</div><div>素材下载和打标签在后台进行,稍后刷新看看。</div></div>
+  {% endif %}
+</section>
+
+{% if lib.sources %}
+<section class="card content-card pool-sources">
+  <div class="card-head"><h2>{{ m.icon("link") }}来源 <span class="count">{{ lib.sources | length }}</span></h2></div>
+  <div class="list">
+    {% for s in lib.sources %}
+    <div class="list-item source-row">
+      <span class="badge tone-{{ {'done': 'success', 'failed': 'danger'}.get(s.status, 'neutral') }}"><span class="dot"></span>{{ {'done': '已下载', 'failed': '失败', 'pending': '待下载'}.get(s.status, s.status) }}</span>
+      <div class="grow">
+        <a class="source-title ellipsis" href="{{ s.url }}" target="_blank" rel="noopener" title="{{ s.title or s.url }}">{{ s.title or s.url }}</a>
+        <div class="subtle small">
+          {{ s.platform }}{% if s.uploader %} · {{ s.uploader }}{% endif %}{% if s.duration %} · <span class="num">{{ '%d:%02d' % ((s.duration // 60) | int, (s.duration % 60) | int) }}</span>{% endif %}
+          {% if s.official %} · <span class="tag tone-brand">官方</span>{% endif %}
+          {% if s.added_by == 'manual' %} · 手动添加{% endif %}
+          {% if s.error %} · <span class="text-danger">{{ s.error }}</span>{% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block script %}library{% endblock %}

@@ -43,6 +43,16 @@
 {% set SCOPE_LABEL = {"product": "产品级", "company": "公司级", "industry": "行业级"} %}
 {% set SCOPE_TONE = {"product": "brand", "company": "warning", "industry": "neutral"} %}
 {% set CONF_LABEL = {"high": "高可信", "medium": "中可信", "low": "低可信"} %}
+{% set VIEW_LABEL = {
+  "exterior_45": "外观 45°", "exterior_front": "正前", "exterior_side": "侧面", "exterior": "外观",
+  "rear": "车尾", "interior": "内饰", "detail": "细节", "driving": "行驶", "aerial": "航拍",
+  "product_hero": "主视觉", "in_use": "使用场景", "scene": "场景", "packaging": "包装",
+  "people": "人物", "text": "文字", "other": "其他",
+} %}
+{% set PROBLEM_LABEL = {
+  "not_target_model": "非目标车型", "no_subject": "没拍到主体", "cropped": "主体被裁切",
+  "unclear": "画面不清晰", "poster": "海报 / 广告图", "source_rejected": "所在源废段过多",
+} %}
 {% set CONF_TONE = {"high": "success", "medium": "warning", "low": "neutral"} %}
 
 {% macro icon(name, cls="") -%}

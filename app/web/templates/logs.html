@@ -3,9 +3,19 @@
 {% block title %}日志 · aimovice{% endblock %}
 {% block body_class %}page-logs{% endblock %}
 
+{% set active_nav = 'projects' %}
+
+{% block sidebar_extra %}
+<div class="nav-label">当前项目</div>
+<nav class="nav">
+  <a class="nav-item" href="/project/{{ project_id }}">{{ m.icon("layers") }}<span>工作台</span></a>
+  <a class="nav-item is-active" href="/project/{{ project_id }}/logs">{{ m.icon("file-text") }}<span>事件日志</span></a>
+</nav>
+{% endblock %}
+
 {% block crumbs %}
 <nav class="crumbs" aria-label="面包屑">
-  <span class="sep">/</span><a href="/">项目</a><span class="sep">/</span><a href="/project/{{ project_id }}">工作台</a><span class="sep">/</span><span class="cur">事件日志</span>
+  <span class="sep">/</span><a href="/#projects">我的项目</a><span class="sep">/</span><a href="/project/{{ project_id }}">工作台</a><span class="sep">/</span><span class="cur">事件日志</span>
 </nav>
 {% endblock %}
 

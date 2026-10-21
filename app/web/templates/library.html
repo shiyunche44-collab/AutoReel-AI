@@ -1,0 +1,60 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}素材库 · aimovice{% endblock %}
+{% block body_class %}page-library{% endblock %}
+{% set active_nav = 'library' %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑"><span class="sep">/</span><span class="cur">素材库</span></nav>
+{% endblock %}
+
+{% block main %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">素材库</h1>
+    <p class="muted">每个选题一个素材池:自动发现的平台视频和官图,经视觉模型逐段打标签,解说轨从这里挑背景画面。同一台车跨项目复用,只建一次。</p>
+  </div>
+</section>
+
+{% if pools %}
+<div class="pool-grid">
+  {% for p in pools %}
+  {%- set st = p.stats -%}
+  <article class="pcard pool-card">
+    <a class="pcard-link" href="/library/{{ p.slug }}" aria-label="打开 {{ p.subject }} 素材池"></a>
+    <div class="pcard-thumb">
+      <span class="pcard-ph">{{ m.icon("image", "i-lg") }}</span>
+      {% if p.cover %}<img src="/library/{{ p.slug }}/frame/{{ p.cover }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}
+      <span class="pcard-state">
+        {% if p.building %}<span class="badge tone-brand is-live"><span class="dot"></span>构建中</span>
+        {% elif st.usable_seconds >= 240 %}<span class="badge tone-success"><span class="dot"></span>素材充足</span>
+        {% else %}<span class="badge tone-warning"><span class="dot"></span>素材偏少</span>{% endif %}
+      </span>
+      <span class="pcard-dur num">{{ '%d:%02d' % ((st.usable_seconds // 60) | int, (st.usable_seconds % 60) | int) }} 可用</span>
+    </div>
+    <div class="pcard-main">
+      <h3 class="pcard-title">{{ p.subject }}</h3>
+      <div class="pool-stats">
+        <span>{{ m.icon("film", "i-sm") }}<b class="num">{{ st.video_usable }}</b>/{{ st.video_segments }} 段</span>
+        <span>{{ m.icon("image", "i-sm") }}<b class="num">{{ st.stills_usable }}</b>/{{ st.stills }} 图</span>
+        <span>{{ m.icon("link", "i-sm") }}<b class="num">{{ st.sources }}</b> 个来源</span>
+      </div>
+      <div class="pcard-foot">
+        <span class="subtle">{% if p.category %}{{ p.category }} · {% endif %}视觉调用 {{ st.vlm_calls }} 次</span>
+        <span class="subtle rel-time" data-ts="{{ p.updated_at }}"></span>
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty card">
+  <div class="empty-icon">{{ m.icon("image", "i-lg") }}</div>
+  <div class="empty-title">还没有素材池</div>
+  <div>新建一个解说项目,采集事实时会自动为选题建池。</div>
+  <a class="btn btn-primary" href="/#create">{{ m.icon("plus", "i-sm") }}新建解说</a>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block script %}library{% endblock %}

@@ -3,9 +3,19 @@
 {% block title %}{{ p.title }} · aimovice{% endblock %}
 {% block body_class %}page-project{% endblock %}
 
+{% set active_nav = 'projects' %}
+
+{% block sidebar_extra %}
+<div class="nav-label">当前项目</div>
+<nav class="nav">
+  <a class="nav-item is-active" href="/project/{{ p.id }}" title="{{ p.title }}">{{ m.icon("layers") }}<span>{{ p.title }}</span></a>
+  <a class="nav-item" href="/project/{{ p.id }}/logs">{{ m.icon("file-text") }}<span>事件日志</span></a>
+</nav>
+{% endblock %}
+
 {% block crumbs %}
 <nav class="crumbs" aria-label="面包屑">
-  <span class="sep">/</span><a href="/">项目</a><span class="sep">/</span><span class="cur" title="{{ p.title }}">{{ p.title }}</span>
+  <span class="sep">/</span><a href="/#projects">我的项目</a><span class="sep">/</span><span class="cur" title="{{ p.title }}">{{ p.title }}</span>
 </nav>
 {% endblock %}
 
@@ -28,55 +38,22 @@
 {%- set editable = p.state in ('GATE_A', 'STORYBOARD_READY') -%}
 {%- set unit = '拍' -%}
 
+<div class="workspace">
+<div class="ws-main">
+
 <!-- 项目头 -->
 <section class="phead">
-  <div class="phead-main">
-    <div class="row phead-title-row">
-      <h1 class="phead-title">{{ p.title }}</h1>
-      {{ m.state_badge(p.state, "state-badge") }}
-    </div>
-    <div class="phead-meta">
-      <span class="tag">{{ m.icon("sparkles", "i-sm") }}{{ p.subject }}</span>
-      <span class="tag">{{ p.category }}</span>
-      {% if p.theme_label or p.theme %}<span class="tag">方向 · {{ p.theme_label or p.theme }}</span>{% endif %}
-      <span class="tag num">{{ m.icon("clock", "i-sm") }}{{ p.duration }} 秒</span>
-      <span class="tag num">{{ m.icon("film", "i-sm") }}{{ p.shot_count }} {{ unit }}</span>
-    </div>
+  <div class="phead-title-row">
+    <h1 class="phead-title">{{ p.title }}</h1>
+    {{ m.state_badge(p.state, "state-badge") }}
   </div>
-  <div class="phead-usage card">
-    {%- set tone = m.usage_tone(p.spent_cost, p.quota_budget) -%}
-    <div class="kpi">
-      <span class="kpi-label">{{ m.icon("wallet", "i-sm") }}等效用量</span>
-      <span class="kpi-value"><span id="spent">{{ '%.2f' % p.spent_cost }}</span><small>/ {{ '%.2f' % p.quota_budget }}</small></span>
-    </div>
-    <div class="progress tone-{{ tone }}" id="usage-bar" data-budget="{{ p.quota_budget }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></div>
-    <div class="usage-sub subtle small">
-      <span>预计 <b class="num">{{ '%.2f' % estimate.with_retry }}</b>(TTS {{ '%.2f' % estimate.tts }} · BGM {{ '%.2f' % estimate.bgm }} · LLM {{ '%.2f' % estimate.llm }},缓存命中更少)</span>
-      <span title="每台车一次性,跨项目复用">素材池 {{ estimate.library_vlm_calls }} 次视觉调用 ≈ <b class="num">{{ '%.2f' % estimate.library }}</b></span>
-      <span>渲染约 <b class="num">{{ wall_clock.render_minutes }}</b> 分钟</span>
-    </div>
+  <div class="phead-meta">
+    <span class="tag">{{ m.icon("sparkles", "i-sm") }}{{ p.subject }}</span>
+    {% for s in p.subjects %}<span class="tag tone-brand">{{ s.name }}{% if s.group %} · {{ s.group }}{% endif %}</span>{% endfor %}
+    {% if p.theme_label or p.theme %}<span class="tag">{{ p.theme_label or p.theme }}</span>{% endif %}
+    <span class="tag num">{{ m.icon("clock", "i-sm") }}{{ '%d:%02d' % (p.duration // 60, p.duration % 60) }}</span>
+    <span class="tag num">{{ m.icon("film", "i-sm") }}{{ p.shot_count }} {{ unit }}</span>
   </div>
-</section>
-
-<!-- 流水线 -->
-<section class="card stepper-card">
-  <ol class="stepper" aria-label="流水线进度">
-    {% for s in m.STEPS %}
-    {%- set i = loop.index0 -%}
-    {%- if p.state == 'DONE' or i < cur_step -%}{%- set cls = "is-done" -%}
-    {%- elif i == cur_step -%}{%- set cls = "is-err" if is_err else ("is-gate" if meta.group == "gate" else "is-cur") -%}
-    {%- else -%}{%- set cls = "" -%}{%- endif -%}
-    <li class="step {{ cls }}" {% if i == cur_step and p.state != 'DONE' %}aria-current="step"{% endif %}>
-      <span class="step-dot">
-        {%- if cls == "is-done" -%}{{ m.icon("check", "i-sm") }}
-        {%- elif cls == "is-err" -%}{{ m.icon("x", "i-sm") }}
-        {%- elif cls == "is-gate" -%}{{ m.icon("flag", "i-sm") }}
-        {%- else -%}<span>{{ loop.index }}</span>{%- endif -%}
-      </span>
-      <span class="step-label">{{ s.label }}</span>
-    </li>
-    {% endfor %}
-  </ol>
 </section>
 
 <!-- 主操作区 -->
@@ -133,6 +110,20 @@
   </div>
 </section>
 
+{# 概念动画风格:渲染前(门禁 A 前后)和审片时可选;JS 拉到本片有概念拍才显示 #}
+{% if p.state in ('STORYBOARD_READY', 'GATE_A', 'ASSETS_READY', 'PROMPTS_READY', 'GATE_B') %}
+<section class="card cs-card hidden" id="concept-style" data-state="{{ p.state }}">
+  <div class="card-head">
+    <h2>{{ m.icon("sparkles", "i-sm") }}概念动画风格<span class="tag tone-brand" id="cs-current"></span></h2>
+    <span class="subtle small" id="cs-hint"></span>
+  </div>
+  <div class="card-body stack">
+    <p class="muted small" id="cs-intro"></p>
+    <div class="cs-grid" id="cs-grid"></div>
+  </div>
+</section>
+{% endif %}
+
 <!-- 内容 Tabs -->
 {%- set default_tab = {"GATE_A": "script", "GATE_B": "board", "DONE": "output", "DRAFT_RENDERING": "board", "FINAL_RENDERING": "board"}.get(p.state, "overview") -%}
 <section class="card content-card" id="content" data-default-tab="{{ default_tab }}">
@@ -161,6 +152,24 @@
           <span class="kpi-sub">逐拍本地渲染,无生成排队</span>
         </div>
       </div>
+
+      {% if roster %}
+      <div>
+        <h3 class="section-title">{{ m.icon("layers", "i-sm") }}车单 <span class="count">{{ roster | length }}</span></h3>
+        <div class="rows">
+          {% for r in roster %}
+          <div class="rowline">
+            <span class="badge tone-{{ 'danger' if r.thin else 'success' }}"><span class="dot"></span>{{ '缺事实' if r.thin else '事实就绪' }}</span>
+            <strong>{{ r.name }}</strong>{% if r.group %}<span class="subtle">{{ r.group }}</span>{% endif %}
+            <span class="grow subtle num {{ 'roster-thin' if r.thin else '' }}">
+              {% if r.facts is not none %}事实 {{ r.facts }} 条(产品级 {{ r.product }}){% else %}事实未采集{% endif %}
+              · 素材池 {{ r.usable_seconds }} 秒{% if r.building %}(构建中){% endif %}
+            </span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
 
       {% if facts_report and facts_report.product_gap %}
       <div class="callout tone-danger">{{ m.icon("alert-circle") }}<div><strong>产品级事实不足</strong> · {{ facts_report.product_gap }}</div></div>
@@ -206,11 +215,12 @@
     {% else %}
     <div class="fact-list" id="fact-list">
       {% for f in p.facts %}
-      <div class="fact" id="fact-{{ f.id }}" data-scope="{{ f.scope }}" data-text="{{ (f.claim ~ ' ' ~ f.source_query ~ ' ' ~ f.id) | lower }}">
+      <div class="fact" id="fact-{{ f.id }}" data-scope="{{ f.scope }}" data-text="{{ (f.claim ~ ' ' ~ f.source_query ~ ' ' ~ f.id ~ ' ' ~ f.subject) | lower }}">
         <span class="fact-bar tone-{{ m.CONF_TONE.get(f.confidence, 'neutral') }}" title="{{ m.CONF_LABEL.get(f.confidence, f.confidence) }}"></span>
         <div class="grow">
           <div class="fact-claim">{{ f.claim }}</div>
           <div class="fact-src">
+            {% if f.subject %}<span class="tag tone-brand">{{ f.subject }}</span>{% endif %}
             <span class="tag tone-{{ m.SCOPE_TONE.get(f.scope, 'neutral') }}">{{ m.SCOPE_LABEL.get(f.scope, f.scope) }}</span>
             <span class="tag tone-{{ m.CONF_TONE.get(f.confidence, 'neutral') }}">{{ m.CONF_LABEL.get(f.confidence, f.confidence) }}</span>
             <code>{{ f.source_tool }}</code>
@@ -320,6 +330,7 @@
           {% endif %}
           {% if s.spec.narration_zh %}<div class="sb-narr">{{ m.icon("mic", "i-sm") }}<span>{{ s.spec.narration_zh }}</span></div>{% endif %}
           <div class="sb-tags">
+            {% if s.spec.subject %}<span class="tag tone-brand">{{ s.spec.subject }}</span>{% endif %}
             {% if s.spec.layout %}<span class="tag tone-brand">版式 · {{ s.spec.layout }}</span>{% endif %}
             {% if s.spec.chapter %}<span class="tag">章节 · {{ s.spec.chapter }}</span>{% endif %}
             {% if s.spec.card %}<span class="tag tone-brand">数据卡片 · {{ s.spec.card.kind }}</span>{% endif %}
@@ -351,12 +362,13 @@
     </div>
     <div class="shot-grid" id="shot-grid">
       {% for s in p.shots %}
-      {%- set src = ('/media/' ~ p.id ~ '/shots/' ~ (s.final_path | basename)) if s.final_path else (('/media/' ~ p.id ~ '/drafts/' ~ (s.draft_path | basename)) if s.draft_path else '') -%}
+      {%- set draft_src = ('/media/' ~ p.id ~ '/drafts/' ~ (s.draft_path | basename)) if s.draft_path else '' -%}
+      {%- set src = ('/media/' ~ p.id ~ '/' ~ (s.final_path | media_kind) ~ '/' ~ (s.final_path | basename)) if s.final_path else draft_src -%}
       {%- set can_retry = s.status not in ('succeeded', 'pending') or p.state == 'FINAL_RENDERING' -%}
       <div class="shot status-{{ s.status }}" data-idx="{{ s.idx }}" data-status="{{ s.status }}" tabindex="0" role="button" aria-label="镜头 {{ s.idx }} 详情">
         <div class="shot-media">
           {% if src %}
-          <video data-src="{{ src }}" muted loop playsinline preload="none"></video>
+          <video data-src="{{ src }}"{% if draft_src and draft_src != src %} data-fallback="{{ draft_src }}"{% endif %} muted loop playsinline preload="none"></video>
           <span class="shot-zoom">{{ m.icon("maximize", "i-sm") }}</span>
           {% else %}
           <div class="shot-ph">
@@ -446,6 +458,80 @@
     {% endif %}
   </div>
 </section>
+</div>
+
+<!-- 右侧检查器:预览 · 流水线 · 用量 · 信息 -->
+<aside class="inspector" aria-label="项目信息">
+  <section class="insp-card insp-preview">
+    {% if p.has_output %}
+    <button class="insp-thumb" type="button" data-goto="output" aria-label="预览成片">
+      <img src="/api/projects/{{ p.id }}/cover" alt="" onerror="this.remove()">
+      <span class="insp-play">{{ m.icon("play") }}</span>
+    </button>
+    {% else %}
+    <div class="insp-thumb is-empty">
+      <span>{{ m.icon("film", "i-lg") }}</span>
+      <small>成片合成后在这里预览</small>
+    </div>
+    {% endif %}
+    <div class="insp-preview-foot">
+      <span class="subtle small num">{{ frame }} · {{ '%d:%02d' % (p.duration // 60, p.duration % 60) }}</span>
+      {% if p.has_output %}
+      <a class="btn btn-sm btn-primary" href="/api/projects/{{ p.id }}/download">{{ m.icon("download", "i-sm") }}下载</a>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="insp-card">
+    <h3 class="insp-title">流水线<span class="subtle small num">{{ [cur_step, m.STEPS | length] | min if p.state != 'DONE' else m.STEPS | length }} / {{ m.STEPS | length }}</span></h3>
+    <ol class="vsteps" aria-label="流水线进度">
+      {% for s in m.STEPS %}
+      {%- set i = loop.index0 -%}
+      {%- if p.state == 'DONE' or i < cur_step -%}{%- set cls = "is-done" -%}
+      {%- elif i == cur_step -%}{%- set cls = "is-err" if is_err else ("is-gate" if meta.group == "gate" else "is-cur") -%}
+      {%- else -%}{%- set cls = "" -%}{%- endif -%}
+      <li class="vstep {{ cls }}" {% if i == cur_step and p.state != 'DONE' %}aria-current="step"{% endif %}>
+        <span class="vstep-dot">
+          {%- if cls == "is-done" -%}{{ m.icon("check", "i-sm") }}
+          {%- elif cls == "is-err" -%}{{ m.icon("x", "i-sm") }}
+          {%- elif cls == "is-gate" -%}{{ m.icon("flag", "i-sm") }}
+          {%- else -%}<span>{{ loop.index }}</span>{%- endif -%}
+        </span>
+        <span class="vstep-label">{{ s.label }}</span>
+        {% if cls in ("is-cur", "is-gate", "is-err") %}<span class="vstep-now">{{ '待确认' if cls == 'is-gate' else ('出错' if cls == 'is-err' else '进行中') }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section class="insp-card">
+    {%- set tone = m.usage_tone(p.spent_cost, p.quota_budget) -%}
+    <h3 class="insp-title">{{ m.icon("wallet", "i-sm") }}等效用量</h3>
+    <div class="insp-usage">
+      <span class="kpi-value"><span id="spent">{{ '%.2f' % p.spent_cost }}</span><small>/ {{ '%.2f' % p.quota_budget }}</small></span>
+    </div>
+    <div class="progress tone-{{ tone }}" id="usage-bar" data-budget="{{ p.quota_budget }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></div>
+    <dl class="insp-dl">
+      <dt>预计总量</dt><dd class="num">{{ '%.2f' % estimate.with_retry }}</dd>
+      <dt>TTS / BGM / LLM</dt><dd class="num">{{ '%.2f' % estimate.tts }} / {{ '%.2f' % estimate.bgm }} / {{ '%.2f' % estimate.llm }}</dd>
+      <dt title="每台车一次性,跨项目复用">素材池</dt><dd class="num">{{ estimate.library_vlm_calls }} 次 ≈ {{ '%.2f' % estimate.library }}</dd>
+      <dt>耗时</dt><dd class="num">渲染约 {{ wall_clock.render_minutes }} 分钟</dd>
+    </dl>
+    <p class="subtle small insp-note">缓存命中时实际用量更少</p>
+  </section>
+
+  <section class="insp-card">
+    <h3 class="insp-title">{{ m.icon("info", "i-sm") }}项目信息</h3>
+    <dl class="insp-dl">
+      <dt>选题</dt><dd>{{ p.subject }}</dd>
+      <dt>品类</dt><dd>{{ p.category }}</dd>
+      {% if p.theme_label or p.theme %}<dt>方向</dt><dd>{{ p.theme_label or p.theme }}</dd>{% endif %}
+      <dt>时长</dt><dd class="num">{{ p.duration }} 秒 · {{ p.shot_count }} {{ unit }}</dd>
+      <dt>编号</dt><dd><span class="mono-id subtle">{{ p.id }}</span></dd>
+    </dl>
+  </section>
+</aside>
+</div>
 {% endblock %}
 
 {% block page_data %}

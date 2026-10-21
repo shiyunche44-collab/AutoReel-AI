@@ -2,11 +2,14 @@
 {% import "_macros.html" as m %}
 {% block title %}aimovice · 解说视频自动化平台{% endblock %}
 {% block body_class %}page-index{% endblock %}
+{% set active_nav = 'home' %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑"><span class="sep">/</span><span class="cur">首页</span></nav>
+{% endblock %}
 
 {% block topbar_right %}
-<span class="badge tone-neutral plan-pill" id="plan-pill" data-expires="{{ plan_expires_on }}" title="M Plan 套餐到期日">
-  {{ m.icon("calendar", "i-sm") }}<span>套餐到期 {{ plan_expires_on }}</span>
-</span>
+<a class="btn btn-ghost btn-sm" href="#projects">{{ m.icon("folder", "i-sm") }}<span class="hide-sm">我的项目</span></a>
 {% endblock %}
 
 {% block main %}
@@ -25,25 +28,41 @@
 </details>
 {% endif %}
 
-<section class="hero">
-  <div class="hero-head">
-    <h1>把一个选题,变成一支<span class="grad">可溯源</span>的解说短片</h1>
-    <p class="muted">事实采集 → 脚本 → 分镜全自动完成;所有会消耗额度的步骤都需要你确认后才开始。</p>
+<section class="studio" id="create">
+  <div class="studio-head">
+    <span class="eyebrow">{{ m.icon("sparkles", "i-sm") }}AI 解说视频 · 事实可溯源</span>
+    <h1>把一个选题,变成一支专业解说短片</h1>
+    <p>事实采集、脚本、分镜全自动完成;所有会消耗额度的步骤,都等你确认后才开始。</p>
   </div>
 
-  <div class="create-layout">
-    <form id="create-form" class="card create-card" novalidate>
+  <form id="create-form" class="composer" novalidate>
+    <div class="composer-main">
       <div class="field">
         <label class="field-label" for="subject">选题 / 车型</label>
-        <div class="input-group">
-          {{ m.icon("sparkles") }}
-          <input class="input input-lg" id="subject" name="subject" required autocomplete="off"
-                 placeholder="例:比亚迪汉 EV 2026 款">
-        </div>
+        <input class="composer-input" id="subject" name="subject" required autocomplete="off"
+               placeholder="例:比亚迪汉 EV 2026 款">
         <span class="field-help" id="subject-help">尽量写全品牌、车型和年款,事实采集会更准。</span>
       </div>
 
-      <div class="form-grid-2">
+      <div class="field">
+        <label class="field-label" for="angle">选题角度 <span class="subtle">可选</span></label>
+        <input class="input" id="angle" name="angle" maxlength="120" autocomplete="off"
+               placeholder="例:月销破 3 万背后,它到底赢在哪 —— 留空则按内容方向常规讲">
+        <span class="field-help">填了会额外检索相关近期新闻,开场和标题围绕这个角度来写。</span>
+      </div>
+
+      <div class="field hidden" id="roster-field">
+        <span class="field-label">车单 <span class="subtle" id="roster-count"></span></span>
+        <div class="roster" id="roster"></div>
+        <div class="row roster-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="roster-add">{{ m.icon("plus", "i-sm") }}加一台车</button>
+          <span class="field-help" id="roster-help">每台车各采各的事实、各建一个素材池,每台车一章。分组(如价位段)只做标注,可留空。</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-bar">
+      <div class="composer-opts">
         <div class="field">
           <label class="field-label" for="category-select">品类</label>
           <select class="select" name="category" id="category-select">
@@ -62,62 +81,91 @@
             {% endfor %}
           </select>
         </div>
+        <div class="field opt-duration">
+          <span class="field-label">时长</span>
+          <div class="segmented" role="radiogroup" aria-label="时长" id="duration-group">
+            {% for d in durations %}
+            <input type="radio" name="duration" id="dur-{{ d }}" value="{{ d }}" {% if loop.first %}checked{% endif %}>
+            <label for="dur-{{ d }}">{{ d }} 秒</label>
+            {% endfor %}
+          </div>
+        </div>
       </div>
       <p class="field-help theme-intent" id="theme-intent"></p>
 
-      <div class="field">
-        <span class="field-label">时长</span>
-        <div class="segmented" role="radiogroup" aria-label="时长" id="duration-group">
-          {% for d in durations %}
-          <input type="radio" name="duration" id="dur-{{ d }}" value="{{ d }}" {% if loop.first %}checked{% endif %}>
-          <label for="dur-{{ d }}">{{ d }} 秒</label>
-          {% endfor %}
+      <div class="composer-foot">
+        <details class="disclosure composer-adv">
+          <summary>{{ m.icon("sliders", "i-sm") }}高级设置</summary>
+          <div class="field advanced">
+            <label class="field-label" for="quota_budget">配额节流上限 <span class="subtle">等效美元</span></label>
+            <input class="input" id="quota_budget" name="quota_budget" type="number" step="0.01" min="0" placeholder="留空则按时长自动设定">
+            <span class="field-help">达到上限后项目会自动暂停,不会继续消耗额度。</span>
+          </div>
+        </details>
+        <div class="composer-submit">
+          <span class="subtle small hide-sm">创建后自动跑到「确认 A」并停下等你</span>
+          <button class="btn btn-primary btn-lg" type="submit" id="create-btn">
+            {{ m.icon("arrow-right") }}创建并开始采集
+          </button>
         </div>
       </div>
+    </div>
+  </form>
 
-      <details class="disclosure">
-        <summary>{{ m.icon("chevron-right", "i-sm") }}高级设置</summary>
-        <div class="field advanced">
-          <label class="field-label" for="quota_budget">配额节流上限 <span class="subtle">等效美元</span></label>
-          <input class="input" id="quota_budget" name="quota_budget" type="number" step="0.01" min="0" placeholder="留空则按时长自动设定">
-          <span class="field-help">达到上限后项目会自动暂停,不会继续消耗额度。</span>
-        </div>
-      </details>
-
-      <div class="create-actions">
-        <button class="btn btn-primary btn-lg" type="submit" id="create-btn">
-          {{ m.icon("arrow-right") }}创建并开始采集
-        </button>
-        <span class="subtle small">创建后自动跑到「确认 A」并停下等你</span>
-      </div>
-    </form>
-
-    <aside class="card estimate-card" aria-live="polite">
-      <div class="card-head"><h2>{{ m.icon("activity") }}预估</h2><span class="subtle small" id="est-dur">—</span></div>
-      <div class="card-body estimate-grid">
+  <div class="studio-meta" aria-live="polite">
+    <div class="est-strip">
+      <div class="est-strip-head"><span class="row">{{ m.icon("activity", "i-sm") }}本次预估</span><span class="subtle" id="est-dur">—</span></div>
+      <div class="est-grid">
         <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}节拍数</span><span class="kpi-value" id="est-shots"><span class="skeleton sk-num"></span></span></div>
         <div class="kpi"><span class="kpi-label">{{ m.icon("wallet", "i-sm") }}等效用量</span><span class="kpi-value" id="est-cost"><span class="skeleton sk-num"></span></span><span class="kpi-sub">含重试预留</span></div>
         <div class="kpi"><span class="kpi-label">{{ m.icon("clock", "i-sm") }}成片耗时</span><span class="kpi-value" id="est-time"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-time-sub">&nbsp;</span></div>
         <div class="kpi"><span class="kpi-label">{{ m.icon("mic", "i-sm") }}其中旁白 TTS</span><span class="kpi-value" id="est-save"><span class="skeleton sk-num"></span></span><span class="kpi-sub" id="est-save-sub">&nbsp;</span></div>
       </div>
-      <div class="flow">
-        <div class="flow-title subtle small">流程</div>
-        <ol class="flow-steps">
-          <li><span class="flow-dot tone-brand">{{ m.icon("zap", "i-sm") }}</span><div><strong>自动</strong><span>事实 · 脚本 · 分镜</span></div></li>
-          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 A</strong><span>审脚本与分镜</span></div></li>
-          <li><span class="flow-dot tone-brand">{{ m.icon("film", "i-sm") }}</span><div><strong>逐拍渲染</strong><span>旁白定时长 · 本地合成</span></div></li>
-          <li><span class="flow-dot tone-warning">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>整片审片</span></div></li>
-          <li><span class="flow-dot tone-success">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1920×1080 输出</span></div></li>
-        </ol>
-      </div>
-    </aside>
+    </div>
+    <ol class="flow-steps" aria-label="生产流程">
+      <li><span class="flow-dot">{{ m.icon("zap", "i-sm") }}</span><div><strong>自动</strong><span>事实 · 脚本 · 分镜</span></div></li>
+      <li><span class="flow-dot is-gate">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 A</strong><span>审脚本与分镜</span></div></li>
+      <li><span class="flow-dot">{{ m.icon("film", "i-sm") }}</span><div><strong>逐拍渲染</strong><span>旁白定时长 · 本地合成</span></div></li>
+      <li><span class="flow-dot is-gate">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>整片审片</span></div></li>
+      <li><span class="flow-dot is-done">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1920×1080 输出</span></div></li>
+    </ol>
   </div>
 </section>
 
-<section class="projects">
-  <div class="projects-head">
+<section class="section" id="topics-card">
+  <span class="anchor" id="topics"></span>
+  <div class="section-head">
+    <div class="section-title-group">
+      <h2 class="section-h">{{ m.icon("flame") }}热点选题</h2>
+      <span class="subtle small" id="topics-meta">懂车帝榜单 · 汽车新闻 · 抖音热榜 · B站热门</span>
+    </div>
     <div class="row">
-      <h2 class="h2">项目</h2>
+      <button class="btn btn-sm btn-ghost btn-icon hidden" type="button" id="topics-refresh" title="强制重新抓取">
+        {{ m.icon("refresh", "i-sm") }}
+      </button>
+      <button class="btn btn-sm" type="button" id="topics-btn">
+        {{ m.icon("sparkles", "i-sm") }}抓取今日热点
+      </button>
+    </div>
+  </div>
+  <div class="topics-intro">
+    <span class="topics-intro-icon">{{ m.icon("flame", "i-lg") }}</span>
+    <div><strong>不知道讲什么?</strong><span>抓取今日榜单与热搜,AI 拆成可以直接开拍的选题,点一下自动填进上面的创作区。</span></div>
+  </div>
+  <div class="hidden" id="topics-body">
+    <div class="topics-grid" id="topics-grid"></div>
+    <details class="disclosure topics-raw" id="topics-raw">
+      <summary>{{ m.icon("chevron-right", "i-sm") }}原始热点 <span class="subtle" id="topics-raw-count"></span></summary>
+      <div class="topics-raw-list" id="topics-raw-list"></div>
+    </details>
+  </div>
+</section>
+
+<section class="section projects">
+  <span class="anchor" id="projects"></span>
+  <div class="section-head">
+    <div class="row">
+      <h2 class="section-h">{{ m.icon("folder") }}我的项目</h2>
       <span class="count" id="proj-count">{{ projects | rejectattr("state", "equalto", "CANCELLED") | list | length }}</span>
     </div>
     <div class="projects-tools">
@@ -150,37 +198,36 @@
              data-updated="{{ p.updated_at }}" data-created="{{ p.created_at }}" data-cost="{{ p.spent_cost }}">
       <a class="pcard-link" href="/project/{{ p.id }}" aria-label="打开 {{ p.title }}"></a>
       <div class="pcard-thumb">
+        <span class="pcard-ph">{{ m.icon("film", "i-lg") }}</span>
         {% if p.has_output %}
         <img src="/api/projects/{{ p.id }}/cover" alt="" loading="lazy" onerror="this.remove()">
         {% endif %}
-        {{ m.icon("film", "i-lg") }}
-      </div>
-      <div class="pcard-main">
-        <div class="pcard-top">
-          <h3 class="pcard-title">{{ p.title }}</h3>
-          {{ m.state_badge(p.state) }}
-        </div>
-        <div class="pcard-meta">
-          <span>{{ p.subject }}</span>
-          {% if p.theme %}<span class="tag">{{ p.theme_label or p.theme }}</span>{% endif %}
-          <span class="num">{{ p.duration }}s · {{ p.shot_count }} 镜头</span>
-        </div>
+        <span class="pcard-state">{{ m.state_badge(p.state) }}</span>
+        <span class="pcard-dur num">{{ '%d:%02d' % (p.duration // 60, p.duration % 60) }}</span>
         <div class="pcard-steps" title="流水线进度">
           {%- set st = meta.step -%}
           {% for s in m.STEPS %}
           <span class="seg {% if st >= 0 and loop.index0 < st %}is-done{% elif loop.index0 == st %}is-cur tone-{{ meta.tone }}{% endif %}{% if st < 0 %} is-err{% endif %}"></span>
           {% endfor %}
         </div>
+      </div>
+      <div class="pcard-main">
+        <h3 class="pcard-title">{{ p.title }}</h3>
+        <div class="pcard-meta">
+          <span class="ellipsis">{{ p.subject }}</span>
+          {% if p.theme %}<span class="tag">{{ p.theme_label or p.theme }}</span>{% endif %}
+          <span class="num subtle">{{ p.shot_count }} 镜头</span>
+        </div>
         <div class="pcard-foot">
           {%- set tone = m.usage_tone(p.spent_cost, p.quota_budget) -%}
-          <span class="pcard-usage">
+          <span class="pcard-usage" title="等效用量 / 配额上限">
             <span class="progress progress-sm tone-{{ tone }}"><span style="width: {{ m.pct(p.spent_cost, p.quota_budget) }}%"></span></span>
             <span class="num subtle">{{ '%.2f' % p.spent_cost }} / {{ '%.2f' % p.quota_budget }}</span>
           </span>
           <span class="subtle rel-time" data-ts="{{ p.updated_at }}"></span>
         </div>
       </div>
-      <button class="btn btn-ghost btn-icon btn-sm pcard-del js-delete" type="button"
+      <button class="btn btn-icon btn-sm pcard-del js-delete" type="button"
               data-id="{{ p.id }}" data-title="{{ p.title }}" aria-label="删除项目" data-tip="删除项目" data-tip-pos="left">
         {{ m.icon("trash", "i-sm") }}
       </button>

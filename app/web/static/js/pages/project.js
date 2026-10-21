@@ -4,6 +4,7 @@ import { toast } from '../ui/toast.js';
 import { confirmDialog, openModal } from '../ui/modal.js';
 import { initChrome, paintBadge, stateMeta } from '../ui/chrome.js';
 import { api } from '../api.js';
+import { initConceptStyle } from './concept-style.js';
 
 initChrome();
 
@@ -91,6 +92,9 @@ async function act(btn, url, body, label) {
 const btnAdvance = $('#btn-advance');
 if (btnAdvance) btnAdvance.addEventListener('click', () => act(btnAdvance, `/api/projects/${PID}/advance`, undefined, '推进'));
 
+// 概念动画风格面板(本片有概念拍时才显示);门禁 B 上换风格会退回渲染,刷新页面跟上状态
+const conceptStyle = initConceptStyle(PID, { onRerender: () => setTimeout(reloadPreserving, 700) });
+
 const btnGateA = $('#btn-gate-a');
 if (btnGateA) {
   btnGateA.addEventListener('click', async () => {
@@ -103,7 +107,9 @@ if (btnGateA) {
       title: '确认脚本与分镜?',
       body: h('div', {},
         h('p', {}, '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'),
-        h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`)),
+        h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`),
+        conceptStyle && conceptStyle.hasConcepts()
+          ? h('p', {}, `概念动画风格:${conceptStyle.currentName()}(审片时还能换,只重渲概念动画那几拍)`) : null),
       confirmText: '确认并开始渲染',
       tone: 'success',
     });
@@ -297,21 +303,53 @@ $$('#shot-filters .chip').forEach((chip) => chip.addEventListener('click', () =>
 }));
 countShots();
 
-// 视频只在进入视口时加载播放:40 个镜头同时 autoplay 会把浏览器拖垮
+// 视频只在进入视口时加载:40 个镜头同时 autoplay 会把浏览器拖垮。
+// 能悬停的设备只显示首帧、悬停才播;触屏没有悬停,进入视口就播。
+const canHover = matchMedia('(hover: hover)').matches;
 let io = null;
+// 成片合成后 shots/ 里的单拍会被清掉,只剩草稿:成片地址 404 时退回草稿
+function withFallback(v) {
+  v.addEventListener('error', () => {
+    const fb = v.dataset.fallback;
+    if (!fb || v.dataset.src === fb) return;
+    v.dataset.src = fb;
+    const wasPlaying = v.closest('.shot.is-playing');
+    v.src = v.src.includes('#t=') ? `${fb}#t=0.1` : fb;
+    if (wasPlaying || v.autoplay) v.play().catch(() => {});
+  });
+  return v;
+}
+function loadVideo(v) {
+  if (v.src) return;
+  withFallback(v);
+  v.preload = 'metadata';
+  // #t=0.1 让浏览器解出第一帧当封面,不然是黑块
+  v.src = `${v.dataset.src}#t=0.1`;
+}
 function observeVideos() {
   if (io || !shots.length) return;
   const vids = $$('#shot-grid video[data-src]');
+  if (canHover) {
+    for (const v of vids) {
+      const shot = v.closest('.shot');
+      const play = () => { loadVideo(v); shot.classList.add('is-playing'); v.play().catch(() => {}); };
+      const stop = () => { shot.classList.remove('is-playing'); v.pause(); };
+      shot.addEventListener('mouseenter', play);
+      shot.addEventListener('mouseleave', stop);
+      shot.addEventListener('focus', play);
+      shot.addEventListener('blur', stop);
+    }
+  }
   if (!('IntersectionObserver' in window)) {
-    vids.forEach((v) => { v.src = v.dataset.src; v.play().catch(() => {}); });
+    vids.forEach((v) => { loadVideo(v); if (!canHover) v.play().catch(() => {}); });
     return;
   }
   io = new IntersectionObserver((entries) => {
     for (const en of entries) {
       const v = en.target;
       if (en.isIntersecting) {
-        if (!v.src) v.src = v.dataset.src;
-        v.play().catch(() => {});
+        loadVideo(v);
+        if (!canHover) v.play().catch(() => {});
       } else if (!v.paused) {
         v.pause();
       }
@@ -342,7 +380,8 @@ function openShot(idx) {
     const card = visible[pos];
     const v = card.querySelector('video[data-src]');
     media.replaceChildren(v
-      ? h('video', { src: v.dataset.src, controls: true, autoplay: true, muted: true, loop: true, playsinline: true })
+      ? withFallback(h('video', { src: v.dataset.src, 'data-fallback': v.dataset.fallback || '', 'data-src': v.dataset.src,
+                                  controls: true, autoplay: true, muted: true, loop: true, playsinline: true }))
       : card.querySelector('.shot-ph').cloneNode(true));
     side.replaceChildren(card.querySelector('template.shot-detail').content.cloneNode(true));
     counter.textContent = `${pos + 1} / ${visible.length}`;
