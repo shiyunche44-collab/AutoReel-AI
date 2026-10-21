@@ -771,7 +771,7 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
 
 def _has_host(item: Item) -> bool:
     """描述里点名有人在讲解 / 介绍(评测博主口播)。"""
-    return bool(re.search(r"主持|讲解|介绍|解说|博主|自述|演示", item.desc or ""))
+    return bool(re.search(r"主持|讲解|介绍|解说|博主|主播|口播|出镜|对着镜头|评测员|自述|演示", item.desc or ""))
 
 
 def is_waste(item: Item) -> bool:
@@ -1072,6 +1072,41 @@ def is_dark(item: Item) -> bool:
 SUBTITLE_CROP = 0.22
 
 
+#: 干净池子(剔掉主持人出镜、第三方水印后)至少这么多秒,才把那两类整个拦在背景之外;
+#: 池子本来就小的话,拦了会铺不满,仍按档位降级使用
+HARD_FILTER_MIN_SECONDS = 60.0
+
+
+#: 非官方来源里主持人出镜的段占比 ≥ 这个,整个源按"评测博主视频"处理,源里的段一律不当背景
+#: (VLM 的描述常漏标:同一支视频里漏掉的段多半也有人入镜、带博主水印)
+HOST_SOURCE_RATIO = 0.15
+
+
+def _host_sources(items: Sequence[Item]) -> set[str]:
+    total: dict[str, int] = {}
+    hosts: dict[str, int] = {}
+    for i in items:
+        if i.kind != "video" or not i.tagged or i.official:
+            continue
+        total[i.source] = total.get(i.source, 0) + 1
+        hosts[i.source] = hosts.get(i.source, 0) + (1 if _has_host(i) else 0)
+    return {s for s, n in total.items() if s and hosts[s] / n >= HOST_SOURCE_RATIO}
+
+
+def _hard_bad(item: Item, host_sources: set[str] = frozenset()) -> bool:
+    """背景里宁可不用的素材:主持人出镜(裁不掉,和旁白打架)、评测博主视频里的段,
+    或第三方的角标水印(别家账号的台标,发出去等于挂别人的名)。官方来源的角标不算。"""
+    if _has_host(item) or (item.kind == "video" and item.source in host_sources):
+        return True
+    return item.kind == "video" and item.problem == "text_overlay" and not item.official
+
+
+def _drop_hard_bad(pool: list[Item], host_sources: set[str] = frozenset()) -> list[Item]:
+    clean = [i for i in pool if not _hard_bad(i, host_sources)]
+    seconds = sum(i.length if i.kind == "video" else STILL_SECONDS for i in clean)
+    return clean if seconds >= HARD_FILTER_MIN_SECONDS else pool
+
+
 def _croppable(item: Item) -> bool:
     """只有烧录字幕、没有主持人的视频段:裁掉底部就是干净画面。"""
     return item.kind == "video" and item.problem == "subtitle" and not _has_host(item)
@@ -1154,6 +1189,7 @@ def fill(subject: str, seconds: float, *, hint: str = "",
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
+    pool = _drop_hard_bad(pool, _host_sources(lib.items))
 
     group = near_dup_groups(pool)
     by_id = {i.id: i for i in lib.items}

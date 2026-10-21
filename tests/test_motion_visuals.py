@@ -424,7 +424,7 @@ def _filter_pool(tmp_path, monkeypatch, clean_len):
 
     def item(id_, start, length, **kw):
         return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view="driving",
-                            target="yes", start=start, end=start + length, source="s", **kw)
+                            target="yes", start=start, end=start + length, source="s_" + id_, **kw)
 
     lib.items = [item("clean", 0, clean_len), item("host", 100, 5, desc="博主出镜讲解车内空间"),
                  item("wm", 200, 5, problem="text_overlay")]
@@ -447,3 +447,20 @@ def test_audio_graph_ducks_bgm_under_narration_without_amix_normalize():
     g, label = render._build_audio_graph(True, True, 0.0)
     assert "asplit=2[narr][narrsc]" in g and "sidechaincompress" in g
     assert "normalize=0" in g and label == "[aout]"
+
+
+def test_fill_drops_whole_source_when_it_is_a_host_vlog(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    lib = library.Library(subject="测试车")
+
+    def item(id_, src, start, length, desc=""):
+        return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view="driving",
+                            target="yes", start=start, end=start + length, source=src, desc=desc)
+
+    lib.items = [item("c1", "clean", 0, 70)] + \
+        [item("vlog_host", "vlog", 0, 5, "博主出镜讲解")] + \
+        [item(f"vlog_{n}", "vlog", 10 + n * 10, 5, "红色车前45度") for n in range(4)]
+    lib.save()
+    assert {p.item_id for p in library.fill("测试车", 20.0)} == {"c1"}

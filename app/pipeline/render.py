@@ -217,33 +217,46 @@ def normalise_all(shot_paths: Sequence[Path], work_dir: Path, *,
 # --------------------------------------------------------------------------
 # 第二段:拼接 + 字幕 + 混音
 # --------------------------------------------------------------------------
+#: BGM 的静态音量(相对旁白)。旁白停顿时 BGM 以这个电平托底
+BGM_BED_GAIN = 0.35
+#: 旁白出声时 BGM 额外压到这个增益以下(侧链压缩的目标)
+BGM_DUCK_RATIO = 12
+BGM_DUCK_THRESHOLD = 0.01
+
+
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float
 ) -> tuple[str, str]:
-    """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。"""
+    """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
+
+    旁白优先:先把旁白和 BGM 各自响度对齐(BGM 比旁白低),再用旁白做侧链压 BGM,
+    最后 amix **不做归一化**(默认的 amix 会把每路除以路数,旁白白白少一半),
+    整体只过一遍 loudnorm。旁白在侧链和混音两处都要用,必须先 asplit。
+    """
     filters: list[str] = []
     if has_narration:
-        filters.append("[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr]")
+        filters.append("[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr0]")
     if has_bgm:
         bgm_index = 2 if has_narration else 1
-        filters.append(f"[{bgm_index}:a]aresample=48000,volume=0.16[bgmraw]")
-        if has_narration:
-            # 侧链闪避:旁白一出声,BGM 自动让位
-            filters.append(
-                "[bgmraw][narr]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[bgm]"
-            )
-        else:
-            filters.append("[bgmraw]anull[bgm]")
-
-    if has_narration and has_bgm:
         filters.append(
-            "[narr][bgm]amix=inputs=2:duration=first:dropout_transition=0,"
+            f"[{bgm_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}[bgmraw]"
+        )
+    if has_narration and has_bgm:
+        filters.append("[narr0]asplit=2[narr][narrsc]")
+        # 侧链:旁白一出声,BGM 自动让位;停顿时 attack/release 让它缓缓浮回来
+        filters.append(
+            f"[bgmraw][narrsc]sidechaincompress=threshold={BGM_DUCK_THRESHOLD}:ratio={BGM_DUCK_RATIO}"
+            ":attack=15:release=500:makeup=1[bgm]"
+        )
+        filters.append(
+            "[narr][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
             f"loudnorm={TARGET_LOUDNESS}[aout]"
         )
     elif has_narration:
-        filters.append(f"[narr]loudnorm={TARGET_LOUDNESS}[aout]")
+        filters.append(f"[narr0]loudnorm={TARGET_LOUDNESS}[aout]")
     else:
-        filters.append(f"[bgm]loudnorm={TARGET_LOUDNESS}[aout]")
+        filters.append(f"[bgmraw]loudnorm={TARGET_LOUDNESS}[aout]")
     return ";".join(f for f in filters if f), "[aout]"
 
 
@@ -322,6 +335,14 @@ def compose(
     args += [str(output)]
 
     proc = _run(args, timeout=2400, cwd=project_dir)
+    if proc.returncode == 0 and output.is_file() and not _decodes_clean(output):
+        # 2026-10-21 实测:同样的参数,管线里合出的成片偶发 H.264 NAL 损坏(满屏
+        # "Invalid NAL unit size"),重合一次就干净。出片前整片解码验一遍,坏了重合。
+        warnings.append("成片解码校验未通过,已重新合成一次")
+        output.unlink(missing_ok=True)
+        proc = _run(args, timeout=2400, cwd=project_dir)
+        if proc.returncode == 0 and output.is_file() and not _decodes_clean(output):
+            warnings.append("成片重合后仍有解码错误,请检查后重新合成")
     if proc.returncode != 0 or not output.is_file():
         # 字幕烧录是 Windows 上最容易出问题的一环,失败时退化为"无字幕重试"
         if ass_filter:
@@ -345,6 +366,12 @@ def compose(
         ok=True, output_path=output, duration=duration, warnings=warnings,
         log=proc.stderr[-500:],
     )
+
+
+def _decodes_clean(video: Path) -> bool:
+    """整片解码一遍,有任何错误输出就算不干净。"""
+    proc = _run(["-v", "error", "-i", str(video), "-f", "null", "-"], timeout=900)
+    return proc.returncode == 0 and not proc.stderr.strip()
 
 
 def _build_ass_filter(ass_path: Path | None, project_dir: Path) -> str | None:

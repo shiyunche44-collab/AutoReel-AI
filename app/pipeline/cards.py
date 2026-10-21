@@ -109,6 +109,21 @@ def normalise(raw: Any, kind: str) -> dict[str, Any] | None:
     }
 
 
+_BLANK_VALUES = {"", "无", "暂无", "未知", "未公布", "不详", "na", "none", "null", "tbd"}
+
+
+def _is_blank_value(text: str) -> bool:
+    """"—"、"暂无"、"N/A" 这类占位符:另一边其实没有数据。"""
+    return re.sub(r"[\W_]+", "", text).lower() in _BLANK_VALUES
+
+
+def _same_value(a: str, b: str) -> bool:
+    """两边取值是否实质相同(忽略空白与标点,"八败两胜" 和 "八败两胜。" 算同一个)。"""
+    def key(t: str) -> str:
+        return re.sub(r"[\W_]+", "", t)
+    return key(a) == key(b)
+
+
 def _bar_value(text: str) -> float | None:
     m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
     return float(m.group(0)) if m else None
@@ -143,7 +158,10 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         if kind == "compare" and len(row["values"]) != 2:
             dropped.append(f"「{text}」对比卡每行需要两个值")
             continue
-        if kind == "compare" and row["values"][0].strip() == row["values"][1].strip():
+        if kind == "compare" and any(_is_blank_value(v) for v in row["values"]):
+            dropped.append(f"「{text}」对比卡有一边没有数据(占位符),放上屏就是半张空卡")
+            continue
+        if kind == "compare" and _same_value(*row["values"]):
             dropped.append(f"「{text}」两边取值相同,算不上对比(多半是一条事实被抄了两遍)")
             continue
         if kind == "bars" and _bar_value(row["values"][0]) is None:

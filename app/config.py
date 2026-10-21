@@ -178,8 +178,8 @@ CONNECTOR_BACKEND = (
 TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
 MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
 #: 自备 BGM 目录(放 mp3/m4a/wav)。MiniMax 音乐接口已对新用户关闭(HTTP 410),有曲子就优先用这里的
-#: 是否给成片配 BGM。默认关:2026-10-20 实测 BGM 混音把旁白压没了(见 render._build_audio_graph),修好前别开
-BGM_ENABLED = os.getenv("BGM_ENABLED", "0") == "1"
+#: 是否给成片配 BGM。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
+BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"
 #: 自备目录没曲子时,是否按 profile.bgm_genres 从 Mixkit 自动收一批
 BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None

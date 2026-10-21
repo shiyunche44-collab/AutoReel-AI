@@ -60,10 +60,11 @@ def test_ground_voids_card_below_minimum():
 
 def test_ground_compare_needs_two_columns_and_values():
     raw = {"title": "同级对比", "rows": [
-        {"label": "续航", "values": ["702 公里", "—"], "fact_id": "f_1"},
+        {"label": "续航", "values": ["702 公里"], "fact_id": "f_1"},
     ]}
     assert cards.ground(cards.normalise(raw, "compare"), _facts())[0] is None
     raw["columns"] = ["汉 EV", "海豹 07"]
+    raw["rows"][0]["values"] = ["702 公里", "CLTC 702 公里"]
     grounded, _ = cards.ground(cards.normalise(raw, "compare"), _facts())
     assert grounded["columns"] == ["汉 EV", "海豹 07"]
 
@@ -141,3 +142,17 @@ def test_profile_rejects_unknown_card_kind():
            "section_plan": {}}
     with pytest.raises(ProfileError):
         _validate(_build("x", raw))
+
+
+def test_ground_compare_drops_rows_equal_after_punctuation():
+    raw = {"title": "销量", "columns": ["A", "B"], "rows": [
+        {"label": "月销量", "values": ["八败两胜", "八败两胜。"], "fact_id": "f_1"},
+    ]}
+    assert cards.ground(cards.normalise(raw, "compare"), _facts())[0] is None
+
+
+def test_ground_compare_drops_placeholder_side():
+    raw = {"title": "尺寸", "columns": ["A", "B"], "rows": [
+        {"label": "续航", "values": ["702 公里", "—"], "fact_id": "f_1"},
+    ]}
+    assert cards.ground(cards.normalise(raw, "compare"), _facts())[0] is None
