@@ -1,0 +1,24 @@
+/* @name 纸质杂志
+   @desc 米白纸底 + 红色强调 + 宋体标题,像汽车杂志内页
+   @order 8
+   @light yes
+   @font-num "Playfair Display"
+*/
+:root {
+  --acc: 214, 69, 43;
+  --hi: 160, 40, 20;
+  --acc2: 43, 95, 214;
+  --hi2: 25, 60, 150;
+  --ink: 29, 26, 22;
+  --bg: 243, 238, 228;
+  --bg2: 232, 225, 212;
+  --haze: 220, 200, 170;
+  --studio-top: #f3eee4;
+  --studio-mid: #efe9dd;
+  --studio-floor: #e4dccd;
+  --studio-light: 255, 250, 240;
+  --glow: 0.15;
+  --vignette: 0.12;
+  --grain: 0.09;
+}
+.hd-ttl { font-family: "STSong", "SimSun", serif; font-weight: 700; letter-spacing: 0.04em; }

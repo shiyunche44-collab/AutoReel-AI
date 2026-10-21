@@ -1,0 +1,26 @@
+/* @name 电影暗调
+   @desc 宽银幕遮幅 + 重颗粒暗角 + 暖金强调 + 宋体标题,发布会质感
+   @order 6
+   @font-num "Playfair Display"
+*/
+:root {
+  --acc: 232, 182, 90;
+  --hi: 255, 232, 190;
+  --acc2: 150, 190, 220;
+  --hi2: 220, 236, 248;
+  --ink: 244, 238, 228;
+  --bg: 8, 7, 6;
+  --bg2: 18, 16, 13;
+  --haze: 90, 70, 40;
+  --glow: 0.7;
+  --studio-light: 255, 230, 190;
+  --studio-top: #0a0908;
+  --studio-mid: #0e0c0a;
+  --studio-floor: #15120e;
+  --grain: 0.14;
+  --vignette: 0.8;
+}
+#root::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  border-top: 96px solid #000; border-bottom: 96px solid #000; }
+.hd { top: 140px; } .fn { top: 152px; }
+.hd-ttl { font-family: "STSong", "SimSun", serif; font-weight: 700; letter-spacing: 0.04em; }

@@ -40,7 +40,7 @@ from .models import (
     ShotPatch,
     ShotSpec,
 )
-from .pipeline import library, orchestrator
+from .pipeline import concept_styles, library, orchestrator
 from .pipeline import render as render_mod
 from .providers import cli
 from .state import State
@@ -229,6 +229,8 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         title=row["title"],
         subject=row["subject"],
         category=row["category"],
+        angle=row.get("angle") or "",
+        subjects=db.project_subjects(row),
         duration=row["duration"],
         shot_count=row["shot_count"],
         state=row["state"],
@@ -265,6 +267,8 @@ def build_summary(row: dict[str, Any]) -> ProjectSummary:
         category=row["category"],
         theme=row.get("theme") or "",
         theme_label=_theme_label(row["category"], row.get("theme") or ""),
+        angle=row.get("angle") or "",
+        subjects=db.project_subjects(row),
         duration=row["duration"],
         shot_count=row["shot_count"],
         state=row["state"],
@@ -321,7 +325,24 @@ def project_page(request: Request, project_id: str):
     w, h = profile.frame_size
     beats = len(detail.shots) or detail.shot_count
     estimate = costs.estimate_explainer(detail.duration)
-    lib = library.Library.load(detail.subject).stats()
+    facts_report = db.read_json(project_id, "facts_report.json", {}) or {}
+    roster = []
+    if detail.subjects:
+        # 横评:每台车一个池子,费用按车累加;门禁 A 按车看事实数和素材秒数
+        per = facts_report.get("per_subject") or {}
+        thin = set(facts_report.get("subjects_thin") or [])
+        vlm = 0
+        for s in detail.subjects:
+            st = library.Library.load(s.name).stats()
+            vlm += st["vlm_calls"]
+            got = per.get(s.name) or {}
+            roster.append({"name": s.name, "group": s.group, "facts": got.get("facts"),
+                           "product": got.get("product"), "thin": s.name in thin,
+                           "usable_seconds": st["usable_seconds"],
+                           "building": library.is_building(s.name)})
+        lib = {"vlm_calls": vlm}
+    else:
+        lib = library.Library.load(detail.subject).stats()
     estimate["library_vlm_calls"] = lib["vlm_calls"]
     estimate["library"] = costs.estimate_library(lib["vlm_calls"])
     wall_clock = {"render_minutes": _explainer_minutes(beats)}
@@ -333,7 +354,8 @@ def project_page(request: Request, project_id: str):
             "p": detail,
             "health": HEALTH,
             "lint": db.read_json(project_id, "lint.json", []) or [],
-            "facts_report": db.read_json(project_id, "facts_report.json", {}) or {},
+            "facts_report": facts_report,
+            "roster": roster,
             "render": db.read_json(project_id, "render.json", {}) or {},
             "events": db.get_events(project_id, limit=40),
             "wall_clock": wall_clock,
@@ -379,6 +401,43 @@ def estimate(duration: int = 240, category: str = ""):
                        "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
         "shot_count": beats,
     }
+
+
+#: 热点选题内存缓存:category -> 结果。抓取 + LLM 要几十秒,30 分钟内复用
+_TOPICS_CACHE: dict[str, dict[str, Any]] = {}
+TOPICS_TTL = 30 * 60
+
+
+@app.get("/api/topics")
+def hot_topics(category: str = "", refresh: int = 0):
+    """抓实时热点 -> LLM 归纳单车 / 横评选题。同步函数,FastAPI 放线程池里跑。"""
+    from .pipeline import topics
+    from .providers import trends
+
+    category = category or default_category()
+    cached = _TOPICS_CACHE.get(category)
+    if cached and not refresh and time.time() - cached["fetched_at"] < TOPICS_TTL:
+        return cached
+    profile = load_profile(category)
+    # 热点口径按品类走 profile.trends:母婴不调懂车帝,新闻 / 抖音 / B站换母婴词
+    items, errors = trends.collect(spec=profile.trends, brands=profile.trend_brands)
+    llm = orchestrator._llm()
+    if llm is None:
+        errors = {**errors, "llm": "没有可用的 LLM,只能列出原始热点"}
+    try:
+        ideas = topics.suggest(items, profile=profile, llm=llm)
+    except Exception as exc:  # noqa: BLE001 - 选题失败仍返回原始热点,让用户自己挑
+        ideas, errors = [], {**errors, "llm": f"选题生成失败:{exc}"}
+    result = {
+        "topics": [t.model_dump() for t in ideas],
+        "trends": [i.to_dict() if hasattr(i, "to_dict") else dict(i) for i in items],
+        "errors": errors,
+        "sources_label": profile.trends.sources_label,
+        "fetched_at": time.time(),
+    }
+    if ideas:
+        _TOPICS_CACHE[category] = result
+    return result
 
 
 @app.post("/api/projects")
@@ -482,6 +541,39 @@ def retry_shot(project_id: str, idx: int, payload: RetryRequest | None = None):
     stage = (payload.stage if payload else "final")
     orchestrator.retry(project_id, idx, stage)
     return {"ok": True}
+
+
+class ConceptStyleRequest(BaseModel):
+    style: str
+
+
+@app.get("/api/concept-styles")
+def concept_style_gallery():
+    """全部概念动画风格 + 固定示例图(仓库里的静态文件,不生成)。"""
+    return concept_styles.gallery()
+
+
+@app.get("/api/concept-styles/image/{name}")
+def concept_style_image(name: str):
+    path = concept_styles.sample_image(Path(name).name)
+    if not path:
+        raise HTTPException(404, "图片不存在")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/api/projects/{project_id}/concept-style")
+def concept_style_status(project_id: str):
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    return concept_styles.project_status(project_id)
+
+
+@app.post("/api/projects/{project_id}/concept-style")
+def concept_style_set(project_id: str, payload: ConceptStyleRequest):
+    try:
+        return orchestrator.set_concept_style(project_id, payload.style)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/projects/{project_id}/events")

@@ -165,7 +165,9 @@ def build(
     order = sorted(by_pos)
     assets = [by_pos[i] for i in order]
     result.audio_paths = [a.local_path for a in assets]
-    used_texts = [texts[i] for i in order]
+    # 字幕用原文:TTS 文本把数字归一化成了中文读法("六百四十三公里"),
+    # 上屏得是"643 公里""kWh",观众才能扫读、截图,也才和画面上的大字对得上
+    used_texts = [pairs[i][0].strip() for i in order]
     used_shots = [shot_indices[i] for i in order]
 
     # ---- 时长探测 ----

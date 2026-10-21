@@ -19,7 +19,7 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition
-from . import explainer, intake, library, script_gen
+from . import concept_styles, explainer, intake, library, motion, script_gen
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
@@ -123,10 +123,22 @@ def create_project(payload: ProjectCreate) -> str:
     if not theme_name:
         theme_name = profile.default_theme
 
+    theme = profile.theme_spec(theme_name)
+    subjects = roundup_subjects(payload, theme) if theme.roundup else []
+
     # 时长能否铺展出正确长度的段落序列,在这里就验掉,
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
-    plan = profile.plan_for(payload.duration, theme_name)
+    names = [s["name"] for s in subjects]
+    plan = profile.slots_for(payload.duration, theme_name, names or None)
     expected_shots = profile.shots_for(payload.duration)
+    # 车多时长短会自动精简每车段落(见 roundup_blocks);配置自检保证车单上限精简后
+    # 放得进最短时长,这里只是兜底,不让结论段被截掉
+    need = len(profile.roundup_blocks(theme, names, shots=expected_shots)) if theme.roundup else 0
+    if need > expected_shots:
+        raise PipelineError(
+            f"{len(names)} 台车在 {payload.duration}s 下精简后仍需 {need} 拍,只有 {expected_shots} 拍。"
+            f"请加长时长或减少车数。"
+        )
     if len(plan) != expected_shots:
         raise PipelineError(
             f"方向「{theme_name}」在 {payload.duration}s 下铺展出 {len(plan)} 个段落,"
@@ -139,7 +151,7 @@ def create_project(payload: ProjectCreate) -> str:
     # 横屏解说轨不调视频生成,只有 TTS、BGM 与几次 LLM
     est = costs.estimate_explainer(payload.duration)["with_retry"]
     now = time.time()
-    title = payload.title or f"{payload.subject} 解说视频"
+    title = payload.title or (payload.subject if theme.roundup else f"{payload.subject} 解说视频")
 
     db.create_project(
         {
@@ -148,6 +160,8 @@ def create_project(payload: ProjectCreate) -> str:
             "subject": payload.subject,
             "category": payload.category,
             "theme": theme_name,
+            "angle": (payload.angle or "").strip(),
+            "subjects": subjects,
             "duration": payload.duration,
             "shot_count": shot_count,
             "narration_mode": payload.narration_mode,
@@ -160,11 +174,37 @@ def create_project(payload: ProjectCreate) -> str:
             "updated_at": now,
         }
     )
+    angle = (payload.angle or "").strip()
+    if angle and (payload.angle_search or payload.angle_evidence):
+        db.write_json(project_id, "topic.json", {
+            "angle": angle,
+            "search": (payload.angle_search or "").strip(),
+            "evidence": [str(e)[:300] for e in payload.angle_evidence or []],
+        })
     db.add_event(
         project_id, str(State.DRAFT_INTENT),
-        reason=f"创建项目:{title}(方向:{theme_name})",
+        reason=f"创建项目:{title}(方向:{theme_name}"
+               + (f",角度:{payload.angle.strip()}" if (payload.angle or "").strip() else "")
+               + ")",
     )
     return project_id
+
+
+def roundup_subjects(payload: ProjectCreate, theme) -> list[dict[str, str]]:
+    """横评车单:去空白、按车名去重,台数要在方向的 subject_count 范围内。"""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in payload.subjects or []:
+        name = " ".join(item.name.split())
+        key = name.replace(" ", "").lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": name, "group": " ".join(item.group.split())})
+    lo, hi = theme.subject_count
+    if not lo <= len(out) <= hi:
+        raise PipelineError(f"「{theme.label}」需要 {lo}–{hi} 台车,车单里有 {len(out)} 台(去重后)。")
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -187,6 +227,10 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
     state = State(project["state"])
     profile, theme = _theme_of(project)
     subject = project["subject"]
+    angle = (project.get("angle") or "").strip()
+    #: 横评车单;单车项目为空
+    subjects = db.project_subjects(project) if theme.roundup else []
+    names = [s["name"] for s in subjects]
 
     if state in (State.GATE_A, State.GATE_B) and not confirmed:
         return {"state": str(state), "action": "等待人工确认", "waiting": True}
@@ -198,29 +242,43 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
     llm = _llm()
 
     if state == State.DRAFT_INTENT:
-        facts, report = intake.run(project_id, profile, subject, theme=theme.name, llm=llm)
+        topic = db.read_json(project_id, "topic.json", {}) or {}
+        if theme.roundup:
+            facts, report = intake.run_roundup(project_id, profile, subjects,
+                                               theme=theme.name, angle=angle,
+                                               angle_search=topic.get("search", ""),
+                                               evidence=topic.get("evidence") or (), llm=llm)
+        else:
+            facts, report = intake.run(project_id, profile, subject, theme=theme.name,
+                                       angle=angle, angle_search=topic.get("search", ""),
+                                       evidence=topic.get("evidence") or (), llm=llm)
         if not report.get("sources_ok") and report.get("sources_failed"):
             # 一个来源都没通是环境问题(CLI 缺失、登录失效),不是"这款车没数据"。
             # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
             first = report["sources_failed"][0]
             raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
         db.update_project(project_id, shot_count=profile.shots_for(project["duration"]))
+        thin = report.get("subjects_thin") or []
         _set_state(project_id, state, State.FACTS_RESOLVED,
                    reason=f"采集 {len(report['sources_ok'])} 个来源,"
-                          f"抽取 {len(facts)} 条事实(方向:{theme.label})")
+                          f"抽取 {len(facts)} 条事实(方向:{theme.label})"
+                          + (f";缺事实的车:{'、'.join(thin)}" if thin else ""))
         return {"state": str(State.FACTS_RESOLVED), "facts": len(facts), "report": report}
 
     if state == State.FACTS_RESOLVED:
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
         facts = _facts(project_id)
-        plan = profile.drop_unbacked(profile.plan_for(project["duration"], theme.name),
-                                     (f.topic for f in facts if f.enabled))
+        slots = profile.drop_unbacked_slots(
+            profile.slots_for(project["duration"], theme.name, names or None),
+            (f.topic for f in facts if f.enabled))
+        plan = [s.section for s in slots]
         segments, title = script_gen.generate(
             subject=subject, profile=profile, facts=facts, plan=plan,
-            duration=project["duration"], llm=llm, theme=theme,
+            duration=project["duration"], llm=llm, theme=theme, angle=angle,
+            **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
         )
-        segments = script_gen.normalize_segments(segments, plan)
+        segments = script_gen.normalize_segments(segments, slots)
         segments = script_gen.ensure_disclaimers(segments, profile)
         issues = script_gen.compliance_lint(segments, profile, facts, theme=theme)
         blocking = [i for i in issues if i.is_error]
@@ -233,15 +291,19 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
                 "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
 
     if state == State.SCRIPT_READY:
-        _start_library(project_id, subject, profile, llm)
+        if names:
+            _start_library_many(project_id, names, profile, llm)
+        else:
+            _start_library(project_id, subject, profile, llm)
         segments = _script(project_id)
         facts = _facts(project_id)
         log: list[dict] = []
         if llm is None:
-            specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments)
+            specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments,
+                                             subjects=names)
         else:
             specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
-                                          facts=facts, llm=llm, card_log=log)
+                                          facts=facts, llm=llm, card_log=log, subjects=subjects)
         problems = explainer.validate_beats(specs)
         if problems:
             raise PipelineError("分镜自检未通过:" + "; ".join(problems))
@@ -292,7 +354,7 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
     if state == State.DRAFT_RENDERING:
         specs = _specs(project_id)
         result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
-                                          limit=EXPLAINER_BEATS_PER_TICK)
+                                          limit=EXPLAINER_BEATS_PER_TICK, subjects=names)
         if result["stage_complete"]:
             _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
             return {"state": str(State.GATE_B), "waiting": True, **result}
@@ -346,6 +408,20 @@ def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
     try:
         if library.build_async(subject, profile=profile, llm=llm):
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
+    except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
+
+
+def _start_library_many(project_id: str, names: list[str], profile, llm=None) -> None:
+    """横评:车单上每台车一个轻量素材池,一个后台线程按车依次建(见 `library.build_many_async`)。"""
+    if not config.USE_LIBRARY:
+        return
+    try:
+        started = library.build_many_async(names, profile=profile, llm=llm,
+                                           enough_seconds=library.ROUNDUP_ENOUGH_SECONDS,
+                                           max_sources=library.ROUNDUP_MAX_SOURCES)
+        if started:
+            db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({'、'.join(started)})")
     except Exception as exc:  # noqa: BLE001
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
@@ -418,6 +494,46 @@ def retry(project_id: str, idx: int, stage: str) -> None:
     if State(project["state"]) == State.GATE_B:
         _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
                    reason=f"重拍第 {idx} 拍(换背景)")
+
+
+#: 概念动画还没开始渲染的状态:换风格只记下来,渲染时就用新风格
+_STYLE_FREE = (State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY,
+               State.GATE_A, State.ASSETS_READY, State.PROMPTS_READY)
+
+
+def project_names(project: dict[str, Any]) -> tuple[str, list[str]]:
+    """(主车, 横评车单)。单车项目车单为空。"""
+    _, theme = _theme_of(project)
+    subjects = db.project_subjects(project) if theme.roundup else []
+    return project["subject"], [s["name"] for s in subjects]
+
+
+def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
+    """选定概念动画风格。渲染前选:只记下来。门禁 B 上换:只把概念动画那几拍退回去用新风格重渲
+    (背景、其他拍都不动),渲完自己回到门禁 B。渲染中 / 成片阶段不让换(会和正在跑的渲染打架)。"""
+    project = db.get_project(project_id)
+    if not project:
+        raise PipelineError("项目不存在")
+    if style not in {s.id for s in motion.styles()}:
+        raise PipelineError(f"没有这个风格:{style}")
+    state = State(project["state"])
+    if state not in _STYLE_FREE and state != State.GATE_B:
+        raise PipelineError("现在不能换概念动画风格:渲染中请等到审片(门禁 B),成片阶段已经定稿")
+    before = explainer.concept_style_of(project_id)
+    db.write_json(project_id, "concept_style.json", {"style": style})
+    redo: list[int] = []
+    if state == State.GATE_B and style != before:
+        redo = [s.idx for s in concept_styles.concept_beats(project_id)]
+        for idx in redo:
+            db.update_shot(project_id, idx, "draft", status="pending", draft_path=None, error=None)
+            db.update_shot(project_id, idx, "final", status="pending", final_path=None, error=None)
+        if redo:
+            _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                       reason=f"概念动画换风格 {motion.get_style(style).name},重渲 {len(redo)} 拍")
+    elif style != before:
+        db.add_event(project_id, str(state), src=str(state),
+                     reason=f"概念动画风格:{motion.get_style(style).name}")
+    return {"style": style, "rerender": redo}
 
 
 def run_until_waiting(project_id: str, max_steps: int = 12) -> list[dict[str, Any]]:

@@ -11,8 +11,9 @@ from __future__ import annotations
 import re
 from typing import Iterable, Sequence
 
-from ..categories import CategoryProfile, Vocab
+from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
+from .grounding import arabicize, numbers_in
 from .timeline import narration_budget_chars
 
 #: 阿拉伯数字/百分号/单位 —— 出现即视为"数据型陈述",必须有事实引用
@@ -23,6 +24,21 @@ _NUMERIC_RE = re.compile(r"\d")
 #: 那才是真正危险的:一个总在喊狼来了的告警等于没有告警。
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 
+#: 型号代号(YU7、SU7、X5、V6s)里的数字是名字不是参数。只认"1–4 个字母 + 1–2 位数字",
+#: 这样 "CLTC643""752V""700TOPS" 这类真参数不会被误剥
+_MODEL_CODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{1,4}\d{1,2}(?![\d.])[A-Za-z]*")
+
+
+#: 广告法绝对化用语:所有品类共享的红线
+AD_ABSOLUTE_TERMS = ("最强", "第一", "顶级", "永久", "唯一", "100%")
+
+
+def forbidden_in(text: str, profile: CategoryProfile) -> list[str]:
+    """文本命中的禁用词(品类禁用词 + 广告法绝对化用语)。"第一次""第一眼"这类不算。"""
+    plain = _BENIGN_FIRST_RE.sub("", text or "")
+    terms = dict.fromkeys((*profile.forbidden_terms, *AD_ABSOLUTE_TERMS))
+    return [t for t in terms if t and t in plain]
+
 
 def has_numeric_claim(text: str) -> bool:
     """判断文本是否含**需要事实支撑**的数据型陈述。
@@ -31,7 +47,8 @@ def has_numeric_claim(text: str) -> bool:
     """
     if not text:
         return False
-    stripped = _YEAR_RE.sub("", text)
+    # 中文数量词("五百九十三公里")同样是数据,先统一成阿拉伯数字再判断
+    stripped = _MODEL_CODE_RE.sub("", _YEAR_RE.sub("", arabicize(text)))
     return bool(_NUMERIC_RE.search(stripped))
 
 
@@ -65,6 +82,7 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 2. `segments` 数组,每项: {{"section": 段落名, "text": 解说词, "fact_refs": ["事实ID"]}}
    - segments 的数量与顺序必须严格对应给定的段落序列。
    - text 为口播文案,口语化、短句、有画面感,不要用书面语长句。
+   - 数值一律写阿拉伯数字(如 26.35 万、593 公里、4.3 秒),字幕直接显示它,配音会自动转成读法。
 3. **事实引用是强制的**:text 中每出现一个数字({number_examples}),
    必须在 fact_refs 中列出支撑该数字的事实 ID。没有事实支撑的数字一律不许写。
    可以改写成不含数字的定性表述,而不是硬写。
@@ -74,17 +92,22 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 {scope_policy}
 5. **数字之外的硬红线**(所有方向都适用,不得因为方向而放宽):
    - 严禁编造任何未在事实清单中出现的信息,包括非数字的参数名与技术名词。
+     讲原理、讲取舍只能用下方「可用原理清单」里的说法,并把它的 k_ ID 写进 fact_refs;
+     原理清单不含数字,句子里的数字仍然只能来自事实清单。
    - 禁止绝对化用语与无法证实的承诺。
-   - 只讲{subject_noun}/这个品牌本身,不评价其他无关产品。
+   - {scope_line}
 6. `title`:8-16 字的视频标题,要有吸引力但不得夸大。
 {title_policy}
 7. 字数:全片约 {chars} 字,平均每镜约 {per_shot} 字。
 8. **黄金三秒**:第 1 段的第一句话必须在 18 字以内(约 3 秒读完),直接抛出一个反常识、
    争议或最硬的一个结论/数字,让人想听下去。不许用"大家好""今天来聊聊""欢迎""这期视频"
-   这类开场白,不许先自我介绍或交代背景。
+   这类开场白,不许先自我介绍或交代背景。{angle_policy}
 
-可用事实清单(只能用这里的 ID,已标注层级):
+可用事实清单(只能用这里的 ID,已标注层级;来源 derived 是由其它事实推算的体感数字):
 {facts}
+
+可用原理清单(讲"为什么"和"代价"时引用,ID 以 k_ 开头):
+{principles}
 
 段落序列(必须一一对应):
 {plan}
@@ -157,6 +180,61 @@ def _title_policy(theme) -> str:
     return _TITLE_POLICY_COMPANY
 
 
+#: 横评时替换 SYSTEM 第 5 条"只讲这台车"那一句
+ROUNDUP_SCOPE_LINE = ("只讲车单里的这几台车;每段只讲段落序列里〔〕标注的那台,"
+                      "它的数字只能引用这台车名下的事实,不许把 A 车的参数安到 B 车头上。")
+
+
+def roster_line(subjects: Sequence[dict[str, str]]) -> str:
+    """车单一行:小米YU7(25-30万)、特斯拉Model Y。"""
+    return "、".join(f"{s['name']}({s['group']})" if s.get("group") else s["name"]
+                    for s in subjects)
+
+
+def roundup_facts_payload(facts: Sequence[Fact], subjects: Sequence[dict[str, str]],
+                          line) -> str:
+    """横评的事实清单按车分组(车单顺序),没有车名的共用事实放最后。"""
+    blocks = []
+    for s in subjects:
+        own = [line(f) for f in facts if f.subject == s["name"]]
+        head = f"## {s['name']}" + (f"({s['group']})" if s.get("group") else "")
+        blocks.append(head + "\n" + ("\n".join(own) or "(这台车没有可用事实:只能写定性描述)"))
+    names = {s["name"] for s in subjects}
+    shared = [line(f) for f in facts if f.subject not in names]
+    if shared:
+        blocks.append("## 共用\n" + "\n".join(shared))
+    return "\n\n".join(blocks)
+
+
+def usable_facts(facts: Sequence[Fact]) -> list[Fact]:
+    """进脚本的事实:去掉推算源已被剔除(门禁 A 取消勾选)的推算事实。"""
+    enabled = {f.id for f in facts if f.enabled}
+    return [f for f in facts
+            if not (f.source_kind == "derived" and f.source_query and f.source_query not in enabled)]
+
+
+def matched_principles(profile: CategoryProfile, facts: Sequence[Fact]):
+    """事实清单里提到了的原理条目 —— 没提到的技术不讲,免得讲了这台车根本没有的东西。"""
+    text = "\n".join(f.claim for f in facts if f.enabled)
+    return [p for p in profile.principles if p.matches(text)]
+
+
+def _angle_policy(angle: str) -> str:
+    """选题角度规则。无角度时返回空串,SYSTEM 渲染结果与旧版逐字一致。"""
+    if not angle:
+        return ""
+    return (
+        f"\n9. **选题角度**:本期选题是「{angle}」。\n"
+        "   - 第 1 段的钩子与 title 必须围绕这个角度,让观众一眼知道这期在聊这件事;"
+        "但第一句不许照抄角度原句,仍须 18 字以内。\n"
+        "   - 角度原句里的绝对化用语(「第一」「最强」等)不许照搬:排名写成带引用的"
+        "具体名次(如「9 月销量榜第 1 名」),其余换成合规说法。\n"
+        "   - 正文仍按段落序列展开,但每段优先讲与角度相关的事实,最后一段回扣角度给出结论。\n"
+        "   - 角度里提到的事件/数字同样必须有事实支撑;事实清单里找不到的,只能定性地提,"
+        "不许为了贴合角度编造。"
+    )
+
+
 def generate(
     *,
     subject: str,
@@ -166,27 +244,54 @@ def generate(
     duration: int,
     llm,
     theme=None,
+    angle: str = "",
+    slots: Sequence[Slot] | None = None,
+    subjects: Sequence[dict[str, str]] | None = None,
 ) -> tuple[list[ScriptSegment], str]:
-    """生成解说脚本。返回 (段落列表, 标题)。"""
+    """生成解说脚本。返回 (段落列表, 标题)。
+
+    `angle`:选题角度(热点选题)。为空时 prompt 与无角度版本逐字一致。
+    `slots` / `subjects`:多车横评的段落位(段落 + 车名)与车单。不传时 prompt 与单车版逐字一致。
+    """
+    roundup = bool(subjects)
+    angle = (angle or "").strip()
     vocab = profile.vocab
     budget = narration_budget_chars(duration)
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
-    facts_payload = "\n".join(
-        f"- {f.id} [{scope_label.get(f.scope, 'company')}"
-        f"{' · topic=quality' if f.topic == QUALITY_TOPIC else ''}] | {f.claim} | "
-        f"来源:{f.source_tool} | 可信度:{f.confidence}"
-        for f in facts
-    ) or "(无可用事实:请完全避免写出任何具体数字)"
+    facts = usable_facts(facts)
+    def _line(f: Fact) -> str:
+        return (f"- {f.id} [{scope_label.get(f.scope, 'company')}"
+                f"{' · topic=quality' if f.topic == QUALITY_TOPIC else ''}] | {f.claim} | "
+                f"口径:{f.basis or '未注明'} | 来源:{f.source_kind or f.source_tool} | "
+                f"可信度:{f.confidence}")
+
+    if roundup:
+        facts_payload = roundup_facts_payload(facts, subjects or (), _line)
+    else:
+        facts_payload = "\n".join(_line(f) for f in facts)
+    facts_payload = facts_payload or "(无可用事实:请完全避免写出任何具体数字)"
+    if roundup and slots:
+        plan_lines = [f"{s.section}〔{s.subject}〕" if s.subject else s.section for s in slots]
+    else:
+        plan_lines = list(plan)
+    principles_payload = "\n".join(
+        f"- {p.id} [{' / '.join(p.terms)}] 原理:{p.explain}"
+        + (f" 代价/边界:{p.tradeoff}" if p.tradeoff else "")
+        for p in matched_principles(profile, facts)
+    ) or "(无)"
 
     user = (
         f"Product subject: {subject}\n"
         f"Category: {profile.label}\n"
         f"Script style: {profile.script_style or '口语化,克制,有画面感'}\n"
         f"Total duration: {duration} seconds\n"
-        f"Target total characters: {budget}\n\n"
+        f"Target total characters: {budget}\n"
+        + (f"Topic angle: {angle}\n" if angle else "")
+        + (f"车单:{roster_line(subjects or ())}\n" if roundup else "")
+        + "\n"
         f"可用事实清单:\n{facts_payload}\n\n"
-        f"段落序列:\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan))
+        f"段落序列:\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines))
     )
 
     data = llm.structured(
@@ -198,13 +303,17 @@ def generate(
             chars=budget,
             per_shot=max(20, budget // shot_count),
             facts=facts_payload,
-            plan="\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan)),
+            principles=principles_payload,
+            plan="\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines)),
+            scope_line=(ROUNDUP_SCOPE_LINE if roundup else
+                        f"只讲{vocab.subject_noun}/这个品牌本身,不评价其他无关产品。"),
             keywords=", ".join(profile.visual_keywords[:4]),
             theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
             else "   按品类惯例组织叙事。",
             theme_rules=_theme_rules(theme, facts),
             scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
+            angle_policy=_angle_policy(angle),
         ),
         user,
         required_keys=["segments", "title"],
@@ -251,6 +360,14 @@ _COMPETITOR_MARKERS = ("竞品", "对手", "友商", "同级", "其他品牌", "
 _DISPARAGING_TERMS = ("智商税", "劝退", "垃圾", "辣鸡", "韭菜", "坑爹")
 
 
+#: "第一感觉""第一次""第一步"是叙述顺序,不是广告法说的排名
+#: "第一类人""第一种情况""第一档"是列举,同样不是排名
+_BENIGN_FIRST_RE = re.compile(r"第一(?=感|眼|印象|次|步|句|段|时间|反应|排|个问题|类|种|档|条|项)")
+
+#: 口径词之后多远内出现的数字算"这个口径下的数"(如 "CLTC续航643公里")
+_BASIS_WINDOW = 40
+
+
 #: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.8 字/秒)与禁用的开场套话
 HOOK_MAX_CHARS = 18
 HOOK_FILLER = ("大家好", "今天来聊", "今天我们", "欢迎", "这期视频", "本期视频", "哈喽", "各位")
@@ -278,6 +395,67 @@ def hook_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
     return issues
 
 
+def depth_lint(
+    segments: Sequence[ScriptSegment],
+    profile: CategoryProfile,
+    facts: Sequence[Fact],
+) -> list[LintIssue]:
+    """技术深度提醒(warning,不硬拦):空话、该讲原理的段落没讲、数字没带口径。
+
+    合规 lint 管"不许错",这里管"不够专业":只念参数、用"很猛"代替论据,
+    观众听完不知道这台车为什么好、好在哪、代价是什么。
+    """
+    vocab = profile.vocab
+    principle_ids = {p.id for p in profile.principles}
+    by_id = {f.id: f for f in facts}
+    issues: list[LintIssue] = []
+
+    for seg in segments:
+        text = seg.text or ""
+        hit = next((t for t in vocab.filler_terms if t in text), None)
+        if hit:
+            issues.append(LintIssue(seg.idx, "warning",
+                                    f"空洞评价「{hit}」:说清楚比什么、好在哪,或删掉:{text[:40]}"))
+        if has_numeric_claim(text):
+            said = numbers_in(text)
+            missing = []
+            for r in seg.fact_refs:
+                claim = by_id[r].claim if r in by_id else ""
+                for t in vocab.basis_terms:
+                    pos = claim.find(t)
+                    if pos < 0 or t in text:
+                        continue
+                    # 只有句子里的数字恰好是这个口径下的数,才需要说口径(讲价格不用说 CLTC)
+                    if numbers_in(claim[pos:pos + len(t) + _BASIS_WINDOW]) & said:
+                        missing.append(t)
+            if missing:
+                issues.append(LintIssue(seg.idx, "warning",
+                                        f"数字没带口径:引用的事实是 {missing[0]} 口径,"
+                                        f"句子里应说明(如「{missing[0]} 标称」):{text[:40]}"))
+
+    # 无出处的技术名词:原理库认得这个词,但事实里根本没提 —— 多半是模型
+    # 凭印象补的配置("空悬""四驱"),这台车未必有
+    fact_text = "\n".join(f.claim for f in facts if f.enabled).lower()
+    for seg in segments:
+        low = (seg.text or "").lower()
+        ghost = next((t for p in profile.principles for t in p.terms
+                      if t.lower() in low and t.lower() not in fact_text), None)
+        if ghost:
+            issues.append(LintIssue(seg.idx, "warning",
+                                    f"「{ghost}」不见于任何事实,这台车未必有这项配置:{seg.text[:40]}"))
+
+    available = bool(matched_principles(profile, facts))
+    for section in vocab.depth_sections:
+        segs = [s for s in segments if s.section == section]
+        if not segs or not available:
+            continue
+        if not any(r in principle_ids for s in segs for r in s.fact_refs):
+            issues.append(LintIssue(segs[0].idx, "warning",
+                                    f"「{section}」只列了参数,没有引用任何原理(k_)讲清为什么"
+                                    "和代价 —— 技术深度不够"))
+    return issues
+
+
 def compliance_lint(
     segments: Sequence[ScriptSegment],
     profile: CategoryProfile,
@@ -287,6 +465,7 @@ def compliance_lint(
     """机械校验脚本。error 级问题必须修复后才能进入分镜阶段。"""
     issues: list[LintIssue] = []
     known_ids = {f.id for f in facts}
+    principle_ids = {p.id for p in profile.principles}
     forbidden = list(profile.forbidden_terms)
     if theme is not None:
         forbidden.extend(theme.extra_forbidden_terms)
@@ -304,8 +483,9 @@ def compliance_lint(
     for seg in segments:
         text = seg.text or ""
 
-        # 1. 数字必须有事实引用(年款年份除外)
-        if has_numeric_claim(text) and not seg.fact_refs:
+        # 1. 数字必须有事实引用(年款年份除外)。原理条目不含数字,只引原理不算有出处
+        fact_refs = [r for r in seg.fact_refs if r not in principle_ids]
+        if has_numeric_claim(text) and not fact_refs:
             issues.append(
                 LintIssue(
                     seg.idx,
@@ -317,21 +497,22 @@ def compliance_lint(
 
         # 2. 引用必须指向真实存在的事实
         for ref in seg.fact_refs:
-            if ref not in known_ids:
+            if ref not in known_ids and ref not in principle_ids:
                 issues.append(
                     LintIssue(seg.idx, "error", f"引用了不存在的事实 ID:{ref}")
                 )
 
         # 3. 品类禁用词 + 方向禁用词(广告法红线)
+        text_ad = _BENIGN_FIRST_RE.sub("", text)
         for term in forbidden:
-            if term in text:
+            if term in text_ad:
                 issues.append(
                     LintIssue(seg.idx, "error", f"出现品类禁用词「{term}」:{text[:40]}...")
                 )
 
         # 4. 通用绝对化用语(所有品类共享的红线)
-        for term in ("最强", "第一", "顶级", "永久", "唯一", "100%"):
-            if term in text:
+        for term in AD_ABSOLUTE_TERMS:
+            if term in text_ad:
                 issues.append(
                     LintIssue(seg.idx, "error", f"出现广告法绝对化用语「{term}」")
                 )
@@ -368,7 +549,20 @@ def compliance_lint(
                     )
                     break
 
+        # 7. 多车横评:讲 A 车的段落不许引用 B 车的事实(参数张冠李戴)。
+        #    开场 / 结论这类共用段(subject 为空)可以引用任何一台车。
+        if seg.subject:
+            others = sorted({f.subject for f in cited if f.subject and f.subject != seg.subject})
+            if others:
+                issues.append(
+                    LintIssue(seg.idx, "error",
+                              f"第 {seg.idx + 1} 段讲{seg.subject},却引用了"
+                              f"{'、'.join(others)}的事实。请改成引用{seg.subject}自己的事实,"
+                              "或把比较挪到开场 / 结论")
+                )
+
     issues.extend(hook_lint(segments))
+    issues.extend(depth_lint(segments, profile, facts))
     return issues
 
 
@@ -392,9 +586,14 @@ def total_chars(segments: Iterable[ScriptSegment]) -> int:
 
 def normalize_segments(
     segments: Sequence[ScriptSegment],
-    plan: Sequence[str],
+    plan: Sequence[str] | Sequence[Slot],
 ) -> list[ScriptSegment]:
-    """把段落数量对齐到分镜计划 —— 数量不一致会导致画面与旁白错位。"""
+    """把段落数量对齐到分镜计划 —— 数量不一致会导致画面与旁白错位。
+
+    `plan` 也可以是段落位(`Slot`):对齐后按位置写回每段讲哪台车 ——
+    以段落位为准,不信 LLM 返回的车名。"""
+    slots = [p if isinstance(p, Slot) else Slot(str(p)) for p in plan]
+    plan = [s.section for s in slots]
     out = list(segments)
     # 段落过多:合并尾部
     while len(out) > len(plan):
@@ -415,4 +614,7 @@ def normalize_segments(
         )
     for i, seg in enumerate(out):
         seg.idx = i
+        # LLM 偶尔整篇写中文数字:字幕全是汉字,lint 的引用检查也会被绕过
+        seg.text = arabicize(seg.text)
+        seg.subject = slots[i].subject if i < len(slots) else ""
     return out

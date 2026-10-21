@@ -1,0 +1,20 @@
+/* @name 祖母绿奢华
+   @desc 墨绿底 + 香槟金,稳重高级,适合豪华车
+   @order 10
+   @font-num "Playfair Display"
+*/
+:root {
+  --acc: 212, 175, 55;
+  --hi: 250, 232, 170;
+  --acc2: 159, 224, 192;
+  --hi2: 220, 248, 234;
+  --ink: 240, 238, 228;
+  --bg: 6, 20, 16;
+  --bg2: 12, 32, 26;
+  --haze: 30, 90, 70;
+  --glow: 0.5;
+  --studio-light: 230, 240, 220;
+  --studio-top: #071712;
+  --studio-mid: #0a1d17;
+  --studio-floor: #0f2720;
+}

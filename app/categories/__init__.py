@@ -20,6 +20,7 @@ Profile 声明了什么:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -97,10 +98,33 @@ class ThemeSpec:
     blocks: tuple[dict[str, Any], ...] = ()
     #: 传统写法:duration -> 段落序列。未声明 blocks 的 profile 走这条路径。
     plan: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    #: 多车横评:每台车各来一份的段落块(YAML 里 blocks 中的 `{per_subject: [...]}` 一项)。
+    #: 非空 = 这是横评方向
+    per_subject: tuple[dict[str, Any], ...] = ()
+    #: per_subject 块在 blocks 里的位置(展开时插在这里)
+    per_subject_at: int = -1
+    #: 车单台数范围 (最少, 最多);只对横评方向有意义
+    subject_count: tuple[int, int] = (0, 0)
 
     @property
     def uses_blocks(self) -> bool:
-        return bool(self.blocks)
+        return bool(self.blocks) or bool(self.per_subject)
+
+    @property
+    def roundup(self) -> bool:
+        return bool(self.per_subject)
+
+    def placeholder_subjects(self) -> tuple[str, ...]:
+        """没有真车单时(配置自检、估节拍数)用的占位车名:按最少台数。"""
+        return tuple(f"车{i + 1}" for i in range(max(1, self.subject_count[0])))
+
+
+@dataclass(frozen=True)
+class Slot:
+    """铺展后的一个段落位:段落名 + 讲哪台车(空串 = 单车项目或共用段)。"""
+
+    section: str
+    subject: str = ""
 
 
 @dataclass(frozen=True)
@@ -192,6 +216,19 @@ class Vocab:
     extract_spec_examples: str = "规格 / 材质 / 售价 / 适用人群 / 配置"
     extract_year_example: str = "2020 年上市的初代款售价 1999 元"
     extract_topic_examples: str = "参数 / 价格 / 销量 / 财务 / 品牌"
+    #: 事实口径(basis)的示例
+    extract_basis_example: str = "标准版 · 2026款"
+    #: 技术机理类事实的示例(抽取时单独成条)
+    extract_tech_examples: str = "材质工艺、核心结构、关键部件、安全设计"
+
+    # ---- 脚本深度 ----
+    #: 空话套话:只表态不给论据的评价词,depth_lint 出现即提醒
+    filler_terms: tuple[str, ...] = ("很猛", "很良心", "有诚意", "闭眼入", "yyds", "真香",
+                                     "这句话很重要", "没得说", "吊打", "天花板")
+    #: 必须讲原理的段落(depth_lint 检查这些段落有没有引用原理条目)
+    depth_sections: tuple[str, ...] = ()
+    #: 口径词:引用的事实原文里有它、句子里却没说,depth_lint 提醒补口径(如 CLTC)
+    basis_terms: tuple[str, ...] = ()
 
     # ---- 素材检索 ----
     discovery_zh: tuple[str, ...] = ("{subject} 宣传片", "{subject} 官方", "{subject} 产品展示",
@@ -228,6 +265,49 @@ class Vocab:
         return set(next(iter(self.hint_groups.values()), ()))
 
 
+@dataclass(frozen=True)
+class Principle:
+    """原理库的一条:脚本讲"为什么"时可以引用的通用技术常识。
+
+    只讲机理和取舍,**不含任何数字** —— 数字仍然只能来自事实层。脚本按 `id`
+    (k_ 开头)引用它,事实清单里出现了 `terms` 之一才会进提示词。
+    """
+
+    id: str
+    terms: tuple[str, ...]
+    explain: str
+    tradeoff: str = ""
+
+    def matches(self, text: str) -> bool:
+        low = text.lower()
+        return any(t.lower() in low for t in self.terms)
+
+
+#: 原理条目里不许出现阿拉伯数字(数字要可追溯,原理库没有来源)
+_PRINCIPLE_DIGIT = re.compile(r"\d")
+
+
+def _build_principles(raw: Any) -> tuple[Principle, ...]:
+    out: list[Principle] = []
+    seen: set[str] = set()
+    for item in raw or ():
+        if not isinstance(item, dict):
+            raise ProfileError("principles 的每一项必须是 {id, terms, explain, tradeoff} 映射")
+        pid = str(item.get("id", "")).strip()
+        if not pid.startswith("k_") or pid in seen:
+            raise ProfileError(f"原理条目 id 必须以 k_ 开头且不重复:{pid!r}")
+        seen.add(pid)
+        p = Principle(id=pid, terms=tuple(str(t) for t in (item.get("terms") or ())),
+                      explain=str(item.get("explain", "")).strip(),
+                      tradeoff=str(item.get("tradeoff", "") or "").strip())
+        if not p.terms or not p.explain:
+            raise ProfileError(f"原理条目 {pid} 缺 terms 或 explain")
+        if _PRINCIPLE_DIGIT.search(p.explain + p.tradeoff):
+            raise ProfileError(f"原理条目 {pid} 不能含数字(数字只能来自事实层)")
+        out.append(p)
+    return tuple(out)
+
+
 def _build_vocab(raw: dict[str, Any]) -> Vocab:
     known = {f.name: f for f in Vocab.__dataclass_fields__.values()}
     kwargs: dict[str, Any] = {}
@@ -244,6 +324,46 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         else:
             kwargs[key] = str(value).rstrip("\n")
     return Vocab(**kwargs)
+
+
+@dataclass(frozen=True)
+class TrendSpec:
+    """热点选题的抓取口径(providers.trends + pipeline.topics)。
+
+    没写 `trends:` 的品类只抓新闻 / 抖音 / B站,且查询词为空 —— 等于没有热点。
+    """
+
+    #: 榜单接口:dongchedi = 懂车帝销量 / 热度榜;空 = 没有公开榜单,靠新闻里的榜单报道
+    rank: str = ""
+    news_queries: tuple[str, ...] = ()
+    bili_queries: tuple[str, ...] = ()
+    #: 抖音热搜过滤的通用词(命中任一才留)
+    hot_words: tuple[str, ...] = ()
+    #: 品牌兜底词;用时并上 official_sites 的 aliases
+    brands: tuple[str, ...] = ()
+    #: 选题禁区:subject / angle 带这些词直接丢(如母婴的婴儿奶粉,广告法第二十条)
+    exclude_words: tuple[str, ...] = ()
+    #: 创建页热点面板的来源说明
+    sources_label: str = ""
+    #: 选题提示词:热点由哪些来源组成
+    sources_desc: str = "近期新闻、抖音热搜、B站高播放视频"
+    #: 选题提示词:subject 该怎么写(接在「全称,」之后)
+    subject_rule: str = "写成「品牌+型号」。"
+    #: 选题提示词第 5 条:优先什么样的热点
+    priority_rule: str = "优先「有新闻或热搜事件 + B站高播放」的交叉热点。"
+
+
+def _build_trends(raw: Any) -> TrendSpec:
+    known = TrendSpec.__dataclass_fields__
+    kwargs: dict[str, Any] = {}
+    for key, value in (raw or {}).items():
+        if key not in known:
+            raise ProfileError(f"trends 里的未知字段 {key!r}")
+        if isinstance(getattr(TrendSpec(), key), tuple):
+            kwargs[key] = tuple(str(x) for x in (value or ()))
+        else:
+            kwargs[key] = str(value or "").rstrip("\n")
+    return TrendSpec(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -281,6 +401,10 @@ class CategoryProfile:
     #: 官网改版不会让配置失效。新增品牌只改 YAML,不改代码。
     official_sites: dict[str, dict[str, tuple[str, ...]]] = field(default_factory=dict)
     script_style: str = ""
+    #: 原理库(见 Principle)
+    principles: tuple[Principle, ...] = ()
+    #: 推算规则名(pipeline/derive.py 的 RULES),按顺序跑
+    derive: tuple[str, ...] = ()
     #: 品类词表(见 Vocab)
     vocab: Vocab = field(default_factory=Vocab)
     #: 事实来源 → 检索词(主体名之后的部分)。没列的来源用 providers.facts 里的通用词
@@ -289,9 +413,19 @@ class CategoryProfile:
     galleries: tuple[str, ...] = ()
     #: 旁白音色,空 = providers.audio.DEFAULT_VOICE_ID
     voice_id: str = ""
+    #: 热点选题口径(见 TrendSpec)
+    trends: TrendSpec = field(default_factory=TrendSpec)
     #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
     skeleton: bool = False
     todo: tuple[str, ...] = ()
+
+    @property
+    def trend_brands(self) -> tuple[str, ...]:
+        """热点里认品牌用的词:trends.brands + 官方渠道的全部别名。"""
+        words = [*self.trends.brands]
+        for spec in self.official_sites.values():
+            words.extend(spec.get("aliases", ()))
+        return tuple(dict.fromkeys(w for w in words if w))
 
     # ------------------------------------------------------------------
     # 画幅与时长
@@ -360,6 +494,8 @@ class CategoryProfile:
         - 未声明(老 profile):走手写 `section_plan`,缺失时按最近档裁剪补齐。
         """
         theme = self.theme_spec(name)
+        if theme.roundup:
+            return tuple(s.section for s in self.slots_for(duration, name))
         if theme.uses_blocks:
             return self._expand_blocks(theme, duration)
         plan = theme.plan or self.section_plan
@@ -375,7 +511,60 @@ class CategoryProfile:
             base.insert(max(1, len(base) - 1), base[len(base) // 2])
         return tuple(base[:target_shots])
 
+    def slots_for(self, duration: int, name: str | None = None,
+                  subjects: Sequence[str] | None = None) -> tuple[Slot, ...]:
+        """段落序列 + 每段讲哪台车。
+
+        - 单车方向:等价于 `plan_for`,subject 全为空。
+        - 横评方向:per_subject 块按车单展开成 N 份(每份带车名),和其它块一起
+          走同一套最大余数铺展 —— 每台车的段落连在一起,车与车按车单顺序排。
+          不给车单时用占位车名(按最少台数),只用于估节拍数和配置自检。
+        """
+        theme = self.theme_spec(name)
+        if not theme.roundup:
+            return tuple(Slot(s) for s in self.plan_for(duration, name))
+        names = [str(x).strip() for x in (subjects or theme.placeholder_subjects()) if str(x).strip()]
+        flat = self.roundup_blocks(theme, names, shots=duration // self.duration_grid)
+        counts = self._allocate(flat, duration)
+        out: list[Slot] = []
+        for block, count in zip(flat, counts):
+            out.extend([Slot(str(block.get("section", "")), str(block.get("subject", "")))] * count)
+        return tuple(out[:duration // self.duration_grid])
+
+    @staticmethod
+    def roundup_blocks(theme: ThemeSpec, subjects: Sequence[str],
+                       shots: int | None = None) -> list[dict[str, Any]]:
+        """横评方向的块表:per_subject 块在它的位置按车单展开。
+
+        给了 `shots` 且每车全套段落放不下时**精简**:按 `drop` 从小到大整档砍掉
+        每台车的同一种段落(先砍「适合谁」,再砍「参数价格」),直到放得下或只剩
+        必留段落 —— 5 台车塞进 2 分钟时每台车只留亮相 + 卖点,而不是把结论截掉。
+        每台车砍的段落相同,车与车的结构保持一致。"""
+        per_subject = list(theme.per_subject)
+        if shots is not None:
+            levels = sorted({b["drop"] for b in per_subject if b.get("drop")})
+            for level in levels:
+                if len(theme.blocks) + len(per_subject) * len(subjects) <= shots:
+                    break
+                per_subject = [b for b in per_subject if b.get("drop") != level]
+        at = theme.per_subject_at if theme.per_subject_at >= 0 else len(theme.blocks)
+        per_car = [{**b, "subject": name} for name in subjects for b in per_subject]
+        return [*theme.blocks[:at], *per_car, *theme.blocks[at:]]
+
+    @staticmethod
+    def roundup_min_blocks(theme: ThemeSpec, count: int) -> int:
+        """`count` 台车精简到底(只留 drop=0 的段落)时的段落块数。"""
+        core = [b for b in theme.per_subject if not b.get("drop")]
+        return len(theme.blocks) + len(core) * count
+
     def _expand_blocks(self, theme: ThemeSpec, duration: int) -> tuple[str, ...]:
+        counts = self._allocate(theme.blocks, duration)
+        out: list[str] = []
+        for block, count in zip(theme.blocks, counts):
+            out.extend([str(block.get("section", ""))] * count)
+        return tuple(out[:duration // self.duration_grid])
+
+    def _allocate(self, blocks: Sequence[dict[str, Any]], duration: int) -> list[int]:
         """把段落块权重表铺展成恰好 duration/6 个段落的序列。
 
         纯函数、无随机:同一份配置 + 同一时长,结果永远相同。
@@ -395,7 +584,6 @@ class CategoryProfile:
                 f"品类 {self.name}: 时长 {duration}s 必须是 {self.duration_grid} 的整数倍"
             )
         shots = duration // self.duration_grid
-        blocks = theme.blocks
         weights = [max(1, int(b.get("weight", 1))) for b in blocks]
         total = sum(weights)
 
@@ -429,11 +617,12 @@ class CategoryProfile:
                             break
                 if not shrunk:
                     break
+        return base
 
-        out: list[str] = []
-        for block, count in zip(blocks, base):
-            out.extend([str(block.get("section", ""))] * count)
-        return tuple(out[:shots])
+    def drop_unbacked_slots(self, slots: Sequence[Slot], topics: Iterable[str]) -> list[Slot]:
+        """`drop_unbacked` 的段落位版本:只换段落名,讲哪台车不动。"""
+        sections = self.drop_unbacked([s.section for s in slots], topics)
+        return [Slot(sec, s.subject) for sec, s in zip(sections, slots)]
 
     def drop_unbacked(self, plan: Sequence[str], topics: Iterable[str]) -> list[str]:
         """声明了 fact_topic、但事实里没有该主题的段落,名额让给前一段(开头的让给后一段)。
@@ -508,17 +697,38 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
     for key, value in (raw.get("plan") or {}).items():
         plan[int(key)] = tuple(str(v) for v in value)
 
-    blocks: list[dict[str, Any]] = []
-    for item in (raw.get("blocks") or []):
+    def _block(item: Any) -> dict[str, Any]:
         if not isinstance(item, dict):
             raise ProfileError(f"方向 {name}: blocks 的每一项必须是 section/weight 映射")
-        blocks.append({
+        return {
             "section": str(item.get("section", "")),
             "weight": int(item.get("weight", 1)),
             # 必须显式搬运:不搬的话 remainder: false 会在解析阶段被丢掉,
             # 配置看起来写了、实际不生效 —— 铺展结果会静默回到旧行为。
             "remainder": bool(item.get("remainder", True)),
-        })
+            # 横评每车段落的精简顺序:拍数不够时先砍 drop 小的(1 先砍),0 = 必留
+            "drop": int(item.get("drop", 0) or 0),
+        }
+
+    blocks: list[dict[str, Any]] = []
+    per_subject: list[dict[str, Any]] = []
+    per_subject_at = -1
+    for item in (raw.get("blocks") or []):
+        if isinstance(item, dict) and "per_subject" in item:
+            # 多车横评:这一项是"每台车各来一份"的段落块组
+            if per_subject_at >= 0:
+                raise ProfileError(f"方向 {name}: per_subject 块最多一个")
+            per_subject_at = len(blocks)
+            per_subject = [_block(b) for b in (item.get("per_subject") or [])]
+            if not per_subject:
+                raise ProfileError(f"方向 {name}: per_subject 块不能为空")
+            continue
+        blocks.append(_block(item))
+    count = raw.get("subject_count") or ([2, 5] if per_subject else [0, 0])
+    try:
+        lo, hi = (int(x) for x in count)
+    except (TypeError, ValueError) as exc:
+        raise ProfileError(f"方向 {name}: subject_count 必须是 [最少, 最多]") from exc
 
     return ThemeSpec(
         name=str(raw.get("name", name)),
@@ -531,6 +741,9 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         extra_forbidden_terms=tuple(str(t) for t in (raw.get("extra_forbidden_terms") or ())),
         blocks=tuple(blocks),
         plan=plan,
+        per_subject=tuple(per_subject),
+        per_subject_at=per_subject_at,
+        subject_count=(lo, hi),
     )
 
 
@@ -609,6 +822,9 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         ),
         bgm_genres=tuple(str(g) for g in (raw.get("bgm_genres") or ())),
         script_style=str(raw.get("script_style", "")),
+        principles=_build_principles(raw.get("principles")),
+        derive=tuple(str(d) for d in (raw.get("derive") or ())),
+        trends=_build_trends(raw.get("trends")),
         skeleton=bool(raw.get("skeleton", False)),
         todo=tuple(str(t) for t in (raw.get("todo") or ())),
     )
@@ -653,7 +869,29 @@ def _validate(profile: CategoryProfile) -> None:
     # 2. 方向库
     min_shots = _min_supported_shots(profile)
     for tname, theme in profile.themes.items():
-        if theme.uses_blocks:
+        if theme.roundup:
+            lo, hi = theme.subject_count
+            if not 1 <= lo <= hi:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: subject_count 需满足 1 ≤ 最少 ≤ 最多")
+            if not any(not b.get("drop") for b in theme.per_subject):
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: per_subject 至少要有一个必留(drop=0)段落")
+            # 最多台数精简到底,也要塞得进最短时长 —— 任何车数 × 任何时长都能建项目
+            need = CategoryProfile.roundup_min_blocks(theme, hi)
+            if need > min_shots:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: {hi} 台车精简后仍要 {need} 个段落块,"
+                    f"超过最短时长的镜头数 {min_shots}")
+            for block in (*theme.blocks, *theme.per_subject):
+                section = str(block.get("section", ""))
+                if section not in profile.sections:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 引用了未定义的段落 {section!r}")
+                if int(block.get("weight", 1)) < 1:
+                    raise ProfileError(
+                        f"品类 {profile.name} 方向 {tname}: 段落块 {section} 的 weight 必须 ≥1")
+        elif theme.uses_blocks:
             if len(theme.blocks) > min_shots:
                 raise ProfileError(
                     f"品类 {profile.name} 方向 {tname}: 声明了 {len(theme.blocks)} 个段落块,"
@@ -782,9 +1020,11 @@ def available_categories() -> list[dict[str, Any]]:
                 "subject_label": profile.vocab.ui_subject_label,
                 "placeholder": profile.vocab.ui_placeholder,
                 "help": profile.vocab.ui_help,
+                "trends_label": profile.trends.sources_label,
             },
             "themes": [
-                {"name": t.name, "label": t.label, "intent": t.intent}
+                {"name": t.name, "label": t.label, "intent": t.intent,
+                 "roundup": t.roundup, "subject_count": list(t.subject_count)}
                 for t in profile.themes.values()
             ],
         })

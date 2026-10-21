@@ -3,14 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 产品镜:正侧面实车图转 X 光,能量流从车尾一侧涌进底板电池,电池条从车尾往车头充满(示意,不代表电量数字) -->
+  <meta name="hf-bg" content="studio" />
+  <meta name="hf-photo" content="exterior_side" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
   <style>
-    .bat { position: absolute; left: 90px; top: 250px; width: 640px; height: 300px; padding: 28px; }
-    .nub { position: absolute; left: 730px; top: 340px; width: 34px; height: 120px; border-radius: 0 17px 17px 0; background-color: rgba(236,246,228,0.34); }
-    .lvl { position: absolute; left: 28px; top: 28px; bottom: 28px; width: 584px; border-radius: 22px; background-color: #b8f36b; transform-origin: 0 50%; }
-    .bolt { position: absolute; left: 90px; top: 250px; width: 640px; height: 300px; }
-    svg { position: absolute; left: 0; top: 0; overflow: visible; }
+    .cell { position: absolute; border-radius: 8px; border: 1.5px solid rgba(var(--acc), 0.6);
+            background-color: rgba(var(--acc), 0.04); overflow: hidden; }
+    .cell .lvl { position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
+                 background: linear-gradient(90deg, rgba(var(--acc), 0.15) 0%, rgba(var(--acc), 0.55) 85%, rgba(var(--hi), 0.95) 100%); }
+    .cell .seg { position: absolute; top: 0; bottom: 0; width: 1.5px; background-color: rgba(var(--bg), 0.7); }
+    .cell .sheen { position: absolute; top: 0; bottom: 0; width: 22%;
+                   background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.35) 50%, rgba(255,255,255,0) 100%); }
+    .front { position: absolute; width: 4px; border-radius: 2px; background-color: rgb(var(--hi));
+             box-shadow: 0 0 20px 6px rgba(var(--acc), calc(0.7 * var(--glow))); }
   </style>
 </head>
 <body>
@@ -19,25 +26,112 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame();
-    const tl = F.tl, T = F.T;
-    const stage = HF.stage();
-    const bat = HF.el("div", "bat glass"); const nub = HF.el("div", "nub");
-    const lvl = HF.el("div", "lvl"); bat.appendChild(lvl);
-    stage.appendChild(bat); stage.appendChild(nub);
-    const bolt = HF.el("div", "bolt"); stage.appendChild(bolt);
-    const sv = HF.svg("svg", { width: 640, height: 300, viewBox: "0 0 640 300" }, bolt);
-    HF.svg("path", { d: "M350 36 L246 166 L318 166 L290 264 L398 126 L324 126 Z", fill: "#0a0c0b", "fill-opacity": "0.78", stroke: "#f2f6ee", "stroke-width": "4", "stroke-linejoin": "round" }, sv);
-    // 充电线:从左边进来,虚线流动
-    const cab = HF.svg("svg", { width: 120, height: 40, viewBox: "0 0 120 40", style: "left:-40px; top:380px" }, stage);
-    const flow = HF.svg("line", { x1: 0, y1: 20, x2: 130, y2: 20, stroke: "#b8f36b", "stroke-width": 8, "stroke-linecap": "round", "stroke-dasharray": "22 18" }, cab);
-    tl.fromTo([bat, nub], { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
-    tl.fromTo(cab, { opacity: 0 }, { opacity: 1, duration: T(0.4) }, T(0.8));
-    tl.to(flow, { attr: { "stroke-dashoffset": -400 }, duration: HF.seconds, ease: "none" }, 0);
-    tl.fromTo(lvl, { scaleX: 0.04 }, { scaleX: 1, duration: Math.max(1.2, HF.seconds * 0.6), ease: "power2.inOut" }, T(1.0));
-    tl.fromTo(bolt, { opacity: 0, scale: 0.7 }, { opacity: 1, scale: 1, duration: T(0.5), ease: "back.out(2)", transformOrigin: "50% 50%" }, T(1.0));
-    tl.to(bolt, { scale: 1.06, duration: 0.7, yoyo: true, repeat: 3, ease: "sine.inOut", transformOrigin: "50% 50%" }, T(1.8));
-    HF.outro(tl);
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
+    const D = HF.data, P = D.photo, rows = HF.rows;
+    const rig = HF.carRig(tl, { width: 1120, cx: 1000, floorY: 560, ghost: true });
+    const stage = rig.stage, geo = rig.geo, floorY = rig.floorY;
+    const fr = geo.facing === "left" ? -1 : 1;          // 车头方向
+
+    // ---- 底板电池条:两轮之间、地线上方 ----
+    const cH = (geo.floor - geo.roof) * rig.box.h;
+    const bx0 = rig.at(geo.wheels[0] + 0.07, 0)[0], bx1 = rig.at(geo.wheels[1] - 0.07, 0)[0];
+    const by = floorY - 0.25 * cH, bh = 22;
+    const cell = HF.el("div", "cell");
+    Object.assign(cell.style, { left: bx0 + "px", top: (by - bh / 2) + "px", width: (bx1 - bx0) + "px", height: bh + "px" });
+    const lvl = HF.el("div", "lvl"); cell.appendChild(lvl);
+    // 车头朝左时从右往左充:渐变和缩放原点都翻过来
+    lvl.style.transformOrigin = fr > 0 ? "0 50%" : "100% 50%";
+    if (fr < 0) lvl.style.background = "linear-gradient(270deg, rgba(var(--acc), 0.15) 0%, rgba(var(--acc), 0.55) 85%, rgba(var(--hi), 0.95) 100%)";
+    const SEG = 12;
+    for (let k = 1; k < SEG; k++) { const s = HF.el("i", "seg"); s.style.left = (100 * k / SEG) + "%"; cell.appendChild(s); }
+    const sheen = HF.el("div", "sheen"); cell.appendChild(sheen);
+    stage.appendChild(cell);
+    const front = HF.el("div", "front");
+    Object.assign(front.style, { top: (by - bh / 2 - 8) + "px", height: (bh + 16) + "px", left: "0px" });
+    stage.appendChild(front);
+
+    // ---- 能量流:从车尾外侧的画面边缘沿弧线流进电池条车尾端 ----
+    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    const entryX = fr > 0 ? bx0 : bx1;
+    const sx = fr > 0 ? -40 : 1960;
+    const flowD = `M${sx} ${floorY + 150} C${sx + fr * 300} ${floorY + 150} ${entryX - fr * 320} ${by + 10} ${entryX} ${by}`;
+    const path = HF.svg("path", { d: flowD, fill: "none", stroke: HF.c("acc", 0.35), "stroke-width": 2,
+      pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+    const glowPath = HF.svg("path", { d: flowD, fill: "none", stroke: HF.c("acc", 0.12), "stroke-width": 14, opacity: 0 }, sv);
+    const NP = 26, rnd = HF.rng(5);
+    const parts = [];
+    for (let k = 0; k < NP; k++) parts.push({ c: HF.svg("circle", { r: 2 + rnd() * 2.5, fill: HF.c("hi"), opacity: 0 }, sv),
+                                              off: k / NP + rnd() * 0.02, jit: (rnd() - 0.5) * 10 });
+    const inlet = HF.svg("circle", { cx: entryX, cy: by, r: 8, fill: "none", stroke: HF.c("acc"), "stroke-width": 2, opacity: 0 }, sv);
+
+    const vig = HF.add(HF.el("div", "vignette"));
+    const head = HF.header(tl, T(0.3), { kicker: "补能" });
+    const fn = HF.footnote(tl, T(1.0));
+
+    // ---- 时间线 ----
+    const xrayAt = T(1.1), xrayDur = Math.max(0.7, T(0.9));
+    if (rig.car) rig.xray(tl, xrayAt, xrayDur, 0.25);
+    const cellAt = rig.car ? xrayAt + xrayDur * 0.55 : T(1.3);
+    tl.fromTo(cell, { opacity: 0, scaleX: 0.6 }, { opacity: 1, scaleX: 1, duration: 0.5, ease: "power3.out" }, cellAt);
+    tl.fromTo(path, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: 0.7, ease: "power2.inOut" }, cellAt + 0.2);
+    tl.fromTo(glowPath, { opacity: 0 }, { opacity: 1, duration: 0.5 }, cellAt + 0.6);
+    const flowAt = cellAt + 0.7;
+    // 充电:电量条从 6% 充到 100%,铺满停留段(示意)
+    const fillDur = Math.max(1.2, A.outAt - flowAt - 0.3);
+    const L = path.getTotalLength();
+    const fill = { v: 0.06 };
+    const paintFill = () => {
+      lvl.style.transform = `scaleX(${fill.v})`;
+      const x = fr > 0 ? bx0 + (bx1 - bx0) * fill.v : bx1 - (bx1 - bx0) * fill.v;
+      front.style.left = (x - 2) + "px";
+    };
+    paintFill();
+    tl.fromTo(front, { opacity: 0 }, { opacity: 1, duration: 0.3 }, flowAt);
+    tl.to(fill, { v: 1, duration: fillDur, ease: "power1.inOut", onUpdate: paintFill }, flowAt);
+    tl.to(front, { opacity: 0, duration: 0.3 }, flowAt + fillDur - 0.1);
+    HF.drive(tl, (t) => {
+      const fade = Math.min(1, t / 0.4);
+      parts.forEach((p) => {
+        const u = (p.off + t * 0.55) % 1;
+        const pt = path.getPointAtLength(u * L);
+        p.c.setAttribute("cx", pt.x.toFixed(1));
+        p.c.setAttribute("cy", (pt.y + p.jit * (1 - u)).toFixed(1));
+        p.c.setAttribute("opacity", (fade * Math.min(1, u * 6) * (0.4 + 0.6 * u)).toFixed(3));
+      });
+      sheen.style.left = (fr > 0 ? -22 + ((t * 0.6) % 1) * 122 : 100 - ((t * 0.6) % 1) * 122) + "%";
+      const ip = (t % 0.9) / 0.9;
+      inlet.setAttribute("r", (8 + ip * 24).toFixed(1));
+      inlet.setAttribute("opacity", (fade * (1 - ip)).toFixed(3));
+    }, flowAt, Math.max(0.1, A.outAt + A.outDur - flowAt));
+
+    // ---- 标注:主数字左下挂在电池条上,其余两行右下 ----
+    const callouts = [];
+    const pAt = (f) => [fr > 0 ? bx0 + (bx1 - bx0) * f : bx1 - (bx1 - bx0) * f, by];
+    if (rows[0]) {
+      const [ax, ay] = pAt(0.3);
+      callouts.push(HF.callout({ anchor: [ax, ay], label: [Math.min(ax, 900) - 80, 820], side: "left",
+        title: rows[0].label, value: rows[0].value, size: HF.fitSize(rows[0].value, Math.min(ax, 900) - 80 - 18 - 110, 140) }));
+    }
+    // 右下两条:上面的标签挂靠前的点、下面的挂靠后的点,引线不交叉
+    const bw = bx1 - bx0, rx = bx0 + bw * 0.86 + 90;
+    rows.slice(1, 3).forEach((r, k) => {
+      const ax = bx0 + bw * (k === 0 ? 0.86 : 0.62);
+      callouts.push(HF.callout({ anchor: [ax, by], label: [rx, 760 + k * 160], side: "right",
+        title: r.label, value: r.value, size: HF.fitSize(r.value, 1810 - rx - 18, 72) }));
+    });
+    const coAt = flowAt + 0.2;
+    const lastCo = Math.max(coAt, Math.min(A.outAt - 1.6, S * 0.6));
+    callouts.forEach((c, k) => {
+      const at = callouts.length > 1 ? coAt + (lastCo - coAt) * k / (callouts.length - 1) : coAt;
+      c.show(tl, at, k === 0 ? Math.max(0.9, T(1.4)) : 0.8);
+      c.breathe(tl, at + 1.0, A.outAt);
+    });
+
+    HF.camera(tl, [{ el: stage, scale: [1.0, 1.045], x: [12, -12] }]);
+    HF.exit(tl, [head, fn].concat(...callouts.map((c) => c.els)), A.outAt, A.outDur);
+    tl.to([sv, cell, front], { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

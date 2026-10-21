@@ -150,6 +150,8 @@ MOTION_BROWSER = os.getenv("HYPERFRAMES_BROWSER_PATH") or next(
 MOTION_WORKERS = int(os.getenv("MOTION_WORKERS", "4"))
 #: 单次渲染的超时(秒)
 MOTION_TIMEOUT = int(os.getenv("MOTION_TIMEOUT", "300"))
+#: 概念动画的浏览器 GPU:auto = 先试 GPU、卡死再退软件渲染;off = 直接软件渲染(锁屏跑批时用)
+MOTION_BROWSER_GPU = os.getenv("MOTION_BROWSER_GPU", "auto").strip().lower()
 
 
 def motion_status() -> tuple[bool, str]:

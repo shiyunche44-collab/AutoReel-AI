@@ -218,12 +218,19 @@ def wrap_subtitle(text: str, max_chars: int | None = None) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
         return text
-    # 优先在逗号处断
+    # 优先在逗号处断(模型写的多是全角标点)
     mid = limit
     for i in range(min(limit, len(text) - 1), max(0, limit - 6), -1):
-        if text[i] in ",、,;:":
+        if text[i] in ",、;:，；：":
             mid = i + 1
             break
+    else:
+        # 硬切不能切进数字或英文串("405 公里"被拆成"4 / 05公里"):退到这串的开头
+        k = mid
+        while k > 0 and text[k - 1].isascii() and text[k - 1].isalnum()                 and text[k].isascii() and text[k].isalnum():
+            k -= 1
+        if k > limit // 2:
+            mid = k
     return f"{text[:mid].strip()}\\N{text[mid:].strip()}"
 
 

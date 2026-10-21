@@ -1,40 +1,30 @@
-// 概念动画模板的公用小工具(风格 A 玻璃拟态)。motion.py 渲染前把它和 gsap.min.js 一起拷进工作目录。
+// 概念动画模板的公用小工具(实车图 + 标注)。motion.py 渲染前把它和 gsap.min.js 一起拷进工作目录。
 //
 // 数据约定(motion.py 注入 window.__DATA__):
-//   { subject, title, seconds, columns, rows: [{label, value, values}], source }
+//   { subject, title, seconds, columns, rows: [{label, value, values, tag}], source }
 // rows 的 value 都是核对过事实的原文 —— 模板只负责"画",数字滚动结束时必须回到原文一字不差。
 (function () {
   const D = window.__DATA__ || {};
   const HF = (window.HF = {});
   HF.data = D;
+  /** 风格颜色:读 _base.css / 风格文件里的变量(三元组),给 SVG 属性和 GSAP 补间用(它们认不出 var())。
+   *  HF.c("acc") → HF.c("acc");HF.c("acc", 0.5) → HF.c("acc", 0.5) */
+  let CS = null;
+  HF.c = function (tok, a) {
+    if (!CS && typeof getComputedStyle === "function") CS = getComputedStyle(document.documentElement);
+    const v = (CS && CS.getPropertyValue("--" + tok).trim()) || "255, 255, 255";
+    return a == null ? `rgb(${v})` : `rgba(${v}, ${a})`;
+  };
   HF.seconds = Number(D.seconds) || 8;
   HF.rows = Array.isArray(D.rows) ? D.rows : [];
-  // 时间缩放:短拍(2~3 秒)把入场节奏压紧,6 秒以上按设计节奏
-  HF.K = Math.max(0.45, Math.min(1, HF.seconds / 6));
-  HF.t = (x) => x * HF.K;
-
   /** 取原文里的第一个数字:"3.23 秒" → {head:"", num:3.23, dec:2, tail:" 秒"}。没有数字返回 null */
   HF.splitNumber = function (text) {
     const s = String(text == null ? "" : text).replace(/,/g, "");
-    const m = s.match(/-?\d+(?:\.\d+)?/);
+    // "4D 毫米波""5G""8K" 里的一位数是名字不是参数(和 overlays.split_number 同一条规则)
+    const m = s.match(/-?(?!\d[DGK](?![A-Za-z]))\d+(?:\.\d+)?/);
     if (!m) return null;
     const dec = m[0].includes(".") ? m[0].split(".")[1].length : 0;
     return { head: s.slice(0, m.index), num: parseFloat(m[0]), dec, tail: s.slice(m.index + m[0].length) };
-  };
-
-  /** 在时间轴 `tl` 的 `at` 秒处把 el 的文字从 `from` 滚到原文 `value`。滚完写回原文 */
-  HF.countUp = function (tl, el, value, at, dur, opt) {
-    opt = opt || {};
-    const p = HF.splitNumber(value);
-    if (!p) { el.textContent = String(value); return; }
-    const from = opt.from == null ? 0 : opt.from;
-    const o = { v: from };
-    el.textContent = p.head + from.toFixed(p.dec) + p.tail;
-    tl.to(o, {
-      v: p.num, duration: dur, ease: opt.ease || "expo.out",
-      onUpdate: () => { el.textContent = p.head + o.v.toFixed(p.dec) + p.tail; },
-      onComplete: () => { el.textContent = String(value); },
-    }, at);
   };
 
   /** 每帧回调:用属性 setter 驱动,任意顺序 seek 都会触发 */
@@ -42,13 +32,6 @@
     const d = { _t: 0 };
     Object.defineProperty(d, "t", { get() { return this._t; }, set(v) { this._t = v; fn(v); } });
     tl.fromTo(d, { t: 0 }, { t: dur, duration: dur, ease: "none" }, at);
-  };
-
-  /** 进度 0–1:原文里的数字相对 `max` 的比例,只用来决定图形画多满(示意,不显示) */
-  HF.ratio = function (value, max) {
-    const p = HF.splitNumber(value);
-    if (!p || !max) return 1;
-    return Math.max(0.08, Math.min(1, p.num / max));
   };
 
   HF.el = function (tag, cls, text) {
@@ -74,27 +57,7 @@
     return Math.max(52, Math.min(maxSize, avail / em));
   };
 
-  /** 把大数字写进 host:数字部分单独一个 span(用来滚动),头尾当单位。返回数字 span */
-  function heroInto(host, value, size) {
-    const p = HF.splitNumber(value);
-    host.innerHTML = "";
-    if (!p) {
-      const t = HF.el("div", "txt", String(value));
-      t.style.fontSize = size + "px";
-      host.appendChild(t);
-      return { count: t, final: String(value), whole: true };
-    }
-    if (p.head) { const h = HF.el("div", "unit", p.head); h.style.fontSize = size * 0.3 + "px"; host.appendChild(h); }
-    const n = HF.el("div", "num", p.num.toFixed(p.dec));
-    n.style.fontSize = size + "px";
-    host.appendChild(n);
-    if (p.tail.trim()) { const u = HF.el("div", "unit", p.tail.trim()); u.style.fontSize = size * 0.3 + "px"; host.appendChild(u); }
-    return { count: n, p, final: p.num.toFixed(p.dec), whole: false };
-  }
-
-  HF.heroInto = heroInto;
-
-  /** 滚动 heroInto 返回的数字;滚完停在原文数字 */
+  /** 滚动 HF.bigNumber 返回的数字;滚完停在原文数字 */
   HF.countHero = function (tl, h, at, dur, opt) {
     opt = opt || {};
     if (h.whole) return;
@@ -106,99 +69,6 @@
       onUpdate: () => { h.count.textContent = o.v.toFixed(dec); },
       onComplete: () => { h.count.textContent = h.final; },
     }, at);
-  };
-
-  /**
-   * 搭玻璃卡框架并排好入场。返回 { tl, root, card, hero, rows, ... }。
-   * opt.heroInVisual:大数字画在右侧示意区里(卡上不放),卡上只列其余行。
-   * opt.maxRows:卡上最多列几行小参数(默认 3)。
-   */
-  HF.frame = function (opt) {
-    opt = opt || {};
-    const root = document.getElementById("root");
-    const tl = gsap.timeline({ paused: true });
-    const T = HF.t;
-    const out = { tl, root, K: HF.K, T };
-
-    const shade = HF.el("div", "shade");
-    const swr = HF.el("div", "sweep-rot"); const sw = HF.el("div", "sweep"); swr.appendChild(sw);
-    root.appendChild(shade); root.appendChild(swr);
-
-    const card = HF.el("div", "card glass");
-    const pill = HF.el("div", "pill", D.subject || "");
-    const ttl = HF.el("div", "ttl", D.title || "");
-    const rule = HF.el("div", "rule");
-    card.appendChild(pill); card.appendChild(ttl); card.appendChild(rule);
-    if (!opt.noCard) root.appendChild(card);
-
-    const rows = opt.noCard ? [] : HF.rows;
-    const first = rows[0];
-    let heroObj = null, restFrom = 0;
-    if (first && !opt.heroInVisual) {
-      const lab = HF.el("div", "hlab", first.label);
-      const hv = HF.el("div", "hval");
-      card.appendChild(lab); card.appendChild(hv);
-      const size = HF.fitSize(first.value, 640, opt.heroMax || 190);
-      heroObj = heroInto(hv, first.value, size);
-      out.heroLab = lab; out.heroVal = hv;
-      restFrom = 1;
-    } else if (opt.heroInVisual) {
-      restFrom = 1;
-    }
-    out.hero = heroObj;
-
-    const list = HF.el("div", "rows");
-    const rowEls = [];
-    rows.slice(restFrom, restFrom + (opt.maxRows == null ? 3 : opt.maxRows)).forEach((r) => {
-      const row = HF.el("div", "r");
-      const rl = HF.el("div", "rl", r.label);
-      const rv = HF.el("div", "rv");
-      const size = Math.max(26, Math.min(44, 330 / textW(r.value) * 1.0));
-      rv.style.fontSize = size + "px";
-      row.appendChild(rl); row.appendChild(rv);
-      list.appendChild(row);
-      rowEls.push({ row, rv, value: r.value });
-    });
-    if (rowEls.length) card.appendChild(list);
-    out.rows = rowEls;
-
-    if (D.source) {
-      const src = HF.el("div", "src glass", D.source);
-      root.appendChild(src);
-      out.src = src;
-      tl.fromTo(src, { opacity: 0, y: -16 }, { opacity: 1, y: 0, duration: T(0.5), ease: "power2.out" }, T(0.9));
-    }
-    const grain = HF.el("div"); grain.id = "grain"; grain.appendChild(HF.el("div")); root.appendChild(grain);
-
-    // 入场:卡从左滑入 → 胶囊 → 标题 → 分隔线展开 → 大数字滚动 → 行依次出现
-    tl.fromTo(card, { opacity: 0, x: -90 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.15));
-    tl.fromTo(pill, { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: T(0.4), ease: "power2.out" }, T(0.4));
-    tl.fromTo(ttl, { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: T(0.55), ease: "power3.out" }, T(0.5));
-    tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: T(0.8), ease: "power2.inOut" }, T(0.65));
-    if (heroObj) {
-      tl.fromTo(out.heroLab, { opacity: 0 }, { opacity: 1, duration: T(0.4) }, T(0.8));
-      tl.fromTo(out.heroVal, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: T(0.5), ease: "power3.out" }, T(0.8));
-      HF.countHero(tl, heroObj, T(0.85), Math.max(0.9, T(1.5)));
-    }
-    rowEls.forEach((r, n) => {
-      const at = T(1.2 + n * 0.28);
-      tl.fromTo(r.row, { opacity: 0, y: 26 }, { opacity: 1, y: 0, duration: T(0.5), ease: "back.out(1.5)" }, at);
-      HF.countUp(tl, r.rv, r.value, at + 0.05, Math.max(0.7, T(1.1)));
-    });
-    // 光扫:一条斜光带从左划过卡面
-    tl.fromTo(sw, { x: -800 }, { x: 2400, duration: Math.max(1.0, T(1.8)), ease: "power1.inOut" }, T(1.8));
-    // 实拍底缓慢推近
-    const bg = document.getElementById("bgwrap");
-    if (bg) tl.fromTo(bg, { scale: 1.0 }, { scale: 1.06, duration: HF.seconds, ease: "sine.inOut" }, 0);
-    return out;
-  };
-
-  /** 右侧示意区容器,插在颗粒层之前 */
-  HF.stage = function (cls) {
-    const s = HF.el("div", "stage" + (cls ? " " + cls : ""));
-    const g = document.getElementById("grain");
-    document.getElementById("root").insertBefore(s, g);
-    return s;
   };
 
   /** SVG 元素 */
@@ -215,10 +85,309 @@
     return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
   };
 
-  /** 收尾:最后 0.35 秒只淡出叠加层(玻璃卡、示意区、来源),实拍底保持到最后一帧 */
-  HF.outro = function (tl, sel) {
-    tl.to(sel || ".card, .src, .stage, .tbl", { opacity: 0, duration: 0.35, ease: "power1.in" },
-      Math.max(0.5, HF.seconds - 0.4));
+  // ======================================================================
+  // 版式组件(实车图 + 标注)
+  // ======================================================================
+
+  /** 节奏:短拍压紧入场,长拍入场照常、多出来的时间交给停留段的二级运动。退场留在最后 */
+  HF.acts = function () {
+    const S = HF.seconds;
+    const K = Math.max(0.4, Math.min(1, S / 7));
+    const outDur = Math.max(0.3, Math.min(0.55, S * 0.08));
+    return { S, K, T: (x) => x * K, outAt: S - outDur, outDur };
+  };
+
+  const UNIT_RE = /^\s*(kWh|kW|km\/h|km|mm|cm|TOPS|Hz|kg|N·m|Nm|V|A|L|s|秒|公里|千米|分钟|小时|度|万元|元|英寸|%|个|颗|线|匹|座|C(?![A-Za-z一-龥]))/i;
+
+  /** 原文拆成 头 + 数字 + 单位 + 余下的说明("752V碳化硅" → 752 / V / 碳化硅)。没有数字返回 null */
+  HF.parts = function (text) {
+    const p = HF.splitNumber(text);
+    if (!p) return null;
+    const m = p.tail.match(UNIT_RE);
+    const unit = m ? m[1] : "";
+    const tag = (m ? p.tail.slice(m[0].length) : p.tail).trim();
+    return Object.assign({}, p, { unit, tag, head: p.head.trim() });
+  };
+
+  /**
+   * 大数字:[头] 数字 单位 [说明标签]。返回能交给 HF.countHero 的对象。
+   * 没有数字的原文(如"全系标配")整段当大字。
+   */
+  HF.bigNumber = function (host, value, size, opt) {
+    opt = opt || {};
+    host.innerHTML = "";
+    host.classList.add("bn");
+    const p = HF.parts(value);
+    if (!p) {
+      const t = HF.el("div", "bn-txt", String(value));
+      t.style.fontSize = Math.round(size) + "px";   // fitSize 对纯文字已按 0.62 缩过
+      host.appendChild(t);
+      return { count: t, final: String(value), whole: true };
+    }
+    if (p.head) { const h = HF.el("div", "bn-unit", p.head); h.style.fontSize = Math.round(size * 0.26) + "px"; host.appendChild(h); }
+    const n = HF.el("div", "bn-num", p.num.toFixed(p.dec));
+    n.style.fontSize = size + "px";
+    host.appendChild(n);
+    if (p.unit) { const u = HF.el("div", "bn-unit", p.unit); u.style.fontSize = Math.round(size * (opt.unitScale || 0.3)) + "px"; host.appendChild(u); }
+    if (p.tag) { const t = HF.el("div", "bn-tag", p.tag); t.style.fontSize = Math.max(20, Math.round(size * 0.17)) + "px"; host.appendChild(t); }
+    return { count: n, p, final: p.num.toFixed(p.dec), whole: false };
+  };
+
+  /** 全屏 SVG 层(引线画在这里),插在颗粒层之前 */
+  HF.overlay = function () {
+    let sv = document.getElementById("ov");
+    if (sv) return sv;
+    sv = HF.svg("svg", { id: "ov", width: 1920, height: 1080, viewBox: "0 0 1920 1080" });
+    const root = document.getElementById("root");
+    const g = document.getElementById("grain");
+    if (g) root.insertBefore(sv, g); else root.appendChild(sv);
+    return sv;
+  };
+
+  /** 在颗粒层之前插一个元素 */
+  HF.add = function (el) {
+    const root = document.getElementById("root");
+    const g = document.getElementById("grain");
+    if (g) root.insertBefore(el, g); else root.appendChild(el);
+    return el;
+  };
+
+  /** 颗粒层(放在最上面) */
+  HF.grain = function () {
+    if (document.getElementById("grain")) return;
+    const g = HF.el("div"); g.id = "grain"; g.appendChild(HF.el("div"));
+    document.getElementById("root").appendChild(g);
+  };
+
+  /** 标题块:眉标(车型 · 栏目)+ 大标题,标题用遮罩从下往上露出 */
+  HF.header = function (tl, at, opt) {
+    opt = opt || {};
+    const box = HF.el("div", "hd");
+    const kick = HF.el("div", "hd-kick");
+    const bar = HF.el("i"); kick.appendChild(bar);
+    kick.appendChild(HF.el("span", "", [D.subject, opt.kicker].filter(Boolean).join(" · ")));
+    const mask = HF.el("div", "hd-mask");
+    const ttl = HF.el("div", "hd-ttl", D.title || "");
+    mask.appendChild(ttl);
+    box.appendChild(kick); box.appendChild(mask);
+    HF.add(box);
+    tl.fromTo(bar, { scaleY: 0 }, { scaleY: 1, duration: 0.35, ease: "power2.out" }, at);
+    tl.fromTo(kick.lastChild, { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, at + 0.1);
+    tl.fromTo(ttl, { yPercent: 105 }, { yPercent: 0, duration: 0.6, ease: "expo.out" }, at + 0.18);
+    return box;
+  };
+
+  /** 来源脚注:右上角一行小字 + 细线 */
+  HF.footnote = function (tl, at) {
+    if (!D.source) return null;
+    const f = HF.el("div", "fn");
+    f.appendChild(HF.el("i"));
+    f.appendChild(HF.el("span", "", D.source));
+    HF.add(f);
+    tl.fromTo(f, { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, at);
+    return f;
+  };
+
+  /**
+   * 引线标注。anchor = 落在图上的点,label = 标签框的锚点(side 决定标签在线的哪一侧)。
+   * 线:落点 → 斜线到拐点 → 水平到标签。返回 { show(tl, at), els }
+   */
+  HF.callout = function (opt) {
+    const sv = HF.overlay();
+    const [ax, ay] = opt.anchor, [lx, ly] = opt.label;
+    const side = opt.side || (lx < ax ? "left" : "right");
+    // 拐点:斜线走到标签那一行;不越过标签端点(否则引线会折回来)
+    const dx = Math.abs(ly - ay) * 0.6;
+    const ex = lx < ax ? Math.max(ax - dx, lx + 20) : Math.min(ax + dx, lx - 20);
+    const d = `M${ax} ${ay} L${ex} ${ly} L${lx} ${ly}`;
+    const g = HF.svg("g", { class: "co" }, sv);
+    const line = HF.svg("path", { d, fill: "none", stroke: HF.c("ink", 0.7), "stroke-width": 2,
+      pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, g);
+    const ring = HF.svg("circle", { cx: ax, cy: ay, r: 10, fill: "none", stroke: HF.c("acc"), "stroke-width": 2, opacity: 0 }, g);
+    const dot = HF.svg("circle", { cx: ax, cy: ay, r: 0, fill: HF.c("acc") }, g);
+    const box = HF.el("div", "co-box " + side);
+    box.style.top = (ly - 4) + "px";
+    if (side === "left") box.style.right = (1920 - lx + 18) + "px"; else box.style.left = (lx + 18) + "px";
+    const lab = HF.el("div", "co-lab", opt.title || "");
+    const val = HF.el("div", "co-val");
+    box.appendChild(lab); box.appendChild(val);
+    HF.add(box);
+    const big = HF.bigNumber(val, opt.value, opt.size || 64, { unitScale: 0.36 });
+    box.style.transform = "translateY(-50%)";
+    return {
+      els: [g, box], box, big,
+      show(tl, at, countDur) {
+        tl.fromTo(dot, { attr: { r: 0 } }, { attr: { r: 5 }, duration: 0.25, ease: "back.out(3)" }, at);
+        tl.fromTo(ring, { attr: { r: 6 }, opacity: 1 }, { attr: { r: 30 }, opacity: 0, duration: 0.8, ease: "power2.out", immediateRender: false }, at);
+        tl.fromTo(line, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: 0.5, ease: "power2.inOut" }, at + 0.05);
+        tl.fromTo(lab, { opacity: 0, x: side === "left" ? 16 : -16 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, at + 0.45);
+        tl.fromTo(val, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, at + 0.5);
+        HF.countHero(tl, big, at + 0.5, countDur || 0.9);
+      },
+      /** 停留段:落点呼吸 */
+      breathe(tl, from, to) {
+        const period = 1.6;
+        for (let t = from; t + 0.1 < to; t += period) {
+          tl.fromTo(ring, { attr: { r: 6 }, opacity: 0.9 }, { attr: { r: 26 }, opacity: 0, duration: Math.min(period, to - t), ease: "power1.out", immediateRender: false }, t);
+        }
+      },
+    };
+  };
+
+  /**
+   * 影棚 + 车:暗色影棚底、地台光、地平线;有车图时把车放在 (cx, floorY),宽 CW。
+   * 返回 rig:{ stage, car, box, floorY, P, at(u, v) → 页面像素, xray(tl, at, dur), roofFront(), cabin() }
+   * 没有车图时 car 为 null,at() 按一辆"虚拟车"的外框换算,模板照样能定位。
+   */
+  HF.carRig = function (tl, opt) {
+    opt = opt || {};
+    const P = D.photo;
+    const CW = opt.width || 1120, cx = opt.cx == null ? 1000 : opt.cx;
+    const floorY = opt.floorY || 545;
+    const bgw = document.getElementById("bgwrap");
+    if (bgw) bgw.classList.add("studio");
+    const stage = HF.add(HF.el("div")); stage.id = "stage";
+    stage.style.transformOrigin = `${cx}px ${floorY}px`;
+    const pool = HF.el("div", "studio-pool"); pool.style.left = (cx - 750) + "px"; pool.style.top = (floorY - 130) + "px";
+    const hz = HF.el("div", "studio-horizon"); hz.style.top = (floorY + 4) + "px";
+    stage.appendChild(pool); stage.appendChild(hz);
+    const rig = { stage, floorY, P, CW, cx, car: null, img: null, edges: null };
+    // 虚拟车:没有车图时的外框(宽 CW,高 0.34 CW,地线 0.95)
+    const geo = P || { width: 100, height: 34, floor: 0.95, roof: 0.05, wheels: [0.239, 0.771], body: [0.02, 0.98],
+                       facing: "right", profile: [] };
+    const ch = CW * geo.height / geo.width;
+    const box = { left: cx - CW / 2, top: floorY - geo.floor * ch, w: CW, h: ch };
+    rig.box = box; rig.geo = geo;
+    rig.at = (u, v) => [box.left + u * CW, box.top + v * ch];
+    rig.front = geo.facing === "left" ? geo.body[0] : geo.body[1];
+    rig.rear = geo.facing === "left" ? geo.body[1] : geo.body[0];
+    /** 车顶前沿(激光雷达、前挡上沿):从车头往回找,第一处车顶高度接近最高点的位置 */
+    rig.roofFront = () => {
+      const pr = geo.profile || [];
+      if (!pr.length) return rig.at(geo.facing === "left" ? 0.38 : 0.62, geo.roof + 0.02);
+      const top = Math.min(...pr);
+      const idx = [...pr.keys()];
+      if (geo.facing !== "left") idx.reverse();
+      const k = idx.find((i) => pr[i] <= top + 0.035);
+      const u = geo.body[0] + (geo.body[1] - geo.body[0]) * k / (pr.length - 1);
+      return rig.at(u, pr[k]);
+    };
+    /** 座舱中心(芯片):两轮中点,车顶到地线之间 45% 处 */
+    rig.cabin = () => rig.at((geo.wheels[0] + geo.wheels[1]) / 2, geo.roof + (geo.floor - geo.roof) * 0.45);
+    tl.fromTo(bgw, { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, 0);
+    tl.fromTo([pool, hz], { opacity: 0 }, { opacity: 1, duration: 0.8, ease: "power1.out" }, 0.15);
+    if (!P) {
+      if (opt.ghost) rig.ghost = ghostCar(tl, stage, box, ch, opt.inAt || 0.1, opt.inDur || 1.2);
+      return rig;
+    }
+
+    const car = HF.el("div", "car");
+    Object.assign(car.style, { left: box.left + "px", top: box.top + "px", width: CW + "px", height: ch + "px" });
+    const refl = HF.el("img", "reflect"); refl.src = P.src;
+    refl.style.top = (2 * P.floor * ch - ch) + "px";
+    const img = HF.el("img"); img.src = P.src;
+    car.appendChild(refl); car.appendChild(img);
+    let edges = null;
+    if (P.edges) { edges = HF.el("div", "edges-wrap"); edges.appendChild(HF.el("div", "edges")); edges.style.clipPath = "inset(0 100% 0 0)"; car.appendChild(edges); }
+    stage.appendChild(car);
+    Object.assign(rig, { car, img, edges });
+    // 车从车头方向的反面滑入
+    const dir = geo.facing === "left" ? -1 : 1;
+    tl.fromTo(car, { x: -300 * dir, opacity: 0, filter: "blur(10px)" },
+                   { x: 0, opacity: 1, filter: "blur(0px)", duration: opt.inDur || 1.0, ease: "expo.out" }, opt.inAt || 0.05);
+
+    /** X 光:扫描光从左到右,扫过处车身变暗、线稿亮起。dim = 最后车身留多少 */
+    rig.xray = (tl2, at, dur, dim) => {
+      dim = dim == null ? 0.2 : dim;
+      const scan = HF.el("div", "scan");
+      Object.assign(scan.style, { top: (box.top - 20) + "px", height: (ch + 40) + "px", left: "0px" });
+      stage.appendChild(scan);
+      tl2.fromTo(scan, { x: box.left - 10, opacity: 0 }, { x: box.left + CW + 10, duration: dur, ease: "power1.inOut" }, at);
+      tl2.to(scan, { opacity: 1, duration: 0.12 }, at);
+      tl2.to(scan, { opacity: 0, duration: 0.2 }, at + dur - 0.15);
+      const pct = { v: 0 };
+      const paint = () => {
+        if (edges) edges.style.clipPath = `inset(0 ${100 - pct.v}% 0 0)`;
+        img.style.opacity = String(1 - (1 - dim) * pct.v / 100);
+      };
+      tl2.to(pct, { v: 100, duration: dur, ease: "power1.inOut", onUpdate: paint }, at);
+    };
+    return rig;
+  };
+
+  /**
+   * 没有车图时的示意车:一条通用侧影线稿(车头朝右),按虚拟车外框(wheels 0.239 / 0.771)缩放。
+   * 用线画出来,不填色,明确是示意。
+   */
+  function ghostCar(tl, stage, box, ch, at, dur) {
+    const CW = box.w;
+    const mx = (x) => box.left + (0.02 + (x - 50) / 722 * 0.96) * CW;
+    const my = (y) => box.top + (0.05 + (y - 102) / 260 * 0.9) * ch;
+    const map = (d) => d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (m, x, y) => mx(+x).toFixed(1) + " " + my(+y).toFixed(1));
+    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    const line = { fill: "none", stroke: HF.c("ink"), "stroke-width": 3, "stroke-linejoin": "round", pathLength: 1,
+                   "stroke-dasharray": "1 1", "stroke-dashoffset": 1 };
+    const body = HF.svg("path", Object.assign({ d: map("M50 300 L50 250 Q50 228 92 222 L222 196 Q292 110 420 102 L560 102 Q650 116 704 200 L752 218 Q772 226 772 258 L772 300 Z") }, line), sv);
+    const win = HF.svg("path", Object.assign({ d: map("M268 196 Q320 128 430 122 L552 122 Q620 134 664 196 Z") }, line, { "stroke-width": 2, stroke: HF.c("ink", 0.55) }), sv);
+    const wheels = [215, 615].map((x) => HF.svg("ellipse", { cx: mx(x), cy: my(308), rx: 54 / 722 * 0.96 * CW, ry: 54 / 260 * 0.9 * ch,
+      fill: HF.c("bg"), stroke: HF.c("ink"), "stroke-width": 3, opacity: 0 }, sv));
+    tl.to(body, { attr: { "stroke-dashoffset": 0 }, duration: dur, ease: "power2.inOut" }, at);
+    tl.to(win, { attr: { "stroke-dashoffset": 0 }, duration: dur * 0.7, ease: "power2.inOut" }, at + dur * 0.3);
+    tl.fromTo(wheels, { opacity: 0 }, { opacity: 1, duration: 0.4 }, at + dur * 0.6);
+    return sv;
+  }
+
+  /**
+   * 次要参数:右侧竖排的小条目(细竖线 + 标签 + 数字),依次滑入。返回元素数组。
+   * opt = { top, right, width(每条), size, row(横排), from, to(时间段) }
+   */
+  HF.chips = function (tl, rows, opt) {
+    opt = opt || {};
+    if (!rows.length) return [];
+    const box = HF.add(HF.el("div", "chips" + (opt.row ? " row" : "")));
+    box.style.top = (opt.top || 300) + "px";
+    box.style.right = (opt.right == null ? 110 : opt.right) + "px";
+    if (!opt.row) box.style.width = (opt.width || 380) + "px";
+    const out = [];
+    rows.forEach((r, n) => {
+      const it = HF.el("div", "it"); const bar = HF.el("i");
+      const lab = HF.el("div", "co-lab", r.label); const val = HF.el("div");
+      if (opt.row) it.style.width = (opt.width || 380) + "px";
+      it.appendChild(bar); it.appendChild(lab); it.appendChild(val);
+      // 口径 / 来源小字("CLTC · 标准版 | 官方"),跟着这一条一起滑入
+      const tag = r.tag ? HF.el("div", "co-tag", r.tag) : null;
+      if (tag) it.appendChild(tag);
+      box.appendChild(it);
+      const big = HF.bigNumber(val, r.value, HF.fitSize(r.value, (opt.width || 380) - 40, opt.size || 64), { unitScale: 0.4 });
+      const span = Math.max(0, (opt.to || opt.from) - opt.from);
+      const at = opt.from + (rows.length > 1 ? span * n / (rows.length - 1) : 0);
+      tl.fromTo(bar, { scaleY: 0 }, { scaleY: 1, duration: 0.35, ease: "power2.out" }, at);
+      tl.fromTo([lab, val, tag].filter(Boolean), { opacity: 0, x: 24 }, { opacity: 1, x: 0, duration: 0.45, ease: "power3.out", stagger: 0.08 }, at + 0.1);
+      HF.countHero(tl, big, at + 0.15, 0.8);
+      out.push(it);
+    });
+    return out;
+  };
+
+  /** 镜头:整拍匀速慢推(ease none,保证任意一秒都在动)。layers = [{el, scale:[a,b], x:[a,b], y:[a,b]}] */
+  HF.camera = function (tl, layers) {
+    layers.forEach((L) => {
+      if (!L.el) return;
+      const from = {}, to = { duration: HF.seconds, ease: "none" };
+      if (L.scale) { from.scale = L.scale[0]; to.scale = L.scale[1]; }
+      if (L.x) { from.x = L.x[0]; to.x = L.x[1]; }
+      if (L.y) { from.y = L.y[0]; to.y = L.y[1]; }
+      tl.fromTo(L.el, from, to, 0);
+    });
+  };
+
+  /** 退场:叠加层按顺序上飘 + 模糊消失(底保持到最后一帧) */
+  HF.exit = function (tl, els, at, dur) {
+    els = els.filter(Boolean);
+    const step = Math.min(0.06, dur / Math.max(2, els.length * 2));
+    els.forEach((el, n) => {
+      tl.to(el, { opacity: 0, y: "-=18", filter: "blur(8px)", duration: Math.max(0.2, dur - n * step), ease: "power2.in" }, at + n * step);
+    });
   };
 
   HF.register = function (tl) {

@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 产品镜:正侧面实车图转 X 光,车顶激光雷达向前打出扫描扇面,前方地面和障碍物逐层被点云勾出来 -->
+  <meta name="hf-bg" content="studio" />
+  <meta name="hf-photo" content="exterior_side" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
-  <style>
-    .radar { position: absolute; left: 25px; top: 0; width: 800px; height: 800px; }
-    svg { position: absolute; left: 0; top: 0; overflow: visible; }
-  </style>
 </head>
 <body>
   <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
@@ -16,41 +15,156 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame();
-    const tl = F.tl, T = F.T;
-    const stage = HF.stage();
-    const rd = HF.el("div", "radar"); stage.appendChild(rd);
-    const sv = HF.svg("svg", { width: 800, height: 800, viewBox: "0 0 800 800" }, rd);
-    const cx = 400, cy = 400;
-    const rings = [130, 235, 340].map((r) => HF.svg("circle", { cx: cx, cy: cy, r: r, fill: "rgba(236,246,228,0.06)", stroke: "rgba(236,246,228,0.34)", "stroke-width": 2 }, sv));
-    HF.svg("line", { x1: cx - 340, y1: cy, x2: cx + 340, y2: cy, stroke: "rgba(236,246,228,0.18)", "stroke-width": 2 }, sv);
-    HF.svg("line", { x1: cx, y1: cy - 340, x2: cx, y2: cy + 340, stroke: "rgba(236,246,228,0.18)", "stroke-width": 2 }, sv);
-    // 扫描扇面:60° 楔形,绕圆心匀速转(顺时针)
-    const ex = cx + 340 * Math.cos(-Math.PI / 3), ey = cy + 340 * Math.sin(-Math.PI / 3);
-    const wedge = HF.svg("path", { d: "M" + cx + " " + cy + " L" + (cx + 340) + " " + cy + " A340 340 0 0 0 " + ex + " " + ey + " Z", fill: "#b8f36b", "fill-opacity": 0.30 }, sv);
-    HF.svg("rect", { x: cx - 38, y: cy - 80, width: 76, height: 160, rx: 26, fill: "rgba(236,246,228,0.14)", stroke: "#b8f36b", "stroke-width": 4 }, sv);
-    HF.svg("rect", { x: cx - 26, y: cy - 38, width: 52, height: 40, rx: 10, fill: "none", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, sv);
-    const rnd = HF.rng(7);
-    const dots = [];
-    for (let n = 0; n < 30; n++) {
-      const ang = rnd() * Math.PI * 2, rr = 110 + rnd() * 215;
-      const d = HF.svg("circle", { cx: cx + rr * Math.cos(ang), cy: cy + rr * Math.sin(ang), r: 5 + rnd() * 4, fill: "#b8f36b", opacity: 0 }, sv);
-      dots.push({ d: d, ang: ang });
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
+    const D = HF.data, P = D.photo, rows = HF.rows;
+    // 版面按"车头朝右"设计,车头朝左时整体镜像:dir = 前方方向,X() 把设计坐标映射过去
+    const dir = P && P.facing === "left" ? -1 : 1;
+    const X = (x) => dir > 0 ? x : 1920 - x;
+    const rig = HF.carRig(tl, { width: 960, cx: X(690), floorY: 700, ghost: true });
+    const stage = rig.stage, floorY = rig.floorY;
+    const [Lx, Ly] = rig.roofFront();
+
+    // ---- 扫描扇面:从雷达向前,上沿略向下,下沿打到地面之外 ----
+    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    const defs = HF.svg("defs", {}, sv);
+    const grad = HF.svg("radialGradient", { id: "fanG", gradientUnits: "userSpaceOnUse", cx: Lx, cy: Ly, r: 1150 }, defs);
+    HF.svg("stop", { offset: "0", "stop-color": HF.c("acc"), "stop-opacity": 0.32 }, grad);
+    HF.svg("stop", { offset: "1", "stop-color": HF.c("acc"), "stop-opacity": 0 }, grad);
+    const R = 1150, a0 = 1 * Math.PI / 180, a1 = 27 * Math.PI / 180;
+    const ray = (a, r) => [Lx + dir * r * Math.cos(a), Ly + r * Math.sin(a)];
+    const [e0x, e0y] = ray(a0, R), [e1x, e1y] = ray(a1, R);
+    const sweepFlag = dir > 0 ? 1 : 0;
+    const fanD = `M${Lx} ${Ly} L${e0x} ${e0y} A${R} ${R} 0 0 ${sweepFlag} ${e1x} ${e1y} Z`;
+    const clip = HF.svg("clipPath", { id: "fanC" }, defs);
+    HF.svg("path", { d: fanD }, clip);
+    const fan = HF.svg("path", { d: fanD, fill: "url(#fanG)", opacity: 0 }, sv);
+    const edgesG = HF.svg("g", { opacity: 0 }, sv);
+    [a0, a1].forEach((a) => { const [x, y] = ray(a, R); HF.svg("line", { x1: Lx, y1: Ly, x2: x, y2: y, stroke: HF.c("acc", 0.5), "stroke-width": 1.5 }, edgesG); });
+    // 波前:三道同心弧,从雷达向外扩散(裁在扇面里)
+    const waveG = HF.svg("g", { "clip-path": "url(#fanC)" }, sv);
+    const WAVES = 3, WP = 1.5;        // 波数、每道波走完 R 的时间
+    const waves = [];
+    for (let k = 0; k < WAVES; k++) waves.push(HF.svg("circle", { cx: Lx, cy: Ly, r: 1, fill: "none", stroke: HF.c("hi"), "stroke-width": 3, opacity: 0 }, waveG));
+
+    // ---- 点云:前方地面(透视排布)+ 两个障碍物(一个车形块、一个竖条) ----
+    const rnd = HF.rng(23);
+    const pts = [];
+    const inFan = (x, y) => {
+      const dx = (x - Lx) * dir, dy = y - Ly;
+      if (dx <= 0) return false;
+      const a = Math.atan2(dy, dx), r = Math.hypot(dx, dy);
+      return a >= a0 && a <= a1 && r <= R;
+    };
+    const addPt = (x, y, big, hit) => {
+      if (!inFan(x, y)) return;
+      const c = HF.svg("circle", { cx: x.toFixed(1), cy: y.toFixed(1), r: big ? 3.4 : 2.4, fill: hit ? HF.c("hi") : HF.c("acc"), opacity: 0 }, sv);
+      pts.push({ c, d: Math.hypot(x - Lx, y - Ly), hit });
+    };
+    for (let k = 0; k < 9; k++) {
+      const y = floorY + 6 + 210 * Math.pow(k / 8, 1.5);
+      const n = 26 + k * 3;
+      for (let i = 0; i < n; i++) addPt(X(1000 + (900 * (i + rnd())) / n), y + (rnd() - 0.5) * 6, false, false);
     }
-    const period = Math.max(1.6, Math.min(2.6, HF.seconds / 2));
-    tl.fromTo(rd, { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: T(0.8), ease: "expo.out", transformOrigin: "50% 50%" }, T(0.3));
-    rings.forEach((r, n) => tl.fromTo(r, { attr: { "stroke-opacity": 0 } }, { attr: { "stroke-opacity": 1 }, duration: 0.4 }, T(0.5) + n * 0.15));
-    const turns = Math.max(1, Math.ceil((HF.seconds - T(0.8)) / period));
-    tl.to(wedge, { rotation: 360 * turns, svgOrigin: cx + " " + cy, duration: turns * period, ease: "none" }, T(0.8));
-    // 点在扇面扫过时亮起,然后慢慢暗下去。扇面的前缘 = 起始角 0 → 顺时针,所以点的"到达时刻"按角度算
-    dots.forEach((o) => {
-      const frac = ((o.ang % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
-      for (let k = 0; k < turns; k++) {
-        const t0 = T(0.8) + k * period + frac * period;
-        tl.fromTo(o.d, { opacity: 1, scale: 1.8 }, { opacity: 0.12, scale: 1, duration: period * 0.9, ease: "power2.out", transformOrigin: "50% 50%" }, t0);
+    const obstacles = [];
+    function block(x0, x1, top, nx, ny) {
+      const o = { x0: Math.min(X(x0), X(x1)), x1: Math.max(X(x0), X(x1)), y0: floorY - top, y1: floorY, pts: [] };
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+        const u = (i + 0.5 + (rnd() - 0.5) * 0.6) / nx, v = (j + 0.5 + (rnd() - 0.5) * 0.6) / ny;
+        // 只取朝雷达那一面 + 顶面的点,像真实点云一样有"影子"
+        if (u > 0.55 && v > 0.35 && rnd() < 0.7) continue;
+        addPt(X(x0 + (x1 - x0) * u), floorY - top + top * v, true, true);
       }
+      o.d = Math.hypot((o.x0 + o.x1) / 2 - Lx, o.y0 - Ly);
+      obstacles.push(o);
+    }
+    block(1380, 1600, 128, 14, 8);
+    block(1745, 1775, 176, 3, 12);
+    // 障碍物的角括号框
+    const brackets = obstacles.map((o) => {
+      const g = HF.svg("g", { opacity: 0 }, sv), L = 18, p = 10;
+      const x0 = o.x0 - p, x1 = o.x1 + p, y0 = o.y0 - p, y1 = o.y1 + p;
+      [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]].forEach(([x, y, sx, sy]) =>
+        HF.svg("path", { d: `M${x + sx * L} ${y} L${x} ${y} L${x} ${y + sy * L}`, fill: "none", stroke: HF.c("hi"), "stroke-width": 2 }, g));
+      return { g, o };
     });
-    HF.outro(tl);
+
+    // 雷达本体:亮点 + 脉冲圈
+    const lidar = HF.svg("g", { opacity: 0 }, sv);
+    HF.svg("rect", { x: Lx - 16, y: Ly - 12, width: 32, height: 14, rx: 6, fill: HF.c("bg"), stroke: HF.c("hi"), "stroke-width": 2 }, lidar);
+    const core = HF.svg("circle", { cx: Lx, cy: Ly - 5, r: 4, fill: HF.c("hi") }, lidar);
+    const pulse = HF.svg("circle", { cx: Lx, cy: Ly - 5, r: 6, fill: "none", stroke: HF.c("acc"), "stroke-width": 2, opacity: 0 }, sv);
+
+    const vig = HF.add(HF.el("div", "vignette"));
+    const head = HF.header(tl, T(0.3), { kicker: "感知" });
+    const fn = HF.footnote(tl, T(1.0));
+
+    // ---- 时间线 ----
+    const xrayAt = T(1.1), xrayDur = Math.max(0.7, T(0.9));
+    if (rig.car) rig.xray(tl, xrayAt, xrayDur, 0.32);
+    const onAt = rig.car ? xrayAt + xrayDur * 0.8 : T(1.3);
+    tl.fromTo(lidar, { opacity: 0 }, { opacity: 1, duration: 0.3 }, onAt);
+    tl.fromTo(pulse, { attr: { r: 6 }, opacity: 1 }, { attr: { r: 40 }, opacity: 0, duration: 0.8, ease: "power2.out", immediateRender: false }, onAt);
+    const scanAt = onAt + 0.35;
+    tl.fromTo(fan, { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power1.out" }, scanAt);
+    tl.fromTo(edgesG, { opacity: 0 }, { opacity: 1, duration: 0.6 }, scanAt);
+    // 波前推进 + 点被扫到时亮一下,之后留一层底亮度(点云逐渐"攒"出来)
+    const scanEnd = A.outAt + A.outDur;
+    const V = R / WP;
+    HF.drive(tl, (t) => {
+      for (let k = 0; k < WAVES; k++) {
+        const tk = t - k * WP / WAVES;
+        const w = waves[k];
+        if (tk < 0) { w.setAttribute("opacity", 0); continue; }
+        const r = (tk % WP) * V;
+        w.setAttribute("r", r.toFixed(1));
+        w.setAttribute("opacity", (0.75 * (1 - r / R)).toFixed(3));
+      }
+      for (const p of pts) {
+        const first = p.d / V;
+        if (t < first) { p.c.setAttribute("opacity", 0); continue; }
+        // 距最近一道波经过已有多久
+        const since = ((t - first) % (WP / WAVES));
+        const base = Math.min(p.hit ? 0.75 : 0.38, 0.15 + (t - first) * 0.25);
+        p.c.setAttribute("opacity", Math.min(1, base + Math.exp(-since / 0.18) * 0.7).toFixed(3));
+      }
+      core.setAttribute("opacity", (0.6 + 0.4 * Math.abs(Math.sin(t * 6))).toFixed(3));
+    }, scanAt, Math.max(0.1, scanEnd - scanAt));
+    brackets.forEach((b) => {
+      const at = scanAt + b.o.d / V + 0.1;
+      tl.fromTo(b.g, { opacity: 0, scale: 1.25, svgOrigin: `${(b.o.x0 + b.o.x1) / 2} ${(b.o.y0 + b.o.y1) / 2}` },
+                     { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2)" }, at);
+    });
+    // 雷达脉冲在停留段持续
+    for (let t = onAt + 1.0; t + 0.2 < A.outAt; t += 1.2)
+      tl.fromTo(pulse, { attr: { r: 6 }, opacity: 0.9 }, { attr: { r: 34 }, opacity: 0, duration: 1.0, ease: "power1.out", immediateRender: false }, t);
+
+    // ---- 标注:主数字挂在雷达上(车尾一侧上方),第二行挂在扇面远端,第三行挂在障碍物 ----
+    const callouts = [];
+    if (rows[0]) callouts.push(HF.callout({ anchor: [Lx, Ly - 14], label: [Lx - dir * 230, 330], side: dir > 0 ? "left" : "right",
+      title: rows[0].label, value: rows[0].value, size: HF.fitSize(rows[0].value, Math.min(560, (dir > 0 ? Lx - 230 : 1920 - Lx - 230) - 130), 120) }));
+    if (rows[1]) {
+      const [bx, by] = ray((a0 + a1) * 0.28, R * 0.62);
+      callouts.push(HF.callout({ anchor: [bx, by], label: [X(1330), 300], side: dir > 0 ? "right" : "left",
+        title: rows[1].label, value: rows[1].value, size: HF.fitSize(rows[1].value, 440, 76) }));
+    }
+    if (rows[2] && obstacles[0]) {
+      const o = obstacles[0];
+      callouts.push(HF.callout({ anchor: [(o.x0 + o.x1) / 2, o.y1 + 12], label: [X(1330), 960], side: dir > 0 ? "right" : "left",
+        title: rows[2].label, value: rows[2].value, size: HF.fitSize(rows[2].value, 440, 64) }));
+    }
+    const coAt = scanAt + 0.5;
+    const lastCo = Math.max(coAt, Math.min(A.outAt - 1.6, S * 0.62));
+    callouts.forEach((c, k) => {
+      const at = callouts.length > 1 ? coAt + (lastCo - coAt) * k / (callouts.length - 1) : coAt;
+      c.show(tl, at, k === 0 ? Math.max(0.9, T(1.3)) : 0.8);
+      if (k > 0) c.breathe(tl, at + 1.0, A.outAt);
+    });
+
+    HF.camera(tl, [{ el: stage, scale: [1.0, 1.04], x: [-6 * dir, 10 * dir] }]);
+    HF.exit(tl, [head, fn].concat(...callouts.map((c) => c.els)), A.outAt, A.outDur);
+    tl.to(sv, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

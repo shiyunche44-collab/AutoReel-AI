@@ -19,6 +19,11 @@ def auto():
 HOOK = "开场"
 
 
+def single(auto) -> list[str]:
+    """单车方向。横评方向的开场段、段落连续性另有专门的测试(见文件末尾)。"""
+    return [n for n, t in auto.themes.items() if not t.roundup]
+
+
 # ---------------------------------------------------------------------------
 # 铺展正确性 —— 逐组合断言
 # ---------------------------------------------------------------------------
@@ -58,9 +63,9 @@ def test_weight_drives_allocation(auto):
 
 
 def test_hook_always_present(auto):
-    """开场必须在每个方向、每个时长的首段出现。"""
+    """开场必须在每个单车方向、每个时长的首段出现。"""
     for duration in auto.supported_durations():
-        for name in auto.themes:
+        for name in single(auto):
             plan = auto.plan_for(duration, name)
             assert plan[0] == HOOK, f"方向 {name} @ {duration}s 首段不是开场"
 
@@ -71,13 +76,13 @@ def test_hook_never_absorbs_remainder(auto):
     最大余数法的标准做法会把余量派给"权重小 → 小数部分大"的块,
     开场权重恒为 1,于是永远排在补位首位,悬念开场会把正片挤掉。
     """
-    for name in auto.themes:
+    for name in single(auto):
         blocks = auto.themes[name].blocks
         hook = next(b for b in blocks if b["section"] == HOOK)
         assert hook["remainder"] is False, f"方向 {name} 的开场未关闭补位"
 
     shortest = min(auto.supported_durations())
-    for name in auto.themes:
+    for name in single(auto):
         assert auto.plan_for(shortest, name).count(HOOK) == 1, (
             f"方向 {name} 在 {shortest} 秒下拿到了多个开场"
         )
@@ -107,7 +112,7 @@ def test_no_remainder_blocks_never_exceed_floor_share():
 
 def test_block_order_is_preserved(auto):
     """同一段落的所有副本必须连续 —— 不能被别的段落打断。"""
-    for name in auto.themes:
+    for name in single(auto):
         seen: list[str] = []
         for section in auto.plan_for(240, name):
             if not seen or seen[-1] != section:
@@ -175,3 +180,118 @@ def test_unknown_section_in_blocks_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(categories, "PROFILES_DIR", tmp_path)
     with pytest.raises(ProfileError, match="未定义的段落"):
         categories.load_profile("badcat2")
+
+
+# ---------------------------------------------------------------------------
+# 多车横评:per_subject 块按车单展开
+# ---------------------------------------------------------------------------
+CARS5 = ["小米YU7", "特斯拉Model Y", "问界M7", "极氪7X", "乐道L60"]
+
+
+@pytest.mark.parametrize("n", [3, 4, 5])
+@pytest.mark.parametrize("duration", [240, 360, 480])
+def test_roundup_slots_cover_every_car(auto, n, duration):
+    cars = CARS5[:n]
+    theme = auto.themes["roundup"]
+    slots = auto.slots_for(duration, "roundup", cars)
+    assert len(slots) == duration // auto.duration_grid
+    assert slots[0] == categories.Slot("横评开场", "")
+    assert slots[-1] == categories.Slot("横评结论", "")
+    per_car = [b["section"] for b in theme.per_subject]
+    for car in cars:
+        own = [s for s in slots if s.subject == car]
+        # 每台车四个段落都在,按声明顺序
+        assert list(dict.fromkeys(s.section for s in own)) == per_car
+    # 每台车的拍连成一块,车按车单顺序排
+    order = [s.subject for s in slots if s.subject]
+    assert list(dict.fromkeys(order)) == cars
+    for car in cars:
+        idx = [i for i, s in enumerate(slots) if s.subject == car]
+        assert idx == list(range(idx[0], idx[-1] + 1))
+
+
+def test_roundup_plan_for_uses_placeholders(auto):
+    """不给车单时 plan_for 按最少台数的占位车铺展,长度照样精确。"""
+    for duration in auto.supported_durations():
+        assert len(auto.plan_for(duration, "roundup")) == duration // auto.duration_grid
+
+
+def test_single_theme_slots_match_plan(auto):
+    for duration in auto.supported_durations():
+        slots = auto.slots_for(duration, "buyguide", ["忽略我"])
+        assert [s.section for s in slots] == list(auto.plan_for(duration, "buyguide"))
+        assert all(s.subject == "" for s in slots)
+
+
+@pytest.fixture
+def fresh_db(tmp_path, monkeypatch):
+    """建项目的测试一律落到临时库,绝不写进 data/aimovice.db。"""
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
+    monkeypatch.setattr(db, "_INITIALISED", False)
+    return db
+
+
+@pytest.mark.parametrize("n,kept", [
+    (3, {"车型亮相", "核心卖点", "参数价格", "适合谁"}),
+    (4, {"车型亮相", "核心卖点", "参数价格"}),
+    (5, {"车型亮相", "核心卖点"}),
+])
+def test_roundup_compacts_to_fit_short_duration(auto, n, kept):
+    """车多时长短:按 drop 整档精简每车段落(先砍适合谁,再砍参数价格),
+    每台车结构一致,开场和结论都还在。"""
+    cars = CARS5[:n]
+    slots = auto.slots_for(120, "roundup", cars)
+    assert len(slots) == 120 // auto.duration_grid
+    assert slots[0].section == "横评开场" and slots[-1].section == "横评结论"
+    for car in cars:
+        assert {s.section for s in slots if s.subject == car} == kept
+
+
+def test_roundup_long_duration_keeps_full_set(auto):
+    slots = auto.slots_for(240, "roundup", CARS5)
+    for car in CARS5:
+        assert {s.section for s in slots if s.subject == car} == {"车型亮相", "核心卖点", "参数价格", "适合谁"}
+
+
+def test_every_roster_size_fits_every_duration(auto):
+    """配置自检的承诺:车单上限 × 最短时长也能建项目。"""
+    lo, hi = auto.themes["roundup"].subject_count
+    for duration in auto.supported_durations():
+        shots = duration // auto.duration_grid
+        for n in range(lo, hi + 1):
+            blocks = auto.roundup_blocks(auto.themes["roundup"], CARS5[:n], shots=shots)
+            assert len(blocks) <= shots
+
+
+def test_roundup_create_five_cars_in_two_minutes(fresh_db):
+    from app.models import ProjectCreate, SubjectEntry
+    from app.pipeline import orchestrator
+
+    pid = orchestrator.create_project(ProjectCreate(
+        subject="纯电 SUV 横评", theme="roundup", duration=120,
+        subjects=[SubjectEntry(name=c) for c in CARS5]))
+    assert fresh_db.get_project(pid)["shot_count"] == 15
+
+
+def test_roundup_create_checks_car_count(fresh_db):
+    from app.models import ProjectCreate, SubjectEntry
+    from app.pipeline import orchestrator
+    from app.pipeline.orchestrator import PipelineError
+
+    payload = ProjectCreate(subject="横评", theme="roundup", duration=240,
+                            subjects=[SubjectEntry(name="小米YU7"), SubjectEntry(name=" 小米YU7 "),
+                                      SubjectEntry(name="问界M7")])
+    with pytest.raises(PipelineError, match="3–5 台车"):
+        orchestrator.create_project(payload)
+
+
+def test_per_subject_block_must_be_single(tmp_path, monkeypatch):
+    from app.categories import _build_theme
+
+    raw = {"label": "T", "blocks": [{"per_subject": [{"section": "a"}]},
+                                    {"per_subject": [{"section": "b"}]}]}
+    with pytest.raises(ProfileError, match="最多一个"):
+        _build_theme("t", raw)

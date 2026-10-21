@@ -168,7 +168,29 @@ def test_tts_mid_failure_is_retried_and_keeps_shot_mapping(monkeypatch, tmp_path
     assert calls[1][0] == [calls[0][0][1]]  # 只补跑丢掉的那一句
     assert not result.missing_sentences
     assert [c.shot_idx for c in result.cues] == [0, 1, 2]
-    assert [c.text for c in result.cues] == calls[0][0]
+    assert [c.text for c in result.cues] == [f"第{i}拍的旁白。" for i in range(3)]
+
+
+def test_subtitles_keep_arabic_numbers_while_tts_reads_chinese(monkeypatch, tmp_path):
+    """TTS 吃中文读法,字幕必须是原文:屏幕上打"六百四十三公里"观众没法扫读。"""
+    from app.models import ShotSpec
+    from app.providers.audio import AudioAsset
+
+    sent: list[str] = []
+
+    def fake(texts, **kw):
+        sent.extend(texts)
+        return [AudioAsset(text=t, local_path=_make_tone(tmp_path / f"n{i}.wav"), index=i)
+                for i, t in enumerate(texts)]
+
+    monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
+    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    specs = [ShotSpec(idx=0, visual_zh="v", narration_zh="CLTC 续航 643 公里,电池 73kWh。")]
+    result = narration.build("p_num", specs, with_bgm=False)
+    assert "六百四十三" in sent[0] and "千瓦时" in sent[0]
+    joined = "".join(c.text for c in result.cues)
+    assert "643" in joined and "73kWh" in joined and "六百" not in joined
 
 
 def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):

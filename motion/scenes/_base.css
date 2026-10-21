@@ -1,11 +1,29 @@
-/* 概念动画公用样式 —— 风格 A「玻璃拟态」:这一拍的实拍素材做底,数据放在毛玻璃卡上。
-   强调色 #b8f36b;数字用 Montserrat(HyperFrames 内置字体),中文用本机的 Noto Sans SC / 微软雅黑。 */
+/* 概念动画公用样式 —— 实车图 + 标注:产品镜用影棚底 + 白底官图抠图,动态镜压在一段实拍上。
+   颜色全部走下面的变量(三元组 "R, G, B",用法 rgb(var(--acc)) / rgba(var(--acc), .5)),
+   风格文件 motion/styles/*.css 只覆盖变量 + 少量附加规则;这里的取值就是默认风格「实车标注」。
+   数字用 Montserrat(HyperFrames 内置字体),中文用本机的 Noto Sans SC / 微软雅黑 —— 风格换字体时
+   motion.py 直接替换字体名字面量(HyperFrames 只认页面里写明的 font-family,认不出 var())。 */
+:root {
+  --acc: 184, 243, 107;      /* 强调色:线、光、数字标签 */
+  --hi: 233, 255, 208;       /* 强调色的高光(扫描线、光点、线稿) */
+  --acc2: 159, 216, 255;     /* 第二强调色(对比的 B 方、芯片走线) */
+  --hi2: 230, 246, 255;
+  --ink: 242, 246, 238;      /* 文字与中性线 */
+  --bg: 11, 13, 12;          /* 底色 / 遮罩 */
+  --bg2: 18, 23, 20;         /* 稍亮的面板底 */
+  --glow: 1;                 /* 辉光强度倍数(浅色风格调到 0~0.3) */
+  --haze: 70, 110, 120;      /* 无素材底的第二团光 */
+  --studio-light: 214, 230, 205;  /* 影棚顶光 / 地台光 */
+  --studio-top: #0c0f0e; --studio-mid: #101412; --studio-floor: #161b18;
+  --grain: 0.07;
+  --vignette: 0.55;
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0c0b; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: rgb(var(--bg)); }
 #root {
   position: relative; width: 100%; height: 100%; overflow: hidden;
-  font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; color: #f2f6ee;
-  background-color: #0a0c0b;
+  font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; color: rgb(var(--ink));
+  background-color: rgb(var(--bg));
 }
 
 /* 底:实拍视频;没有素材时退回暗色径向底 */
@@ -13,50 +31,82 @@ html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0c0
 .bgwrap video { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; object-fit: cover; }
 .bgwrap.nobg {
   background:
-    radial-gradient(ellipse 900px 700px at 1300px 420px, rgba(184, 243, 107, 0.16) 0%, rgba(184, 243, 107, 0) 100%),
-    radial-gradient(ellipse 1200px 900px at 400px 700px, rgba(70, 110, 120, 0.30) 0%, rgba(70, 110, 120, 0) 100%),
-    #0b0e0d;
+    radial-gradient(ellipse 900px 700px at 1300px 420px, rgba(var(--acc), 0.16) 0%, rgba(var(--acc), 0) 100%),
+    radial-gradient(ellipse 1200px 900px at 400px 700px, rgba(var(--haze), 0.30) 0%, rgba(var(--haze), 0) 100%),
+    rgb(var(--bg));
 }
-.shade { position: absolute; inset: 0; pointer-events: none;
-  background:
-    radial-gradient(ellipse 1150px 1000px at 420px 540px, rgba(5, 7, 6, 0.66) 0%, rgba(5, 7, 6, 0) 100%),
-    radial-gradient(ellipse 1000px 900px at 1450px 540px, rgba(5, 7, 6, 0.40) 0%, rgba(5, 7, 6, 0) 100%); }
-.sweep-rot { position: absolute; left: 0; top: -240px; width: 1920px; height: 1560px; transform: rotate(18deg); pointer-events: none; }
-.sweep { position: absolute; top: 0; left: 0; width: 640px; height: 1560px; mix-blend-mode: screen;
-  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.16) 50%, rgba(255,255,255,0) 100%); }
-
-/* 毛玻璃 */
-.glass {
-  border-radius: 40px; background-color: rgba(236, 246, 228, 0.11);
-  border: 2px solid rgba(236, 246, 228, 0.30);
-  box-shadow: 0 40px 90px rgba(0, 0, 0, 0.35), inset 0 2px 0 rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(30px) saturate(1.5); -webkit-backdrop-filter: blur(30px) saturate(1.5);
-}
-
-/* 左侧数据卡 */
-.card { position: absolute; left: 110px; top: 150px; width: 780px; padding: 56px 60px 52px; }
-.pill { display: inline-flex; align-items: center; height: 48px; padding: 0 24px; border-radius: 24px;
-  background-color: rgba(184, 243, 107, 0.16); color: #b8f36b; font-size: 24px; font-weight: 600; letter-spacing: 0.08em; }
-.ttl { margin-top: 26px; font-size: 72px; font-weight: 800; line-height: 1.12; letter-spacing: -0.01em; }
-.rule { height: 2px; margin: 32px 0 30px; background-color: rgba(236, 246, 228, 0.32); transform-origin: 0 50%; }
-.hlab { font-size: 30px; color: rgba(242, 246, 238, 0.74); }
-.hval { display: flex; align-items: baseline; gap: 14px; margin-top: 8px; white-space: nowrap; }
-.num { font-family: "Montserrat"; font-weight: 700; letter-spacing: -0.035em; line-height: 1; font-variant-numeric: tabular-nums; }
-.txt { font-weight: 800; line-height: 1.05; letter-spacing: -0.01em; }
-.unit { font-weight: 600; color: rgba(242, 246, 238, 0.82); }
-.rows { margin-top: 34px; }
-.r { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; padding: 18px 0;
-     border-top: 2px solid rgba(236, 246, 228, 0.16); white-space: nowrap; }
-.rl { font-size: 28px; color: rgba(242, 246, 238, 0.74); }
-.rv { font-weight: 700; color: #f2f6ee; }
-.rv .num { letter-spacing: -0.02em; }
-.src { position: absolute; right: 110px; top: 84px; height: 56px; line-height: 52px; padding: 0 26px; border-radius: 28px;
-       font-size: 22px; letter-spacing: 0.04em; color: rgba(242, 246, 238, 0.66); white-space: nowrap; max-width: 900px; overflow: hidden; }
-
-/* 右侧示意区:各模板往里画 */
-.stage { position: absolute; left: 960px; top: 160px; width: 850px; height: 800px; }
-.acc { color: #b8f36b; }
 
 #grain { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-#grain div { position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; opacity: 0.07;
+#grain div { position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; opacity: var(--grain);
   background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+/* ======================================================================
+   版式:强调色只用在线、光和数字上,不做大块填充
+   ====================================================================== */
+/* 影棚底:顶光 + 地台 + 地平线微光 */
+.bgwrap.studio {
+  background:
+    radial-gradient(ellipse 1100px 520px at 1000px 120px, rgba(var(--studio-light), 0.16) 0%, rgba(var(--studio-light), 0) 100%),
+    linear-gradient(180deg, var(--studio-top) 0%, var(--studio-mid) 56%, var(--studio-floor) 57%, rgb(var(--bg)) 100%);
+}
+.studio-horizon { position: absolute; left: 0; width: 1920px; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, rgba(var(--acc), 0) 0%, rgba(var(--acc), 0.28) 50%, rgba(var(--acc), 0) 100%); }
+.studio-pool { position: absolute; width: 1500px; height: 260px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(var(--studio-light), 0.13) 0%, rgba(var(--studio-light), 0) 70%); }
+.vignette { position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse 1300px 820px at 960px 520px, rgba(0,0,0,0) 55%, rgba(0,0,0,var(--vignette)) 100%); }
+
+/* 标题块 */
+.hd { position: absolute; left: 110px; top: 92px; }
+.hd-kick { display: flex; align-items: center; gap: 16px; font-size: 26px; font-weight: 600; letter-spacing: 0.12em;
+  color: rgba(var(--ink), 0.72); }
+.hd-kick i { display: block; width: 5px; height: 30px; border-radius: 3px; background-color: rgb(var(--acc)); transform-origin: 50% 100%; }
+.hd-mask { overflow: hidden; margin-top: 14px; padding-bottom: 6px; }
+.hd-ttl { font-size: 76px; font-weight: 800; line-height: 1.1; letter-spacing: -0.01em; white-space: nowrap; }
+
+/* 来源脚注 */
+.fn { position: absolute; right: 110px; top: 104px; display: flex; align-items: center; gap: 14px;
+  font-size: 22px; letter-spacing: 0.04em; color: rgba(var(--ink), 0.58); white-space: nowrap; max-width: 760px; }
+.fn i { display: block; width: 36px; height: 1px; background-color: rgba(var(--ink), 0.45); }
+
+/* 大数字 */
+.bn { display: flex; align-items: baseline; gap: 12px; white-space: nowrap; }
+.bn-num { font-family: "Montserrat"; font-weight: 700; letter-spacing: -0.035em; line-height: 0.95;
+  font-variant-numeric: tabular-nums; color: rgb(var(--ink)); }
+.bn-unit { font-family: "Montserrat", "Noto Sans SC", "Microsoft YaHei"; font-weight: 600; color: rgba(var(--ink), 0.78); }
+.bn-txt { font-weight: 800; line-height: 1.05; color: rgb(var(--ink)); }
+.bn-tag { align-self: center; margin-left: 6px; padding: 6px 16px; border-radius: 999px; font-weight: 600;
+  color: rgb(var(--acc)); border: 1.5px solid rgba(var(--acc), 0.55); letter-spacing: 0.04em; }
+
+/* 引线标注 */
+#ov { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.co-box { position: absolute; white-space: nowrap; }
+.co-box.left { text-align: right; }
+.co-box.left .bn { justify-content: flex-end; }
+.co-lab { font-size: 30px; font-weight: 500; letter-spacing: 0.06em; color: rgba(var(--ink), 0.7); margin-bottom: 8px; }
+
+/* 车图 */
+.car { position: absolute; display: block; }
+.car img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+.car .reflect { transform: scaleY(-1); opacity: 0.16;
+  -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,1) 100%);
+  mask-image: linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,1) 100%); }
+/* 线稿:白线 PNG 当遮罩,底色就是线的颜色;外层加辉光 */
+.car .edges-wrap { position: absolute; inset: 0; filter: drop-shadow(0 0 5px rgba(var(--acc), calc(0.7 * var(--glow)))); }
+.car .edges { position: absolute; inset: 0; background-color: rgb(var(--hi));
+  -webkit-mask-image: url("car_edges.png"); -webkit-mask-size: 100% 100%; -webkit-mask-repeat: no-repeat;
+  mask-image: url("car_edges.png"); mask-size: 100% 100%; mask-repeat: no-repeat; }
+
+/* 影棚舞台 + 扫描光(carRig) */
+#stage { position: absolute; inset: 0; }
+.scan { position: absolute; width: 6px; border-radius: 3px; background-color: rgb(var(--hi));
+        box-shadow: 0 0 30px 8px rgba(var(--acc), calc(0.55 * var(--glow))); }
+
+/* 示意车(没有车图时)+ 次要参数条目 */
+.ghost { position: absolute; left: 0; top: 0; overflow: visible; }
+.chips { position: absolute; }
+.chips.row { display: flex; gap: 28px; }
+.chips .it { position: relative; padding: 16px 0 16px 26px; }
+.chips .it i { position: absolute; left: 0; top: 20px; bottom: 20px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
+.chips .co-lab { margin-bottom: 4px; font-size: 26px; }
+.chips .co-tag { margin-top: 6px; font-size: 22px; color: rgb(var(--acc)); opacity: 0.85; letter-spacing: 0.02em; }

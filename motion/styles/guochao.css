@@ -1,0 +1,21 @@
+/* @name 国潮
+   @desc 朱红暗底 + 金色 + 楷体标题,国货新势力
+   @order 17
+   @font-num "Playfair Display"
+*/
+:root {
+  --acc: 240, 192, 96;
+  --hi: 255, 236, 190;
+  --acc2: 232, 71, 60;
+  --hi2: 255, 200, 190;
+  --ink: 250, 240, 225;
+  --bg: 34, 9, 9;
+  --bg2: 50, 14, 13;
+  --haze: 160, 40, 30;
+  --glow: 0.6;
+  --studio-light: 255, 220, 180;
+  --studio-top: #250a0a;
+  --studio-mid: #2c0c0c;
+  --studio-floor: #381110;
+}
+.hd-ttl { font-family: "STKaiti", "KaiTi", serif; font-weight: 700; letter-spacing: 0.06em; }

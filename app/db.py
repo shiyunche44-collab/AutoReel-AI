@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS projects (
     subject         TEXT NOT NULL,
     category        TEXT NOT NULL DEFAULT 'auto_long',
     theme           TEXT NOT NULL DEFAULT '',
+    angle           TEXT NOT NULL DEFAULT '',
+    subjects        TEXT NOT NULL DEFAULT '[]',
     duration        INTEGER NOT NULL,
     shot_count      INTEGER NOT NULL DEFAULT 0,
     narration_mode  TEXT NOT NULL DEFAULT 'tts',
@@ -108,6 +110,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """
     if "theme" not in _column_names(conn, "projects"):
         conn.execute("ALTER TABLE projects ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
+    if "angle" not in _column_names(conn, "projects"):
+        conn.execute("ALTER TABLE projects ADD COLUMN angle TEXT NOT NULL DEFAULT ''")
+    if "subjects" not in _column_names(conn, "projects"):
+        conn.execute("ALTER TABLE projects ADD COLUMN subjects TEXT NOT NULL DEFAULT '[]'")
 
 
 def init_db() -> None:
@@ -157,12 +163,15 @@ def read_json(project_id: str, name: str, default: Any = None) -> Any:
 # --------------------------------------------------------------------------
 def create_project(row: dict[str, Any]) -> None:
     init_db()
+    row = {"angle": "", **row}
+    subjects = row.get("subjects") or []
+    row["subjects"] = subjects if isinstance(subjects, str) else json.dumps(subjects, ensure_ascii=False)
     with connect() as conn:
         conn.execute(
             """INSERT INTO projects
-               (id, title, subject, category, theme, duration, shot_count, narration_mode,
+               (id, title, subject, category, theme, angle, subjects, duration, shot_count, narration_mode,
                 state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
-               VALUES (:id, :title, :subject, :category, :theme, :duration, :shot_count, :narration_mode,
+               VALUES (:id, :title, :subject, :category, :theme, :angle, :subjects, :duration, :shot_count, :narration_mode,
                        :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
                        :created_at, :updated_at)""",
             row,
@@ -184,6 +193,20 @@ def list_projects(limit: int = 100) -> list[dict[str, Any]]:
             "SELECT * FROM projects ORDER BY updated_at DESC LIMIT ?", (limit,)
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def project_subjects(row: dict[str, Any] | None) -> list[dict[str, str]]:
+    """项目行里的横评车单 -> [{name, group}]。单车项目 / 旧库 / 坏数据都返回 []。"""
+    raw = (row or {}).get("subjects") or "[]"
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError):
+        return []
+    out = []
+    for item in items or []:
+        if isinstance(item, dict) and str(item.get("name") or "").strip():
+            out.append({"name": str(item["name"]).strip(), "group": str(item.get("group") or "").strip()})
+    return out
 
 
 def update_project(project_id: str, **fields: Any) -> None:

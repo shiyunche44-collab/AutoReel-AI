@@ -3,21 +3,34 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 对比镜:影棚底,两列从中线向两侧长出的细光条;只摆原文数字,不判输赢 -->
+  <meta name="hf-bg" content="studio" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
   <style>
-    .tbl { position: absolute; left: 160px; top: 140px; width: 1600px; height: 800px; }
-    .hd { position: absolute; top: 40px; width: 560px; font-size: 54px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hd.a { left: 60px; color: #b8f36b; } .hd.b { right: 60px; text-align: right; color: #7fd0ff; }
-    .vs { position: absolute; left: 700px; width: 200px; top: 36px; text-align: center; font-family: "Montserrat"; font-weight: 700; font-size: 44px; color: rgba(242,246,238,0.66); letter-spacing: 0.1em; }
-    .rw { position: absolute; left: 0; width: 1600px; height: 128px; }
-    .lb { position: absolute; left: 600px; width: 400px; top: 0; text-align: center; font-size: 28px; color: rgba(242,246,238,0.74); }
-    .bar { position: absolute; top: 48px; height: 40px; border-radius: 20px; }
-    .bar.a { background-color: #b8f36b; transform-origin: 100% 50%; }
-    .bar.b { background-color: #7fd0ff; transform-origin: 0 50%; }
-    .vl { position: absolute; top: 34px; font-size: 44px; font-weight: 700; white-space: nowrap; }
-    .vl.a { text-align: right; } .vl.b { text-align: left; }
-    .ln { position: absolute; left: 60px; width: 1480px; height: 2px; background-color: rgba(236,246,228,0.22); transform-origin: 0 50%; }
+    .colname { position: absolute; top: 262px; font-size: 46px; font-weight: 800; white-space: nowrap; }
+    .colname.a { right: 1080px; text-align: right; }
+    .colname.b { left: 1080px; }
+    .colname i { display: block; width: 60px; height: 3px; border-radius: 2px; margin-top: 14px; }
+    .colname.a i { margin-left: auto; background-color: rgb(var(--acc)); }
+    .colname.b i { background-color: rgb(var(--acc2)); }
+    .vs { position: absolute; left: 960px; top: 290px; width: 76px; height: 76px; margin: -38px 0 0 -38px; border-radius: 50%;
+          border: 1.5px solid rgba(var(--ink), 0.4); text-align: center; line-height: 74px;
+          font-family: "Montserrat"; font-weight: 700; font-size: 26px; letter-spacing: 0.06em; color: rgba(var(--ink), 0.8); }
+    .axis { position: absolute; left: 959px; width: 2px; background: linear-gradient(180deg, rgba(var(--ink), 0) 0%, rgba(var(--ink), 0.3) 15%, rgba(var(--ink), 0.3) 85%, rgba(var(--ink), 0) 100%);
+            transform-origin: 50% 0; }
+    .rlab { position: absolute; left: 960px; transform: translateX(-50%); font-size: 28px; font-weight: 500; letter-spacing: 0.06em;
+            color: rgba(var(--ink), 0.7); white-space: nowrap; text-align: center; }
+    .val { position: absolute; }
+    .val.a { right: 1080px; }
+    .val.a .bn { justify-content: flex-end; }
+    .val.b { left: 1080px; }
+    .track { position: absolute; height: 2px; background-color: rgba(var(--ink), 0.12); }
+    .bar { position: absolute; height: 8px; border-radius: 4px; overflow: hidden; }
+    .bar.a { background-color: rgb(var(--acc)); box-shadow: 0 0 18px rgba(var(--acc), calc(0.6 * var(--glow))); transform-origin: 100% 50%; }
+    .bar.b { background-color: rgb(var(--acc2)); box-shadow: 0 0 18px rgba(var(--acc2), calc(0.55 * var(--glow))); transform-origin: 0 50%; }
+    .bar i { position: absolute; top: 0; bottom: 0; width: 120px;
+             background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%); }
   </style>
 </head>
 <body>
@@ -26,45 +39,88 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame({ noCard: true });
-    const tl = F.tl, T = F.T;
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
     const D = HF.data, cols = D.columns || [];
-    const stage = HF.stage("glass");
-    stage.className = "tbl glass";
-    const hdA = HF.el("div", "hd a", cols[0] || D.subject || "");
-    const hdB = HF.el("div", "hd b", cols[1] || "");
+    const bgw = document.getElementById("bgwrap");
+    if (bgw) bgw.classList.add("studio");
+    tl.fromTo(bgw, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0);
+    const stage = HF.add(HF.el("div")); stage.id = "stage";
+    stage.style.transformOrigin = "960px 600px";
+
+    const rows = HF.rows.slice(0, 4);
+    const n = Math.max(1, rows.length);
+    const top0 = 420, pitch = Math.min(160, 560 / n);
+    const MAXW = 680, GAP = 120;              // 光条最长、离中线的空隙
+
+    const ca = HF.el("div", "colname a"); ca.appendChild(HF.el("span", "", cols[0] || D.subject || "")); ca.appendChild(HF.el("i"));
+    const cb = HF.el("div", "colname b"); cb.appendChild(HF.el("span", "", cols[1] || "")); cb.appendChild(HF.el("i"));
     const vs = HF.el("div", "vs", "VS");
-    stage.appendChild(hdA); stage.appendChild(hdB); stage.appendChild(vs);
-    const ln = HF.el("div", "ln"); ln.style.top = "150px"; stage.appendChild(ln);
-    tl.fromTo(stage, { opacity: 0, y: 50 }, { opacity: 1, y: 0, duration: T(0.8), ease: "expo.out" }, T(0.2));
-    tl.fromTo(hdA, { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: T(0.5), ease: "power3.out" }, T(0.45));
-    tl.fromTo(hdB, { opacity: 0, x: 60 }, { opacity: 1, x: 0, duration: T(0.5), ease: "power3.out" }, T(0.45));
-    tl.fromTo(vs, { opacity: 0, scale: 1.8 }, { opacity: 1, scale: 1, duration: T(0.4), ease: "back.out(2)" }, T(0.6));
-    tl.fromTo(ln, { scaleX: 0 }, { scaleX: 1, duration: T(0.7), ease: "power2.inOut" }, T(0.7));
-    const MAXW = 400, cx = 800;
-    HF.rows.slice(0, 4).forEach((r, n) => {
+    const axis = HF.el("div", "axis"); axis.style.top = "350px"; axis.style.height = (top0 + n * pitch - 330) + "px";
+    [axis, ca, cb, vs].forEach((e) => stage.appendChild(e));
+
+    const items = rows.map((r, k) => {
       const vals = (r.values && r.values.length >= 2) ? r.values : [r.value, ""];
       const pa = HF.splitNumber(vals[0]), pb = HF.splitNumber(vals[1]);
-      const top = Math.max(pa ? pa.num : 0, pb ? pb.num : 0) || 1;
-      const wa = pa ? Math.max(50, MAXW * pa.num / top) : MAXW * 0.5;
-      const wb = pb ? Math.max(50, MAXW * pb.num / top) : MAXW * 0.5;
-      const row = HF.el("div", "rw"); row.style.top = (178 + n * 142) + "px";
-      const lb = HF.el("div", "lb", r.label);
-      const ba = HF.el("div", "bar a"); ba.style.left = (cx - 14 - wa) + "px"; ba.style.width = wa + "px";
-      const bb = HF.el("div", "bar b"); bb.style.left = (cx + 14) + "px"; bb.style.width = wb + "px";
-      const va = HF.el("div", "vl a"); va.style.right = (1600 - (cx - 14 - wa - 18)) + "px";
-      const vb = HF.el("div", "vl b"); vb.style.left = (cx + 14 + wb + 18) + "px";
-      [lb, ba, bb, va, vb].forEach((e) => row.appendChild(e));
-      stage.appendChild(row);
-      const at = T(0.95 + n * 0.4);
-      tl.fromTo(lb, { opacity: 0 }, { opacity: 1, duration: T(0.3) }, at);
-      tl.fromTo(ba, { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);
-      tl.fromTo(bb, { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);
-      tl.fromTo([va, vb], { opacity: 0 }, { opacity: 1, duration: T(0.3) }, at + 0.15);
-      HF.countUp(tl, va, vals[0], at + 0.15, Math.max(0.6, T(0.9)));
-      HF.countUp(tl, vb, vals[1], at + 0.15, Math.max(0.6, T(0.9)));
+      // 光条长度只表示两边数字的相对大小(同一行内比),没有数字的一侧画半长虚条
+      const top = Math.max(pa ? Math.abs(pa.num) : 0, pb ? Math.abs(pb.num) : 0) || 1;
+      const wa = pa ? Math.max(40, MAXW * Math.abs(pa.num) / top) : MAXW * 0.5;
+      const wb = pb ? Math.max(40, MAXW * Math.abs(pb.num) / top) : MAXW * 0.5;
+      const y = top0 + k * pitch;
+      const lab = HF.el("div", "rlab", r.label); lab.style.top = (y - 6) + "px";
+      const lw = String(r.label).length * 28;
+      if (lw > 2 * GAP + 120) lab.style.fontSize = Math.max(18, 28 * (2 * GAP + 120) / lw) + "px";
+      const size = Math.min(72, pitch * 0.48);
+      const va = HF.el("div", "val a"), vb = HF.el("div", "val b");
+      va.style.top = vb.style.top = (y - size * 0.55) + "px";
+      const ba = HF.el("div", "bar a"), bb = HF.el("div", "bar b");
+      const barY = y + size * 0.62;
+      ba.style.top = bb.style.top = barY + "px";
+      ba.style.left = (960 - GAP - wa) + "px"; ba.style.width = wa + "px";
+      bb.style.left = (960 + GAP) + "px"; bb.style.width = wb + "px";
+      if (!pa) ba.style.opacity = 0.35; if (!pb) bb.style.opacity = 0.35;
+      const sa = HF.el("i"), sb = HF.el("i"); ba.appendChild(sa); bb.appendChild(sb);
+      const ta = HF.el("div", "track"), tb = HF.el("div", "track");
+      ta.style.top = tb.style.top = (barY + 3) + "px";
+      ta.style.left = (960 - GAP - MAXW) + "px"; ta.style.width = MAXW + "px";
+      tb.style.left = (960 + GAP) + "px"; tb.style.width = MAXW + "px";
+      [ta, tb, ba, bb, va, vb, lab].forEach((e) => stage.appendChild(e));
+      const ha = HF.bigNumber(va, vals[0], HF.fitSize(vals[0], MAXW - 40, size), { unitScale: 0.42 });
+      const hb = vals[1] ? HF.bigNumber(vb, vals[1], HF.fitSize(vals[1], MAXW - 40, size), { unitScale: 0.42 }) : null;
+      return { lab, va, vb, ba, bb, ta, tb, sa, sb, ha, hb, wa, wb };
     });
-    HF.outro(tl);
+
+    const vig = HF.add(HF.el("div", "vignette"));
+    const head = HF.header(tl, T(0.3), { kicker: "对比" });
+    const fn = HF.footnote(tl, T(1.0));
+
+    // ---- 时间线:列名从两侧进 → VS → 中轴 → 每行光条从中线长出、数字滚动,铺到整拍 60% ----
+    tl.fromTo(ca, { opacity: 0, x: -50 }, { opacity: 1, x: 0, duration: 0.6, ease: "expo.out" }, T(0.6));
+    tl.fromTo(cb, { opacity: 0, x: 50 }, { opacity: 1, x: 0, duration: 0.6, ease: "expo.out" }, T(0.6));
+    tl.fromTo(vs, { opacity: 0, scale: 1.6 }, { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(2)" }, T(0.8));
+    tl.fromTo(axis, { scaleY: 0 }, { scaleY: 1, duration: 0.8, ease: "power2.inOut" }, T(0.9));
+    const r0 = T(1.2), rLast = Math.max(r0, Math.min(A.outAt - 1.4, S * 0.6));
+    items.forEach((it, k) => {
+      const at = items.length > 1 ? r0 + (rLast - r0) * k / (items.length - 1) : r0;
+      tl.fromTo([it.ta, it.tb], { opacity: 0 }, { opacity: 1, duration: 0.3 }, at);
+      tl.fromTo(it.lab, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, at);
+      tl.fromTo([it.ba, it.bb], { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);
+      tl.fromTo(it.va, { opacity: 0, x: 20 }, { opacity: 1, x: 0, duration: 0.45, ease: "power3.out" }, at + 0.15);
+      tl.fromTo(it.vb, { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.45, ease: "power3.out" }, at + 0.15);
+      HF.countHero(tl, it.ha, at + 0.15, Math.max(0.7, T(1.0)));
+      if (it.hb) HF.countHero(tl, it.hb, at + 0.15, Math.max(0.7, T(1.0)));
+      // 停留段:一道高光从中线沿光条往外跑,循环
+      const from = at + 1.0;
+      if (from < A.outAt) HF.drive(tl, (t) => {
+        const ph = ((t + k * 0.35) % 1.8) / 1.8;
+        it.sa.style.left = (it.wa - ph * (it.wa + 240) + 0) + "px";
+        it.sb.style.left = (-120 + ph * (it.wb + 240)) + "px";
+      }, from, A.outAt + A.outDur - from);
+    });
+
+    HF.camera(tl, [{ el: stage, scale: [1.0, 1.03] }]);
+    HF.exit(tl, [head, fn, stage], A.outAt, A.outDur);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

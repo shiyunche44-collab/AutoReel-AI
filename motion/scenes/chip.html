@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 产品镜:正侧面实车图转 X 光,座舱里的芯片亮起,走线把信号送到车头、车尾、车顶和车轮;右侧放大镜看芯片核心 -->
+  <meta name="hf-bg" content="studio" />
+  <meta name="hf-photo" content="exterior_side" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
-  <style>
-    .die { position: absolute; left: 25px; top: 0; width: 800px; height: 800px; }
-    svg { position: absolute; left: 0; top: 0; overflow: visible; }
-  </style>
 </head>
 <body>
   <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
@@ -16,37 +15,134 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame();
-    const tl = F.tl, T = F.T;
-    const stage = HF.stage();
-    const die = HF.el("div", "die"); stage.appendChild(die);
-    const sv = HF.svg("svg", { width: 800, height: 800, viewBox: "0 0 800 800" }, die);
-    const cx = 400, cy = 400, half = 200;
-    const pins = [];
-    for (let k = 0; k < 8; k++) {
-      const o = -150 + k * 43;
-      [[cx + o, cy - half, cx + o, cy - half - 60], [cx + o, cy + half, cx + o, cy + half + 60],
-       [cx - half, cy + o, cx - half - 60, cy + o], [cx + half, cy + o, cx + half + 60, cy + o]].forEach((p) => {
-        pins.push(HF.svg("line", { x1: p[0], y1: p[1], x2: p[2], y2: p[3], stroke: "rgba(236,246,228,0.5)", "stroke-width": 6, "stroke-linecap": "round" }, sv));
-      });
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
+    const D = HF.data, P = D.photo, rows = HF.rows;
+    const rig = HF.carRig(tl, { width: 980, cx: 780, floorY: 610, ghost: true });
+    const stage = rig.stage, geo = rig.geo;
+    const [cxp, cyp] = rig.cabin();
+    const ACC = HF.c("acc");
+
+    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    // ---- 走线:芯片 → 车头 / 车尾 / 车顶(激光雷达处)/ 两个车轮,横平竖直的折线 ----
+    const fr = geo.facing === "left" ? -1 : 1;
+    const ends = [
+      rig.at(rig.front - fr * 0.03, geo.roof + (geo.floor - geo.roof) * 0.5),
+      rig.at(rig.rear + fr * 0.03, geo.roof + (geo.floor - geo.roof) * 0.42),
+      rig.roofFront(),
+      rig.at(geo.wheels[0], geo.floor - 0.245 * (geo.floor - geo.roof)),
+      rig.at(geo.wheels[1], geo.floor - 0.245 * (geo.floor - geo.roof)),
+    ];
+    const traces = ends.map(([ex, ey], k) => {
+      // 先水平后竖直;车轮支路先下后横
+      const d = k >= 3 ? `M${cxp} ${cyp} L${cxp} ${ey - 40} L${ex} ${ey - 40} L${ex} ${ey}`
+                       : `M${cxp} ${cyp} L${ex} ${cyp} L${ex} ${ey}`;
+      const base = HF.svg("path", { d, fill: "none", stroke: HF.c("acc2", 0.75), "stroke-width": 2.5,
+        pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+      const pulse = HF.svg("path", { d, fill: "none", stroke: HF.c("hi2"), "stroke-width": 5, "stroke-linecap": "round",
+        pathLength: 1, "stroke-dasharray": "0.1 0.9", "stroke-dashoffset": 0.1, opacity: 0, filter: `drop-shadow(0 0 6px ${HF.c("acc2", 0.9)})` }, sv);
+      const node = HF.svg("circle", { cx: ex, cy: ey, r: 0, fill: HF.c("acc2") }, sv);
+      return { base, pulse, node };
+    });
+    // 芯片本体
+    const chip = HF.svg("g", { opacity: 0 }, sv);
+    HF.svg("rect", { x: cxp - 20, y: cyp - 20, width: 40, height: 40, rx: 6, fill: HF.c("bg"), stroke: HF.c("hi"), "stroke-width": 2.5 }, chip);
+    const chipCore = HF.svg("rect", { x: cxp - 9, y: cyp - 9, width: 18, height: 18, rx: 3, fill: ACC }, chip);
+    const chipRing = HF.svg("circle", { cx: cxp, cy: cyp, r: 24, fill: "none", stroke: ACC, "stroke-width": 2, opacity: 0 }, sv);
+
+    // ---- 放大镜:右侧大圆 + 两条切线连到芯片 ----
+    const MX = 1540, MY = 400, MR = 200;
+    const ov = HF.overlay();
+    const ang = Math.atan2(MY - cyp, MX - cxp), dd = Math.hypot(MX - cxp, MY - cyp), tang = Math.asin(MR / dd);
+    const tanLines = [-1, 1].map((s) => {
+      const a = ang + s * tang, len = Math.sqrt(dd * dd - MR * MR);
+      return HF.svg("line", { x1: cxp, y1: cyp, x2: cxp + len * Math.cos(a), y2: cyp + len * Math.sin(a),
+        stroke: HF.c("ink", 0.35), "stroke-width": 1.5, "stroke-dasharray": "5 7", opacity: 0 }, ov);
+    });
+    const lens = HF.svg("g", { opacity: 0 }, ov);
+    HF.svg("circle", { cx: MX, cy: MY, r: MR, fill: HF.c("bg", 0.92), stroke: HF.c("ink", 0.55), "stroke-width": 2 }, lens);
+    HF.svg("circle", { cx: MX, cy: MY, r: MR + 10, fill: "none", stroke: HF.c("acc", 0.25), "stroke-width": 1 }, lens);
+    // 芯片放大:封装 + 引脚 + 6×6 核心
+    const half = 92;
+    HF.svg("rect", { x: MX - half, y: MY - half, width: half * 2, height: half * 2, rx: 14, fill: HF.c("bg2"), stroke: HF.c("hi", 0.7), "stroke-width": 2 }, lens);
+    for (let k = 0; k < 7; k++) {
+      const o = -66 + k * 22;
+      [[MX + o, MY - half, MX + o, MY - half - 22], [MX + o, MY + half, MX + o, MY + half + 22],
+       [MX - half, MY + o, MX - half - 22, MY + o], [MX + half, MY + o, MX + half + 22, MY + o]].forEach((p) =>
+        HF.svg("line", { x1: p[0], y1: p[1], x2: p[2], y2: p[3], stroke: HF.c("hi", 0.45), "stroke-width": 3, "stroke-linecap": "round" }, lens));
     }
-    // 数据流:从芯片向四周跑的虚线
-    const streams = [[cx, cy - half - 60, cx, 20], [cx, cy + half + 60, cx, 780], [cx - half - 60, cy, 20, cy], [cx + half + 60, cy, 780, cy]].map((p) =>
-      HF.svg("line", { x1: p[0], y1: p[1], x2: p[2], y2: p[3], stroke: "#b8f36b", "stroke-width": 5, "stroke-linecap": "round", "stroke-dasharray": "14 26", "stroke-opacity": 0.7 }, sv));
-    HF.svg("rect", { x: cx - half, y: cy - half, width: half * 2, height: half * 2, rx: 36, fill: "rgba(236,246,228,0.12)", stroke: "rgba(236,246,228,0.5)", "stroke-width": 3 }, sv);
-    const cells = [];
-    const N = 6, cw = 44, gap = 10, x0 = cx - (N * cw + (N - 1) * gap) / 2;
+    const N = 6, cw = 20, gap = 6, x0 = MX - (N * cw + (N - 1) * gap) / 2, y0 = MY - (N * cw + (N - 1) * gap) / 2;
+    const cores = [];
     for (let r = 0; r < N; r++) for (let c = 0; c < N; c++)
-      cells.push(HF.svg("rect", { x: x0 + c * (cw + gap), y: x0 + r * (cw + gap), width: cw, height: cw, rx: 8, fill: "rgba(236,246,228,0.10)" }, sv));
-    tl.fromTo(die, { opacity: 0, scale: 0.88 }, { opacity: 1, scale: 1, duration: T(0.8), ease: "expo.out", transformOrigin: "50% 50%" }, T(0.3));
-    tl.fromTo(pins, { attr: { "stroke-opacity": 0 } }, { attr: { "stroke-opacity": 1 }, duration: 0.3, stagger: 0.012 * F.K }, T(0.7));
-    // 核心按固定乱序依次点亮
+      cores.push({ el: HF.svg("rect", { x: x0 + c * (cw + gap), y: y0 + r * (cw + gap), width: cw, height: cw, rx: 3,
+        fill: ACC, "fill-opacity": 0.06, stroke: HF.c("acc", 0.5), "stroke-width": 1 }, lens), r, c });
+
+    const vig = HF.add(HF.el("div", "vignette"));
+    const head = HF.header(tl, T(0.3), { kicker: "智驾芯片" });
+    const fn = HF.footnote(tl, T(1.0));
+
+    // ---- 时间线 ----
+    const xrayAt = T(1.1), xrayDur = Math.max(0.7, T(0.9));
+    if (rig.car) rig.xray(tl, xrayAt, xrayDur, 0.25);
+    const onAt = rig.car ? xrayAt + xrayDur * 0.7 : T(1.3);
+    tl.fromTo(chip, { opacity: 0, scale: 0.4, svgOrigin: `${cxp} ${cyp}` }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(2.5)" }, onAt);
+    tl.fromTo(chipRing, { attr: { r: 20 }, opacity: 1 }, { attr: { r: 60 }, opacity: 0, duration: 0.8, ease: "power2.out", immediateRender: false }, onAt + 0.1);
+    // 走线依次画出,末端节点亮起
+    const trAt = onAt + 0.35;
+    traces.forEach((t, k) => {
+      const at = trAt + k * 0.12 * A.K;
+      tl.to(t.base, { attr: { "stroke-dashoffset": 0 }, duration: 0.7, ease: "power2.inOut" }, at);
+      tl.fromTo(t.node, { attr: { r: 0 } }, { attr: { r: 6 }, duration: 0.25, ease: "back.out(3)" }, at + 0.65);
+    });
+    // 放大镜展开
+    const lensAt = trAt + 0.5;
+    tl.fromTo(tanLines, { opacity: 0 }, { opacity: 1, duration: 0.4 }, lensAt);
+    tl.fromTo(lens, { opacity: 0, scale: 0.6, svgOrigin: `${MX} ${MY}` }, { opacity: 1, scale: 1, duration: 0.6, ease: "expo.out" }, lensAt + 0.1);
+    // 核心按固定乱序点亮
     const rnd = HF.rng(11);
-    const order = cells.map((c, i) => [rnd(), i]).sort((a, b) => a[0] - b[0]).map((o) => o[1]);
-    order.forEach((i, n) => tl.to(cells[i], { attr: { fill: "#b8f36b" }, duration: 0.2, ease: "power1.out" }, T(1.0) + n * 0.035 * F.K));
-    tl.to(streams, { attr: { "stroke-dashoffset": -600 }, duration: HF.seconds, ease: "none" }, 0);
-    tl.fromTo(streams, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.2));
-    HF.outro(tl);
+    const order = cores.map((c, i) => [rnd(), i]).sort((a, b) => a[0] - b[0]).map((o) => o[1]);
+    const coreAt = lensAt + 0.5;
+    order.forEach((i, n) => tl.to(cores[i].el, { attr: { "fill-opacity": 0.55, stroke: HF.c("hi") }, duration: 0.15 }, coreAt + n * 0.025 * A.K));
+    // 停留段:信号脉冲沿走线循环;核心按斜向波纹明暗起伏;芯片中心呼吸
+    const loopAt = trAt + 1.0;
+    traces.forEach((t) => tl.fromTo(t.pulse, { opacity: 0 }, { opacity: 1, duration: 0.3 }, loopAt));
+    HF.drive(tl, (t) => {
+      traces.forEach((tr, k) => {
+        const ph = ((t * 0.9 + k * 0.21) % 1);
+        tr.pulse.setAttribute("stroke-dashoffset", (0.1 - ph).toFixed(4));
+        tr.node.setAttribute("fill-opacity", (0.55 + 0.45 * Math.max(0, 1 - Math.abs(ph - 0.93) * 8)).toFixed(3));
+      });
+      if (t > 0.8) cores.forEach((c) => {
+        const w = Math.sin((c.r + c.c) * 0.7 - t * 4.2);
+        c.el.setAttribute("fill-opacity", (0.35 + 0.3 * Math.max(0, w)).toFixed(3));
+      });
+      chipCore.setAttribute("fill-opacity", (0.7 + 0.3 * Math.sin(t * 5)).toFixed(3));
+    }, loopAt, Math.max(0.1, A.outAt + A.outDur - loopAt));
+
+    // ---- 标注:主数字在放大镜下方;其余两行挂在芯片上,标签在车下 ----
+    const callouts = [];
+    // 落点在放大镜左下沿,标签在它右下方(引线从左边进,不压字)
+    const la = [MX - MR * 0.71, MY + MR * 0.71], lx0 = la[0] + 40;
+    if (rows[0]) callouts.push(HF.callout({ anchor: la, label: [lx0, MY + MR + 110], side: "right",
+      title: rows[0].label, value: rows[0].value, size: HF.fitSize(rows[0].value, 1810 - lx0 - 18, 120) }));
+    // 其余两行挂在芯片左下、右下两角,标签在车下
+    rows.slice(1, 3).forEach((r, k) => {
+      const ax = cxp + (k === 0 ? -20 : 20), ay = cyp + 20;
+      callouts.push(HF.callout({ anchor: [ax, ay], label: k === 0 ? [ax - 120, 900] : [ax + 120, 900], side: k === 0 ? "left" : "right",
+        title: r.label, value: r.value, size: HF.fitSize(r.value, k === 0 ? Math.max(260, ax - 120 - 18 - 110) : 380, 64) }));
+    });
+    const coAt = lensAt + 0.8;
+    const lastCo = Math.max(coAt, Math.min(A.outAt - 1.6, S * 0.62));
+    callouts.forEach((c, k) => {
+      const at = callouts.length > 1 ? coAt + (lastCo - coAt) * k / (callouts.length - 1) : coAt;
+      c.show(tl, at, k === 0 ? Math.max(0.9, T(1.3)) : 0.8);
+      if (k > 0) c.breathe(tl, at + 1.0, A.outAt);
+    });
+
+    HF.camera(tl, [{ el: stage, scale: [1.0, 1.04], x: [10, -10] }]);
+    HF.exit(tl, [head, fn, lens].concat(tanLines, ...callouts.map((c) => c.els)), A.outAt, A.outDur);
+    tl.to(sv, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

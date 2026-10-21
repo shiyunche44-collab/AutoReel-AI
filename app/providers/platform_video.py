@@ -29,6 +29,7 @@ import html
 import os
 import re
 import shutil
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -175,6 +176,13 @@ def parse_bili_duration(raw: Any) -> float:
         return 0.0
 
 
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def parse_bili_results(payload: dict[str, Any]) -> list[PlatformHit]:
     data = payload.get("data") or {}
     hits: list[PlatformHit] = []
@@ -195,16 +203,26 @@ def parse_bili_results(payload: dict[str, Any]) -> list[PlatformHit]:
             # 搜索结果里没有 UP 主认证字段,官方判定靠名字;
             # `is_union_video` 等字段与认证无关,不拿来凑数
             verified=False,
+            # 热点选题要按播放量和发布时间筛
+            extra={"play": _as_int(v.get("play")), "pubdate": _as_int(v.get("pubdate"))},
         ))
     return hits
 
 
-def search_bilibili(query: str, *, limit: int = 10) -> list[PlatformHit]:
+def search_bilibili(query: str, *, limit: int = 10, order: str = "",
+                    since_days: int = 0) -> list[PlatformHit]:
+    """`order`:B 站排序参数,空 = 综合;"click" 最多播放,"pubdate" 最新发布。
+    `since_days`:只要最近 N 天发布的视频(0 = 不限)。"""
     import uuid
 
     import httpx
 
     params = {"search_type": "video", "keyword": query, "page": 1}
+    if order:
+        params["order"] = order
+    if since_days:
+        now = int(time.time())
+        params.update(pubtime_begin_s=now - since_days * 86400, pubtime_end_s=now)
     headers = {
         "User-Agent": webassets.BROWSER_UA,
         "Referer": "https://search.bilibili.com/",

@@ -51,6 +51,12 @@ class Fact(BaseModel):
     #: 事实的**层级**:company=公司工商/财务,product=产品参数,industry=行业
     #: 二者不可混用 —— 用公司注册地址去讲产品卖点是解说视频的典型翻车方式。
     scope: Literal["company", "product", "industry"] = "company"
+    #: 口径 / 版本 / 年份(如 "CLTC · 标准版 · 2026款"),上屏时跟着数字走
+    basis: str = ""
+    #: 来源类型:official=官方发布/官网,media=媒体报道,derived=由其它事实推算
+    source_kind: Literal["official", "media", "derived", ""] = ""
+    #: 多车横评:这条事实属于车单里哪台车;空串 = 单车项目或全片共用
+    subject: str = ""
     #: 用户是否保留(可在 Web 端剔除)
     enabled: bool = True
 
@@ -65,6 +71,8 @@ class ScriptSegment(BaseModel):
     text: str
     #: 引用的 fact id 列表。数字型陈述必须有引用,否则合规 lint 拦截。
     fact_refs: list[str] = Field(default_factory=list)
+    #: 多车横评:这一段讲车单里的哪台车;空串 = 单车项目或开场 / 结论这类共用段
+    subject: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -105,6 +113,8 @@ class ShotSpec(BaseModel):
     chapter: str = ""
     #: 背景画面偏好:exterior / interior / any —— 只影响排序,不做硬过滤
     view: str = ""
+    #: 多车横评:这一拍讲哪台车(背景素材、叠加层车名、事实核对都按它);空串 = 共用拍
+    subject: str = ""
 
 
 class Shot(BaseModel):
@@ -148,6 +158,14 @@ class Shot(BaseModel):
 # --------------------------------------------------------------------------
 # 项目
 # --------------------------------------------------------------------------
+class SubjectEntry(BaseModel):
+    """多车横评车单里的一台车。"""
+
+    name: str = Field(min_length=1, max_length=40, description="车型名,如 '小米YU7'")
+    #: 分组标注(如价位段「10-15万」),只进车名旁的标注和脚本提示,不分章
+    group: str = Field(default="", max_length=20)
+
+
 class ProjectCreate(BaseModel):
     subject: str = Field(min_length=1, description="选题/车型/产品型号,如 '比亚迪汉 EV 2026 款'")
     category: str = "auto_long"
@@ -158,6 +176,15 @@ class ProjectCreate(BaseModel):
     narration_mode: NarrationMode = "tts"
     quota_budget: float | None = None
     title: str | None = None
+    #: 选题角度(来自热点选题或手填),如「月销破 3 万背后:它到底赢在哪」。
+    #: 只影响事实检索与脚本叙事;subject 仍是干净的车型名,素材池按它建。
+    angle: str | None = Field(default=None, max_length=120)
+    #: 热点选题附带的角度检索词(如「特斯拉 Model Y 召回 2026」);空 = 由角度原句提取
+    angle_search: str | None = Field(default=None, max_length=60)
+    #: 热点选题依据的热点原文行,作为一份事实素材进入抽取
+    angle_evidence: list[str] | None = Field(default=None, max_length=12)
+    #: 多车横评的车单(方向为 roundup 时必填);此时 subject 是选题名
+    subjects: list[SubjectEntry] | None = Field(default=None, max_length=8)
 
 
 class ScriptPatch(BaseModel):
@@ -188,6 +215,10 @@ class ProjectSummary(BaseModel):
     theme: str = ""
     #: 方向的中文标签,仅用于展示
     theme_label: str = ""
+    #: 选题角度;空串 = 无
+    angle: str = ""
+    #: 多车横评车单;单车项目为空
+    subjects: list[SubjectEntry] = Field(default_factory=list)
     duration: int
     shot_count: int
     state: str

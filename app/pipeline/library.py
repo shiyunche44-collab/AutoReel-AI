@@ -96,6 +96,10 @@ EARLY_STOP_RATIO = 0.7
 #: 解说轨的"够用":可用视频秒数 + 可用官图 × STILL_SECONDS 达到它,就不再给视频段
 #: 打标签。背景只要是这台车、画面干净,一条片子 4 分钟的背景量就够轮换
 ENOUGH_USABLE_SECONDS = 240.0
+#: 多车横评:每台车只占全片的一小段,轻量池够这么多秒就停
+ROUNDUP_ENOUGH_SECONDS = 90.0
+#: 多车横评:每台车最多拉几个平台视频源
+ROUNDUP_MAX_SOURCES = 3
 STILL_SECONDS = 4.0
 #: 代表帧 dHash 的汉明距离不超过它算同一个画面(同源快剪里的重复镜头),只打一个
 DUP_BITS = 6
@@ -966,6 +970,35 @@ def build_async(subject: str, **kwargs: Any) -> bool:
     return True
 
 
+def build_many_async(subjects: list[str], **kwargs: Any) -> list[str]:
+    """多台车的素材池:**一个**后台线程按顺序逐台构建(VLM 打标签有限流,并发只会排队)。
+
+    已经在建的车跳过。返回这次接手构建的车名。
+    """
+    mine: list[str] = []
+    with _running_lock:
+        for name in subjects:
+            key = slug(name)
+            if key not in _running:
+                _running.add(key)
+                mine.append(name)
+    if not mine:
+        return []
+
+    def _run() -> None:
+        for name in mine:
+            try:
+                build(name, **kwargs)
+            except Exception:  # noqa: BLE001 - 一台车失败不能让后面的车永远卡在"在建"
+                pass
+            finally:
+                with _running_lock:
+                    _running.discard(slug(name))
+
+    threading.Thread(target=_run, name=f"library-many-{slug(mine[0])}", daemon=True).start()
+    return mine
+
+
 def is_building(subject: str) -> bool:
     with _running_lock:
         return slug(subject) in _running
@@ -1243,6 +1276,53 @@ def fill(subject: str, seconds: float, *, hint: str = "",
         last = out[-1]
         last.length = round(last.length + (seconds - covered), 3)
     return out
+
+
+#: 一个长镜头最多放慢到原速的几分之一(概念动画的底)
+LONG_TAKE_MAX_SLOWDOWN = 2.2
+#: 长镜头优先的视角:动起来的车(行驶、航拍),数据压在上面最有"在跑"的感觉
+LONG_TAKE_VIEWS = ("driving", "aerial")
+
+
+def long_take(subject: str, seconds: float, *, hint: str = "",
+              used: dict[str, int] | None = None, recent: list[str] | None = None) -> Piece | None:
+    """给概念动画挑**一个**能撑满(或放慢后撑满)整拍的干净长镜头。
+
+    和 `fill` 的区别:fill 追求 2–4 秒一刀的节奏,概念动画上面压着大量信息,底在跳切会显得乱。
+    排序:是这台车 > 没用过(按近重复簇算)> 不在最近几刀里 > 行驶/航拍 > 干净 > 官方 > 长。
+    够长的段从中间截;找不到返回 None,调用方退回 fill 的多段拼接。
+    `used` / `recent` 和 fill 共用,就地更新。
+    """
+    used = used if used is not None else {}
+    recent = recent if recent is not None else []
+    lib = Library.load(subject)
+    vocab = vocab_of(lib)
+    want = vocab.hint_views(hint)
+    need = seconds / LONG_TAKE_MAX_SLOWDOWN
+    pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
+            and not is_dark(i) and (not want or i.view in want)]
+    pool = [i for i in _drop_hard_bad(pool, _host_sources(lib.items)) if not _hard_bad(i)]
+
+    def usable_len(i: Item) -> float:
+        return i.length - (SOURCE_FADE_IN if i.start < 0.5 else 0.0)
+
+    pool = [i for i in pool if usable_len(i) >= need]
+    if not pool:
+        return None
+    group = near_dup_groups(pool)
+    recent_groups = {group.get(r, r) for r in recent[-RECENT_PIECES:]}
+    i = min(pool, key=lambda x: (x.target != "yes", used.get(group[x.id], 0) + used.get(x.id, 0),
+                                 group[x.id] in recent_groups, x.view not in LONG_TAKE_VIEWS,
+                                 _dirt(x), not x.official, -x.length))
+    skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
+    length = usable_len(i)
+    take = min(length, seconds)
+    start = i.start + skip + (length - take) / 2
+    used[i.id] = used.get(i.id, 0) + 1
+    recent.append(i.id)
+    del recent[:-RECENT_PIECES]
+    return Piece(item_id=i.id, kind="video", path=i.path, start=round(start, 3), length=round(take, 3),
+                 crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0)
 
 
 # --------------------------------------------------------------------------

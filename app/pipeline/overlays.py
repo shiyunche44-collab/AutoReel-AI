@@ -58,6 +58,11 @@ def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: st
     for r in rows:
         label, lf = _fit(d, r["label"], 28, inner)
         d.text((x0 + pad, y + 4), label, font=lf, fill=_MUTED)
+        if r.get("tag"):
+            # 口径 / 来源小标签贴在参数名右边,和数字一起被看到
+            gap = int(d.textlength(label + "  ", font=lf))
+            tag_txt, tgf = _fit(d, str(r["tag"]), 24, max(40, inner - gap))
+            d.text((x0 + pad + gap, y + 8), tag_txt, font=tgf, fill=_ACCENT)
         value, vf = _fit(d, r["values"][0], 42, inner, bold=True)
         d.text((x0 + pad, y + 4 + int(rh * 0.36)), value, font=vf, fill=_TEXT)
         d.line((x0 + pad, y + rh - 6, x1 - pad, y + rh - 6), fill=_RULE, width=2)
@@ -132,7 +137,8 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
 # --------------------------------------------------------------------------
 # 大数字滚动(stat 版式)
 # --------------------------------------------------------------------------
-_NUM_RE = r"-?\d+(?:\.\d+)?"
+#: "4D 毫米波""5G""8K" 里的一位数是名字不是参数,不拿来滚动
+_NUM_RE = r"-?(?!\d[DGK](?![A-Za-z]))\d+(?:\.\d+)?"
 #: 数字从 0 滚到目标值用几帧、多久。关键帧 + concat 时长,不逐帧画满整拍
 COUNT_STEPS = 16
 COUNT_SECONDS = 1.1
@@ -175,8 +181,13 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
     _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), 210, max_w, bold=True)
     d.text((w // 2, int(h * 0.46)), value, font=nf, fill=_ACCENT, anchor="mm",
            stroke_width=10, stroke_fill=(0, 0, 0, 255))
+    if overlay.get("tag"):
+        # 口径 + 来源类型("CLTC · 标准版 | 官方"):大数字不带口径,懂车的人第一反应就是"哪个工况?"
+        tag_txt, tgf = _fit(d, str(overlay["tag"]), int(h * 0.034), max_w, bold=True)
+        d.text((w // 2, int(h * 0.60)), tag_txt, font=tgf, fill=_TEXT, anchor="mm",
+               stroke_width=3, stroke_fill=(0, 0, 0, 255))
     src, sf = _fit(d, overlay.get("source", ""), 24, max_w)
-    d.text((w // 2, int(h * 0.64)), src, font=sf, fill=_MUTED, anchor="mm")
+    d.text((w // 2, int(h * 0.66)), src, font=sf, fill=_MUTED, anchor="mm")
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest)

@@ -86,7 +86,22 @@ def test_ground_bars_requires_numeric_values():
     ]}
     grounded, dropped = cards.ground(cards.normalise(raw, "bars"), _facts())
     assert [r["label"] for r in grounded["rows"]] == ["汉 EV", "海豹 07"]
-    assert any("不是数字" in d for d in dropped)
+    assert any("很多" in d for d in dropped)
+
+
+def test_ground_rejects_text_values_not_in_fact():
+    """纯文字取值也要有出处:对比卡对手一栏的"往往需选装"曾经混上屏。"""
+    from app.models import Fact
+    facts = [Fact(id="f_l", claim="小米YU7全系标配激光雷达、700TOPS算力Thor芯片",
+                  source_tool="t", confidence="high", scope="product")]
+    raw = {"title": "硬件对比", "columns": ["YU7", "对手"], "rows": [
+        {"label": "激光雷达", "values": ["全系标配", "往往需选装"], "fact_id": "f_l"}]}
+    grounded, dropped = cards.ground(cards.normalise(raw, "compare"), facts)
+    assert grounded is None and any("往往需选装" in d for d in dropped)
+    spec = {"title": "硬件", "rows": [{"label": "激光雷达", "values": ["全系标配"], "fact_id": "f_l"},
+                                       {"label": "算力", "values": ["700TOPS"], "fact_id": "f_l"}]}
+    grounded, _ = cards.ground(cards.normalise(spec, "spec"), facts)
+    assert grounded and len(grounded["rows"]) == 2
 
 
 def test_render_frames_reveal_rows_one_by_one(tmp_path):

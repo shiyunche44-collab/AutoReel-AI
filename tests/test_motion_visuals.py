@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import random
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -464,3 +465,152 @@ def test_fill_drops_whole_source_when_it_is_a_host_vlog(tmp_path, monkeypatch):
         [item(f"vlog_{n}", "vlog", 10 + n * 10, 5, "红色车前45度") for n in range(4)]
     lib.save()
     assert {p.item_id for p in library.fill("测试车", 20.0)} == {"c1"}
+
+
+# --------------------------------------------------------------------------
+# 概念动画 v3:车图抠图、模板元数据、长镜头底、数字拆分
+# --------------------------------------------------------------------------
+def _studio_car(path, facing="right", bg=(250, 250, 250)):
+    """白底上的"车":车身 + 驾驶舱(靠车尾一侧高)+ 两个深色轮子。"""
+    from PIL import ImageDraw
+
+    im = Image.new("RGB", (800, 450), bg)
+    d = ImageDraw.Draw(im)
+    d.rectangle((120, 220, 680, 320), fill=(150, 20, 40))           # 车身
+    d.rectangle((260, 150, 540, 220), fill=(120, 20, 35))           # 驾驶舱
+    # 车头那头削低一截(引擎盖)
+    d.rectangle((600, 220, 680, 262) if facing == "right" else (120, 220, 200, 262), fill=bg)
+    for cx in (240, 560):
+        d.ellipse((cx - 50, 270, cx + 50, 370), fill=(20, 20, 20))  # 轮子伸到最底下
+    im.save(path)
+    return path
+
+
+def test_cutout_finds_wheels_floor_and_caches(tmp_path, monkeypatch):
+    from app.pipeline import motion_assets
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    c = motion_assets.cutout(_studio_car(tmp_path / "car.png"), item_id="x")
+    assert c is not None and Path(c.png).is_file() and Path(c.edges).is_file()
+    # 轮心:原图 240 / 560,车身外接框 120–680,左右各留 2% 白边
+    left = 120 - int(560 * motion_assets.MARGIN)
+    assert c.wheels[0] == pytest.approx((240 - left) / c.width, abs=0.03)
+    assert c.wheels[1] == pytest.approx((560 - left) / c.width, abs=0.03)
+    assert c.floor > 0.9 and c.roof < 0.1
+    with Image.open(c.png) as im:
+        assert im.mode == "RGBA" and im.getpixel((2, 2))[3] == 0      # 背景透明
+    again = motion_assets.cutout(tmp_path / "car.png", item_id="x")
+    assert again == c                                                   # 走缓存
+
+
+def test_cutout_facing(tmp_path, monkeypatch):
+    from app.pipeline import motion_assets
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    assert motion_assets.cutout(_studio_car(tmp_path / "r.png", "right")).facing == "right"
+    assert motion_assets.cutout(_studio_car(tmp_path / "l.png", "left")).facing == "left"
+
+
+def test_cutout_rejects_non_studio_and_cropped(tmp_path, monkeypatch):
+    from app.pipeline import motion_assets
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    assert motion_assets.cutout(_image(tmp_path / "street.png", 3)) is None   # 不是白底
+    im = Image.new("RGB", (400, 300), (250, 250, 250))
+    from PIL import ImageDraw
+    ImageDraw.Draw(im).rectangle((0, 100, 300, 200), fill=(30, 30, 30))       # 车贴着左边
+    im.save(tmp_path / "cut.png")
+    assert motion_assets.cutout(tmp_path / "cut.png") is None
+
+
+def test_hero_still_picks_studio_view(tmp_path, monkeypatch):
+    from app.pipeline import motion_assets
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    lib = library.Library(subject="测试车")
+    lib.items = [
+        library.Item(id="street", kind="still", path=str(_image(tmp_path / "s.png", 4)),
+                     tagged=True, view="exterior_side", target="yes", official=True),
+        library.Item(id="studio", kind="still", path=str(_studio_car(tmp_path / "c.png")),
+                     tagged=True, view="exterior_side", target="yes"),
+    ]
+    lib.save()
+    c = motion_assets.hero_still("测试车", ["exterior_45", "exterior_side"])
+    assert c is not None and c.item_id == "studio"
+    assert motion_assets.hero_still("测试车", ["interior"]) is None
+
+
+def test_scene_meta_declares_background_and_photo(tmp_path, monkeypatch):
+    assert motion.scene_background("battery") == "studio"
+    assert motion.scene_background("accel") == "footage"
+    for scene in ("dims", "lidar", "chip", "charging", "compare"):
+        assert motion.scene_background(scene) == "studio"
+    assert motion.scene_photo_views("battery") == ["exterior_side"]
+    assert motion.scene_photo_views("lidar") == ["exterior_side"]
+    assert motion.scene_photo_views("compare") == []             # 对比镜不用车图
+    # 模板没声明 = 实拍底、不要车图
+    (tmp_path / "plain.html").write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(motion, "scenes_dir", lambda: tmp_path)
+    assert motion.scene_background("plain") == "footage"
+    assert motion.scene_photo_views("plain") == []
+
+
+def test_compose_html_inlines_base_css_and_photo_geometry(tmp_path, monkeypatch):
+    from app.pipeline import motion_assets
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    photo = motion_assets.cutout(_studio_car(tmp_path / "car.png"))
+    html = motion.compose_html("battery", {"rows": []}, 5.0, photo=photo)
+    # 字体:Montserrat 的声明必须在页面里,HyperFrames 才会内嵌
+    assert motion.BASE_CSS_LINK not in html and '"Montserrat"' in html
+    assert '"src": "car.png"' in html and '"edges": "car_edges.png"' in html
+    assert str(tmp_path) not in html                                   # 不泄漏本机路径
+    data = {"rows": []}
+    assert motion.cache_key("battery", data, 5.0, (1920, 1080), photo=photo) != \
+        motion.cache_key("battery", data, 5.0, (1920, 1080))
+
+
+def test_long_take_prefers_long_confirmed_moving_shot(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    lib = library.Library(subject="测试车")
+
+    def item(id_, start, length, view, target="yes"):
+        return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view=view,
+                            target=target, start=start, end=start + length, source="s_" + id_)
+
+    lib.items = [item("short", 10, 2.0, "driving"), item("static", 20, 9.0, "exterior_45"),
+                 item("drive", 40, 6.0, "driving"), item("other_car", 60, 12.0, "driving", "unknown")]
+    lib.save()
+    used: dict[str, int] = {}
+    recent: list[str] = []
+    take = library.long_take("测试车", 8.0, hint="exterior", used=used, recent=recent)
+    assert take.item_id == "drive" and take.length == pytest.approx(6.0)  # 放慢 1.33 倍铺满
+    assert used == {"drive": 1} and recent == ["drive"]
+    nxt = library.long_take("测试车", 8.0, hint="exterior", used=used, recent=recent)
+    assert nxt.item_id == "static"                                       # 用过的往后排
+    assert nxt.length == pytest.approx(8.0) and nxt.start == pytest.approx(20.5)  # 够长就从中间截
+    assert library.long_take("测试车", 30.0, hint="exterior") is None   # 放慢也铺不满
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node"), reason="没有 node")
+def test_lib_parts_splits_number_unit_and_tag(tmp_path):
+    import json
+    import subprocess
+
+    script = tmp_path / "t.js"
+    script.write_text(
+        "global.window = {}; global.document = {};\n"
+        + (motion.scenes_dir() / "_lib.js").read_text(encoding="utf-8")
+        + "\nconst H = window.HF; console.log(JSON.stringify(["
+          "H.parts('752V碳化硅'), H.parts('3.23 秒'), H.parts('4999 mm'), H.parts('全系标配'),"
+          "H.parts('CLTC 835公里')]));\n", encoding="utf-8")
+    out = json.loads(subprocess.run(["node", str(script)], capture_output=True, text=True,
+                                    encoding="utf-8", check=True).stdout)
+    v, s, mm, none, km = out
+    assert (v["num"], v["unit"], v["tag"]) == (752, "V", "碳化硅")
+    assert (s["num"], s["dec"], s["unit"], s["tag"]) == (3.23, 2, "秒", "")
+    assert (mm["num"], mm["unit"]) == (4999, "mm")
+    assert none is None
+    assert (km["head"], km["num"], km["unit"]) == ("CLTC", 835, "公里")

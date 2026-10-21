@@ -173,3 +173,13 @@ def test_format_ass_includes_playres_for_vertical_video():
     ass = format_ass(cues, width=1080, height=1920)
     assert "PlayResX: 1080" in ass
     assert "PlayResY: 1920" in ass
+
+
+def test_wrap_subtitle_breaks_at_fullwidth_comma_and_never_inside_numbers():
+    from app.pipeline.timeline import wrap_subtitle
+    out = wrap_subtitle("标准版CLTC续航643公里，15分钟补能405公里，折算每分钟约27公里", 22)
+    assert r"\N405" in out  # 窗口里没有逗号:硬切退到数字开头
+    out = wrap_subtitle("标准版续航很长，充电十五分钟能跑很远很远", 9)
+    assert out.split(r"\N")[0].endswith("，")
+    out = wrap_subtitle("续航六百公里十五分钟补能大约405公里折算", 15)
+    assert r"4\N05" not in out and r"40\N5" not in out

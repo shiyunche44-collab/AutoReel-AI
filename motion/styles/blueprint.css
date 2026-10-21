@@ -1,0 +1,26 @@
+/* @name 蓝图
+   @desc 深蓝图纸底 + 白色细线 + 网格,技术说明感
+   @order 5
+   @font-num "IBM Plex Mono"
+*/
+:root {
+  --acc: 143, 211, 255;
+  --hi: 235, 247, 255;
+  --acc2: 255, 214, 102;
+  --hi2: 255, 240, 200;
+  --ink: 240, 246, 255;
+  --bg: 13, 42, 82;
+  --bg2: 20, 54, 100;
+  --haze: 60, 110, 180;
+  --glow: 0.4;
+  --studio-light: 180, 210, 255;
+  --studio-top: #0d2a52;
+  --studio-mid: #0f2f5b;
+  --studio-floor: #143866;
+  --vignette: 0.35;
+  --grain: 0.04;
+}
+.bgwrap::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(var(--ink), 0.09) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(var(--ink), 0.09) 1px, transparent 1px);
+  background-size: 60px 60px; }

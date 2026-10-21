@@ -3,13 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 产品镜:正侧面实车图,长 / 轴距 / 高三条尺寸线从车身本身量出来 -->
+  <meta name="hf-bg" content="studio" />
+  <meta name="hf-photo" content="exterior_side" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
   <style>
-    .car { position: absolute; left: 0; top: 130px; width: 850px; height: 600px; }
-    svg { position: absolute; left: 0; top: 0; overflow: visible; }
-    .dl { font-family: "Noto Sans SC","Microsoft YaHei"; fill: rgba(242,246,238,0.8); font-size: 26px; }
-    .dv { font-family: "Montserrat","Noto Sans SC"; font-weight: 700; fill: #b8f36b; font-size: 38px; }
+    .dbox { position: absolute; white-space: nowrap; }
+    .dbox.mid { transform: translateX(-50%); text-align: center; }
+    .dbox.mid .bn { justify-content: center; }
+    .dbox.end { text-align: right; transform: translateY(-50%); }
+    .dbox.end .bn { justify-content: flex-end; }
+    .dbox .co-lab { font-size: 26px; margin-bottom: 4px; }
   </style>
 </head>
 <body>
@@ -18,41 +23,120 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame();
-    const tl = F.tl, T = F.T;
-    const stage = HF.stage();
-    const car = HF.el("div", "car"); stage.appendChild(car);
-    const sv = HF.svg("svg", { width: 850, height: 600, viewBox: "0 0 850 600" }, car);
-    const body = HF.svg("path", { d: "M50 300 L50 250 Q50 228 92 222 L222 196 Q292 110 420 102 L560 102 Q650 116 704 200 L752 218 Q772 226 772 258 L772 300 Z", fill: "rgba(236,246,228,0.10)", stroke: "#f2f6ee", "stroke-width": 4, "stroke-linejoin": "round", pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
-    const win = HF.svg("path", { d: "M268 196 Q320 128 430 122 L552 122 Q620 134 664 196 Z", fill: "rgba(236,246,228,0.10)", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, sv);
-    const wheels = [215, 615].map((x) => {
-      const w = HF.svg("g", {}, sv);
-      HF.svg("circle", { cx: x, cy: 308, r: 54, fill: "#0a0c0b", "fill-opacity": 0.7, stroke: "#f2f6ee", "stroke-width": 4 }, w);
-      HF.svg("circle", { cx: x, cy: 308, r: 22, fill: "none", stroke: "rgba(242,246,238,0.6)", "stroke-width": 3 }, w);
-      return w;
-    });
-    // 尺寸线:轴距(中)、长(下)、高(右)。文字按行标签里的关键字对应,原文照写
-    const find = (re) => HF.rows.find((r) => re.test(r.label));
-    const dim = (x1, y1, x2, y2, row, tx, ty, anchor) => {
-      const g = HF.svg("g", { opacity: 0 }, sv);
-      HF.svg("line", { x1: x1, y1: y1, x2: x2, y2: y2, stroke: "#b8f36b", "stroke-width": 4, "stroke-linecap": "round" }, g);
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
+    const D = HF.data, P = D.photo, rows = HF.rows;
+    // 车头朝哪边,车尾那一侧就留给高度线
+    const facingLeft = P && P.facing === "left";
+    const CW = 1100;
+    const rig = HF.carRig(tl, { width: CW, cx: facingLeft ? 900 : 1020, floorY: 560, ghost: true });
+    const geo = rig.geo, floorY = rig.floorY, stage = rig.stage;
+    const ch = rig.box.h;
+
+    // ---- 行按标签关键字对应到三条尺寸线,其余行做成右侧条目 ----
+    const used = new Set();
+    const pick = (re) => { const r = rows.find((x) => !used.has(x) && re.test(x.label)); if (r) used.add(r); return r; };
+    const rWheel = pick(/轴距/), rLen = pick(/长/), rH = pick(/高/);
+    const rest = rows.filter((r) => !used.has(r)).slice(0, 2);
+
+    // ---- 几何:车身两端、两轮中心、车顶 ----
+    const xL = rig.at(geo.body[0], 0)[0], xR = rig.at(geo.body[1], 0)[0];
+    const wr = 0.245 * (geo.floor - geo.roof);       // 轮半径(相对外框高),只用来定延长线起点
+    const wy = rig.at(0, geo.floor - wr)[1];
+    const w0 = rig.at(geo.wheels[0], 0)[0], w1 = rig.at(geo.wheels[1], 0)[0];
+    const roofV = (geo.profile && geo.profile.length) ? Math.min(...geo.profile) : geo.roof;
+    const roofY = rig.at(0, roofV)[1];
+    const rearX = facingLeft ? xR : xL;
+
+    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    const ACC = HF.c("acc");
+    /** 一条尺寸线:延长线(虚线)+ 主线从中间向两头长出 + 两端短竖线 */
+    function dimLine(x1, y1, x2, y2, ext) {
+      const g = HF.svg("g", {}, sv);
+      const exts = ext.map((e) => HF.svg("line", { x1: e[0], y1: e[1], x2: e[2], y2: e[3], stroke: HF.c("ink", 0.45),
+        "stroke-width": 1.5, "stroke-dasharray": "6 6", opacity: 0 }, g));
       const horiz = y1 === y2;
-      [[x1, y1], [x2, y2]].forEach((p) => HF.svg("line", horiz ? { x1: p[0], y1: p[1] - 14, x2: p[0], y2: p[1] + 14, stroke: "#b8f36b", "stroke-width": 4 } : { x1: p[0] - 14, y1: p[1], x2: p[0] + 14, y2: p[1], stroke: "#b8f36b", "stroke-width": 4 }, g));
-      if (row) {
-        const t = HF.svg("text", { x: tx, y: ty, "text-anchor": anchor || "middle" }, g);
-        const a = HF.svg("tspan", { "class": "dl" }, t); a.textContent = row.label + "  ";
-        const b = HF.svg("tspan", { "class": "dv" }, t); b.textContent = row.value;
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      const a = HF.svg("line", { x1: mx, y1: my, x2: mx, y2: my, stroke: ACC, "stroke-width": 2.5, "stroke-linecap": "round" }, g);
+      const caps = [[x1, y1], [x2, y2]].map((p) => HF.svg("line", horiz
+        ? { x1: p[0], y1: p[1] - 12, x2: p[0], y2: p[1] + 12, stroke: ACC, "stroke-width": 2.5, opacity: 0 }
+        : { x1: p[0] - 12, y1: p[1], x2: p[0] + 12, y2: p[1], stroke: ACC, "stroke-width": 2.5, opacity: 0 }, g));
+      // 测量光点:停留段沿主线来回走
+      const dot = HF.svg("circle", { cx: x1, cy: y1, r: 4, fill: HF.c("hi"), opacity: 0 }, g);
+      return {
+        g,
+        show(at) {
+          tl.fromTo(exts, { opacity: 0 }, { opacity: 1, duration: 0.3 }, at);
+          tl.to(a, { attr: { x1: x1, y1: y1, x2: x2, y2: y2 }, duration: 0.7, ease: "expo.inOut" }, at + 0.1);
+          tl.fromTo(caps, { opacity: 0 }, { opacity: 1, duration: 0.2 }, at + 0.65);
+        },
+        sweep(from, to) {
+          if (to - from < 0.5) return;
+          tl.fromTo(dot, { opacity: 0 }, { opacity: 0.9, duration: 0.3 }, from);
+          HF.drive(tl, (t) => {
+            const ph = (Math.sin(t * 1.6) + 1) / 2;
+            dot.setAttribute("cx", (x1 + (x2 - x1) * ph).toFixed(1));
+            dot.setAttribute("cy", (y1 + (y2 - y1) * ph).toFixed(1));
+          }, from, to - from);
+        },
+      };
+    }
+    /** 数值框:标签 + 大数字 */
+    function valBox(row, cls, x, y, size, avail) {
+      const b = HF.add(HF.el("div", "dbox " + cls));
+      b.style.top = y + "px";
+      if (cls === "mid") b.style.left = x + "px"; else b.style.right = (1920 - x) + "px";
+      const lab = HF.el("div", "co-lab", row.label), val = HF.el("div");
+      b.appendChild(lab); b.appendChild(val);
+      const big = HF.bigNumber(val, row.value, HF.fitSize(row.value, avail, size), { unitScale: 0.36 });
+      return { b, lab, val, big };
+    }
+
+    // 轴距:贴着轮胎下沿;长:再往下;高:车尾外侧竖线
+    const yWB = floorY + 40, yLen = floorY + 196;
+    const dims = [];
+    if (rWheel || !rLen) dims.push({ row: rWheel, line: dimLine(w0, yWB, w1, yWB, [[w0, wy, w0, yWB + 14], [w1, wy, w1, yWB + 14]]),
+                                      box: rWheel && valBox(rWheel, "mid", (w0 + w1) / 2, yWB + 16, 64, 420) });
+    if (rLen) dims.push({ row: rLen, line: dimLine(xL, yLen, xR, yLen, [[xL, floorY - 40, xL, yLen + 14], [xR, floorY - 40, xR, yLen + 14]]),
+                          box: valBox(rLen, "mid", (xL + xR) / 2, yLen + 16, 72, 520) });
+    if (rH) {
+      const hx = facingLeft ? rearX + 60 : rearX - 60;
+      const line = dimLine(hx, roofY, hx, floorY, [[rearX, roofY, hx + (facingLeft ? 14 : -14), roofY]]);
+      // 数值放在竖线外侧
+      let box;
+      if (facingLeft) {
+        box = valBox(rH, "start", hx + 30, (roofY + floorY) / 2, 64, 1920 - hx - 140);
+        box.b.className = "dbox"; box.b.style.right = ""; box.b.style.left = (hx + 30) + "px"; box.b.style.transform = "translateY(-50%)";
+      } else {
+        box = valBox(rH, "end", hx - 30, (roofY + floorY) / 2, 64, hx - 140);
       }
-      return g;
-    };
-    const dWheel = dim(215, 410, 615, 410, find(/轴距/), 415, 466);
-    const dLen = dim(50, 520, 772, 520, find(/长/), 411, 576);
-    const dH = dim(812, 102, 812, 362, find(/高/), 830, 66, "end");
-    tl.fromTo(car, { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
-    tl.to(body, { attr: { "stroke-dashoffset": 0 }, duration: T(1.4), ease: "power2.inOut" }, T(0.5));
-    tl.fromTo([win].concat(wheels), { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.4));
-    [dWheel, dLen, dH].forEach((g, n) => tl.fromTo(g, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(1.7) + n * 0.4 * F.K));
-    HF.outro(tl);
+      dims.push({ row: rH, line, box });
+    }
+
+    const vig = HF.add(HF.el("div", "vignette"));
+    const head = HF.header(tl, T(0.3), { kicker: "尺寸" });
+    const fn = HF.footnote(tl, T(1.0));
+
+    // ---- 时间线:车进场 → 尺寸线一条条量出来(铺到整拍 55%)→ 条目 → 停留段测量光点来回 ----
+    const d0 = T(1.3), dLast = Math.max(d0, Math.min(A.outAt - 1.4, S * 0.55));
+    dims.forEach((d, k) => {
+      const at = dims.length > 1 ? d0 + (dLast - d0) * k / (dims.length - 1) : d0;
+      d.line.show(at);
+      if (d.box) {
+        tl.fromTo(d.box.lab, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, at + 0.45);
+        tl.fromTo(d.box.val, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, at + 0.5);
+        HF.countHero(tl, d.box.big, at + 0.5, Math.max(0.8, T(1.1)));
+      }
+      d.line.sweep(at + 1.4, A.outAt);
+    });
+    // 其余行(车宽等侧视量不出来的):右下角横排
+    const chips = HF.chips(tl, rest, { top: 880, right: 110, width: 330, size: 54, row: true,
+                                       from: dLast + 0.4, to: Math.min(A.outAt - 0.8, dLast + 1.2) });
+    HF.camera(tl, [{ el: stage, scale: [1.0, 1.035], x: [8, -8] }]);
+
+    HF.exit(tl, [head, fn].concat(dims.map((d) => d.box && d.box.b), chips), A.outAt, A.outDur);
+    tl.to(sv, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

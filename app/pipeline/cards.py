@@ -124,6 +124,19 @@ def _same_value(a: str, b: str) -> bool:
     return key(a) == key(b)
 
 
+def _unbacked_text(value: str, claim: str) -> bool:
+    """不含数字的取值("全系标配""往往需选装")也得是事实原文里的说法。
+
+    数字核对管不到纯文字:模型给对比卡对手一栏填"往往需选装",数字检查放行,
+    屏幕上就多了一句没有出处的断言。占位符("—""暂无")交给对比卡的空值检查。
+    """
+    if not value or re.search(r"\d", value) or _is_blank_value(value):
+        return False
+    def key(t: str) -> str:
+        return re.sub(r"[\W_]+", "", t).lower()
+    return key(value) not in key(claim)
+
+
 def _bar_value(text: str) -> float | None:
     m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
     return float(m.group(0)) if m else None
@@ -155,6 +168,10 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         if missing:
             dropped.append(f"「{text}」中的 {sorted(missing)} 不见于 {fact.id}:{fact.claim}")
             continue
+        invented = [v for v in row["values"] if _unbacked_text(v, fact.claim)]
+        if invented:
+            dropped.append(f"「{text}」中的「{invented[0]}」不见于 {fact.id}:{fact.claim}")
+            continue
         if kind == "compare" and len(row["values"]) != 2:
             dropped.append(f"「{text}」对比卡每行需要两个值")
             continue
@@ -167,7 +184,8 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         if kind == "bars" and _bar_value(row["values"][0]) is None:
             dropped.append(f"「{text}」柱状图取值不是数字")
             continue
-        kept.append({**row, "values": row["values"][:2] if kind == "compare" else row["values"][:1]})
+        kept.append({**row, "values": row["values"][:2] if kind == "compare" else row["values"][:1],
+                     "tag": basis_tag(fact)})
 
     kept = kept[: _MAX_ROWS[kind]]
     if len(kept) < _MIN_ROWS[kind]:
@@ -176,9 +194,40 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         return None, dropped + ["对比卡缺两个对比对象名,卡片作废"]
 
     used = [by_id[r["fact_id"]] for r in kept]
+    return {**card, "rows": kept, "source": source_line(used)}, dropped
+
+
+#: 来源类型的上屏叫法
+SOURCE_KIND_CN = {"official": "官方", "media": "媒体", "derived": "推算"}
+
+
+def basis_tag(fact: Fact) -> str:
+    """一条事实上屏时跟在数字旁边的小标签:口径 + 来源类型,如 "CLTC · 标准版 | 官方"。"""
+    kind = SOURCE_KIND_CN.get(fact.source_kind, "")
+    return " | ".join(x for x in (fact.basis, kind) if x)
+
+
+def source_line(used: Sequence[Fact]) -> str:
+    """卡片底部来源行:口径汇总 + 各类来源条数 + 采集月份。
+
+    以前只有一行"公开资料整理",看不出是 CLTC 还是 WLTP、是官方还是媒体 ——
+    这些恰恰是懂车的观众判断数字靠不靠谱的依据。
+    """
+    bases: list[str] = []
+    for f in used:
+        if f.basis and f.basis not in bases:
+            bases.append(f.basis)
+    kinds: dict[str, int] = {}
+    for f in used:
+        name = SOURCE_KIND_CN.get(f.source_kind, "公开资料")
+        kinds[name] = kinds.get(name, 0) + 1
     dates = sorted({f.retrieved_at[:7] for f in used if f.retrieved_at})
-    return {**card, "rows": kept,
-            "source": f"数据来源:公开资料整理{' · ' + dates[-1] if dates else ''}"}, dropped
+    parts = ["数据来源:" + " · ".join(f"{k} {n}" for k, n in kinds.items())]
+    if bases:
+        parts.append("口径:" + " / ".join(bases[:2]) + (" 等" if len(bases) > 2 else ""))
+    if dates:
+        parts.append(dates[-1])
+    return " | ".join(parts)
 
 
 # --------------------------------------------------------------------------

@@ -23,6 +23,7 @@ broll 拍按规则自动轮换三种样式(不经 LLM):全屏 / 左上角角标 
 """
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -34,9 +35,11 @@ from typing import Any, Sequence
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import cards, library, motion, narration, overlays
+from . import cards, library, motion, motion_assets, narration, overlays
 from . import render as render_mod
 from .grounding import numbers_in
+
+_log = logging.getLogger(__name__)
 
 LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook")
 #: 不需要任何数据就能成立的版式 —— 其它版式核对失败都退回它
@@ -159,7 +162,8 @@ def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]
     if overlays.split_number(value) is None:
         return None, dropped + [f"「{value}」里没有可滚动的数字"]
     return {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
-            "fact_id": r["fact_id"], "source": grounded.get("source", "")}, dropped
+            "fact_id": r["fact_id"], "source": grounded.get("source", ""),
+            "tag": r.get("tag", "")}, dropped
 
 
 def concept_guide(vocab: Vocab) -> str:
@@ -182,18 +186,34 @@ def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile) -> s
     sec = profile.section(seg.section if seg else "")
     options = list(sec.layouts) or list(LAYOUTS)
     card = f" | 卡片:{cards.KIND_GUIDE[sec.card]}" if sec.card in cards.KIND_GUIDE else ""
-    return (f"[第 {i + 1} 拍] 段落:{sec.name or '未分类'}({sec.beat or '无'}) | "
+    car = f"〔{seg.subject}〕" if seg is not None and seg.subject else ""
+    return (f"[第 {i + 1} 拍] 段落:{sec.name or '未分类'}{car}({sec.beat or '无'}) | "
             f"可选版式:{'/'.join(options)}{card} | 旁白:{seg.text if seg else ''}")
 
 
+#: 横评时追加到分镜 SYSTEM 末尾的规则
+ROUNDUP_BEAT_RULE = ("\n8. 这是多车横评:拍号后〔〕里是这一拍讲的车。panel / card / stat / concept 的每一行"
+                     "只能用**这台车**名下的事实(事实前的 [车名]);没有〔〕的开场 / 结论拍可以用任何一台车的,"
+                     "对比卡、柱状图的行名写车名。")
+
+
 def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[ScriptSegment],
-                facts: Sequence[Fact], llm, card_log: list[dict] | None = None) -> list[ShotSpec]:
-    """一段脚本 = 一拍。LLM 挑版式、填叠加数据,这里逐项核对,核不过就降级成 broll。"""
+                facts: Sequence[Fact], llm, card_log: list[dict] | None = None,
+                subjects: Sequence[dict[str, str]] | None = None) -> list[ShotSpec]:
+    """一段脚本 = 一拍。LLM 挑版式、填叠加数据,这里逐项核对,核不过就降级成 broll。
+
+    `subjects`:多车横评车单。给了就按车标注事实与拍,核对时每拍只认本车 + 共用事实。"""
     usable = [f for f in facts if f.enabled and f.confidence in ("high", "medium")]
-    facts_payload = "\n".join(f"- {f.id}: {f.claim}" for f in usable)[:5000] or "(无)"
+    if subjects:
+        facts_payload = "\n".join(f"- {f.id} [{f.subject or '共用'}]: {f.claim}"
+                                  for f in usable)[:9000] or "(无)"
+    else:
+        facts_payload = "\n".join(f"- {f.id}: {f.claim}" for f in usable)[:5000] or "(无)"
     vocab = profile.vocab
+    from .script_gen import roster_line
     user = USER.format(
-        subject_label=vocab.subject_label, subject=subject, count=len(segments),
+        subject_label=vocab.subject_label if not subjects else "横评车单",
+        subject=subject if not subjects else roster_line(subjects), count=len(segments),
         beats="\n".join(_beat_line(i, s, profile) for i, s in enumerate(segments)),
         facts=facts_payload,
     )
@@ -203,6 +223,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             keyword_examples=vocab.keyword_examples, stat_examples=vocab.stat_examples,
             view_enum=vocab.view_enum, view_guide=vocab.view_guide,
             concept_guide=concept_guide(vocab))
+        if subjects:
+            system = system.replace("\n\n必需键: beats", ROUNDUP_BEAT_RULE + "\n\n必需键: beats")
         data = llm.structured(system, user,
                               required_keys=["beats"], temperature=0.5)
         raw = data.get("beats") or []
@@ -216,9 +238,17 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             except (TypeError, ValueError):
                 by_idx[n] = item
 
-    specs = [_ground_beat(i, seg, by_idx.get(i, {}), subject, profile, facts, card_log)
+    specs = [_ground_beat(i, seg, by_idx.get(i, {}), subject, profile,
+                          facts_for(facts, seg.subject), card_log)
              for i, seg in enumerate(segments)]
     return assign_broll_styles(enforce_rhythm(specs))
+
+
+def facts_for(facts: Sequence[Fact], subject: str) -> list[Fact]:
+    """一拍能用来核对叠加数字的事实:讲某台车的拍只认这台车 + 共用事实;共用拍全认。"""
+    if not subject:
+        return list(facts)
+    return [f for f in facts if not f.subject or f.subject == subject]
 
 
 def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: CategoryProfile,
@@ -285,14 +315,15 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
                          "layout": layout, "dropped": dropped})
 
     view = _hint(sec.angle, str(item.get("view") or ""), profile.vocab)
-    visual = str(item.get("visual") or "").strip()[:30] or (sec.beat or f"{subject} 宣传画面")
+    visual = str(item.get("visual") or "").strip()[:30] or (sec.beat or f"{seg.subject or subject} 宣传画面")
     return ShotSpec(
         idx=i, duration=0.0, section=sec.name,
         visual_zh=f"[{layout}] {visual}",
         camera_zh="", ambience_zh="", narration_zh=seg.text,
         angle=sec.angle, on_screen_text=[],
         card=card, layout=layout, overlay=overlay,
-        chapter=sec.chapter or sec.name, view=view,
+        chapter=seg.subject or sec.chapter or sec.name, view=view,
+        subject=seg.subject,
     )
 
 
@@ -360,16 +391,32 @@ def broll_style(spec: ShotSpec) -> str:
 
 
 def fallback_beats(*, subject: str, profile: CategoryProfile,
-                   segments: Sequence[ScriptSegment]) -> list[ShotSpec]:
+                   segments: Sequence[ScriptSegment],
+                   subjects: Sequence[str] | None = None) -> list[ShotSpec]:
     """没有 LLM 时:全部 broll。结构、时间轴、合成链路照样能验。"""
     out = []
     for i, seg in enumerate(segments):
         sec = profile.section(seg.section)
         out.append(ShotSpec(idx=i, duration=0.0, section=sec.name,
-                            visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or subject}",
+                            visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or seg.subject or subject}",
                             narration_zh=seg.text, angle=sec.angle, layout=SAFE_LAYOUT,
-                            chapter=sec.chapter or sec.name, view=_hint(sec.angle, "", profile.vocab)))
+                            chapter=seg.subject or sec.chapter or sec.name,
+                            view=_hint(sec.angle, "", profile.vocab), subject=seg.subject))
     return assign_broll_styles(out)
+
+
+def beat_subject(spec: ShotSpec, subjects: Sequence[str], fallback: str) -> str:
+    """这一拍画面上该是哪台车(背景素材、车名角标、卡片底图都按它取)。
+
+    - 拍上标了车:就是它;
+    - 横评的开场 / 结论这类共用拍:按拍号在车单里轮换 —— 背景永远是车单上的车,
+      不会出现选题名去查素材池查个空;
+    - 单车项目:项目主体。"""
+    if spec.subject:
+        return spec.subject
+    if subjects:
+        return subjects[spec.idx % len(subjects)]
+    return fallback
 
 
 def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
@@ -536,6 +583,26 @@ def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple
                 "-t", f"{seconds:.3f}", str(dest)])
     if proc.returncode != 0 or not dest.is_file():
         raise render_mod.RenderError(f"背景拼接失败:{(proc.stderr or '')[-300:]}")
+    return dest
+
+
+#: 概念动画的实拍底从外观组里挑(行驶、航拍也在这组),车内镜头压上数据不好看
+CONCEPT_FOOTAGE_HINT = "exterior"
+
+
+def concept_background(piece: library.Piece, seconds: float, size: tuple[int, int], work: Path) -> Path:
+    """概念动画的底:一个长镜头(`library.long_take`),比整拍短就放慢铺满。
+    放慢的行车镜头本身有质感,也省掉压着数据时底在跳切的乱。"""
+    work.mkdir(parents=True, exist_ok=True)
+    dest = work / "bg.mp4"
+    w, h = size
+    factor = max(1.0, seconds / max(0.1, piece.length))
+    vf = (_fit_filter(w, h, piece.crop_bottom) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
+          f"tpad=stop_mode=clone:stop_duration={seconds:.3f}[v]")
+    proc = _ff(["-ss", f"{piece.start:.3f}", "-t", f"{piece.length:.3f}", "-i", piece.path,
+                "-filter_complex", vf, "-map", "[v]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
+    if proc.returncode != 0 or not dest.is_file():
+        raise render_mod.RenderError(f"概念动画底生成失败:{(proc.stderr or '')[-300:]}")
     return dest
 
 
@@ -727,11 +794,43 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
     return dest, pieces
 
 
+def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
+                   used: dict[str, int], recent: list[str]
+                   ) -> tuple[Path | None, motion_assets.Cutout | None, list[library.Piece]]:
+    """concept 拍的素材:(实拍底, 车图, 用到的片段)。正式渲染和选风格预览共用,保证预览看到的就是成片的样子。
+    产品镜(studio)用模板自带的影棚底,不铺实拍;其余压在一段实拍上。"""
+    scene = (spec.overlay or {}).get("scene", "")
+    bg_clip: Path | None = None
+    pieces: list[library.Piece] = []
+    if motion.scene_background(scene) != "studio":
+        # 一个长镜头放慢铺满;库里没有够长的才退回多段拼接
+        take = library.long_take(subject, seconds, hint=CONCEPT_FOOTAGE_HINT, used=used, recent=recent)
+        got = [take] if take else library.fill(subject, seconds, hint=CONCEPT_FOOTAGE_HINT,
+                                               used=used, recent=recent)
+        if got:
+            try:
+                bg_clip = (concept_background(take, seconds, size, work) if take else
+                           background_clip(got, seconds, size, work, motion_seed=spec.idx))
+                pieces = got
+            except Exception:
+                bg_clip = None
+    views = motion.scene_photo_views(scene)
+    photo = motion_assets.hero_still(subject, views) if views else None
+    return bg_clip, photo, pieces
+
+
+def concept_style_of(project_id: str) -> str:
+    """项目选定的概念动画风格(`concept_style.json`);没选过 = 默认风格。"""
+    got = db.read_json(project_id, "concept_style.json", {}) or {}
+    return motion.get_style(got.get("style")).id
+
+
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,
                 chapters: Sequence[tuple[str, float]], chapter_idx: int,
                 used: dict[str, int], card_bg: Path | None,
                 recent: list[str] | None = None,
-                sting: tuple[int, str] | None = None) -> tuple[Path, list[dict]]:
+                sting: tuple[int, str] | None = None,
+                style: str | None = None) -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
@@ -755,27 +854,21 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 "overlay": {"kind": "highlight", "lines": lines} if lines else None})
             return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
                                chapters=chapters, chapter_idx=chapter_idx, used=used,
-                               card_bg=card_bg, recent=recent, sting=sting)
+                               card_bg=card_bg, recent=recent, sting=sting, style=style)
     elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
     elif spec.layout == "concept" and spec.overlay:
-        # 动画压在这一拍的实拍上;没有素材就用动画自带的暗色底
-        got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
-        bg_clip = None
-        if got:
-            try:
-                bg_clip = background_clip(got, seconds, size, work / "concept_bg",
-                                          motion_seed=spec.idx)
-                pieces = got
-            except Exception:
-                bg_clip = None
+        scene = spec.overlay.get("scene", "")
+        bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
+                                                used, recent)
         try:
-            base = motion.render(spec.overlay.get("scene", ""),
-                                 motion.scene_data(spec.overlay, subject), seconds, size,
-                                 work / "concept.mp4", background=bg_clip)
-        except motion.MotionError:
-            # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败
+            base = motion.render(scene, motion.scene_data(spec.overlay, subject), seconds, size,
+                                 work / "concept.mp4", background=bg_clip, photo=photo, style=style)
+        except motion.MotionError as exc:
+            # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败 —— 但要留痕,
+            # 否则"概念动画全变成数据卡"看起来像正常产出
+            _log.warning("第 %s 拍概念动画 %s 退回数据卡:%s", spec.idx, scene, exc)
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
     else:
@@ -799,6 +892,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
         layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]
     elif broll_style(spec) == "lower_third" and not sting:
         name = chapters[chapter_idx][0] if 0 <= chapter_idx < len(chapters) else ""
+        if name == subject:  # 横评:章名就是车名,角标改写「车名 · 段落」
+            name = spec.section
         layer = overlays.lower_third(subject, name, size, work / "layer.png")
         flt = "lower_third"
     if layer and not layer_input:
@@ -885,11 +980,14 @@ def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
 
 
 def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
-                   profile: CategoryProfile, limit: int = 3) -> dict[str, Any]:
+                   profile: CategoryProfile, limit: int = 3,
+                   subjects: Sequence[str] | None = None) -> dict[str, Any]:
     """渲染还没出片的拍(每次最多 `limit` 拍,后台循环反复调用)。
 
     产物写成 draft 档 succeeded —— 门禁 B 的审片页按草稿档展示。
+    `subjects`:多车横评车单 —— 每拍按 `beat_subject` 取自己那台车的素材,绝不借别的车的。
     """
+    subjects = list(subjects or [])
     rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
     todo = [s for s in specs if s.duration > 0
             and rows.get(s.idx, {}).get("status") != "succeeded"][:limit]
@@ -899,17 +997,23 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     beats_dir(project_id)  # 每拍的背景片段记录放这里
     # 成品放 drafts/:审片页按 /media/{项目}/drafts/{文件} 取草稿预览
     out_dir = config.project_dir(project_id) / "drafts"
-    bgs = card_backgrounds(subject)
+    bg_cache: dict[str, list[Path]] = {}
+    style = concept_style_of(project_id)
     done, errors = [], []
     for s in todo:
         pos = next(n for n, x in enumerate(specs) if x.idx == s.idx)
+        car = beat_subject(s, subjects, subject)
+        if car not in bg_cache:
+            bg_cache[car] = card_backgrounds(car)
+        bgs = bg_cache[car]
         try:
-            path, pieces = render_beat(s, subject=subject, size=profile.frame_size,
+            path, pieces = render_beat(s, subject=car, size=profile.frame_size,
                                        out_dir=out_dir, chapters=chapters,
                                        chapter_idx=where[pos], used=used,
                                        card_bg=bgs[s.idx % len(bgs)] if bgs else None,
                                        recent=recent,
-                                       sting=sting_for(specs, where, chapters, s.idx))
+                                       sting=sting_for(specs, where, chapters, s.idx),
+                                       style=style)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])

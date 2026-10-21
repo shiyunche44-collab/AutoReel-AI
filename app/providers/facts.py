@@ -68,16 +68,32 @@ class CollectionResult:
     @property
     def context(self) -> str:
         """拼接成给 LLM 阅读的原始素材上下文。"""
+        return self.bounded_context(None)
+
+    def bounded_context(self, budget: int | None) -> str:
+        """同 `context`,但总正文不超过 `budget` 字,且**每份素材都有份**。
+
+        旧做法是拼完再整体截断:第一份产品检索就有一两万字,排在后面的
+        素材(销量新闻、角度检索、热点依据)一个字都进不了抽取。这里按份
+        分额度 —— 小的全文保留,省下的额度再平分给大的。
+        """
+        docs = [(i, d) for i, d in enumerate(self.docs, 1) if d.ok and d.text]
+        caps = {i: len(d.text) for i, d in docs}
+        if budget is not None and sum(caps.values()) > budget:
+            left, pending = budget, sorted(caps, key=caps.get)
+            while pending:
+                share = left // len(pending)
+                i = pending.pop(0)
+                caps[i] = min(caps[i], share)
+                left -= caps[i]
         parts = []
-        for i, doc in enumerate(self.docs, 1):
-            if not doc.ok or not doc.text:
-                continue
+        for i, doc in docs:
             parts.append(
                 f"### 素材 {i}\n"
                 f"- 来源工具:{doc.tool}\n"
                 f"- 查询串:{doc.query}\n"
                 f"- 取数日期:{doc.retrieved_at}\n\n"
-                f"{doc.text}"
+                f"{doc.text[:caps[i]]}"
             )
         return "\n\n".join(parts)
 

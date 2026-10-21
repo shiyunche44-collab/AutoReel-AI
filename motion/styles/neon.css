@@ -1,0 +1,22 @@
+/* @name 霓虹赛博
+   @desc 紫黑底 + 品红/青色霓虹 + 扫描线,年轻夸张
+   @order 3
+   @font-num "Space Mono"
+*/
+:root {
+  --acc: 255, 47, 208;
+  --hi: 255, 196, 242;
+  --acc2: 34, 240, 255;
+  --hi2: 200, 252, 255;
+  --ink: 244, 236, 255;
+  --bg: 10, 4, 20;
+  --bg2: 22, 10, 40;
+  --haze: 40, 20, 140;
+  --glow: 1.4;
+  --studio-light: 200, 160, 255;
+  --studio-top: #0c0518;
+  --studio-mid: #120822;
+  --studio-floor: #1b0d33;
+}
+#root::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.2) 0 2px, rgba(0, 0, 0, 0) 2px 4px); }

@@ -3,14 +3,40 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=1920, height=1080" />
+  <!-- 动态镜:压在一段放慢的实拍上;有正侧面白底车图时,车沿速度标尺跑完 0→100 -->
+  <meta name="hf-bg" content="footage" />
+  <meta name="hf-photo" content="exterior_side" />
   <script src="gsap.min.js"></script>
   <link rel="stylesheet" href="_base.css" />
   <style>
-    .gauge { position: absolute; left: 30px; top: 40px; width: 790px; height: 720px; }
-    svg { position: absolute; left: 0; top: 0; overflow: visible; }
-    .center { position: absolute; left: 0; width: 790px; top: 400px; text-align: center; }
-    .center .hval { justify-content: center; margin-top: 8px; }
-    .center .hlab { text-align: center; }
+    .dim { position: absolute; inset: 0; background-color: rgba(var(--bg), 0.52); pointer-events: none; }
+    #streaks { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+    #streaks i { position: absolute; display: block; height: 2px; border-radius: 1px;
+      background: linear-gradient(90deg, rgba(var(--hi), 0) 0%, rgba(var(--hi), 0.75) 100%); }
+    .timer { position: absolute; left: 0; width: 1920px; top: 255px; text-align: center; }
+    .timer .lab { font-size: 32px; font-weight: 600; letter-spacing: 0.3em; color: rgba(var(--ink), 0.74); }
+    .timer .bn { justify-content: center; margin-top: 10px; }
+    .timer .bn-num { text-shadow: 0 0 60px rgba(0, 0, 0, 0.5); }
+    .ruler { position: absolute; left: 260px; width: 1400px; height: 60px; }
+    .ruler .base { position: absolute; left: 0; right: 0; top: 0; height: 2px; background-color: rgba(var(--ink), 0.35); }
+    .ruler .fill { position: absolute; left: 0; top: -1px; width: 1400px; height: 4px; border-radius: 2px; background-color: rgb(var(--acc));
+                   transform-origin: 0 50%; box-shadow: 0 0 18px rgba(var(--acc), calc(0.8 * var(--glow))); }
+    .ruler .tick { position: absolute; top: 10px; width: 2px; height: 14px; margin-left: -1px; background-color: rgba(var(--ink), 0.45); }
+    .ruler .tick.major { height: 22px; background-color: rgba(var(--ink), 0.7); }
+    .ruler .tl { position: absolute; top: 40px; transform: translateX(-50%); font-family: "Montserrat"; font-weight: 600;
+                 font-size: 24px; color: rgba(var(--ink), 0.66); white-space: nowrap; }
+    .ruler .head { position: absolute; top: -9px; width: 20px; height: 20px; margin-left: -10px; border-radius: 50%;
+                   background-color: rgb(var(--hi)); box-shadow: 0 0 24px 6px rgba(var(--acc), calc(0.75 * var(--glow))); }
+    .speed { position: absolute; top: -66px; transform: translateX(-50%); font-family: "Montserrat"; font-weight: 700;
+             font-size: 34px; color: rgb(var(--acc)); white-space: nowrap; }
+    .speed small { font-size: 20px; font-weight: 600; margin-left: 6px; color: rgba(var(--ink), 0.7); }
+    .runner { position: absolute; }
+    .runner img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+    .flash { position: absolute; inset: 0; background-color: rgb(var(--hi)); opacity: 0; pointer-events: none; mix-blend-mode: screen; }
+    .side { position: absolute; right: 80px; width: 380px; }
+    .side .it { position: relative; padding: 18px 0 18px 26px; }
+    .side .it i { position: absolute; left: 0; top: 22px; bottom: 22px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
+    .side .co-lab { margin-bottom: 4px; }
   </style>
 </head>
 <body>
@@ -19,40 +45,141 @@
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>
-    const F = HF.frame({ heroInVisual: true, maxRows: 3 });
-    const tl = F.tl, T = F.T;
-    const stage = HF.stage();
-    const g = HF.el("div", "gauge glass"); stage.appendChild(g);
-    const sv = HF.svg("svg", { width: 790, height: 720, viewBox: "0 0 790 720" }, g);
-    const cx = 395, cy = 360, R = 290;
-    const pt = (deg, r) => [cx + r * Math.cos(deg * Math.PI / 180), cy + r * Math.sin(deg * Math.PI / 180)];
-    const arc = (a0, a1, r) => { const p0 = pt(a0, r), p1 = pt(a1, r); return "M" + p0[0] + " " + p0[1] + " A" + r + " " + r + " 0 " + (a1 - a0 > 180 ? 1 : 0) + " 1 " + p1[0] + " " + p1[1]; };
-    HF.svg("path", { d: arc(135, 404.9, R), fill: "none", stroke: "rgba(236,246,228,0.18)", "stroke-width": 26, "stroke-linecap": "round" }, sv);
-    const fill = HF.svg("path", { d: arc(135, 404.9, R), fill: "none", stroke: "#b8f36b", "stroke-width": 26, "stroke-linecap": "round", pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
-    for (let k = 0; k <= 10; k++) {
-      const a = 135 + 27 * k, p0 = pt(a, R - 40), p1 = pt(a, R - (k % 5 === 0 ? 74 : 60));
-      HF.svg("line", { x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], stroke: "rgba(242,246,238,0.5)", "stroke-width": k % 5 === 0 ? 5 : 3, "stroke-linecap": "round" }, sv);
+    const A = HF.acts(), T = A.T, S = A.S;
+    const tl = gsap.timeline({ paused: true });
+    const D = HF.data, P = D.photo;
+    const rows = HF.rows;
+    const bgw = document.getElementById("bgwrap");
+
+    const dim = HF.add(HF.el("div", "dim"));
+    const vig = HF.add(HF.el("div", "vignette"));
+    // 速度线:固定种子,位置不随机变化
+    const streaks = HF.add(HF.el("div")); streaks.id = "streaks";
+    const rnd = HF.rng(7);
+    const lines = [];
+    for (let n = 0; n < 34; n++) {
+      const l = HF.el("i");
+      const len = 180 + rnd() * 520, y = 60 + rnd() * 960;
+      Object.assign(l.style, { top: y.toFixed(0) + "px", width: len.toFixed(0) + "px", opacity: (0.25 + rnd() * 0.6).toFixed(2) });
+      streaks.appendChild(l);
+      lines.push({ el: l, len, x0: rnd() * 2400, v: 0.6 + rnd() * 0.8 });
     }
-    const needle = HF.svg("g", {}, sv);
-    HF.svg("line", { x1: cx, y1: cy, x2: cx + R - 60, y2: cy, stroke: "#f2f6ee", "stroke-width": 7, "stroke-linecap": "round" }, needle);
-    HF.svg("circle", { cx: cx, cy: cy, r: 16, fill: "#b8f36b" }, sv);
-    // 中心:第一行(零百秒数)。单位是秒就按真实时间走,不是就 1.8 秒滚完
-    const first = HF.rows[0] || { label: "", value: "" };
-    const p = HF.splitNumber(first.value);
-    const real = p && /秒|s/i.test(p.tail) && p.num > 0 && p.num <= 9;
-    const run = real ? Math.min(p.num, HF.seconds - 1.2) : Math.max(1.0, T(1.8));
-    const ctr = HF.el("div", "center"); g.appendChild(ctr);
-    const lab = HF.el("div", "hlab", first.label); const hv = HF.el("div", "hval");
-    ctr.appendChild(lab); ctr.appendChild(hv);
-    const hero = HF.heroInto(hv, first.value, HF.fitSize(first.value, 380, 150));
-    tl.fromTo(g, { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: T(0.8), ease: "expo.out" }, T(0.3));
-    tl.fromTo(ctr, { opacity: 0 }, { opacity: 1, duration: T(0.4) }, T(0.7));
-    const at = T(0.9);
-    HF.countHero(tl, hero, at, run, { ease: real ? "none" : "expo.out" });
-    tl.fromTo(fill, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: run, ease: "power2.out" }, at);
-    tl.fromTo(needle, { rotation: 135, svgOrigin: cx + " " + cy }, { rotation: 404.9, svgOrigin: cx + " " + cy, duration: run, ease: "power2.out" }, at);
-    tl.to(hv, { scale: 1.07, duration: 0.18, yoyo: true, repeat: 1, ease: "power2.out", transformOrigin: "50% 60%" }, at + run);
-    HF.outro(tl);
+
+    // 计时器:第一行(零百秒数)。单位是秒且 ≤9 就按真实时间走
+    const first = rows[0] || { label: "", value: "" };
+    const p = HF.parts(first.value);
+    const real = p && /秒|s/i.test(p.unit) && p.num > 0 && p.num <= 9;
+    const runAt = T(1.0);
+    const run = real ? Math.min(p.num, Math.max(1.0, A.outAt - runAt - 1.4)) : Math.max(1.0, T(1.8));
+    const timer = HF.add(HF.el("div", "timer"));
+    const tlab = HF.el("div", "lab", first.label); const tval = HF.el("div");
+    timer.appendChild(tlab); timer.appendChild(tval);
+    const big = HF.bigNumber(tval, first.value, HF.fitSize(first.value, 1100, 290));
+
+    // 速度标尺
+    const RX = 260, RW = 1400, RY = 860;
+    const ruler = HF.add(HF.el("div", "ruler")); ruler.style.top = RY + "px";
+    ruler.appendChild(HF.el("div", "base"));
+    const fill = HF.el("div", "fill"); ruler.appendChild(fill);
+    for (let k = 0; k <= 20; k++) {
+      const t = HF.el("div", "tick" + (k % 2 === 0 ? " major" : "")); t.style.left = (RW * k / 20) + "px"; ruler.appendChild(t);
+      if (k % 4 === 0) { const lb = HF.el("div", "tl", String(k * 5)); lb.style.left = (RW * k / 20) + "px"; ruler.appendChild(lb); }
+    }
+    const unitLab = HF.el("div", "tl", "km/h"); unitLab.style.left = (RW + 70) + "px"; ruler.appendChild(unitLab);
+    const headDot = HF.el("div", "head"); ruler.appendChild(headDot);
+    const speed = HF.el("div", "speed"); const spNum = HF.el("span", "", "0"); const spU = HF.el("small", "", "km/h");
+    speed.appendChild(spNum); speed.appendChild(spU); ruler.appendChild(speed);
+
+    // 车:沿标尺从 0 跑到 100,车头朝右(原图朝左就镜像)
+    let runner = null, ghosts = [], carW = 330, carH = 0;
+    if (P) {
+      carH = carW * P.height / P.width;
+      const flip = P.facing === "left" ? "scaleX(-1)" : "";
+      const mk = (op) => {
+        const r = HF.el("div", "runner");
+        Object.assign(r.style, { width: carW + "px", height: carH + "px", top: (RY - P.floor * carH - 8) + "px", left: "0px", opacity: op });
+        const im = HF.el("img"); im.src = P.src; im.style.transform = flip; r.appendChild(im);
+        return HF.add(r);
+      };
+      ghosts = [mk(0), mk(0), mk(0)];
+      runner = mk(1);
+      speed.style.top = -(P.floor * carH + 62) + "px";  // 车速读数放在车顶上方
+    }
+
+    const flash = HF.add(HF.el("div", "flash"));
+    const head = HF.header(tl, T(0.25), { kicker: "加速" });
+    const fn = HF.footnote(tl, T(0.9));
+
+    // 右侧:其余行(功率、极速)在停留段依次出现
+    const side = HF.add(HF.el("div", "side")); side.style.top = "300px";
+    const sideItems = rows.slice(1, 3).map((r) => {
+      const it = HF.el("div", "it"); const bar = HF.el("i");
+      const lab = HF.el("div", "co-lab", r.label); const val = HF.el("div");
+      it.appendChild(bar); it.appendChild(lab); it.appendChild(val); side.appendChild(it);
+      return { it, bar, lab, val, big: HF.bigNumber(val, r.value, HF.fitSize(r.value, 380, 72), { unitScale: 0.36 }) };
+    });
+
+    // ---- 时间线 ----
+    tl.fromTo(dim, { opacity: 0.2 }, { opacity: 1, duration: T(0.8), ease: "power1.out" }, 0);
+    tl.fromTo(timer, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: T(0.6), ease: "power3.out" }, T(0.45));
+    tl.fromTo(ruler, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, T(0.6));
+    tl.fromTo(fill, { scaleX: 0 }, { scaleX: 0, duration: 0.01 }, 0);
+
+    // 起跑:计时、标尺、车、速度线共用一个进度(加速度递减的曲线:先猛后缓)
+    const ease = gsap.parseEase("power2.out");
+    const xOf = (u) => RX + RW * u;
+    HF.countHero(tl, big, runAt, run, { ease: real ? "none" : "expo.out" });
+    HF.drive(tl, (t) => {
+      const lin = Math.min(1, t / run);
+      const u = ease(lin);
+      const after = Math.max(0, t - run);
+      fill.style.transform = `scaleX(${u.toFixed(4)})`;
+      headDot.style.left = (RW * u).toFixed(1) + "px";
+      speed.style.left = (RW * u).toFixed(1) + "px";
+      spNum.textContent = String(Math.round(100 * u));
+      // 速度感:车速越快速度线越密越亮;冲线后慢慢收
+      const v = lin < 1 ? 0.15 + 0.85 * Math.min(1, lin * 1.6) : Math.max(0.12, 1 - after * 0.9);
+      lines.forEach((L) => {
+        const x = ((L.x0 - t * 2600 * L.v * v) % 2600 + 2600) % 2600 - 500;
+        L.el.style.transform = `translateX(${x.toFixed(0)}px) scaleX(${(0.4 + v).toFixed(3)})`;
+      });
+      streaks.style.opacity = String(Math.min(1, t / 0.4) * (0.25 + 0.75 * v));
+      if (runner) {
+        const cxp = xOf(u);
+        runner.style.left = (cxp - carW * 0.62).toFixed(1) + "px";
+        const gap = 46 * v;
+        ghosts.forEach((g, k) => {
+          g.style.left = (cxp - carW * 0.62 - gap * (k + 1)).toFixed(1) + "px";
+          g.style.opacity = (lin < 1 ? (0.32 - k * 0.09) * v : Math.max(0, 0.3 - after * 0.8) * (1 - k * 0.3)).toFixed(3);
+        });
+      }
+    }, runAt, Math.max(0.1, A.outAt - runAt));
+    if (runner) tl.fromTo(runner, { opacity: 0 }, { opacity: 1, duration: 0.3 }, runAt - 0.25);
+    // 实拍底:起跑时推近,冲线后回落一点(冲刺感)
+    if (bgw) {
+      tl.fromTo(bgw, { scale: 1.0 }, { scale: 1.12, duration: run, ease: "power2.in" }, runAt);
+      tl.to(bgw, { scale: 1.07, duration: Math.max(0.3, A.outAt - runAt - run), ease: "power2.out" }, runAt + run);
+    }
+    // 冲线:闪白、数字一顿
+    const fin = runAt + run;
+    tl.fromTo(flash, { opacity: 0 }, { opacity: 0.38, duration: 0.06, ease: "none" }, fin);
+    tl.to(flash, { opacity: 0, duration: 0.35, ease: "power2.out" }, fin + 0.06);
+    tl.to(tval, { scale: 1.08, duration: 0.14, yoyo: true, repeat: 1, ease: "power2.out", transformOrigin: "50% 60%" }, fin);
+    tl.to(tlab, { color: HF.c("acc"), duration: 0.2 }, fin);
+
+    // 其余行:冲线后依次出现,铺到停留段
+    const sideAt = Math.min(fin + 0.3, A.outAt - 1.2);
+    sideItems.forEach((s, k) => {
+      const at = sideAt + k * Math.max(0.35, (A.outAt - 1.0 - sideAt) / Math.max(1, sideItems.length));
+      tl.fromTo(s.bar, { scaleY: 0 }, { scaleY: 1, duration: 0.35, ease: "power2.out" }, at);
+      tl.fromTo(s.lab, { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, at + 0.1);
+      tl.fromTo(s.val, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, at + 0.15);
+      HF.countHero(tl, s.big, at + 0.15, 0.8);
+    });
+
+    // 退场
+    HF.exit(tl, [head, fn, timer, side, ruler].concat(runner ? [runner] : []), A.outAt, A.outDur);
+    HF.grain();
     HF.register(tl);
   </script>
 </body>

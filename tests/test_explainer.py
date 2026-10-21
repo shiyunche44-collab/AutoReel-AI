@@ -40,7 +40,7 @@ def test_auto_long_is_landscape_and_self_contained():
     assert p.frame_size == (1920, 1080)
     # 原先从竖屏 auto 继承的官方渠道、合规词表、BGM 现在直接写在 auto_long 里
     assert "xiaomi" in p.official_sites and p.forbidden_terms and p.music_prompt
-    assert set(p.themes) == {"buyguide"}
+    assert set(p.themes) == {"buyguide", "roundup"}
     for d in p.supported_durations():
         assert len(p.plan_for(d)) == p.shots_for(d)
 
@@ -151,7 +151,7 @@ def test_build_beats_grounds_stat_and_rejects_invented_number():
     s = specs[good]
     assert s.layout == "stat"
     assert s.overlay == {"kind": "stat", "label": "CLTC续航", "value": "835公里",
-                         "fact_id": "f_1", "source": s.overlay["source"]}
+                         "fact_id": "f_1", "source": s.overlay["source"], "tag": ""}
     if bad is not None and bad != good:
         # 退回 broll 后只剩样式标记(assign_broll_styles),没有编出来的数字
         assert specs[bad].layout == "broll"
