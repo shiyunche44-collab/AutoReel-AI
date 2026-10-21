@@ -621,7 +621,7 @@ def _min_supported_shots(profile: CategoryProfile) -> int:
 
 
 #: 解说轨的版式名。与 pipeline/explainer.LAYOUTS 保持一致(这里不反向导入流水线)
-EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept")
+EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook")
 
 
 def _validate(profile: CategoryProfile) -> None:

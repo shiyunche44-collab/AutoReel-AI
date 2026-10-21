@@ -43,6 +43,7 @@ themes:
     script_rules:
       - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
       - 结论段必须说清楚适合哪类人、不适合哪类人。
+      - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
     blocks:
       - {section: 开场, weight: 1, remainder: false}
       - {section: 定位与价格, weight: 2}
@@ -65,10 +66,10 @@ themes:
 # angle 在这里只决定背景画面偏外观还是偏车内,不要求逐镜对上。
 sections:
   开场:
-    beat: 一句话抛出这台车最值得聊的点或争议
+    beat: 第一句 18 字内直接抛出这台车最反常识的结论、争议或最硬的一个数字(黄金三秒)
     chapter: 开头
     angle: exterior_45
-    layouts: [highlight, broll]
+    layouts: [hook, highlight, broll]
   定位与价格:
     beat: 它卖多少钱、打谁、在品牌里是什么位置
     chapter: 定位价格

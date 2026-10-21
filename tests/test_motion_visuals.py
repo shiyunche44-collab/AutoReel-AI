@@ -13,7 +13,7 @@ from PIL import Image
 
 from app import config
 from app.categories import load_profile
-from app.models import Fact, ShotSpec
+from app.models import Fact, ScriptSegment, ShotSpec
 from app.pipeline import explainer, library, motion, overlays, render, timeline
 from tests.test_explainer import FakeLLM, _facts, _segments
 
@@ -202,6 +202,83 @@ def test_render_broll_styles_with_sting(stills_pool, tmp_path, style):
 
 
 # --------------------------------------------------------------------------
+# 黄金三秒:开场 hook 版式
+# --------------------------------------------------------------------------
+def _hook_overlay(**kw):
+    return {"kind": "hook", "lines": ["激光雷达", "全系标配"], **kw}
+
+
+def test_hook_beat_is_grounded_and_only_first_beat_keeps_it():
+    p = load_profile("auto_long")
+    segs = _segments(p)
+    segs[0].text = "全系标配激光雷达,这价位少见。"
+    items = [{"idx": 1, "layout": "hook", "keywords": ["激光雷达", "全系标配"]},
+             {"idx": 2, "layout": "hook", "keywords": ["外观"]}]
+    got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
+                                llm=FakeLLM(items))
+    assert got[0].layout == "hook" and got[0].overlay["lines"] == ["激光雷达", "全系标配"]
+    assert got[1].layout != "hook"            # 开场之外的 hook 不成立
+    assert explainer.validate_beats(got) == []
+
+
+def test_hook_with_invented_keywords_falls_back_to_broll():
+    p = load_profile("auto_long")
+    segs = _segments(p)
+    items = [{"idx": 1, "layout": "hook", "keywords": ["高通8650"]}]
+    got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
+                                llm=FakeLLM(items))
+    assert got[0].layout == "broll" and got[0].overlay is None
+
+
+def test_hook_stat_must_come_from_facts():
+    p = load_profile("auto_long")
+    segs = _segments(p)
+    good = {"idx": 1, "layout": "hook", "keywords": ["续航"],
+            "stat": {"label": "CLTC 续航", "value": "835 公里", "fact_id": "f_1"}}
+    got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
+                                llm=FakeLLM([good]))
+    assert got[0].overlay["stat"]["value"] == "835 公里"
+    bad = {**good, "stat": {"label": "续航", "value": "999 公里", "fact_id": "f_1"}}
+    got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
+                                llm=FakeLLM([bad]))
+    assert "stat" not in got[0].overlay       # 数字核对不过只丢数字,关键词保留
+
+
+def test_hook_frames_pop_hold_then_transparent(tmp_path):
+    frames = overlays.hook_frames(_hook_overlay(), "测试车", (640, 360), tmp_path, 3.0)
+    assert sum(d for _, d in frames) == pytest.approx(3.0, abs=0.05)
+    first = Image.open(frames[0][0])
+    assert first.getchannel("A").getbbox() is not None      # 0 秒起就有字,没有淡入
+    assert Image.open(frames[-1][0]).getchannel("A").getbbox() is None   # 最后一帧全透明
+
+
+def test_hook_filter_holds_bar_for_three_seconds():
+    g = explainer.layout_filter("hook", (1920, 1080), True)
+    assert g.endswith("[out]") and "enable='lt(t,3.0)'" in g and "fade=in:st=3.0" in g
+
+
+@needs_ffmpeg
+def test_render_hook_beat_cuts_every_second(stills_pool, tmp_path):
+    spec = ShotSpec(idx=0, duration=5.0, visual_zh="[hook] x", narration_zh="a", layout="hook",
+                    overlay=_hook_overlay(), chapter="开头", view="exterior")
+    dest, pieces = explainer.render_beat(spec, subject="测试车", size=(640, 360), out_dir=tmp_path,
+                                         chapters=[("开头", 5.0)], chapter_idx=0,
+                                         used={}, card_bg=None, recent=[], sting=None)
+    assert timeline.probe_safe(dest, default=0.0) == pytest.approx(5.0, abs=0.1)
+    assert len(pieces) >= 3                   # 前 3 秒至少三刀
+
+
+def test_hook_lint_flags_long_or_filler_first_sentence():
+    from app.pipeline import script_gen
+    long = [ScriptSegment(idx=0, section="开场", text="这是一句非常非常非常非常长的开场白根本读不完。")]
+    assert script_gen.hook_lint(long)
+    filler = [ScriptSegment(idx=0, section="开场", text="大家好,今天聊YU7。")]
+    assert script_gen.hook_lint(filler)
+    ok = [ScriptSegment(idx=0, section="开场", text="这价位竟然标配激光雷达。后面详细说。")]
+    assert script_gen.hook_lint(ok) == []
+
+
+# --------------------------------------------------------------------------
 # 概念动画:分镜核对与降级
 # --------------------------------------------------------------------------
 def _concept_beats(scene, rows, columns=None):
@@ -337,3 +414,36 @@ def test_scene_renders_with_hyperframes(scene, tmp_path, monkeypatch):
     data = motion.scene_data({"title": "测试", "rows": rows, "columns": ["A", "B"]}, "测试车")
     out = motion.render(scene, data, 2.0, (1920, 1080), tmp_path / f"{scene}.mp4")
     assert timeline.probe_safe(out, default=0.0) == pytest.approx(2.0, abs=0.1)
+
+
+def _filter_pool(tmp_path, monkeypatch, clean_len):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    lib = library.Library(subject="测试车")
+
+    def item(id_, start, length, **kw):
+        return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view="driving",
+                            target="yes", start=start, end=start + length, source="s", **kw)
+
+    lib.items = [item("clean", 0, clean_len), item("host", 100, 5, desc="博主出镜讲解车内空间"),
+                 item("wm", 200, 5, problem="text_overlay")]
+    lib.save()
+
+
+def test_fill_excludes_host_and_third_party_watermark_when_clean_pool_is_enough(tmp_path, monkeypatch):
+    _filter_pool(tmp_path, monkeypatch, clean_len=library.HARD_FILTER_MIN_SECONDS + 5)
+    ids = {p.item_id for p in library.fill("测试车", 20.0)}
+    assert ids == {"clean"}
+
+
+def test_fill_keeps_dirty_clips_as_fallback_when_clean_pool_is_small(tmp_path, monkeypatch):
+    _filter_pool(tmp_path, monkeypatch, clean_len=3)
+    ids = {p.item_id for p in library.fill("测试车", 12.0)}
+    assert ids & {"host", "wm"}
+
+
+def test_audio_graph_ducks_bgm_under_narration_without_amix_normalize():
+    g, label = render._build_audio_graph(True, True, 0.0)
+    assert "asplit=2[narr][narrsc]" in g and "sidechaincompress" in g
+    assert "normalize=0" in g and label == "[aout]"

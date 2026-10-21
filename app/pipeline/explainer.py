@@ -38,9 +38,12 @@ from . import cards, library, motion, narration, overlays
 from . import render as render_mod
 from .grounding import numbers_in
 
-LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept")
+LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook")
 #: 不需要任何数据就能成立的版式 —— 其它版式核对失败都退回它
 SAFE_LAYOUT = "broll"
+#: 黄金三秒:开场拍前几秒是快切 + 大字的冷开场,每刀多长、大字停多久
+HOOK_SECONDS = 3.0
+HOOK_CUT = 1.0
 #: 连续几拍整屏卡片就太像 PPT 了
 MAX_CARD_RUN = 2
 #: 概念动画全片最多几拍(每拍要渲染半分钟左右,也不该喧宾夺主)
@@ -73,6 +76,9 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
   rows 2–5 行。
 - highlight:宣传片缩成小窗 + 两行大字。旁白在强调一个卖点 / 关键配置 / 结论时用。给 `keywords`:
   1–2 行,每行 {kw} 字以内,是这一拍最想让观众记住的词(如 {keyword_examples})。
+- hook:**只有第 1 拍可选**(黄金三秒冷开场):前 3 秒快切 + 屏幕中央大字弹出。给 `keywords`
+  (1–2 行,每行 {kw} 字以内,是旁白第一句里最抓人的词),旁白第一句若围绕一个核心数字,
+  再给 `stat`(同下)。段落「可选版式」里有 hook 就优先用它。
 - card:整屏数据卡。段落标了「卡片」时优先用。给 `card`:
   {{"title": "卡片标题(12 字内)", "columns": [两个对比对象名,仅对比卡需要],
     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
@@ -242,6 +248,18 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         overlay, dropped = ground_stat(item.get("stat"), facts)
         if overlay is None:
             layout = SAFE_LAYOUT
+    elif layout == "hook":
+        lines = ground_keywords(item.get("keywords"), seg.text, facts)
+        stat = None
+        if item.get("stat"):
+            stat, dropped = ground_stat(item.get("stat"), facts)
+        if lines or stat:
+            overlay = {"kind": "hook", "lines": lines}
+            if stat:
+                overlay["stat"] = {"label": stat["label"], "value": stat["value"]}
+        else:
+            # 关键词和数字都核对不过:没有可弹的字,退回 broll
+            layout = SAFE_LAYOUT
     elif layout == "concept":
         raw = item.get("concept")
         scene = str(raw.get("scene") or "").strip() if isinstance(raw, dict) else ""
@@ -285,7 +303,10 @@ def enforce_rhythm(specs: list[ShotSpec]) -> list[ShotSpec]:
     run = 0
     prev = ""
     concepts = 0
-    for s in specs:
+    for pos, s in enumerate(specs):
+        if s.layout == "hook" and pos > 0:
+            s.layout, s.overlay = SAFE_LAYOUT, None
+            s.visual_zh = re.sub(r"^\[hook\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
         if s.layout in ("stat", "concept") and prev == s.layout:
             old = s.layout
             s.layout, s.overlay = SAFE_LAYOUT, None
@@ -362,7 +383,7 @@ def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
             errors.append(f"第 {s.idx} 拍没有旁白(时长由旁白决定,空拍无法定长)")
         if s.layout == "card" and not s.card:
             errors.append(f"第 {s.idx} 拍是 card 但没有卡片数据")
-        if s.layout in ("panel", "highlight", "stat", "concept") and not s.overlay:
+        if s.layout in ("panel", "highlight", "stat", "concept", "hook") and not s.overlay:
             errors.append(f"第 {s.idx} 拍是 {s.layout} 但没有叠加数据")
     return errors
 
@@ -577,6 +598,15 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
             f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
             f"[v1][txt]overlay=0:0[v2];[v2][1:v]overlay=0:0,format=yuv420p[out]"
         )
+    if layout == "hook" and has_layer:
+        # [2] 是大字弹出关键帧(播完透明);前 3 秒压暗托字、不放章节条,之后条再淡入
+        t = HOOK_SECONDS
+        return (
+            f"[0:v]eq=brightness=-0.14:enable='lt(t,{t})'[bgd];[2:v]format=rgba[txt];"
+            f"[bgd][txt]overlay=0:0:eof_action=pass[v1];"
+            f"[1:v]format=rgba,fade=in:st={t}:d=0.4:alpha=1[bar];"
+            f"[v1][bar]overlay=0:0,format=yuv420p[out]"
+        )
     if layout == "stat" and has_layer:
         # [2] 是逐帧滚动的数字(concat 关键帧),播完停在最后一帧
         return (
@@ -659,6 +689,44 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
     return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
 
 
+def hook_background(subject: str, seconds: float, size: tuple[int, int], work: Path,
+                    used: dict[str, int], recent: list[str], hint: str, seed: int
+                    ) -> tuple[Path, list[library.Piece]]:
+    """黄金三秒的背景:前几秒每 1 秒一刀硬切(不 xfade),之后接正常背景铺满这一拍。"""
+    n = 3 if seconds >= 3.5 else 2 if seconds >= 2.0 else 1
+    cuts: list[library.Piece] = []
+    for _ in range(n):
+        got = library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent)
+        if got:
+            cuts.append(replace(got[0], length=HOOK_CUT))
+    if not cuts:
+        raise render_mod.RenderError("开场没有可用素材")
+    head = HOOK_CUT * len(cuts)
+    rest = round(seconds - head, 3)
+    if rest < 0.2:  # 余下太短就并进最后一刀
+        cuts[-1] = replace(cuts[-1], length=round(seconds - HOOK_CUT * (len(cuts) - 1), 3))
+        rest = 0.0
+    work.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    prev = ""
+    for k, p in enumerate(cuts):
+        m = motion_for(p.item_id, seed + k, prev)
+        prev = m
+        parts.append(_piece_clip(p, work / f"cut_{k:02d}.mp4", size, m))
+    pieces = list(cuts)
+    if rest > 0:
+        more = library.fill(subject, rest, hint=hint, used=used, recent=recent)
+        parts.append(background_clip(more, rest, size, work / "rest", motion_seed=seed + 9))
+        pieces += more
+    dest = work / "hook_bg.mp4"
+    listing = render_mod.timeline_mod.concat_list_file(parts, work / "hook_parts.txt")
+    proc = _ff(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy",
+                "-t", f"{seconds:.3f}", str(dest)])
+    if proc.returncode != 0 or not dest.is_file():
+        raise render_mod.RenderError(f"开场背景拼接失败:{(proc.stderr or '')[-300:]}")
+    return dest, pieces
+
+
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,
                 chapters: Sequence[tuple[str, float]], chapter_idx: int,
                 used: dict[str, int], card_bg: Path | None,
@@ -676,7 +744,19 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     work.mkdir(parents=True, exist_ok=True)
 
     pieces: list[library.Piece] = []
-    if spec.layout == "card" and spec.card:
+    if spec.layout == "hook" and spec.overlay:
+        try:
+            base, pieces = hook_background(subject, seconds, size, work / "hook", used, recent,
+                                           spec.view, spec.idx)
+        except Exception:  # noqa: BLE001 - 冷开场做不出来:同一批关键词退回 highlight 版式
+            lines = spec.overlay.get("lines") or []
+            fallback = spec.model_copy(update={
+                "layout": "highlight" if lines else SAFE_LAYOUT,
+                "overlay": {"kind": "highlight", "lines": lines} if lines else None})
+            return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
+                               chapters=chapters, chapter_idx=chapter_idx, used=used,
+                               card_bg=card_bg, recent=recent, sting=sting)
+    elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
     elif spec.layout == "concept" and spec.overlay:
@@ -709,6 +789,11 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
         layer = overlays.panel(spec.overlay, subject, size, work / "layer.png")
     elif spec.layout == "highlight" and spec.overlay:
         layer = overlays.highlight(spec.overlay.get("lines") or [], size, work / "layer.png")
+    elif spec.layout == "hook" and spec.overlay:
+        frames = overlays.hook_frames(spec.overlay, subject, size, work / "hook_txt",
+                                      HOOK_SECONDS)
+        layer = _frames_listing(frames, work / "hook_txt.txt")
+        layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]
     elif spec.layout == "stat" and spec.overlay:
         layer = _stat_listing(spec.overlay, subject, size, work, seconds)
         layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]

@@ -41,6 +41,7 @@ themes:
       - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
       - 适用月龄、承重、尺寸这类数字只能取自事实,查不到就不写数字。
       - 结论段必须说清楚适合哪类家庭、不适合哪类家庭。
+      - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
     blocks:
       - {section: 开场, weight: 1, remainder: false}
       - {section: 定位与价格, weight: 2}
@@ -55,10 +56,10 @@ themes:
 # 版式说明见 auto_long.yaml。angle 只决定背景偏产品本身还是偏使用场景。
 sections:
   开场:
-    beat: 一句话抛出这款最值得聊的点或争议
+    beat: 第一句 18 字内直接抛出这款最反常识的结论、争议或最硬的一个事实(黄金三秒)
     chapter: 开头
     angle: product_hero
-    layouts: [highlight, broll]
+    layouts: [hook, highlight, broll]
   定位与价格:
     beat: 卖多少钱、对标谁、在品牌里是什么档位
     chapter: 定位价格

@@ -79,6 +79,9 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 6. `title`:8-16 字的视频标题,要有吸引力但不得夸大。
 {title_policy}
 7. 字数:全片约 {chars} 字,平均每镜约 {per_shot} 字。
+8. **黄金三秒**:第 1 段的第一句话必须在 18 字以内(约 3 秒读完),直接抛出一个反常识、
+   争议或最硬的一个结论/数字,让人想听下去。不许用"大家好""今天来聊聊""欢迎""这期视频"
+   这类开场白,不许先自我介绍或交代背景。
 
 可用事实清单(只能用这里的 ID,已标注层级):
 {facts}
@@ -248,6 +251,33 @@ _COMPETITOR_MARKERS = ("竞品", "对手", "友商", "同级", "其他品牌", "
 _DISPARAGING_TERMS = ("智商税", "劝退", "垃圾", "辣鸡", "韭菜", "坑爹")
 
 
+#: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.8 字/秒)与禁用的开场套话
+HOOK_MAX_CHARS = 18
+HOOK_FILLER = ("大家好", "今天来聊", "今天我们", "欢迎", "这期视频", "本期视频", "哈喽", "各位")
+
+
+def first_sentence(text: str) -> str:
+    """脚本的第一句(到第一个句末标点为止)。"""
+    return re.split(r"[。!?!?;;\n]", (text or "").strip(), maxsplit=1)[0].strip()
+
+
+def hook_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+    """开场第一句太长或是套话 → warning(提示重写,不硬拦)。"""
+    if not segments:
+        return []
+    first = first_sentence(segments[0].text)
+    issues: list[LintIssue] = []
+    if len(first) > HOOK_MAX_CHARS:
+        issues.append(LintIssue(segments[0].idx, "warning",
+                                f"开场第一句 {len(first)} 字,超过黄金三秒的 {HOOK_MAX_CHARS} 字:{first}"))
+    for term in HOOK_FILLER:
+        if term in first:
+            issues.append(LintIssue(segments[0].idx, "warning",
+                                    f"开场第一句是套话「{term}」,应直接抛钩子:{first}"))
+            break
+    return issues
+
+
 def compliance_lint(
     segments: Sequence[ScriptSegment],
     profile: CategoryProfile,
@@ -338,6 +368,7 @@ def compliance_lint(
                     )
                     break
 
+    issues.extend(hook_lint(segments))
     return issues
 
 

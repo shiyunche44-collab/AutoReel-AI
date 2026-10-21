@@ -447,6 +447,11 @@ def extract_cover_frame(video_path: str | Path, dest: str | Path, at: float = 1.
     return dest if proc.returncode == 0 and dest.is_file() else None
 
 
+#: 封面抽帧时刻:开场前 3 秒是冷开场的大字(黄金三秒),取它之后的干净画面,
+#: 免得封面标题和视频里的大字叠在一起
+COVER_AT = 3.6
+
+
 def make_cover(video_path: str | Path, title: str, dest: str | Path,
                subtitle: str = "", size: tuple[int, int] | None = None) -> Path | None:
     """抽帧 + Pillow 合成带标题的封面(默认竖屏,`size` 给横屏尺寸)。"""
@@ -454,7 +459,9 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
 
     dest = Path(dest)
     raw = dest.parent / "_cover_raw.jpg"
-    if not extract_cover_frame(video_path, raw, at=1.0):
+    total = probe_safe(video_path, default=0.0)
+    at = min(COVER_AT, total / 2) if total > 0 else 1.0
+    if not extract_cover_frame(video_path, raw, at=at):
         return None
     try:
         image = Image.open(raw).convert("RGB")

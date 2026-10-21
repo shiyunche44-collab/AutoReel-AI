@@ -279,3 +279,72 @@ def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | P
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest)
     return dest
+
+
+# --------------------------------------------------------------------------
+# 黄金三秒:开场大字(0 秒起弹出,无淡入;停留后快速淡出)
+# --------------------------------------------------------------------------
+HOOK_POP_STEPS = 5
+HOOK_POP_SECONDS = 0.2
+HOOK_FADE_STEPS = 3
+HOOK_FADE_SECONDS = 0.3
+#: 弹出起始放大倍数,缩回 1.0 时停稳
+HOOK_POP_FROM = 1.35
+
+
+def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path,
+              scale: float = 1.0, alpha: float = 1.0) -> Path:
+    """开场大字。有 `stat` 时:上面小字标签、中央大数字,关键词压在下面;
+    没有就只有一两行关键词居中。数字取原文,不滚动(三秒里没有时间滚)。"""
+    w, h = size
+    img, d = _canvas(size)
+    max_w = int(w * 0.86)
+    lines = [str(x).strip() for x in overlay.get("lines") or [] if str(x).strip()][:2]
+    stat_ = overlay.get("stat") if isinstance(overlay.get("stat"), dict) else None
+    edge = (0, 0, 0, 255)
+    if stat_:
+        label = str(stat_.get("label") or "")
+        tag, tf = _fit(d, f"{subject} · {label}" if subject else label,
+                       int(54 * scale), max_w, bold=True)
+        d.text((w // 2, int(h * 0.24)), tag, font=tf, fill=_TEXT, anchor="mm",
+               stroke_width=4, stroke_fill=edge)
+        num, nf = _fit(d, str(stat_.get("value") or ""), int(230 * scale), max_w, bold=True)
+        d.text((w // 2, int(h * 0.42)), num, font=nf, fill=_ACCENT, anchor="mm",
+               stroke_width=11, stroke_fill=edge)
+        y, sizes = int(h * 0.60), (96, 84)
+    else:
+        y, sizes = int(h * (0.34 if len(lines) > 1 else 0.40)), (150, 124)
+    for n, text in enumerate(lines):
+        px = int(sizes[n] * scale)
+        t, f = _fit(d, text, px, max_w, bold=True)
+        d.text((w // 2, y), t, font=f, fill=_TEXT if n == 0 else _ACCENT, anchor="mt",
+               stroke_width=max(4, px // 12), stroke_fill=edge)
+        y += int(px * 1.2)
+    if alpha < 1:
+        a = img.getchannel("A").point(lambda v: int(v * max(0.0, alpha)))
+        img.putalpha(a)
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    img.save(dest)
+    return dest
+
+
+def hook_frames(overlay: dict[str, Any], subject: str, size: tuple[int, int],
+                out_dir: str | Path, total: float = 3.0) -> list[tuple[Path, float]]:
+    """开场大字关键帧:[(透明 PNG, 停留秒数)],总长 = `total`。
+    弹出(1.35×→1.0×)→ 停留 → 淡出,最后一帧全透明。"""
+    from .cards import ease_out
+
+    out_dir = Path(out_dir)
+    frames: list[tuple[Path, float]] = []
+    step = HOOK_POP_SECONDS / HOOK_POP_STEPS
+    for k in range(HOOK_POP_STEPS):
+        s = HOOK_POP_FROM - (HOOK_POP_FROM - 1.0) * ease_out((k + 1) / HOOK_POP_STEPS)
+        frames.append((hook_text(overlay, subject, size, out_dir / f"hook_p{k:02d}.png", s), step))
+    hold = max(0.2, total - HOOK_POP_SECONDS - HOOK_FADE_SECONDS)
+    frames[-1] = (frames[-1][0], hold)
+    fstep = HOOK_FADE_SECONDS / HOOK_FADE_STEPS
+    for k in range(1, HOOK_FADE_STEPS + 1):
+        frames.append((hook_text(overlay, subject, size, out_dir / f"hook_f{k:02d}.png",
+                                 1.0, 1 - k / HOOK_FADE_STEPS), fstep))
+    return frames
