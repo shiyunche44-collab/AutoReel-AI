@@ -375,3 +375,12 @@ def test_script_prompt_has_the_three_part_opening_and_the_ending():
     assert "开头三段式" in text
     assert "先给冲突" in text
     assert "结尾要给**行动**" in text
+
+
+def test_portrait_beats_are_shorter():
+    seg = ScriptSegment(idx=0, section="三电性能",
+                        text="电池容量是一百零一点七度,CLTC续航八百三十五公里,快充十五分钟能补六百二十公里。")
+    wide = script_gen.split_segments([seg])
+    tall = script_gen.split_segments([seg], script_gen.PORTRAIT_SHOOT_CHARS_MAX)
+    assert all(len(s.text) <= script_gen.PORTRAIT_SHOOT_CHARS_MAX for s in tall)
+    assert len(tall) >= len(wide)

@@ -250,6 +250,19 @@ def _angle_policy(angle: str) -> str:
     )
 
 
+def _portrait_policy(portrait: bool) -> str:
+    """竖屏短视频的额外规则。横屏返回空串,SYSTEM 渲染结果与旧版逐字一致。"""
+    if not portrait:
+        return ""
+    return (
+        "\n- **竖屏短视频**:观众是在手机上刷到的,划走只要一秒。\n"
+        "   - 第 1 段第一句就抛出冲突或结论(价格、反差、一个最硬的数字),不铺垫、不寒暄。\n"
+        "   - 每段只讲一件事,句子更短;能用一个数字说清的不用一句形容词。\n"
+        "   - 不讲「下面我们来看」「接下来聊聊」这类过渡句,直接进内容。\n"
+        "   - title 要能在手机上一眼看完:18 字以内,可以用冒号分成两半(画面上会拆成两行)。"
+    )
+
+
 def generate(
     *,
     subject: str,
@@ -262,11 +275,13 @@ def generate(
     angle: str = "",
     slots: Sequence[Slot] | None = None,
     subjects: Sequence[dict[str, str]] | None = None,
+    portrait: bool = False,
 ) -> tuple[list[ScriptSegment], str, str]:
     """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
     `angle`:选题角度(热点选题)。为空时 prompt 与无角度版本逐字一致。
     `slots` / `subjects`:多车横评的段落位(段落 + 车名)与车单。不传时 prompt 与单车版逐字一致。
+    `portrait`:竖屏项目多一组短视频规则;横屏时 prompt 与旧版逐字一致。
     """
     roundup = bool(subjects)
     angle = (angle or "").strip()
@@ -332,7 +347,7 @@ def generate(
             theme_rules=_theme_rules(theme, facts),
             scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
-            angle_policy=_angle_policy(angle),
+            angle_policy=_angle_policy(angle) + _portrait_policy(portrait),
             subject=subject,
         ),
         user,
@@ -865,6 +880,8 @@ def normalize_segments(
 #: (`explainer.build_beats` 一段一版式)。拍太长,这一拍里就只剩一张画面撑着 ——
 #: 实测成片 24 拍平均 8 秒一拍,后半程好几拍是同一张参数面板杵着不走。
 SHOOT_CHARS_MAX = 28
+#: 竖屏一拍的字数上限:约 4–5 秒换一次画面(竖屏刷得更快)
+PORTRAIT_SHOOT_CHARS_MAX = 22
 #: 拆出来的碎块太短就别单独成拍(2 个字的一拍纯属浪费画面)
 MIN_PART_CHARS = 8
 #: 句子边界(标点跟着前一句)

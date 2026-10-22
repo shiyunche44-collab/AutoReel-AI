@@ -373,6 +373,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     if state == State.FACTS_RESOLVED:
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
+        portrait = aspect.is_portrait(project)
         facts = _facts(project_id)
         slots = profile.drop_unbacked_slots(
             profile.slots_for(project["duration"], theme.name, names or None),
@@ -383,12 +384,14 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             segments, title, thesis = script_gen.generate(
                 subject=subject, profile=profile, facts=facts, plan=plan,
                 duration=project["duration"], llm=llm, theme=theme, angle=angle,
+                portrait=portrait,
                 **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
             )
         segments = script_gen.normalize_segments(segments, slots)
-        # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次)。
+        # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次;竖屏 4–5 秒)。
         # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
-        segments = script_gen.split_segments(segments)
+        segments = script_gen.split_segments(
+            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
         segments = script_gen.ensure_disclaimers(segments, profile)
         issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
         blocking = [i for i in issues if i.is_error]
