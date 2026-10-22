@@ -38,6 +38,7 @@ import argparse
 import functools
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -54,6 +55,24 @@ from ..providers import images, official, platform_video
 from . import vision_verdict
 
 LIB_ROOT_NAME = "library"
+
+#: 池文件写入锁:按车型一把。
+#:
+#: 素材池是**跨项目共享**的 —— 同一台车的两个项目各起一个后台构建线程,
+#: 各自 load 一份旧副本、各自 save,后写的覆盖先写的,先写线程刚打上的
+#: 标签就没了。写盘前按车型串行化。
+_save_locks: dict[str, threading.Lock] = {}
+_save_locks_guard = threading.Lock()
+
+
+def _save_lock(subject: str) -> threading.Lock:
+    """取某个车型的池写锁。"""
+    with _save_locks_guard:
+        lock = _save_locks.get(subject)
+        if lock is None:
+            lock = threading.Lock()
+            _save_locks[subject] = lock
+        return lock
 
 
 def profile_of(lib: "Library") -> CategoryProfile:
@@ -215,25 +234,36 @@ class Library:
 
     def save(self) -> None:
         """写盘。后台构建拿着的是旧副本,期间用命令行 `add` 加的链接
-        会被它覆盖掉 —— 所以写之前把盘上多出来的源并进来。"""
-        self.dir.mkdir(parents=True, exist_ok=True)
-        on_disk = Library.load(self.subject)
-        mine = {s.url for s in self.sources}
-        self.sources += [s for s in on_disk.sources if s.url not in mine]
-        self.updated_at = time.time()
-        payload = {
-            "subject": self.subject,
-            "discovered_at": self.discovered_at,
-            "gallery_at": self.gallery_at,
-            "updated_at": self.updated_at,
-            "category": self.category or on_disk.category,
-            "vlm_calls": self.vlm_calls,
-            "sources": [asdict(s) for s in self.sources],
-            "items": [asdict(i) for i in self.items],
-        }
-        tmp = self.dir / "library.json.tmp"
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.dir / "library.json")
+        会被它覆盖掉 —— 所以写之前把盘上多出来的源并进来。
+
+        写盘按**车型串行**:池是跨项目共享的,同一台车的两个项目各起一个
+        后台构建线程时,谁后写谁覆盖,先写线程刚打上的标签就没了。
+        """
+        with _save_lock(self.subject):
+            self.dir.mkdir(parents=True, exist_ok=True)
+            on_disk = Library.load(self.subject)
+            mine = {s.url for s in self.sources}
+            self.sources += [s for s in on_disk.sources if s.url not in mine]
+            self.updated_at = time.time()
+            payload = {
+                "subject": self.subject,
+                "discovered_at": self.discovered_at,
+                "gallery_at": self.gallery_at,
+                "updated_at": self.updated_at,
+                "category": self.category or on_disk.category,
+                "vlm_calls": self.vlm_calls,
+                "sources": [asdict(s) for s in self.sources],
+                "items": [asdict(i) for i in self.items],
+            }
+            tmp = self.dir / "library.json.tmp"
+            # 原子替换:读者要么看到旧内容,要么看到新内容,不会看到半截。
+            # 池文件被截断的话,`Library.load` 会静默返回一个空池 ——
+            # 整台车的素材标签就这么没了,而且查不出来。
+            with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False, indent=1))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.dir / "library.json")
 
     # ---- 增改 ----
     def add_source(self, src: Source) -> bool:

@@ -10,6 +10,8 @@ WAL 模式 + 每次调用独立连接,适配 FastAPI 的线程池。
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 import threading
 import time
@@ -18,6 +20,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 _SCHEMA_LOCK = threading.Lock()
 _INITIALISED = False
@@ -151,7 +155,15 @@ CREATE INDEX IF NOT EXISTS idx_metric_pub ON metric_snapshots(publication_id);
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    """打开一个带 WAL 的连接,退出时自动提交/回滚。"""
+    """打开一个带 WAL 的连接,退出时关闭。
+
+    ⚠️ **这个上下文管理器不提供事务**。连接是 autocommit
+    (`isolation_level=None`),所以 `with connect() as conn:` 那个 with 块
+    只是"用完关连接",并不会开启事务 —— 多语句操作在崩溃时会只落一半。
+
+    要原子性(比如"改状态 + 记事件"必须同时成功或同时失败)就用
+    `transaction()`。
+    """
     config.ensure_dirs()
     conn = sqlite3.connect(config.DATA_DIR / "aimovice.db", timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
@@ -160,6 +172,38 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=30000")
         yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """显式事务:块里的语句要么全成,要么全不成。
+
+    为什么需要它:`job_events` 是本项目**唯一的排障依据**(状态卡住了,
+    靠事件流回放卡在哪一步)。但事件与状态是两条独立语句、两次独立
+    连接,进程在中间被杀就会留下"状态变了但没事件"或"有事件但状态
+    没变"的裂缝 —— 排障时看到的就是一段自相矛盾的记录。
+
+    `BEGIN IMMEDIATE` 立刻拿写锁,避免两个写事务先读后写升级锁时死锁。
+    """
+    config.ensure_dirs()
+    conn = sqlite3.connect(config.DATA_DIR / "aimovice.db", timeout=30, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:  # pragma: no cover - 回滚本身失败时别盖掉原异常
+                pass
+            raise
+        conn.execute("COMMIT")
     finally:
         conn.close()
 
@@ -211,12 +255,70 @@ def _json_path(project_id: str, name: str) -> Path:
     return config.project_dir(project_id) / name
 
 
+#: `os.replace` 在目标正被别的进程打开时会失败(Windows 的共享冲突)。
+#: 读方(read_json / 页面预览)随时可能正开着这个文件,重试几次即可。
+_REPLACE_RETRIES = 6
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """把一段文本原子地写到 path。
+
+    做法:写同目录下的临时文件 → flush → fsync → os.replace 覆盖。
+    `os.replace` 在同卷上是原子替换(Windows 亦然),所以读者要么看到
+    旧内容,要么看到新内容,**不会看到半截**。
+
+    为什么必须这样:直接 `path.write_text` 写到一半被kill会留下截断的
+    文件。README 自己就写了"托管后台任务有 1 小时上限会把服务收走" ——
+    写到一半被杀不是假设,是常态。而 `read_json` 对损坏文件是**静默**
+    返回默认值的,于是半截的 script.json 会被当成"文件不存在",
+    流水线重新生成一份,用户在门禁 A 手改的稿就这么没了。
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == _REPLACE_RETRIES - 1:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        # 理论上到不了这里
+        os.replace(tmp, path)
+    except BaseException:
+        # 失败就把临时文件清掉,别在项目目录里留垃圾
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def write_json(project_id: str, name: str, payload: Any) -> Path:
     path = _json_path(project_id, name)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
     return path
+
+
+def _quarantine_corrupt(path: Path, exc: Exception) -> None:
+    """损坏的 JSON 另存一份,不当作"文件不存在"。
+
+    静默返回默认值是最坏的处理方式:流水线以为文件没了,重新生成,
+    用户手改的稿被覆盖,而且**事后完全查不出发生过什么**。
+    改名保留(而不是删除)是为了留证据。
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"{path.name}.corrupt-{stamp}")
+    try:
+        os.replace(path, backup)
+    except OSError:
+        return
+    log.warning("JSON 损坏,已另存为 %s:%s", backup.name, exc)
 
 
 def read_json(project_id: str, name: str, default: Any = None) -> Any:
@@ -225,28 +327,39 @@ def read_json(project_id: str, name: str, default: Any = None) -> Any:
         return default
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError as exc:
+        _quarantine_corrupt(path, exc)
+        return default
+    except OSError:
         return default
 
 
 # --------------------------------------------------------------------------
 # 项目
 # --------------------------------------------------------------------------
-def create_project(row: dict[str, Any]) -> None:
+def create_project(row: dict[str, Any], conn: sqlite3.Connection | None = None) -> None:
+    """插入项目行。
+
+    `conn` 不为空时用调用方给的连接(通常来自 `transaction()`),
+    这样"插项目 + 记事件"可以是一个原子单元。
+    """
     init_db()
     row = {"angle": "", **row}
     subjects = row.get("subjects") or []
     row["subjects"] = subjects if isinstance(subjects, str) else json.dumps(subjects, ensure_ascii=False)
-    with connect() as conn:
-        conn.execute(
-            """INSERT INTO projects
-               (id, title, subject, category, theme, angle, subjects, duration, shot_count, narration_mode,
-                state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
-               VALUES (:id, :title, :subject, :category, :theme, :angle, :subjects, :duration, :shot_count, :narration_mode,
-                       :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
-                       :created_at, :updated_at)""",
-            row,
-        )
+    sql = (
+        """INSERT INTO projects
+           (id, title, subject, category, theme, angle, subjects, duration, shot_count, narration_mode,
+            state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
+           VALUES (:id, :title, :subject, :category, :theme, :angle, :subjects, :duration, :shot_count, :narration_mode,
+                   :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
+                   :created_at, :updated_at)"""
+    )
+    if conn is not None:
+        conn.execute(sql, row)
+        return
+    with connect() as own:
+        own.execute(sql, row)
 
 
 def get_project(project_id: str) -> dict[str, Any] | None:
@@ -280,17 +393,67 @@ def project_subjects(row: dict[str, Any] | None) -> list[dict[str, str]]:
     return out
 
 
-def update_project(project_id: str, **fields: Any) -> None:
+#: `projects` 表里允许 `update_project` 改的列。
+#:
+#: 之前 SET 子句是用 f-string 直接拼 kwargs 的键。当前所有调用点的键都
+#: 是内部字面量,**没有注入面**;但这是一张等着被人顺手塞进用户输入
+#: 的表 —— 白名单把这条路堵死,代价只是一份常量。
+_PROJECT_COLUMNS = frozenset({
+    "title", "subject", "category", "theme", "angle", "thesis", "subjects",
+    "duration", "shot_count", "narration_mode", "state", "state_reason",
+    "quota_budget", "spent_cost", "est_cost", "created_at", "updated_at",
+})
+
+
+def update_project(project_id: str, *, conn: sqlite3.Connection | None = None,
+                   **fields: Any) -> None:
+    """改项目行。`conn` 不为空时用调用方给的连接(见 `transaction()`)。"""
     if not fields:
         return
     init_db()
+    unknown = set(fields) - _PROJECT_COLUMNS
+    if unknown:
+        raise ValueError(f"未知列:{'、'.join(sorted(unknown))}")
     fields["updated_at"] = time.time()
     assignments = ", ".join(f"{k} = :{k}" for k in fields)
-    with connect() as conn:
-        conn.execute(
-            f"UPDATE projects SET {assignments} WHERE id = :id",
-            {"id": project_id, **fields},
-        )
+    sql = f"UPDATE projects SET {assignments} WHERE id = :id"
+    args = {"id": project_id, **fields}
+    if conn is not None:
+        conn.execute(sql, args)
+        return
+    with connect() as own:
+        own.execute(sql, args)
+
+
+def cas_state(project_id: str, expected: str, new: str, *,
+              conn: sqlite3.Connection | None = None,
+              reason: str | None = None) -> bool:
+    """状态机的 CAS 写:只有当前状态还是 `expected` 时才改成 `new`。
+
+    返回 True = 改成了;False = 状态已经被别人推进了,调用方应当放弃
+    本轮并重读状态。
+
+    为什么需要:原来的 `_set_state` 是"读出来 → 判断转移合法 → 无条件
+    UPDATE",中间有个 TOCTOU 窗口。两个执行流(后台调度器 + 用户手动
+    推进)都读到 DRAFT_RENDERING 时,会各自开渲同一批拍,写同一个文件。
+    把"判断"和"写"合成一条 SQL 就没有这个窗口了。
+    """
+    init_db()
+    now = time.time()
+    if reason is None:
+        sql = ("UPDATE projects SET state = :new, updated_at = :now "
+               "WHERE id = :id AND state = :expected")
+    else:
+        sql = ("UPDATE projects SET state = :new, state_reason = :reason, updated_at = :now "
+               "WHERE id = :id AND state = :expected")
+    args = {"id": project_id, "expected": expected, "new": new,
+            "reason": reason, "now": now}
+    if conn is not None:
+        cur = conn.execute(sql, args)
+        return cur.rowcount > 0
+    with connect() as own:
+        cur = own.execute(sql, args)
+        return cur.rowcount > 0
 
 
 # --------------------------------------------------------------------------
@@ -408,14 +571,25 @@ def claim_pending_shots(project_id: str, stage: str, limit: int) -> list[dict[st
 # 事件
 # --------------------------------------------------------------------------
 def add_event(project_id: str, dst: str, src: str | None = None,
-              reason: str = "", cost: float = 0.0) -> None:
+              reason: str = "", cost: float = 0.0,
+              conn: sqlite3.Connection | None = None) -> None:
+    """记一条事件。
+
+    `conn` 不为空时用调用方给的连接(通常来自 `transaction()`),
+    让"改状态 + 记事件"成为一个原子单元 —— 事件流是本项目唯一的
+    排障依据,状态与事件不一致的裂缝比没有事件更误导人。
+    """
     init_db()
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO job_events (project_id, created_at, src, dst, reason, cost)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (project_id, time.time(), src, dst, reason, cost),
-        )
+    sql = (
+        "INSERT INTO job_events (project_id, created_at, src, dst, reason, cost)"
+        " VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    args = (project_id, time.time(), src, dst, reason, cost)
+    if conn is not None:
+        conn.execute(sql, args)
+        return
+    with connect() as own:
+        own.execute(sql, args)
 
 
 def get_events(project_id: str, limit: int = 200) -> list[dict[str, Any]]:
