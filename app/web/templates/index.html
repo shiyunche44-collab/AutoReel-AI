@@ -28,6 +28,26 @@
 </details>
 {% endif %}
 
+{# 需要人处理的项目(配额暂停 / 失败)顶在最上面 —— 可靠性的一条底线是
+   "失败要可见":卡住的项目不该要人自己去列表里翻。 #}
+{% if attention %}
+<details class="callout tone-warning" open>
+  <summary class="row-between">
+    <span class="row">{{ m.icon("alert-triangle") }}<strong>{{ attention | length }} 个项目需要处理</strong></span>
+    <span class="subtle small">展开 / 收起</span>
+  </summary>
+  <ul>
+    {% for p in attention %}
+    <li>
+      <a href="/project/{{ p.id }}">{{ p.title }}</a>
+      {{ m.state_badge(p.state) }}
+      {% if p.state_reason %}<span class="subtle">· {{ p.state_reason }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+
 <section class="studio" id="create">
   <div class="studio-head">
     <span class="eyebrow">{{ m.icon("sparkles", "i-sm") }}AI 解说视频 · 事实可溯源</span>

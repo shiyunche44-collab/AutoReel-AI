@@ -230,6 +230,9 @@ class ProjectSummary(BaseModel):
     duration: int
     shot_count: int
     state: str
+    #: 停在这个状态的原因(配额暂停 / 失败时写明卡在哪)。列表页要显示它 ——
+    #: 只说"失败了"不说是为什么,等于让人自己去看日志。
+    state_reason: str = ""
     est_cost: float
     spent_cost: float
     quota_budget: float

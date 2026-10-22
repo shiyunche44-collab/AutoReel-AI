@@ -231,6 +231,18 @@ def _unwrap(tool: str, result: Any) -> Any:
     """归一化 Connector 的响应信封。
 
     观察到的形态:`{"code":0,"message":"ok", ...payload}`,payload 与 code 同级。
+
+    **返回形状的约定**(调用方必须两种都兼容):
+
+    - 有 ``code`` 且非 0/200 → 抛 `ConnectorError`;
+    - payload 为空 → 返回整个响应;
+    - payload 恰好**只有一个键**、且它的值是**非空 list** → 直接返回那个 list;
+    - 其余情况 → 返回 payload 字典。
+
+    最后那条是"形状嗅探":它让某些工具的调用方少写一层取值。但也意味着
+    同一个工具可能这次给 list、下次给 dict —— **调用方不能只按一种形状
+    写**。`audio._extract_success_items` 与 `images` 的取图逻辑都同时
+    兼容两种形状,新增调用方时照做。
     """
     if isinstance(result, dict) and "code" in result:
         code = result.get("code")
