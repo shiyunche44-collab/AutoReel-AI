@@ -722,3 +722,13 @@
 .chart-dot { fill: var(--brand); }
 .chart-label { fill: var(--text-3); font-size: 10.5px; font-family: var(--font); }
 .chart-empty { fill: var(--text-3); font-size: 13px; font-family: var(--font); }
+
+/* ---------------------------------------------------------------------------
+   竖屏项目(9:16):预览框跟着成片画幅走。缩略图限高居中,不撑爆网格
+--------------------------------------------------------------------------- */
+.pcard-thumb.is-portrait img { object-position: center 40%; }
+.is-portrait .shot-media,
+.is-portrait .insp-thumb { aspect-ratio: 9 / 16; max-height: 420px; margin-inline: auto; }
+.is-portrait .lb-media { aspect-ratio: 9 / 16; max-height: 78vh; }
+.is-portrait .output-video { aspect-ratio: 9 / 16; width: auto; max-width: 100%; height: min(78vh, 760px); margin-inline: auto; }
+.is-portrait .asset-media { aspect-ratio: 9 / 16; max-height: 360px; }

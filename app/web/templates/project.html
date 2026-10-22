@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% import "_macros.html" as m %}
 {% block title %}{{ p.title }} · aimovice{% endblock %}
-{% block body_class %}page-project{% endblock %}
+{% block body_class %}page-project{% if p.aspect == "9:16" %} is-portrait{% endif %}{% endblock %}
 
 {% set active_nav = 'projects' %}
 

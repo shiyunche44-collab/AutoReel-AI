@@ -156,7 +156,7 @@
       <li><span class="flow-dot is-gate">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 A</strong><span>审脚本与分镜</span></div></li>
       <li><span class="flow-dot">{{ m.icon("film", "i-sm") }}</span><div><strong>逐拍渲染</strong><span>旁白定时长 · 本地合成</span></div></li>
       <li><span class="flow-dot is-gate">{{ m.icon("flag", "i-sm") }}</span><div><strong>确认 B</strong><span>整片审片</span></div></li>
-      <li><span class="flow-dot is-done">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>1920×1080 输出</span></div></li>
+      <li><span class="flow-dot is-done">{{ m.icon("check", "i-sm") }}</span><div><strong>成片</strong><span>横版 1920×1080 / 竖版 1080×1920</span></div></li>
     </ol>
   </div>
 </section>
@@ -226,13 +226,13 @@
              data-search="{{ (p.title ~ ' ' ~ p.subject) | lower }}"
              data-updated="{{ p.updated_at }}" data-created="{{ p.created_at }}" data-cost="{{ p.spent_cost }}">
       <a class="pcard-link" href="/project/{{ p.id }}" aria-label="打开 {{ p.title }}"></a>
-      <div class="pcard-thumb">
+      <div class="pcard-thumb{% if p.aspect == '9:16' %} is-portrait{% endif %}">
         <span class="pcard-ph">{{ m.icon("film", "i-lg") }}</span>
         {% if p.has_output %}
         <img src="/api/projects/{{ p.id }}/cover" alt="" loading="lazy" onerror="this.remove()">
         {% endif %}
         <span class="pcard-state">{{ m.state_badge(p.state) }}</span>
-        <span class="pcard-dur num">{{ '%d:%02d' % (p.duration // 60, p.duration % 60) }}</span>
+        <span class="pcard-dur num">{% if p.aspect == '9:16' %}竖屏 · {% endif %}{{ '%d:%02d' % (p.duration // 60, p.duration % 60) }}</span>
         <div class="pcard-steps" title="流水线进度">
           {%- set st = meta.step -%}
           {% for s in m.STEPS %}
