@@ -154,7 +154,13 @@ def create_project(payload: ProjectCreate) -> str:
         theme_name = profile.default_theme
 
     theme = profile.theme_spec(theme_name)
-    subjects = roundup_subjects(payload, theme) if theme.roundup else []
+    if payload.duration not in profile.theme_durations(theme, project_aspect):
+        raise PipelineError(
+            f"「{theme.label}」最长 {theme.max_duration}s,可选:"
+            f"{list(profile.theme_durations(theme, project_aspect))}")
+    if theme.requires_angle and not (payload.angle or "").strip():
+        raise PipelineError(f"「{theme.label}」要先填选题角度:这期只讲的那一个点")
+    subjects = roundup_subjects(payload, theme) if theme.multi else []
 
     # 时长能否铺展出正确长度的段落序列,在这里就验掉,
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
@@ -182,7 +188,7 @@ def create_project(payload: ProjectCreate) -> str:
     # 横屏解说轨不调视频生成,只有 TTS、BGM 与几次 LLM
     est = costs.estimate_explainer(payload.duration)["with_retry"]
     now = time.time()
-    title = payload.title or (payload.subject if theme.roundup else f"{payload.subject} 解说视频")
+    title = payload.title or (payload.subject if theme.multi else f"{payload.subject} 解说视频")
 
     db.create_project(
         {
@@ -207,11 +213,13 @@ def create_project(payload: ProjectCreate) -> str:
         }
     )
     angle = (payload.angle or "").strip()
-    if angle and (payload.angle_search or payload.angle_evidence):
+    hook = (payload.hook or "").strip()
+    if (angle and (payload.angle_search or payload.angle_evidence)) or hook:
         db.write_json(project_id, "topic.json", {
             "angle": angle,
             "search": (payload.angle_search or "").strip(),
             "evidence": [str(e)[:300] for e in payload.angle_evidence or []],
+            **({"hook": hook} if hook else {}),
         })
     db.add_event(
         project_id, str(State.DRAFT_INTENT),
@@ -333,7 +341,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     subject = project["subject"]
     angle = (project.get("angle") or "").strip()
     #: 横评车单;单车项目为空
-    subjects = db.project_subjects(project) if theme.roundup else []
+    subjects = db.project_subjects(project) if theme.multi else []
     names = [s["name"] for s in subjects]
 
     if state in (State.GATE_A, State.GATE_B) and not confirmed:
@@ -349,7 +357,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         topic = db.read_json(project_id, "topic.json", {}) or {}
         # 配额:事实抽取要调 LLM 与检索接口,调用前先预留额度
         with costs.project_spend(project_id, costs.stage_reserve("facts")):
-            if theme.roundup:
+            if theme.multi:
                 facts, report = intake.run_roundup(project_id, profile, subjects,
                                                    theme=theme.name, angle=angle,
                                                    angle_search=topic.get("search", ""),
@@ -380,13 +388,14 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait),
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
+        topic = db.read_json(project_id, "topic.json", {}) or {}
         # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
         with costs.project_spend(project_id, costs.stage_reserve("script")):
             segments, title, thesis = script_gen.generate(
                 subject=subject, profile=profile, facts=facts, plan=plan,
                 duration=project["duration"], llm=llm, theme=theme, angle=angle,
-                portrait=portrait,
-                **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
+                portrait=portrait, hook=str(topic.get("hook") or ""),
+                **({"slots": slots, "subjects": subjects} if theme.multi else {}),
             )
         segments = script_gen.normalize_segments(segments, slots)
         # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次;竖屏 4–5 秒)。
@@ -681,6 +690,14 @@ def update_script(project_id: str, segments: list[ScriptSegment],
             raise PipelineError("项目不存在")
         if State(project["state"]) not in (State.GATE_A, State.STORYBOARD_READY):
             raise PipelineError("只有门禁 A 阶段可以修改脚本")
+        # 编辑器只回传段落名 / 正文 / 引用:车名(横评)和章节标题(问答、争议)按段号从旧稿补回,
+        # 否则保存一次脚本,跨车引用的检查和章节条上的问题就都没了
+        old = _script(project_id)
+        for seg in segments:
+            prev = old[seg.idx] if 0 <= seg.idx < len(old) else None
+            if prev is not None and prev.section == seg.section:
+                seg.subject = seg.subject or prev.subject
+                seg.heading = seg.heading or prev.heading
         # 先同步再落盘:同步不过(段落数对不上、大字全废)就别改坏现有状态
         _sync_storyboard(project_id, segments)
         _save_script(project_id, segments)
@@ -739,7 +756,7 @@ _STYLE_FREE = (State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, Sta
 def project_names(project: dict[str, Any]) -> tuple[str, list[str]]:
     """(主车, 横评车单)。单车项目车单为空。"""
     _, theme = _theme_of(project)
-    subjects = db.project_subjects(project) if theme.roundup else []
+    subjects = db.project_subjects(project) if theme.multi else []
     return project["subject"], [s["name"] for s in subjects]
 
 

@@ -217,6 +217,26 @@ QUALITY_RULE = """
     (e.g. "2024 年 3 月,该品牌一款婴儿推车因折叠锁扣缺陷被召回"). Set topic to "quality".
     If the registry returned nothing relevant, output NO fact for it — never write "no recall records"."""
 
+#: 争议类事实的主题标签。槽点争议片型的「争议」段只从这类事实里找争议
+CONTROVERSY_TOPIC = "争议"
+
+#: 材料里有争议检索(槽点争议片型)时追加的抽取规则
+CONTROVERSY_RULE = """
+15. Some material is about public controversy over the subject (doubts, owner complaints, the maker's
+    response). Keep each controversy as its own fact: WHO raises it (media / owners / a named outlet),
+    WHAT exactly is claimed, and any number or official response the material gives
+    (e.g. "有车主反映冬季续航只有 CLTC 标称的六成,官方回应称低温下属正常衰减"). Set topic to "争议".
+    Only keep controversies the material actually reports; never turn a rumor into a fact about the
+    product, and keep the attribution ("有车主反映""媒体质疑") in the claim."""
+
+#: 争议检索词里的标志词(见 providers.facts.ifind_controversy_news):材料的检索词带它就是争议材料
+CONTROVERSY_MARKERS = ("争议", "槽点", "投诉", "吐槽")
+
+
+def has_controversy(source_docs: Sequence[dict[str, Any]] | None) -> bool:
+    return any(any(m in str(d.get("query", "")) for m in CONTROVERSY_MARKERS) for d in source_docs or [])
+
+
 EXTRACT_USER = """Product subject: {subject}
 Category: {category}
 Today: {today}
@@ -282,6 +302,8 @@ def extract_facts(
                                    subject=subject)
     if any(d.get("tool") in facts_provider.QUALITY_TOOLS for d in source_docs or []):
         system += QUALITY_RULE
+    if has_controversy(source_docs):
+        system += CONTROVERSY_RULE
     data = llm.structured(
         system,
         EXTRACT_USER.format(

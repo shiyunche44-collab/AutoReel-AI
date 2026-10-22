@@ -122,6 +122,142 @@ themes:
           - {section: 适合谁, weight: 1, drop: 1}
       - {section: 横评结论, weight: 2, remainder: false}
 
+  # 单点深挖:整期只讲一个点(选题角度就是这个点,建项目必填),讲透"是什么 → 为什么 →
+  # 数字 → 代价 → 对谁有用"。只讲一个点的片子不拉长:最长 4 分钟。
+  deepdive:
+    label: 单点深挖
+    intent: >
+      整期只讲选题角度里的那一个点(一项技术、一个配置、一个争议参数),别的卖点一概不提:
+      先抛这个点上最反常识的判断 → 它是什么 → 为什么能做到(原理)→ 关键数字 →
+      代价和边界 → 对谁真有用 → 一句话结论。宁深勿广。
+    requires_angle: true
+    max_duration: 240
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.tech_news
+      - ifind.product_news
+      - ifind.compare_news
+    script_rules:
+      - 全片只讲选题角度里的那一个点;跟它无关的参数、配置、价格一概不提,哪怕事实清单里有。
+      - 「为什么」段必须引用原理清单(k_ 开头)讲清机理,并把原理条目里的代价/边界讲出来。
+      - 每个数字后面接一句"所以呢":换算成日常场景、跟同级比,或点出对谁有用。
+      - 开场第一句不超过 18 字,直接抛这个点上最反常识的判断;不说"大家好""今天来聊聊"。
+      - 代价和缺点只能用原理条目里写明的"代价/边界",或事实清单里明确写到的问题;不许自己推测。
+      - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+      - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据。
+    # 竖屏 60s 只放得下 4 段:先砍「对谁有用」,再砍「是什么」,再砍「代价边界」
+    blocks:
+      - {section: 深挖开场, weight: 1, remainder: false}
+      - {section: 是什么, weight: 2, drop: 2}
+      - {section: 为什么, weight: 3}
+      - {section: 关键数字, weight: 2}
+      - {section: 代价边界, weight: 2, drop: 3}
+      - {section: 对谁有用, weight: 1, drop: 1}
+      - {section: 深挖结论, weight: 1, remainder: false}
+
+  # 问答式:每章回答一个买家最常问的问题,章节名就是问题(脚本给 heading)。
+  qa:
+    label: 问答式
+    intent: >
+      用"买这台车前最该搞清楚的几个问题"组织全片:开场抛出最尖锐的那个问题 →
+      每章回答一个问题(先一句话给答案,再给数字和依据,最后说对谁意味着什么)→
+      结论把几个答案串成一句判断。问题要是真实买家会问的(够不够用、值不值、
+      哪版划算、有什么坑),不是"它的外观怎么样"这种平的提问。
+    max_duration: 360
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.product_news
+      - ifind.tech_news
+      - ifind.cost_news
+      - ifind.compare_news
+    script_rules:
+      - 「问题」段每段给一个 heading:就是这一章回答的问题,12 字以内,用问句(如「冬天续航打几折?」)。
+        同一章拆成多段时 heading 写同一句。
+      - 每个问题先用一句话直接给答案(够 / 不够、值 / 不值、选哪版),再给数字和依据,不许绕。
+      - 几个问题不能重复讲同一件事;每个问题落到一个具体的决策(买不买、买哪版、要不要加钱)。
+      - 每个数字后面接一句"所以呢";没有依据的问题就换一个有事实可答的问题,不许编答案。
+      - 开场第一句不超过 18 字,直接抛最尖锐的那个问题或答案;不说"大家好""今天来聊聊"。
+      - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+      - 不许自己推测这台车的缺点;代价只能来自原理条目的"代价/边界"或事实里写明的问题。
+    blocks:
+      - {section: 问答开场, weight: 1, remainder: false}
+      - {section: 问题一, weight: 2}
+      - {section: 问题二, weight: 2}
+      - {section: 问题三, weight: 2, drop: 3}
+      - {section: 问题四, weight: 2, drop: 2}
+      - {section: 问题五, weight: 2, drop: 1}
+      - {section: 问答结论, weight: 1, remainder: false}
+
+  # 1v1 对决:两台车,按维度逐章对打(每章同时讲两台车),章末给这一维的胜负,
+  # 结论给比分但按人群推荐。建项目时车单填 2 台。
+  pk:
+    label: 1v1 对决
+    intent: >
+      两台车按维度逐项对打:开场抛出这场对决最大的悬念 → 价格 → 空间 → 三电 → 智能,
+      每一章同时摆出两台车同一维度的数字,章末一句判这一维谁占优、对谁重要 →
+      结论报比分,再按人群给推荐(谁该选 A、谁该选 B)。
+    versus: true
+    subject_count: [2, 2]
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.product_news
+      - ifind.tech_news
+    script_rules:
+      - 每一章都要同时讲两台车的**同一维度**,两边的数字各自引用自己那台车名下的事实;
+        口径(CLTC / 版本)不一致的数字不放在一起比,改成定性说。
+      - 每章最后一句判这一维谁占优、差距对谁重要(「差 3 万,对预算卡死的人是决定性的」);
+        某一维没有两边可比的事实,就说"这一项打平 / 没法比",不许硬判。
+      - 结论先报比分(如「4 个维度 3 比 1」),再按人群推荐:谁该选 A、谁该选 B;不说"谁最好""谁赢了"。
+      - 开场第一句不超过 18 字,直接抛出这场对决最大的悬念;不说"大家好""今天来聊聊"。
+      - 不许贬低任何一台车,也不许自己推测缺点;差距只用数字和事实里写明的问题说。
+      - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+    # 竖屏 60s 只放得下 4 段:先砍「智能」,再砍「空间」
+    blocks:
+      - {section: 对决开场, weight: 1, remainder: false}
+      - {section: 对决价格, weight: 2}
+      - {section: 对决空间, weight: 2, drop: 2}
+      - {section: 对决三电, weight: 3}
+      - {section: 对决智能, weight: 2, drop: 1}
+      - {section: 对决结论, weight: 2, remainder: false}
+
+  # 槽点 / 争议:先摆网上对这台车的争议,逐条拿事实核对,给出"说对了 / 说过头了 / 说反了"。
+  debate:
+    label: 槽点争议
+    intent: >
+      拿网上对这台车争议最大的几个说法开刀:开场亮出最大的那个争议 →
+      每章一个争议(网上怎么说 → 事实怎么说 → 判断:说对了 / 说过头了 / 说反了)→
+      结论给出这些争议加起来,这台车到底适合谁。立场鲜明,但每个判断都要有出处。
+    allow_subject_critique: true
+    max_duration: 360
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.controversy_news
+      - ifind.product_news
+      - ifind.tech_news
+    script_rules:
+      - 「争议」段每段给一个 heading:这一章的争议,12 字以内(如「续航虚标?」「车机卡不卡」)。
+        同一章拆成多段时 heading 写同一句。
+      - 争议只能来自事实清单(topic 为「争议」的事实,或事实里写明的问题、投诉、召回);
+        事实里没有的槽点不许自己编,也不许写"有网友说"却不引用事实。
+      - 每个争议都要有判断:说对了、说过头了,还是说反了,并用数字或事实说明为什么。
+      - 本车的缺点可以直说,但要有出处;不许贬低竞品,不许用"智商税""劝退""垃圾"这类词。
+      - 开场第一句不超过 18 字,直接抛最大的那个争议;不说"大家好""今天来聊聊"。
+      - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+    blocks:
+      - {section: 争议开场, weight: 1, remainder: false}
+      - {section: 争议一, weight: 3}
+      - {section: 争议二, weight: 3, drop: 2}
+      - {section: 争议三, weight: 3, drop: 1}
+      - {section: 争议结论, weight: 1, remainder: false}
+
 # 版式说明(pipeline/explainer.py):
 #   broll     全屏这台车的宣传片
 #   panel     宣传片 + 左侧参数面板(车名、3–5 项参数)
@@ -236,6 +372,144 @@ sections:
     angle: exterior_45
     layouts: [card, highlight, broll]
     card: bars
+
+  # ---- 单点深挖(deepdive) ----
+  深挖开场:
+    beat: 第一句 18 字内抛出这个点上最反常识的判断或最硬的一个数字
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  是什么:
+    beat: 用一句大白话说清这个点是什么、这台车上具体是哪套东西
+    chapter: 是什么
+    angle: exterior_45
+    layouts: [highlight, panel, concept, broll]
+  为什么:
+    beat: 讲清它为什么能做到(引用原理),以及跟常规做法差在哪
+    chapter: 为什么
+    angle: exterior_45
+    layouts: [concept, highlight, panel, broll]
+  关键数字:
+    beat: 这个点最硬的一两个数字,每个都换算成观众能感知的场景
+    chapter: 关键数字
+    angle: exterior_45
+    layouts: [stat, card, panel, concept, highlight]
+    card: spec
+    requires_fact: true
+  代价边界:
+    beat: 这个点的代价和适用边界:什么情况下它不灵、要多付出什么
+    chapter: 代价
+    angle: exterior_45
+    layouts: [highlight, broll, panel]
+  对谁有用:
+    beat: 这个点对哪类人是刚需、对哪类人可有可无
+    chapter: 对谁有用
+    angle: interior
+    layouts: [broll, highlight]
+  深挖结论:
+    beat: 一句话判断这个点值不值,最后一句给行动
+    chapter: 结论
+    angle: exterior_45
+    layouts: [highlight, card, broll]
+    card: spec
+
+  # ---- 问答式(qa)。章节名用脚本给的 heading(问题本身)----
+  问答开场:
+    beat: 第一句 18 字内抛出最尖锐的那个问题,或直接给出它的答案
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  问题一: &qa_question
+    beat: 回答一个买家最常问的问题:先一句话给答案,再给数字和依据,最后说对谁意味着什么
+    chapter: 问题一
+    heading: true
+    angle: exterior_45
+    layouts: [highlight, panel, stat, card, concept, broll]
+    card: spec
+  问题二:
+    <<: *qa_question
+    chapter: 问题二
+    angle: interior
+  问题三:
+    <<: *qa_question
+    chapter: 问题三
+  问题四:
+    <<: *qa_question
+    chapter: 问题四
+    angle: interior
+  问题五:
+    <<: *qa_question
+    chapter: 问题五
+  问答结论:
+    beat: 把几个问题的答案串成一句判断,说清适合谁、不适合谁,最后一句给行动
+    chapter: 结论
+    angle: exterior_45
+    layouts: [card, highlight, broll]
+    card: spec
+
+  # ---- 1v1 对决(pk)。每段同时讲两台车,柱状图的行名写车名 ----
+  对决开场:
+    beat: 第一句 18 字内抛出这场对决最大的悬念,再交代比哪两台、比哪几项
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  对决价格:
+    beat: 两台车的售价与版本区间放在一起比,章末判这一维谁占优
+    chapter: 价格
+    angle: exterior_45
+    layouts: [card, panel, stat, highlight, broll]
+    card: bars
+  对决空间:
+    beat: 尺寸、轴距、空间与实用性放在一起比,章末判这一维谁占优
+    chapter: 空间
+    angle: interior
+    layouts: [card, panel, highlight, concept, broll]
+    card: bars
+  对决三电:
+    beat: 续航、补能、加速放在一起比(口径一致才比),章末判这一维谁占优
+    chapter: 三电
+    angle: exterior_45
+    layouts: [card, stat, concept, panel, highlight, broll]
+    card: bars
+  对决智能:
+    beat: 智驾硬件、座舱芯片与功能放在一起比,章末判这一维谁占优
+    chapter: 智能
+    angle: interior
+    layouts: [card, panel, highlight, concept, broll]
+    card: bars
+  对决结论:
+    beat: 报比分,再按人群推荐谁该选哪台,最后一句给行动
+    chapter: 结论
+    angle: exterior_45
+    layouts: [card, highlight, broll]
+    card: bars
+
+  # ---- 槽点争议(debate)。章节名用脚本给的 heading(争议本身)----
+  争议开场:
+    beat: 第一句 18 字内抛出这台车最大的那个争议,带上你的立场
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  争议一: &debate_point
+    beat: 一个争议:网上怎么说 → 事实怎么说(数字、出处)→ 判断:说对了 / 说过头了 / 说反了
+    chapter: 争议一
+    heading: true
+    angle: exterior_45
+    layouts: [highlight, panel, stat, card, broll]
+    card: spec
+  争议二:
+    <<: *debate_point
+    chapter: 争议二
+    angle: interior
+  争议三:
+    <<: *debate_point
+    chapter: 争议三
+  争议结论:
+    beat: 这些争议加起来,这台车到底适合谁、不适合谁,最后一句给行动
+    chapter: 结论
+    angle: exterior_45
+    layouts: [highlight, card, broll]
+    card: spec
 
 visual_keywords: [汽车, 轿车, 新能源汽车, 内饰, 续航, 座舱]
 reference_query_template: "{subject} 实拍 {angle}"
@@ -380,6 +654,7 @@ fact_queries:
   ifind.compare_news: 对比 竞品 同级 差异 相比
   ifind.cost_news: 用车成本 保险 保养 电费 油耗 保值率
   ifind.tech_news: 技术 架构 三电 智驾 平台 底盘 调校
+  ifind.controversy_news: 争议 槽点 投诉 质疑 车主吐槽 回应
   ifind.market_news: 销量 市场份额 排名 行业格局 渗透率
 
 # --------------------------------------------------------------------------

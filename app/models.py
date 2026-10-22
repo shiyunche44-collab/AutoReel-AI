@@ -77,6 +77,8 @@ class ScriptSegment(BaseModel):
     fact_refs: list[str] = Field(default_factory=list)
     #: 多车横评:这一段讲车单里的哪台车;空串 = 单车项目或开场 / 结论这类共用段
     subject: str = ""
+    #: 脚本给的章节名(问答式的问题、槽点式的争议);空 = 用段落配置的章节名
+    heading: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +191,8 @@ class ProjectCreate(BaseModel):
     angle_search: str | None = Field(default=None, max_length=60)
     #: 热点选题依据的热点原文行,作为一份事实素材进入抽取
     angle_evidence: list[str] | None = Field(default=None, max_length=12)
+    #: 热点选题给的开场钩子(18 字内):写脚本时作为第一句的参考
+    hook: str | None = Field(default=None, max_length=40)
     #: 多车横评的车单(方向为 roundup 时必填);此时 subject 是选题名
     subjects: list[SubjectEntry] | None = Field(default=None, max_length=8)
 

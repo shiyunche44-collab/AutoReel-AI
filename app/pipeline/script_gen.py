@@ -194,10 +194,38 @@ _QUALITY_RULE = ("topic=quality 的事实是品牌 / 公司名下的召回、抽
                  "不得说成这款产品有问题,也不得据此下\"不安全\"\"质量差\"这类结论。")
 
 
-def _theme_rules(theme, facts: Sequence[Fact]) -> str:
+#: 争议类事实的主题标签,与 intake.CONTROVERSY_TOPIC 一致
+CONTROVERSY_TOPIC = "争议"
+
+#: heading 段落最多几个字(章节条上要放得下)
+HEADING_MAX_CHARS = 12
+
+
+def _heading_rule(profile: CategoryProfile | None, plan: Sequence[str]) -> str:
+    """段落序列里有要脚本给章节名的段落时,告诉模型多输出一个 heading 键。"""
+    if profile is None:
+        return ""
+    names = list(dict.fromkeys(s for s in plan if profile.section(s).heading))
+    if not names:
+        return ""
+    return (f"segments 里段落「{'、'.join(names)}」的每一项多给一个 `heading` 键:"
+            f"这一章的标题({HEADING_MAX_CHARS} 字以内),会显示在章节条和章节转场上。")
+
+
+def _hook_rule(hook: str) -> str:
+    """热点选题带来的开场钩子:给模型当第一句的参考,不强制照抄。"""
+    hook = (hook or "").strip()
+    if not hook:
+        return ""
+    return (f"选题策划给的开场钩子:「{hook}」。第 1 段第一句可以直接用它,也可以写得更好;"
+            "但它里面的数字同样要有事实支撑,找不到就改成不含数字的说法。")
+
+
+def _theme_rules(theme, facts: Sequence[Fact], extra: Sequence[str] = ()) -> str:
     rules = list(theme.script_rules) if theme is not None else []
     if any(f.topic == QUALITY_TOPIC and f.enabled for f in facts):
         rules.append(_QUALITY_RULE)
+    rules.extend(r for r in extra if r)
     return "\n".join(f"   - {r}" for r in rules) if rules else "   (无方向专属规则)"
 
 
@@ -291,6 +319,7 @@ def generate(
     slots: Sequence[Slot] | None = None,
     subjects: Sequence[dict[str, str]] | None = None,
     portrait: bool = False,
+    hook: str = "",
 ) -> tuple[list[ScriptSegment], str, str]:
     """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
@@ -314,6 +343,8 @@ def generate(
         tags = scope_label.get(f.scope, "company")
         if f.topic == QUALITY_TOPIC:
             tags += " · topic=quality"
+        elif f.topic == CONTROVERSY_TOPIC:
+            tags += " · 争议"
         if f.compare_with:
             tags += f" · 对比[{f.compare_with}]"
         if is_hero(f, vocab):
@@ -366,7 +397,7 @@ def generate(
             keywords=", ".join(profile.visual_keywords[:4]),
             theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
             else "   按品类惯例组织叙事。",
-            theme_rules=_theme_rules(theme, facts),
+            theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan), _hook_rule(hook)]),
             scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
             angle_policy=_angle_policy(angle) + _portrait_policy(portrait),
@@ -391,12 +422,16 @@ def generate(
         refs = item.get("fact_refs") or []
         if isinstance(refs, str):
             refs = [refs]
+        heading = ""
+        if profile.section(section).heading:
+            heading = str(item.get("heading") or "").strip()[:HEADING_MAX_CHARS + 2]
         segments.append(
             ScriptSegment(
                 idx=len(segments),
                 section=section,
                 text=text,
                 fact_refs=[str(r) for r in refs if str(r)],
+                heading=heading,
             )
         )
 
@@ -448,6 +483,8 @@ def fit_length(segments: list[ScriptSegment], budget: int, llm,
         log.warning("脚本压缩失败,用原稿:%s", exc)
         return segments
     known = {s.section for s in segments}
+    # 压缩稿不带 heading(只删不加的提示词里没有它),按段落名从原稿搬回来
+    headings = {s.section: s.heading for s in segments if s.heading}
     out: list[ScriptSegment] = []
     for item in data.get("segments") or []:
         if not isinstance(item, dict):
@@ -459,7 +496,8 @@ def fit_length(segments: list[ScriptSegment], budget: int, llm,
         refs = item.get("fact_refs") or []
         refs = [refs] if isinstance(refs, str) else refs
         out.append(ScriptSegment(idx=len(out), section=section, text=text,
-                                 fact_refs=[str(r) for r in refs if str(r)]))
+                                 fact_refs=[str(r) for r in refs if str(r)],
+                                 heading=headings.get(section, "")))
     if not out or spoken_chars(out) >= have or out[0].section != segments[0].section \
             or out[-1].section != segments[-1].section:
         log.warning("脚本压缩结果不可用(%d 段),用原稿", len(out))
@@ -486,7 +524,7 @@ _DISPARAGING_TERMS = ("智商税", "劝退", "垃圾", "辣鸡", "韭菜", "坑�
 _BENIGN_FIRST_RE = re.compile(r"第一(?=感|眼|印象|次|步|句|段|时间|反应|排|个问题|类|种|档|条|项)")
 
 #: 竞品 / 对比类章节的识别词。段落名里出现这些字,这段就是在跟别人比。
-_COMPARISON_SECTION_WORDS = ("竞品", "对比", "横评", "比较", "比一比")
+_COMPARISON_SECTION_WORDS = ("竞品", "对比", "横评", "比较", "比一比", "对决")
 
 #: 厂商口径的标志:把结论归给厂商,或归给厂商里的人。
 #:
@@ -993,7 +1031,8 @@ def compliance_lint(
     if theme is not None:
         forbidden.extend(theme.extra_forbidden_terms)
     allow_critique = bool(getattr(theme, "allow_subject_critique", False))
-    theme_roundup = bool(getattr(theme, "roundup", False))
+    # 有车单的片型(横评 / 对决):事实本来就带车名,规则 7 管张冠李戴
+    theme_roundup = bool(getattr(theme, "multi", getattr(theme, "roundup", False)))
     # 规则 5 只在**产品是叙事主体**的方向生效。
     #
     # 它的触发词表里含"电池""充电""配置"这类词,而这些词在品牌叙事里同样高频
@@ -1151,6 +1190,21 @@ def total_chars(segments: Iterable[ScriptSegment]) -> int:
     return sum(len(s.text or "") for s in segments)
 
 
+def unify_headings(segments: Sequence[ScriptSegment]) -> None:
+    """同一段落(连续几项同名)用同一个 heading:取第一个非空的。
+
+    章节条按章节名合并相邻拍,同一章里 heading 写得不一样就会被切成两章。"""
+    i = 0
+    while i < len(segments):
+        j = i
+        while j < len(segments) and segments[j].section == segments[i].section:
+            j += 1
+        head = next((s.heading for s in segments[i:j] if s.heading), "")
+        for s in segments[i:j]:
+            s.heading = head
+        i = j
+
+
 def normalize_segments(
     segments: Sequence[ScriptSegment],
     plan: Sequence[str] | Sequence[Slot],
@@ -1179,6 +1233,7 @@ def normalize_segments(
                 fact_refs=list(template.fact_refs),
             )
         )
+    unify_headings(out)
     for i, seg in enumerate(out):
         seg.idx = i
         # LLM 偶尔整篇写中文数字:字幕全是汉字,lint 的引用检查也会被绕过
@@ -1290,5 +1345,6 @@ def split_segments(segments: Sequence[ScriptSegment],
         parts = _split_text(text, max_chars) if len(text) > max_chars else [text]
         for p in parts:
             out.append(ScriptSegment(idx=len(out), section=seg.section, text=p,
-                                     fact_refs=list(seg.fact_refs), subject=seg.subject))
+                                     fact_refs=list(seg.fact_refs), subject=seg.subject,
+                                     heading=seg.heading))
     return out

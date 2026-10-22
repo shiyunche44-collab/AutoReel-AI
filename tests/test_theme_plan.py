@@ -67,7 +67,7 @@ def test_hook_always_present(auto):
     for duration in auto.supported_durations():
         for name in single(auto):
             plan = auto.plan_for(duration, name)
-            assert plan[0] == HOOK, f"方向 {name} @ {duration}s 首段不是开场"
+            assert HOOK in plan[0], f"方向 {name} @ {duration}s 首段不是开场"
 
 
 def test_hook_never_absorbs_remainder(auto):
@@ -78,12 +78,13 @@ def test_hook_never_absorbs_remainder(auto):
     """
     for name in single(auto):
         blocks = auto.themes[name].blocks
-        hook = next(b for b in blocks if b["section"] == HOOK)
+        hook = next(b for b in blocks if HOOK in b["section"])
         assert hook["remainder"] is False, f"方向 {name} 的开场未关闭补位"
 
     shortest = min(auto.supported_durations())
     for name in single(auto):
-        assert auto.plan_for(shortest, name).count(HOOK) == 1, (
+        plan = auto.plan_for(shortest, name)
+        assert plan.count(plan[0]) == 1, (
             f"方向 {name} 在 {shortest} 秒下拿到了多个开场"
         )
 

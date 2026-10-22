@@ -657,7 +657,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         camera_zh="", ambience_zh="", narration_zh=seg.text,
         angle=sec.angle, on_screen_text=[],
         card=card, layout=layout, overlay=overlay,
-        chapter=seg.subject or sec.chapter or sec.name, view=view,
+        chapter=seg.heading or seg.subject or sec.chapter or sec.name, view=view,
         subject=seg.subject,
     )
 
@@ -806,7 +806,7 @@ def fallback_beats(*, subject: str, profile: CategoryProfile,
         out.append(ShotSpec(idx=i, duration=0.0, section=sec.name,
                             visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or seg.subject or subject}",
                             narration_zh=seg.text, angle=sec.angle, layout=SAFE_LAYOUT,
-                            chapter=seg.subject or sec.chapter or sec.name,
+                            chapter=seg.heading or seg.subject or sec.chapter or sec.name,
                             view=_hint(sec.angle, "", profile.vocab), subject=seg.subject))
     return assign_broll_styles(out)
 
@@ -821,8 +821,22 @@ def beat_subject(spec: ShotSpec, subjects: Sequence[str], fallback: str) -> str:
     if spec.subject:
         return spec.subject
     if subjects:
+        # 共用拍(对决的每一章、横评的开场结论)旁白只点了一台车的名字,就配那台车:
+        # 「Model Y 的后排更宽」配着 YU7 的画面,观众会以为在说 YU7
+        named = [s for s in subjects if _names_car(spec.narration_zh, s)]
+        if len(named) == 1:
+            return named[0]
         return subjects[spec.idx % len(subjects)]
     return fallback
+
+
+def _names_car(text: str, name: str) -> bool:
+    """旁白里提没提到这台车:全名,或车名里最长的字母数字串(「YU7」「Model Y」→「Model」不算)。"""
+    text = text or ""
+    if name and name in text:
+        return True
+    tokens = [t for t in re.findall(r"[A-Za-z0-9]+(?: [A-Za-z0-9]+)*", name or "") if len(t) >= 2]
+    return any(t in text for t in tokens if any(c.isdigit() for c in t) or " " in t or len(t) >= 4)
 
 
 def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:

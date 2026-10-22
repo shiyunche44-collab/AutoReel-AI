@@ -40,6 +40,18 @@ function syncThemeIntent() {
   const hint = $('#theme-intent');
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
   syncRoster();
+  syncAngleField();
+}
+
+// 单点深挖:角度就是"这期只讲的那一个点",必填
+const ANGLE_HELP = '填了会额外检索相关近期新闻,开场和标题围绕这个角度来写。';
+const ANGLE_PLACEHOLDER = '例:月销破 3 万背后,它到底赢在哪 —— 留空则按内容方向常规讲';
+function syncAngleField() {
+  const t = currentTheme();
+  const need = !!(t && t.requires_angle);
+  $('#angle-tag').textContent = need ? '必填' : '可选';
+  $('#angle-help').textContent = need ? '这期只讲这一个点(一项技术、一个配置或一个争议参数),别的卖点一概不提。' : ANGLE_HELP;
+  $('#angle').placeholder = need ? '例:800V 高压平台到底快在哪' : ANGLE_PLACEHOLDER;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,8 +125,8 @@ function syncRoster() {
   $('#roster-field').classList.toggle('hidden', !on);
   const label = $('label[for="subject"]');
   if (on) {
-    label.textContent = '横评选题';
-    $('#subject').placeholder = '例:25 万级纯电 SUV 横评';
+    label.textContent = t.versus ? '对决选题' : '横评选题';
+    $('#subject').placeholder = t.versus ? '例:小米YU7 vs 特斯拉Model Y' : '例:25 万级纯电 SUV 横评';
     $('#subject-help').textContent = subjectHelp();
     const roster = $('#roster');
     while ($$('.roster-row', roster).length < rosterRange()[0]) roster.append(rosterRow());
@@ -173,8 +185,13 @@ function syncDurations() {
   const group = $('#duration-group');
   const cat = catInfo($('#category-select').value);
   const byAspect = (cat.durations_by_aspect || {})[selectedAspect()];
-  const options =
+  const all =
     byAspect && byAspect.length ? byAspect : cat.durations && cat.durations.length ? cat.durations : DATA.durations;
+  // 片型有最长时长(单点深挖最长 4 分钟)
+  const theme = currentTheme();
+  const cap = theme && theme.max_duration;
+  const fit = cap ? all.filter((d) => d <= cap) : all;
+  const options = fit.length ? fit : all.slice(0, 1);
   const keep = Number(selectedDuration());
   const pick = options.includes(keep) ? keep : options[0];
   const label = (d) => (d >= 120 && d % 60 === 0 ? `${d / 60} 分钟` : `${d} 秒`);
@@ -248,6 +265,7 @@ if (form) {
   );
   $('#theme-select').addEventListener('change', () => {
     syncThemeIntent();
+    syncDurations();
     refreshEstimate();
   });
   $('#roster-add').addEventListener('click', () => {
@@ -257,10 +275,11 @@ if (form) {
   });
   syncSubjectField();
   syncAspectDefault();
-  syncDurations();
   syncThemeField();
+  syncDurations();
   refreshEstimate();
 
+  $('#angle').addEventListener('input', (e) => e.target.classList.remove('is-invalid'));
   const subject = $('#subject');
   subject.addEventListener('input', () => {
     subject.classList.remove('is-invalid');
@@ -280,6 +299,12 @@ if (form) {
       return;
     }
     const theme = currentTheme();
+    if (theme && theme.requires_angle && !String(fd.get('angle') || '').trim()) {
+      $('#angle').classList.add('is-invalid');
+      $('#angle').focus();
+      toast(`「${theme.label}」要先填选题角度:这期只讲的那一个点`, { type: 'danger', title: '缺少角度' });
+      return;
+    }
     const roundup = !!(theme && theme.roundup);
     const roster = roundup ? rosterValues() : [];
     if (roundup) {
@@ -316,6 +341,7 @@ if (form) {
           ...(pickedTopic && pickedTopic.subject === subj && String(fd.get('angle') || '').trim()
             ? { angle_search: pickedTopic.search_terms || null, angle_evidence: pickedTopic.evidence || null }
             : {}),
+          ...(pickedTopic && pickedTopic.subject === subj && pickedTopic.hook ? { hook: pickedTopic.hook } : {}),
           quota_budget: fd.get('quota_budget') ? parseFloat(String(fd.get('quota_budget'))) : null,
         });
         toast('项目已创建,正在采集事实…');
@@ -435,6 +461,8 @@ function pickTopic(t, card) {
   if ([...sel.options].some((o) => o.value === t.theme)) {
     sel.value = t.theme;
     syncThemeIntent();
+    syncDurations();
+    refreshEstimate();
   }
   if ((t.subjects || []).length) setRoster(t.subjects);
   const subject = $('#subject');

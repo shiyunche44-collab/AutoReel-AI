@@ -77,6 +77,9 @@ class SectionSpec:
     #: 该段落只讲某一主题的事实(如 quality = 召回 / 抽检记录)。事实里没有这个主题时
     #: 整段跳过(名额让给前一段),不让脚本硬写"没有记录"之类查无实据的结论
     fact_topic: str = ""
+    #: 这一段的章节名由脚本给(问答式的"问题"、槽点式的"争议"):脚本多输出一个 `heading`,
+    #: 章节条与章节转场显示它,而不是段落名
+    heading: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,18 @@ class ThemeSpec:
     per_subject_at: int = -1
     #: 车单台数范围 (最少, 最多);只对横评方向有意义
     subject_count: tuple[int, int] = (0, 0)
+    #: 1v1 对决:有车单(subject_count 台),各车各采事实、各建素材池,但段落按**维度**排、
+    #: 全部是共用段(每段同时讲两台车),不像横评那样每车一章
+    versus: bool = False
+    #: 必须填选题角度(单点深挖:角度就是"这期只讲的那一个点")
+    requires_angle: bool = False
+    #: 这个片型最长做多少秒(0 = 不限)。只讲一个点的片子拉到 8 分钟就是注水
+    max_duration: int = 0
+
+    @property
+    def multi(self) -> bool:
+        """有车单的片型(横评 / 对决):建项目要填车单,事实与素材按车分开采。"""
+        return self.roundup or self.versus
 
     @property
     def uses_blocks(self) -> bool:
@@ -492,6 +507,13 @@ class CategoryProfile:
             return self.durations_portrait or config.SUPPORTED_DURATIONS_PORTRAIT
         return self.durations or config.SUPPORTED_DURATIONS
 
+    def theme_durations(self, theme: ThemeSpec, aspect: str | None = None) -> tuple[int, ...]:
+        """这个片型在这个画幅下可选的时长:画幅档位里不超过片型 `max_duration` 的那些。"""
+        durations = self.supported_durations(aspect)
+        if not theme.max_duration:
+            return durations
+        return tuple(d for d in durations if d <= theme.max_duration) or durations[:1]
+
     def all_durations(self) -> tuple[int, ...]:
         """横竖两种画幅的时长并集 —— 配置自检要对每一档都铺展得开。"""
         from .. import config
@@ -824,7 +846,8 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
                 raise ProfileError(f"方向 {name}: per_subject 块不能为空")
             continue
         blocks.append(_block(item))
-    count = raw.get("subject_count") or ([2, 5] if per_subject else [0, 0])
+    versus = bool(raw.get("versus", False))
+    count = raw.get("subject_count") or ([2, 5] if per_subject else [2, 2] if versus else [0, 0])
     try:
         lo, hi = (int(x) for x in count)
     except (TypeError, ValueError) as exc:
@@ -844,6 +867,9 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         per_subject=tuple(per_subject),
         per_subject_at=per_subject_at,
         subject_count=(lo, hi),
+        versus=versus,
+        requires_angle=bool(raw.get("requires_angle", False)),
+        max_duration=int(raw.get("max_duration", 0) or 0),
     )
 
 
@@ -861,6 +887,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             layouts=tuple(str(x) for x in (value.get("layouts") or ())),
             chapter=str(value.get("chapter", "") or ""),
             fact_topic=str(value.get("fact_topic", "") or ""),
+            heading=bool(value.get("heading", False)),
         )
         for key, value in (raw.get("sections") or {}).items()
     }
@@ -1002,6 +1029,12 @@ def _validate(profile: CategoryProfile) -> None:
                     raise ProfileError(
                         f"品类 {profile.name} 方向 {tname}: 段落块 {section} 的 weight 必须 ≥1")
         elif theme.uses_blocks:
+            if theme.versus and not 2 <= theme.subject_count[0] <= theme.subject_count[1]:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: 对决方向 subject_count 需满足 2 ≤ 最少 ≤ 最多")
+            if theme.max_duration and not any(d <= theme.max_duration for d in profile.all_durations()):
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: max_duration={theme.max_duration} 比所有时长档位都短")
             core = CategoryProfile.core_blocks(theme.blocks)
             if core > min_shots:
                 raise ProfileError(
@@ -1137,10 +1170,12 @@ def available_categories() -> list[dict[str, Any]]:
             },
             "themes": [
                 {"name": t.name, "label": t.label, "intent": t.intent,
-                 "roundup": t.roundup, "subject_count": list(t.subject_count),
+                 # 前端的 roundup = "要填车单"(横评与对决都要)
+                 "roundup": t.multi, "versus": t.versus, "subject_count": list(t.subject_count),
+                 "requires_angle": t.requires_angle, "max_duration": t.max_duration,
                  # 横评:每档时长最多放得下几台车(竖屏短档位放不下最多台数)
                  "max_subjects": ({str(d): profile.max_subjects(t, d) for d in profile.all_durations()}
-                                  if t.roundup else {})}
+                                  if t.multi else {})}
                 for t in profile.themes.values()
             ],
         })
