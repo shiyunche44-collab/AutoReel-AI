@@ -384,3 +384,15 @@ def test_portrait_beats_are_shorter():
     tall = script_gen.split_segments([seg], script_gen.PORTRAIT_SHOOT_CHARS_MAX)
     assert all(len(s.text) <= script_gen.PORTRAIT_SHOOT_CHARS_MAX for s in tall)
     assert len(tall) >= len(wide)
+
+
+def test_split_never_breaks_a_word_or_leaves_a_midsentence_period():
+    """竖屏实跑的两处毛病:「激光雷 / 达」硬切劈词;「我的判断是。YU7……」并碎块后句号留在句中。"""
+    from app.pipeline import script_gen
+
+    parts = script_gen._split_text("全系标配700TOPS Thor芯片加激光雷达，HAD终身免费。", 22)
+    assert parts == ["全系标配700TOPS Thor芯片加激光雷达。", "HAD终身免费。"]
+    parts = script_gen._split_text("我的判断是，YU7不是一台车，是两个价位段的两种车。", 22)
+    assert parts[0] == "我的判断是，YU7不是一台车。"
+    # 真的太长才硬切,且优先切在空格上
+    assert script_gen._hard_cut("a" * 15 + " " + "b" * 20, 22) == ["a" * 15, "b" * 20]

@@ -977,6 +977,19 @@ def _split_keep(text: str, chars: str) -> list[str]:
 _TRAILING_MARKS = "，,、；;：:"
 
 
+def _hard_cut(text: str, max_chars: int) -> list[str]:
+    """没有标点可断的长串按 `max_chars` 切;块的后半段有空格就切在空格上。"""
+    out: list[str] = []
+    while len(text) > max_chars:
+        cut = text.rfind(" ", max_chars // 2, max_chars + 1)
+        cut = cut if cut > 0 else max_chars
+        out.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text:
+        out.append(text)
+    return out
+
+
 def _split_text(text: str, max_chars: int) -> list[str]:
     """把一段话切成每块不超过 `max_chars` 字的几块,尽量断在句末标点上。"""
     parts: list[str] = []
@@ -989,9 +1002,12 @@ def _split_text(text: str, max_chars: int) -> list[str]:
             if len(clause) <= max_chars:
                 parts.append(clause)
                 continue
-            # 连逗号都没有(纯数字长串):只能硬切,宁可切坏也不能留一个 30 秒的拍
-            for k in range(0, len(clause), max_chars):
-                parts.append(clause[k:k + max_chars])
+            # 连逗号都没有:稍长一点(1.5 倍内)整句留着 —— 硬切会把词劈开
+            # (实测「激光雷 / 达」);再长才硬切,优先切在空格上,宁可切坏也不能留一个 30 秒的拍
+            if len(clause) <= max_chars * 1.5:
+                parts.append(clause)
+                continue
+            parts.extend(_hard_cut(clause, max_chars))
     # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话。
     # 先并再换标点 —— 并回去的逗号仍是逗号,不会冒出「我的判断是。YU7……」
     merged: list[str] = []
