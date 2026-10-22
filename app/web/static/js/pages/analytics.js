@@ -9,6 +9,7 @@ initChrome();
 const DATA = readJSON('page-data', {});
 let items = DATA.items || [];
 let byPlatform = DATA.by_platform || [];
+let byAspect = DATA.by_aspect || [];
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -144,6 +145,36 @@ function renderPlatforms() {
   }
 }
 
+function rate(value) {
+  return value === null || value === undefined ? '—' : `${(value * 100).toFixed(2)}%`;
+}
+
+function renderAspects() {
+  const tbody = $('#aspect-table tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (!byAspect.length) {
+    tbody.appendChild(h('tr', {}, h('td', { colspan: 8, class: 'subtle' }, '还没有发布记录')));
+    return;
+  }
+  for (const a of byAspect) {
+    tbody.appendChild(
+      h(
+        'tr',
+        {},
+        h('td', {}, h('span', { class: 'badge' }, a.label || a.aspect)),
+        h('td', { class: 'num' }, String(a.count || 0)),
+        h('td', { class: 'num' }, String(a.published || 0)),
+        h('td', { class: 'num' }, num(a.avg_views)),
+        h('td', { class: 'num' }, num(a.views)),
+        h('td', { class: 'num' }, num(a.likes)),
+        h('td', { class: 'num' }, num(a.followers)),
+        h('td', { class: 'num' }, rate(a.engagement_rate)),
+      ),
+    );
+  }
+}
+
 function renderWorks() {
   const tbody = $('#work-table tbody');
   tbody.innerHTML = '';
@@ -159,7 +190,13 @@ function renderWorks() {
       'tr',
       { 'data-pub': item.id, class: 'is-clickable' },
       h('td', {}, h('span', { class: 'badge tone-brand' }, item.platform_label)),
-      h('td', { class: 'pub-title', title: item.title }, item.title),
+      h(
+        'td',
+        { class: 'pub-title', title: item.title },
+        item.aspect === '9:16' ? h('span', { class: 'badge' }, item.aspect_label || '竖屏') : null,
+        item.aspect === '9:16' ? ' ' : null,
+        item.title,
+      ),
       h('td', { class: 'num' }, num(item.metrics?.views)),
       h('td', { class: 'num' }, num(item.metrics?.likes)),
       h('td', { class: 'num' }, num(item.metrics?.comments)),
@@ -169,9 +206,7 @@ function renderWorks() {
       h(
         'td',
         { class: 'num' },
-        item.engagement_rate === null || item.engagement_rate === undefined
-          ? '—'
-          : `${(item.engagement_rate * 100).toFixed(2)}%`,
+        rate(item.engagement_rate),
       ),
       h('td', {}, bar),
     );
@@ -211,8 +246,10 @@ async function reload() {
     const data = await api.get('/api/metrics/overview');
     items = data.items || [];
     byPlatform = data.by_platform || [];
+    byAspect = data.by_aspect || [];
     renderKpi();
     renderPlatforms();
+    renderAspects();
     renderWorks();
   } catch (err) {
     say(err.message, 'danger');
@@ -223,5 +260,6 @@ $('#btn-refresh')?.addEventListener('click', reload);
 
 renderKpi();
 renderPlatforms();
+renderAspects();
 renderWorks();
 setInterval(reload, 60000);

@@ -137,3 +137,31 @@ def test_snapshot_same_timestamp_is_ignored(store):
     db.add_snapshot("pub_p_test_acc_1_16:9", "bilibili", 1000.0, {"views": 1})
     db.add_snapshot("pub_p_test_acc_1_16:9", "bilibili", 1000.0, {"views": 2})
     assert len(db.list_snapshots("pub_p_test_acc_1_16:9")) == 1
+
+
+# --------------------------------------------------------------------------
+# 看板:按画幅分组
+# --------------------------------------------------------------------------
+def test_overview_groups_by_aspect(store):
+    from app.metrics import store as metrics_store
+
+    db.create_project(_project())
+    db.create_publication(_publication("p_test", "acc_1", "16:9"))
+    db.create_publication(_publication("p_test", "acc_2", "9:16"))
+    db.create_publication(_publication("p_test", "acc_3", "9:16"))
+    db.add_snapshot("pub_p_test_acc_1_16:9", "bilibili", 1000.0, {"views": 100, "likes": 5})
+    db.add_snapshot("pub_p_test_acc_2_9:16", "bilibili", 1000.0, {"views": 300, "likes": 30})
+    # acc_3 还没抓到数据:不算进平均播放的分母
+
+    data = metrics_store.overview()
+    by = {b["aspect"]: b for b in data["by_aspect"]}
+    assert [b["aspect"] for b in data["by_aspect"]] == ["16:9", "9:16"]
+    assert by["16:9"]["count"] == 1 and by["16:9"]["avg_views"] == 100
+    assert by["9:16"]["count"] == 2 and by["9:16"]["views"] == 300
+    assert by["9:16"]["avg_views"] == 300
+    assert by["9:16"]["engagement_rate"] == 0.1
+    from app.pipeline import aspect
+    assert {i["aspect_label"] for i in data["items"]} == {aspect.label("16:9"), aspect.label("9:16")}
+    # 平台维度的合计保持原样
+    assert data["by_platform"][0]["count"] == 3
+    assert data["by_platform"][0]["views"] == 400

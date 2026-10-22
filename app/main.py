@@ -438,10 +438,13 @@ def index(request: Request):
 
 #: 解说轨每拍的墙钟(秒),含 TTS 分摊与最终合成。YU7 实测 27 拍 5.4 分钟 ≈ 12 秒/拍
 EXPLAINER_SECONDS_PER_BEAT = 12
+#: 按画幅的墙钟系数。竖屏与横屏像素数相同,模糊铺底多一层滤镜,先按 1.0 记,实测后再调
+RENDER_FACTOR = {config.LANDSCAPE: 1.0, config.PORTRAIT: 1.0}
 
 
-def _explainer_minutes(beats: int) -> int:
-    return max(1, math.ceil(beats * EXPLAINER_SECONDS_PER_BEAT / 60))
+def _explainer_minutes(beats: int, aspect_value: str = config.LANDSCAPE) -> int:
+    factor = RENDER_FACTOR.get(aspect_value, 1.0)
+    return max(1, math.ceil(beats * EXPLAINER_SECONDS_PER_BEAT * factor / 60))
 
 
 @app.get("/project/{project_id}", response_class=HTMLResponse)
@@ -476,7 +479,7 @@ def project_page(request: Request, project_id: str):
         lib = library.Library.load(detail.subject).stats()
     estimate["library_vlm_calls"] = lib["vlm_calls"]
     estimate["library"] = costs.estimate_library(lib["vlm_calls"])
-    wall_clock = {"render_minutes": _explainer_minutes(beats)}
+    wall_clock = {"render_minutes": _explainer_minutes(beats, detail.aspect)}
     return templates.TemplateResponse(
         request,
         "project.html",
@@ -629,14 +632,17 @@ def categories():
 
 
 @app.get("/api/estimate")
-def estimate(duration: int = 240, category: str = ""):
+def estimate(duration: int = 240, category: str = "", aspect: str = config.LANDSCAPE):
     """时长跟着旁白走,这里只给节拍数的估计。"""
     profile = load_profile(category or default_category())
     beats = profile.shots_for(duration)
+    if aspect not in config.ASPECTS:
+        aspect = config.LANDSCAPE
     return {
         "duration": duration,
+        "aspect": aspect,
         "cost": costs.estimate_explainer(duration),
-        "wall_clock": {"render_minutes": _explainer_minutes(beats),
+        "wall_clock": {"render_minutes": _explainer_minutes(beats, aspect),
                        "note": f"逐拍渲染约 {EXPLAINER_SECONDS_PER_BEAT} 秒/拍,无生成排队"},
         "shot_count": beats,
     }
@@ -1002,7 +1008,7 @@ def analytics_page(request: Request):
     return templates.TemplateResponse(
         request, "analytics.html",
         {"request": request, "items": data["items"], "by_platform": data["by_platform"],
-         "platforms": platforms_info()},
+         "by_aspect": data["by_aspect"], "platforms": platforms_info()},
     )
 
 

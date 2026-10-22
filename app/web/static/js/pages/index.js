@@ -207,7 +207,10 @@ async function refreshEstimate() {
   const cat = $('#category-select').value;
   $('#est-dur').textContent = `${d} 秒成片`;
   try {
-    const data = await api.get(`/api/estimate?duration=${encodeURIComponent(d)}&category=${encodeURIComponent(cat)}`);
+    const data = await api.get(
+      `/api/estimate?duration=${encodeURIComponent(d)}&category=${encodeURIComponent(cat)}` +
+        `&aspect=${encodeURIComponent(selectedAspect())}`,
+    );
     if (seq !== estSeq) return; // 用户连点时只认最后一次
     const wc = data.wall_clock;
     const c = data.cost;

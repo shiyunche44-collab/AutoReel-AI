@@ -54,6 +54,24 @@
 
 <section class="card">
   <div class="card-head">
+    <h2>{{ m.icon("monitor", "i-sm") }}画幅对比</h2>
+    <span class="subtle small">按每条平均比,条数不同时合计没有可比性</span>
+  </div>
+  <div class="card-body">
+    <div class="table-wrap">
+      <table class="table" id="aspect-table">
+        <thead>
+          <tr><th>画幅</th><th class="num">作品</th><th class="num">已发布</th><th class="num">平均播放</th>
+            <th class="num">总播放</th><th class="num">总点赞</th><th class="num">涨粉</th><th class="num">互动率</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
     <h2>{{ m.icon("activity", "i-sm") }}作品明细</h2>
     <span class="subtle small">点一行看趋势</span>
   </div>
@@ -84,7 +102,7 @@
 {% endblock %}
 
 {% block page_data %}
-<script type="application/json" id="page-data">{{ {"items": items, "by_platform": by_platform} | tojson }}</script>
+<script type="application/json" id="page-data">{{ {"items": items, "by_platform": by_platform, "by_aspect": by_aspect} | tojson }}</script>
 {% endblock %}
 
 {% block script %}analytics{% endblock %}

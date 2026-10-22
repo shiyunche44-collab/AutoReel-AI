@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from .. import db
+from ..pipeline import aspect as aspect_mod
 from ..publish import accounts as accounts_mod
 from . import collector
 
@@ -86,6 +87,7 @@ def overview() -> dict[str, Any]:
     publications = db.list_publications(limit=500)
     items: list[dict[str, Any]] = []
     by_platform: dict[str, dict[str, Any]] = {}
+    by_aspect: dict[str, dict[str, Any]] = {}
     for row in publications:
         view = service.publication_view(row)
         snap = db.latest_snapshot(row["id"])
@@ -94,21 +96,38 @@ def overview() -> dict[str, Any]:
         view["engagement_rate"] = engagement_rate(metrics)
         view["captured_at"] = snap.get("captured_at") if snap else None
         view["snapshots"] = len(db.list_snapshots(row["id"], limit=1000))
+        view["aspect_label"] = aspect_mod.label(view["aspect"])
         items.append(view)
-        bucket = by_platform.setdefault(row["platform"], {
-            "platform": row["platform"], "label": view["platform_label"],
-            "published": 0, "views": 0, "likes": 0, "comments": 0,
-            "favorites": 0, "shares": 0, "followers": 0, "count": 0,
-        })
-        bucket["count"] += 1
-        if row["state"] == "published":
-            bucket["published"] += 1
-        for key in ("views", "likes", "comments", "favorites", "shares", "followers"):
-            value = metrics.get(key)
-            if value:
-                bucket[key] += int(value)
+        _add(by_platform.setdefault(row["platform"], _bucket(
+            platform=row["platform"], label=view["platform_label"])), row, metrics)
+        _add(by_aspect.setdefault(view["aspect"], _bucket(
+            aspect=view["aspect"], label=view["aspect_label"])), row, metrics)
     items.sort(key=lambda x: -(x.get("published_at") or x.get("created_at") or 0))
-    return {"items": items, "by_platform": list(by_platform.values())}
+    for bucket in by_aspect.values():
+        # 横竖屏比的是「每条平均」,条数不一样时合计没有可比性
+        bucket["avg_views"] = round(bucket["views"] / bucket["with_views"]) if bucket["with_views"] else None
+        bucket["engagement_rate"] = engagement_rate(bucket)
+    return {"items": items, "by_platform": list(by_platform.values()),
+            "by_aspect": sorted(by_aspect.values(), key=lambda b: b["aspect"])}
+
+
+_SUM_KEYS = ("views", "likes", "comments", "favorites", "shares", "followers")
+
+
+def _bucket(**head: Any) -> dict[str, Any]:
+    return {**head, "published": 0, "count": 0, "with_views": 0, **{k: 0 for k in _SUM_KEYS}}
+
+
+def _add(bucket: dict[str, Any], row: dict[str, Any], metrics: dict[str, Any]) -> None:
+    bucket["count"] += 1
+    if row["state"] == "published":
+        bucket["published"] += 1
+    if metrics.get("views") is not None:
+        bucket["with_views"] += 1
+    for key in _SUM_KEYS:
+        value = metrics.get(key)
+        if value:
+            bucket[key] += int(value)
 
 
 def platform_series(platform: str, days: int = 30) -> list[dict[str, Any]]:

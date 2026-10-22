@@ -291,3 +291,17 @@ def test_portrait_concept_style_falls_back(monkeypatch):
     # 选定模版有竖屏版:直接用
     ready.add("glass")
     assert explainer.portrait_concept_style("battery", "glass", PORTRAIT) == ("glass", "")
+
+
+def test_estimate_api_takes_aspect():
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    client = TestClient(main.app)
+    land = client.get("/api/estimate", params={"duration": 90, "aspect": "16:9"}).json()
+    tall = client.get("/api/estimate", params={"duration": 90, "aspect": "9:16"}).json()
+    junk = client.get("/api/estimate", params={"duration": 90, "aspect": "4:3"}).json()
+    assert tall["aspect"] == "9:16" and junk["aspect"] == "16:9"
+    assert tall["shot_count"] == land["shot_count"]
+    assert tall["wall_clock"]["render_minutes"] >= 1
