@@ -251,6 +251,10 @@ class Vocab:
     # ---- 概念动画(解说轨 concept 版式,模板在 motion/scenes/<名>.html)----
     #: 模板名 → 什么时候用(拼进分镜提示词)。空 = 这个品类不开 concept 版式
     concept_scenes: dict[str, str] = field(default_factory=dict)
+    #: 模板名 → 命中它的关键词(参数名 / 旁白里出现就选这个模板)。
+    #: 用途:概念动画用得少,需要**兜底**把它补上去时,靠这些词判断这一拍该配哪张图 ——
+    #: 讲电池的拍配电池包模板,讲补能的配补能模板,配错图等于把画面讲错了。
+    concept_scene_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     # ---- 前端 ----
     ui_subject_label: str = "产品"
@@ -348,6 +352,9 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict) and key == "detail_types":
             # 细节类型 → 各种说法(说法本身是词表,所以是元组)
+            kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
+        elif isinstance(default, dict) and key == "concept_scene_keys":
+            # 模板名 → 命中它的关键词(词表)
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict):
             kwargs[key] = {str(k): str(v) for k, v in (value or {}).items()}

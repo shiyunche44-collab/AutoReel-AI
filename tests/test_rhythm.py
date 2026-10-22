@@ -204,6 +204,101 @@ def test_demote_without_profile_still_falls_back_to_broll():
 
 
 # --------------------------------------------------------------------------
+# 概念动画:全片太少就补(护城河,复盘点名要 4–6 拍)
+# --------------------------------------------------------------------------
+def test_concept_min_scales_with_the_length():
+    assert explainer.concept_min(15) == 3
+    assert explainer.concept_min(30) == 4
+    assert explainer.concept_min(60) == explainer.MAX_CONCEPT
+
+
+def test_concept_scene_picks_the_matching_template():
+    p = load_profile("auto_long")
+    rows = [{"label": "电池容量", "values": ["73kWh"], "fact_id": "f_1"}]
+    assert explainer.concept_scene_for(rows, "这块电池 73 度", p.vocab) == "battery"
+    rows = [{"label": "零百加速", "values": ["2.92秒"], "fact_id": "f_2"}]
+    assert explainer.concept_scene_for(rows, "", p.vocab) == "accel"
+
+
+def test_concept_scene_refuses_when_nothing_matches():
+    p = load_profile("auto_long")
+    rows = [{"label": "整备质量", "values": ["2100kg"], "fact_id": "f_3"}]
+    assert explainer.concept_scene_for(rows, "今天聊点别的", p.vocab) == ""
+
+
+def test_promote_concepts_raises_the_count():
+    p = load_profile("auto_long")
+    rows = [{"label": "电池容量", "values": ["73kWh"], "fact_id": "f_1"}]
+    specs = []
+    for i in range(12):
+        specs.append(_spec(i, "panel", duration=4.0, section="三电性能",
+                            overlay={"kind": "panel", "rows": [dict(rows[0])], "source": "官方"}))
+    out = explainer.promote_concepts(specs, p)
+    assert sum(s.layout == "concept" for s in out) >= explainer.concept_min(len(specs))
+    # 补上去的拍要有模板、有数据
+    con = next(s for s in out if s.layout == "concept")
+    assert con.overlay["scene"] in p.vocab.concept_scenes
+    assert con.overlay["rows"]
+    assert not explainer.validate_beats(out)
+
+
+def test_promote_concepts_respects_the_section_grammar():
+    p = load_profile("auto_long")
+    rows = [{"label": "电池容量", "values": ["73kWh"], "fact_id": "f_1"}]
+    specs = [_spec(i, "panel", duration=4.0, section="结论建议",
+                    overlay={"kind": "panel", "rows": [dict(rows[0])], "source": ""})
+             for i in range(12)]
+    out = explainer.promote_concepts(specs, p)
+    assert all(s.layout != "concept" for s in out)
+
+
+def test_promote_concepts_keeps_two_concepts_apart():
+    p = load_profile("auto_long")
+    rows = [{"label": "电池容量", "values": ["73kWh"], "fact_id": "f_1"}]
+    specs = [_spec(i, "panel", duration=4.0, section="三电性能",
+                    overlay={"kind": "panel", "rows": [dict(rows[0])], "source": ""})
+             for i in range(12)]
+    out = explainer.promote_concepts(specs, p)
+    layouts = [s.layout for s in out]
+    assert not any(a == b == "concept" for a, b in zip(layouts, layouts[1:]))
+
+
+def test_promote_concepts_does_not_land_next_to_an_existing_concept():
+    """模型自己选的 concept 在后一拍时,前一拍也不能被升级成 concept。"""
+    p = load_profile("auto_long")
+    row = {"label": "电池容量", "values": ["73kWh"], "fact_id": "f_1"}
+    specs = []
+    for i in range(15):
+        if i == 1:
+            ov = {"kind": "concept", "scene": "battery", "rows": [dict(row)]}
+            specs.append(_spec(i, "concept", duration=4.0, section="三电性能", overlay=ov))
+        else:
+            ov = {"kind": "panel", "rows": [dict(row)], "source": ""}
+            specs.append(_spec(i, "panel", duration=4.0, section="三电性能", overlay=ov))
+    out = explainer.promote_concepts(specs, p)
+    layouts = [s.layout for s in out]
+    assert not any(a == b == "concept" for a, b in zip(layouts, layouts[1:]))
+    assert out[0].layout == "panel"
+
+
+def test_promote_concepts_does_nothing_for_categories_without_templates():
+    p = load_profile("baby_long")
+    rows = [{"label": "承重", "values": ["25kg"], "fact_id": "f_1"}]
+    specs = [_spec(i, "panel", duration=4.0, section="规格怎么选",
+                    overlay={"kind": "panel", "rows": [dict(rows[0])], "source": ""})
+             for i in range(12)]
+    out = explainer.promote_concepts(specs, p)
+    assert all(s.layout != "concept" for s in out)
+
+
+def test_concept_guide_asks_for_enough_concepts():
+    p = load_profile("auto_long")
+    guide = explainer.concept_guide(p.vocab, 30)
+    assert "4–6 拍" in guide
+    assert "优先用 concept" in guide
+
+
+# --------------------------------------------------------------------------
 # 每个数字标注口径与来源
 # --------------------------------------------------------------------------
 def _card(tag: str) -> dict:

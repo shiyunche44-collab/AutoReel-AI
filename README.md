@@ -317,6 +317,21 @@ python -m app.pipeline.library sheet 小米YU7 [--usable]          # 导出联�
 6. **素材池不够时也别冻帧**(`library.fill`):池子铺不满这一拍时,拿干净的官图补几刀
    (配不同运镜),而不是把最后一帧冻到底 —— 冻帧就是一段没有画面变化的时间。
 
+### 概念动画下限(`explainer.concept_min` / `promote_concepts`)
+
+复盘说:概念动画是全片视觉质量最高的部分(电池包格子图、补能曲线、尺寸线稿这类
+"看不见的东西"只有它讲得清),但实测一部片只用了 2–3 段。现在按拍数给下限:
+
+    下限 = min(6, max(3, round(拍数 × 0.13)))     # 15 拍→3,30 拍→4,45 拍→6,60 拍→6
+
+不够时由 `promote_concepts` 把 `panel` / `card` 拍升级成概念动画(数字仍来自已核对
+过的事实),三条规矩:
+
+- **不覆盖 `stat`** —— 大数字是模型特意选的,不是兜底用的;
+- **不连着两拍都升级**,也不动 `sections` 里没有 concept 的段;
+- 概念动画的模板必须**命中关键词才配**(`vocab.concept_scene_keys`:battery / charging /
+  accel / lidar / chip / dims)—— 配错图等于把画面讲错,一个都没命中就不配。
+
 ### 每个数字都标口径(`cards.basis_tag`)
 
 参数面板、大数字、数据卡的每一行,数字旁边都跟一个口径标签(「CLTC · 标准版 | 官方」),

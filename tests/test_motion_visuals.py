@@ -305,8 +305,11 @@ def test_concept_with_invented_number_or_unknown_scene_never_renders_as_concept(
     # 编造的数字:整拍没有任何可上屏的数据,只能退回 broll
     assert bad_num.layout == "broll"
     bad_scene = _concept_beats("rocket", [{"label": "CLTC续航", "values": ["835公里"], "fact_id": "f_1"}])
-    # 模板不存在:这一拍不再是 concept,但那行核对过的数据不该跟着一起扔掉
-    assert bad_scene.layout != "concept"
+    # 模板不存在:这一拍不再是 rocket(那行核对过的数据也没跟着一起扔掉)。
+    # 它可能被兜底成另一张**存在的**模板,或者退回面板 —— 但绝不能是 rocket。
+    assert bad_scene.overlay.get("scene") != "rocket"
+    if bad_scene.layout == "concept":
+        assert bad_scene.overlay["scene"] in load_profile("auto_long").vocab.concept_scenes
     assert "835" in str(bad_scene.overlay)
 
 
