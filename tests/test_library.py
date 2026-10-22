@@ -351,3 +351,96 @@ def test_fill_uses_pool_category_views(data_dir, tmp_path):
     lib.save()
     pieces = lib_mod.fill("推车", 3.0, hint="in_use")
     assert pieces and {p.item_id for p in pieces} == {"i1"}
+
+
+# --------------------------------------------------------------------------
+# 官方素材优先:官方源单独配额、确认秒数、官方源先打标签
+# --------------------------------------------------------------------------
+def test_discover_official_quota_and_third_party_cap(monkeypatch):
+    from app.providers import official, platform_video
+
+    H = platform_video.PlatformHit
+    off = [H("bilibili", f"https://www.bilibili.com/video/BVoff{n}", f"小米YU7 宣传片{n}",
+             uploader="小米汽车", duration=60, official=True) for n in range(12)]
+    other = [H("bilibili", f"https://www.bilibili.com/video/BVoth{n}", f"小米YU7 实拍{n}",
+               uploader=f"up{n}", duration=60) for n in range(12)]
+    monkeypatch.setattr(official, "bilibili_official", lambda *a, **k: list(off))
+    monkeypatch.setattr(official, "platform_official", lambda *a, **k: [])
+    monkeypatch.setattr(platform_video, "search", lambda q, **k: list(other))
+    monkeypatch.setattr(platform_video, "is_official", lambda h, *a, **k: h.official)
+    monkeypatch.setattr(config, "MEDIA_PLATFORMS", ["bilibili"])
+    lib = Library(subject="小米YU7")
+    lib_mod.discover(lib, ["小米汽车"], [])
+    n_off = sum(1 for s in lib.sources if s.official)
+    assert n_off == lib_mod.MAX_OFFICIAL_SOURCES
+    assert len(lib.sources) - n_off == lib_mod.THIRD_PARTY_WITH_OFFICIAL
+    assert all(s.official for s in lib.sources[:n_off])
+
+
+def test_confirmed_seconds_counts_only_safe_footage():
+    items = [_seg(1, 0, 10, official=True),                     # 官方:算
+             _seg(2, 0, 5, target="yes"),                        # 认出是这台车:算
+             _seg(3, 0, 20),                                     # 没认出的第三方:不算
+             _seg(4, 0, 8, target="yes", problem="text_overlay")]  # 第三方台标:不算
+    lib = Library(subject="x", items=items)
+    assert lib_mod.confirmed_seconds(lib, video_only=True) == 15
+    assert lib.stats()["confirmed_video_seconds"] == 15
+
+
+def test_tag_queue_tags_official_sources_first(monkeypatch):
+    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 1)
+    third = [_seg(n, n, n + 2, tagged=False) for n in range(2)]
+    offi = [_seg(n, n, n + 2, tagged=False, official=True) for n in range(10, 12)]
+    for i in offi:
+        i.source = "off"
+    queue = lib_mod._tag_queue(Library(subject="x", items=third + offi))
+    assert queue[0].official
+
+
+def test_site_videos_go_first_and_count_as_official(monkeypatch):
+    from app.providers import clips, official, platform_video
+
+    vids = [clips.ClipCandidate(url=f"https://cdn.x.com/yu7/pc/v{n}.mp4", page_url="p",
+                                origin="official:site", official=True) for n in range(6)]
+    monkeypatch.setattr(official, "site_assets", lambda *a, **k: (vids, []))
+    monkeypatch.setattr(official, "bilibili_official", lambda *a, **k: [])
+    monkeypatch.setattr(official, "platform_official", lambda *a, **k: [])
+    monkeypatch.setattr(platform_video, "search", lambda q, **k: [])
+    lib = Library(subject="小米YU7")
+    lib_mod.discover(lib, ["小米汽车"], [], spec={"sites": ("x.com",)})
+    assert len(lib.sources) == lib_mod.MAX_SITE_SOURCES
+    assert all(s.official and s.platform == "site" for s in lib.sources)
+
+
+def test_new_gallery_backfills_old_pool(data_dir, monkeypatch):
+    from app.providers import official
+
+    calls: list[str] = []
+    monkeypatch.setattr(official, "GALLERIES", {
+        "autohome": official.Gallery(lambda *a: calls.append("autohome") or []),
+        "official_site": official.Gallery(lambda *a: calls.append("official_site") or []),
+    })
+    monkeypatch.setattr(lib_mod, "profile_of", lambda lib: type(
+        "P", (), {"galleries": ["autohome", "official_site"]})())
+    lib = Library(subject="x", gallery_at=1.0, galleries_done=["autohome"])
+    lib_mod.ingest_gallery(lib, [])
+    assert calls == ["official_site"]
+    assert lib.galleries_done == ["autohome", "official_site"]
+    lib.save()
+    assert Library.load("x").galleries_done == ["autohome", "official_site"]
+
+
+def test_gallery_that_needs_login_is_retried_later(data_dir, monkeypatch):
+    """没登录的图源抛错:不记成抓过,登录后下次重建再抓。"""
+    from app.providers import official
+
+    def need_login(*a):
+        raise official.DongchediLoginRequired("要登录")
+
+    monkeypatch.setattr(official, "GALLERIES", {"dongchedi": official.Gallery(need_login)})
+    monkeypatch.setattr(lib_mod, "profile_of", lambda lib: type(
+        "P", (), {"galleries": ["dongchedi"]})())
+    lib = Library(subject="x")
+    errors: list[str] = []
+    assert lib_mod.ingest_gallery(lib, errors) == 0
+    assert lib.galleries_done == [] and "要登录" in errors[0]

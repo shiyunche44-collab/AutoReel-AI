@@ -184,7 +184,7 @@
             <strong>{{ r.name }}</strong>{% if r.group %}<span class="subtle">{{ r.group }}</span>{% endif %}
             <span class="grow subtle num {{ 'roster-thin' if r.thin else '' }}">
               {% if r.facts is not none %}事实 {{ r.facts }} 条(产品级 {{ r.product }}){% else %}事实未采集{% endif %}
-              · 素材池 {{ r.usable_seconds }} 秒{% if r.building %}(构建中){% endif %}
+              · 素材池 {{ r.usable_seconds }} 秒(确认本车视频 {{ r.confirmed_video_seconds | int }} 秒){% if r.building %}(构建中){% endif %}
             </span>
           </div>
           {% endfor %}
@@ -194,6 +194,12 @@
 
       {% if facts_report and facts_report.product_gap %}
       <div class="callout tone-danger">{{ m.icon("alert-circle") }}<div><strong>产品级事实不足</strong> · {{ facts_report.product_gap }}</div></div>
+      {% endif %}
+
+      {% if footage_thin %}
+      <div class="callout tone-warning">{{ m.icon("alert-circle") }}<div><strong>确认是本车的视频素材偏少</strong> ·
+        {% for f in footage_thin %}{{ f.name }} 只有 {{ f.seconds | int }} 秒{% if not loop.last %}、{% endif %}{% endfor %}。
+        背景会更多用官图和没认出车型的片段;可以在<a href="/library">素材池</a>里手动贴几条官方视频链接再渲染。</div></div>
       {% endif %}
 
       {% if facts_report and facts_report.stale_year_note %}

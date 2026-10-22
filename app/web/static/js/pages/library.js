@@ -1,8 +1,23 @@
 /* 素材库:池子列表的相对时间 + 池子详情按视角 / 可用 / 关键词筛选。 */
 import { $, $$, relTime, debounce } from '../ui/dom.js';
 import { initChrome } from '../ui/chrome.js';
+import { toast } from '../ui/toast.js';
+import { api } from '../api.js';
 
 initChrome();
+
+/* 懂车帝图库要登录:弹出浏览器,登录成功后窗口自动关 */
+const dcdLogin = $('#dcd-login');
+if (dcdLogin) {
+  dcdLogin.addEventListener('click', async () => {
+    try {
+      const r = await api.post('/api/sources/login/dongchedi');
+      toast(r.message, { type: 'brand', duration: 8000 });
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  });
+}
 
 $$('.rel-time').forEach((el) => {
   el.textContent = relTime(el.dataset.ts);

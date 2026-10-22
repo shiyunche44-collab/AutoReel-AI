@@ -112,11 +112,22 @@ REDISCOVER_SECONDS = 7 * 24 * 3600
 #: 实测小米 YU7 池子里四成视觉调用花在这类段上
 EARLY_STOP_SAMPLE = 8
 EARLY_STOP_RATIO = 0.7
-#: 解说轨的"够用":可用视频秒数 + 可用官图 × STILL_SECONDS 达到它,就不再给视频段
-#: 打标签。背景只要是这台车、画面干净,一条片子 4 分钟的背景量就够轮换
+#: 解说轨的"够用":**确认是这台车**的干净视频秒数(`confirmed_seconds`)达到它,就不再给
+#: 视频段打标签。只算确认过的:没认出车型的第三方段凑够了秒数,背景照样会配错车
 ENOUGH_USABLE_SECONDS = 240.0
 #: 多车横评:每台车只占全片的一小段,轻量池够这么多秒就停
 ROUNDUP_ENOUGH_SECONDS = 90.0
+#: 官方号的源单独计数,不和第三方源抢 `MAX_AUTO_SOURCES` 的名额:
+#: 官方画面一定是这台车、没有别人的台标,是背景的主力
+MAX_OFFICIAL_SOURCES = 8
+#: 其中官网视频最多几个(官网一页常有十来段短视频,都收会把官方号的宣传片挤掉)
+MAX_SITE_SOURCES = 4
+#: 官方源到这个数后,第三方源最多再收几个(只当补位)
+OFFICIAL_ENOUGH_SOURCES = 4
+THIRD_PARTY_WITH_OFFICIAL = 3
+#: 「确认是这台车」的视频秒数低于它,不等满 7 天就重新找源(每次至少隔这么久)
+CONFIRMED_VIDEO_TARGET = 180.0
+REDISCOVER_THIN_SECONDS = 6 * 3600
 #: 多车横评:每台车最多拉几个平台视频源
 ROUNDUP_MAX_SOURCES = 3
 STILL_SECONDS = 4.0
@@ -195,6 +206,8 @@ class Library:
     items: list[Item] = field(default_factory=list)
     discovered_at: float = 0.0
     gallery_at: float = 0.0
+    #: 抓过的静图来源名(profile 新加了来源,老池子下次构建时只补抓新的那几个)
+    galleries_done: list[str] = field(default_factory=list)
     updated_at: float = 0.0
     #: 建池的品类(profile 名)。空 = 旧池子,按汽车处理
     category: str = ""
@@ -227,6 +240,9 @@ class Library:
                    for i in raw.get("items") or []],
             discovered_at=float(raw.get("discovered_at") or 0.0),
             gallery_at=float(raw.get("gallery_at") or 0.0),
+            # 记这个字段之前的池子:抓过的就是当时唯一的汽车之家
+            galleries_done=list(raw.get("galleries_done") or (
+                ["autohome"] if raw.get("gallery_at") else [])),
             updated_at=float(raw.get("updated_at") or 0.0),
             category=str(raw.get("category") or ""),
             vlm_calls=int(raw.get("vlm_calls") or 0),
@@ -249,6 +265,7 @@ class Library:
                 "subject": self.subject,
                 "discovered_at": self.discovered_at,
                 "gallery_at": self.gallery_at,
+                "galleries_done": self.galleries_done,
                 "updated_at": self.updated_at,
                 "category": self.category or on_disk.category,
                 "vlm_calls": self.vlm_calls,
@@ -305,6 +322,9 @@ class Library:
             "skipped": sum(1 for i in self.items if i.skipped),
             "vlm_calls": self.vlm_calls,
             "usable_seconds": round(usable_seconds(self), 1),
+            "confirmed_seconds": round(confirmed_seconds(self), 1),
+            "confirmed_video_seconds": round(confirmed_seconds(self, video_only=True), 1),
+            "official_sources": sum(1 for s in self.sources if s.official),
             "usable_by_view": dict(sorted(views.items(), key=lambda kv: -kv[1])),
         }
 
@@ -370,13 +390,41 @@ def discovery_queries(subject: str, en: str, vocab: Vocab) -> tuple[list[str], l
     return zh, en_q
 
 
+def site_hits(subject: str, spec: dict[str, tuple[str, ...]], errors: list[str]
+              ) -> list[platform_video.PlatformHit]:
+    """车企官网车型页 / 媒体中心里的视频(直链 mp4、嵌入的 B 站 / YouTube 播放器)。
+    无水印、清晰度最高,排在所有源前面。页面要点名这台车,别的车型的素材按地址剔掉
+    (`official.site_assets`)。"""
+    if not spec or not (spec.get("sites") or spec.get("media")):
+        return []
+    try:
+        videos, _ = official.site_assets(subject, spec, errors=errors)
+    except Exception as exc:  # noqa: BLE001 - 官网改版只是少一路
+        errors.append(f"官网视频抓取失败:{str(exc)[:120]}")
+        return []
+    out: list[platform_video.PlatformHit] = []
+    for v in videos[:MAX_SITE_SOURCES]:
+        name = v.url.rsplit("/", 1)[-1].split("?", 1)[0][:60]
+        out.append(platform_video.PlatformHit(
+            platform=v.platform or "site", url=v.url, title=f"{subject} 官网 {name}",
+            uploader="官网", official=True, verified=True))
+    return out
+
+
 def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
-             max_sources: int = MAX_AUTO_SOURCES, tiktok_handles: Sequence[str] = ()) -> int:
-    """搜一轮新源加进池子。官方号的视频优先。返回新增的源数。"""
+             max_sources: int = MAX_AUTO_SOURCES, tiktok_handles: Sequence[str] = (),
+             spec: dict[str, tuple[str, ...]] | None = None) -> int:
+    """搜一轮新源加进池子。官网视频 → 官方号的视频 → 其余。返回新增的源数。"""
     subject = lib.subject
     vocab = vocab_of(lib)
     en = english_name(subject, aliases)
     hits: list[platform_video.PlatformHit] = []
+    # 官网的视频不走标题过滤(文件名不是标题),直接排最前
+    site = site_hits(subject, spec or {}, errors)
+    if aliases and "bilibili" in config.MEDIA_PLATFORMS:
+        # 官方号投稿直接按号列:关键词搜索只能碰到官方号的两三条
+        hits += official.bilibili_official(subject, aliases, markers=vocab.official_markers,
+                                           limit=MAX_OFFICIAL_SOURCES * 2, errors=errors)
     if aliases:
         hits += official.platform_official(subject, aliases, platforms=config.MEDIA_PLATFORMS,
                                            errors=errors, markers=vocab.official_markers)
@@ -393,19 +441,39 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
     for h in hits:
         h.official = h.official or bool(aliases and platform_video.is_official(
             h, aliases, markers=vocab.official_markers))
-    ranked = rank_sources(_dedupe_hits(hits), subject, names=[en], vocab=vocab)
+    ranked = [*_dedupe_hits(site),
+              *rank_sources(_dedupe_hits(hits), subject, names=[en], vocab=vocab)]
 
-    have_auto = sum(1 for s in lib.sources if s.added_by == "auto")
+    # 官方源和第三方源分开计数:官方的先收满,第三方只补位
+    auto = [s for s in lib.sources if s.added_by == "auto"]
+    n_official = sum(1 for s in auto if s.official)
+    n_other = len(auto) - n_official
+    # 横评的轻量池(max_sources 很小)官方 + 第三方合计不超过 max_sources;正常池官方单独计
+    separate = max_sources >= MAX_AUTO_SOURCES
+    official_cap = MAX_OFFICIAL_SOURCES if separate else max_sources
     added = 0
-    for h in ranked:
-        if have_auto + added >= max_sources:
+    for h in (h for h in ranked if h.official):
+        if n_official >= official_cap:
             break
-        added += lib.add_source(Source(
-            url=h.url, platform=h.platform, title=h.title, uploader=h.uploader,
-            duration=h.duration, official=h.official,
-        ))
+        got = lib.add_source(_source_of(h))
+        n_official += got
+        added += got
+    other_cap = max_sources if separate else max(0, max_sources - n_official)
+    if n_official >= OFFICIAL_ENOUGH_SOURCES:
+        other_cap = min(other_cap, THIRD_PARTY_WITH_OFFICIAL)
+    for h in (h for h in ranked if not h.official):
+        if n_other >= other_cap:
+            break
+        got = lib.add_source(_source_of(h))
+        n_other += got
+        added += got
     lib.discovered_at = time.time()
     return added
+
+
+def _source_of(h: platform_video.PlatformHit) -> Source:
+    return Source(url=h.url, platform=h.platform, title=h.title, uploader=h.uploader,
+                  duration=h.duration, official=h.official)
 
 
 #: 标题里出现这些词的源不要:游戏画面、新闻事件、渲染猜想、玩具手办。
@@ -644,6 +712,8 @@ def ingest_gallery(lib: Library, errors: list[str], *,
     have = {i.url for i in lib.items if i.kind == "still"}
     added = 0
     for name in profile_of(lib).galleries:
+        if name in lib.galleries_done:
+            continue
         gallery = official.GALLERIES.get(name)
         if gallery is None:
             errors.append(f"未知静图来源:{name}")
@@ -663,6 +733,7 @@ def ingest_gallery(lib: Library, errors: list[str], *,
             if item is not None:
                 have.add(ref.url)
                 added += 1
+        lib.galleries_done.append(name)
     lib.gallery_at = time.time()
     return added
 
@@ -741,7 +812,8 @@ TAG_SYSTEM = """你把视觉模型对若干图片的描述转成素材标签。�
 - problem,按顺序取第一条命中的:target 为 "no" → "not_target_model";
   {no_subject}
   明确说{short}被画面边缘切掉(局部特写不算)→ "cropped";明确说模糊、过暗、看不清 → "unclear";
-  宣传海报(大标题字、代言人摆拍)、网页 / App 截图,或{short}是**显示在大屏 / 屏幕 / 电视里**的
+  宣传海报(画面上**有**大标题字,或有代言人摆拍;只是"宣传照 / 官方大片"、画面里没有大字和人的不算)、
+  网页 / App 截图,或{short}是**显示在大屏 / 屏幕 / 电视里**的
   翻拍画面(发布会舞台大屏、前景有观众)→ "poster";
   画面下方有对白或解说**字幕**(一行行句子)→ "subtitle";
   只有角落的台标、水印、小字标注 → "text_overlay";都没有 → ""。
@@ -775,7 +847,7 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
     while queue:
         if deadline and time.monotonic() > deadline:
             break
-        if enough_seconds and usable_seconds(lib) >= enough_seconds:
+        if enough_seconds and confirmed_seconds(lib, video_only=True) >= enough_seconds:
             queue = [i for i in queue if i.kind == "still"]
         batch = [i for i in queue[:TAG_BATCH] if not i.tagged and not i.skipped
                  and i.frame and Path(i.frame).is_file()]
@@ -823,6 +895,22 @@ def usable_seconds(lib: Library) -> float:
         if i.kind == "video":
             total += i.length if i.length >= FILL_MIN_PIECE else 0.0
         elif i.view in angle_of_view:
+            total += STILL_SECONDS
+    return total
+
+
+def confirmed_seconds(lib: Library, *, video_only: bool = False) -> float:
+    """池子里「确认是这台车、能放心当背景」的总量(秒):官方来源或认出是这台车,
+    而且没有主持人出镜 / 第三方台标。开场拍只用这部分;它少了,背景就只能靠官图和没认出的片段。"""
+    hosts = _host_sources(lib.items)
+    angle_of_view = vocab_of(lib).angle_of_view
+    total = 0.0
+    for i in lib.items:
+        if not i.usable or not _confirmed(i) or _hard_bad(i, hosts):
+            continue
+        if i.kind == "video":
+            total += i.length if i.length >= FILL_MIN_PIECE else 0.0
+        elif not video_only and i.view in angle_of_view:
             total += STILL_SECONDS
     return total
 
@@ -913,7 +1001,7 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
           enough_seconds: float | None = None) -> dict[str, Any]:
     """增量构建素材池。返回统计。全程不抛异常。
 
-    `enough_seconds`:可用素材够这么多秒就不再给视频段打标签。默认
+    `enough_seconds`:确认是这台车的视频够这么多秒就不再给视频段打标签。默认
     `ENOUGH_USABLE_SECONDS`(背景不挑画面);传 0 不设上限。
     """
     errors = errors if errors is not None else []
@@ -938,12 +1026,14 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
         tiktok_handles = tuple(spec.get("tiktok", ()))
 
     try:
-        if time.time() - lib.discovered_at > REDISCOVER_SECONDS:
+        age = time.time() - lib.discovered_at
+        thin = confirmed_seconds(lib, video_only=True) < CONFIRMED_VIDEO_TARGET
+        if age > REDISCOVER_SECONDS or (thin and age > REDISCOVER_THIN_SECONDS):
             n = discover(lib, aliases, errors, max_sources=max_sources,
-                         tiktok_handles=tiktok_handles)
+                         tiktok_handles=tiktok_handles, spec=spec)
             say(f"发现新源 {n} 个")
             lib.save()
-        if not lib.gallery_at:
+        if any(g not in lib.galleries_done for g in profile_of(lib).galleries):
             n = ingest_gallery(lib, errors, spec=spec)
             say(f"静图 {n} 张")
             lib.save()
@@ -967,7 +1057,7 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
         lib.save()
     stats = lib.stats()
     stats["elapsed"] = round(time.monotonic() - started, 1)
-    enough = bool(enough_seconds) and usable_seconds(lib) >= enough_seconds
+    enough = bool(enough_seconds) and confirmed_seconds(lib, video_only=True) >= enough_seconds
     stats["finished"] = not _late() and not stats["sources_pending"] and (
         enough or not _tag_queue(lib))
     return stats
@@ -1057,7 +1147,8 @@ def _tag_queue(lib: Library) -> list[Item]:
             by_src.setdefault(i.source, []).append(i)
     samples: list[Item] = []
     rest: list[Item] = []
-    for segs in by_src.values():
+    # 官方源先打:够用(按确认过的秒数算)就停,第三方的段可能根本不用看
+    for segs in sorted(by_src.values(), key=lambda segs: not segs[0].official):
         tagged = sum(1 for i in segs if i.tagged)
         room = MAX_TAGGED_PER_SOURCE - tagged
         if room <= 0:

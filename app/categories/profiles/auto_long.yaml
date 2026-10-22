@@ -642,9 +642,11 @@ bgm_genres: [tech, corporate-music, documentary]
 # 旁白音色(MiniMax)
 voice_id: male-qn-jingying
 
-# 静图来源(providers/official.GALLERIES):汽车之家官图按视角分好类。
-# 懂车帝(dongchedi)也能用,图多是 640 宽的文章配图,暂不开
-galleries: [autohome]
+# 静图来源(providers/official.GALLERIES):汽车之家官图按视角分好类;official_site 是
+# 车企官网车型页 + 媒体中心的大图(只认点名这台车的页面)。
+# 懂车帝(dongchedi)图库要登录(素材库页「登录懂车帝」):官方图 + 外观 / 内饰 1920 宽大图;
+# 没登录时这一项跳过、不记成抓过,登录后下次重建自动补上
+galleries: [autohome, official_site, dongchedi]
 
 # 热点选题口径(字段说明见 app/categories.TrendSpec)。品牌兜底词另外并上 official_sites 别名
 trends:
@@ -804,7 +806,6 @@ vocab:
     lidar: [雷达, 摄像头, 超声波, 感知]
     chip: [芯片, 算力, 处理器]
     dims: [尺寸, 轴距, 长宽高, 空间, 车身]
-
   ui_subject_label: 选题 / 车型
   ui_placeholder: 例:比亚迪汉 EV 2026 款
   ui_help: 尽量写全品牌、车型和年款,事实采集会更准。

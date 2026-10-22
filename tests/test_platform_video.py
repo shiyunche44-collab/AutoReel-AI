@@ -253,3 +253,28 @@ def test_js_runtime_enabled_when_node_is_installed(monkeypatch):
 def test_title_relevance_model_code_in_chinese_subject(title, ok):
     """回归:中文主体只认整串,英文标题(YouTube)被全部过滤掉。"""
     assert pv.title_relevant(title, "小米YU7") is ok
+
+
+def test_wbi_sign_is_deterministic():
+    from app.providers import platform_video as pv
+
+    mixin = pv.wbi_mixin_key("https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+                             "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png")
+    assert mixin == "ea1db124af3c7062474693fa704f4ff8"
+    signed = pv.wbi_sign({"foo": "114", "bar": "514", "zab": 1919810}, mixin, now=1702204169)
+    assert signed["w_rid"] == "8f6f2b5b3d485fe1886cec6a0be8c5d4"
+
+
+def test_parse_bili_space_and_users():
+    from app.providers import platform_video as pv
+
+    hits = pv.parse_bili_space({"data": {"list": {"vlist": [
+        {"bvid": "BV1x", "title": "YU7 &amp; 宣传片", "length": "01:31", "author": "小米汽车",
+         "play": 10, "created": 5}, {"title": "无 bvid"}]}}})
+    assert len(hits) == 1 and hits[0].url.endswith("/BV1x")
+    assert hits[0].title == "YU7 & 宣传片" and hits[0].duration == 91
+    users = pv.parse_bili_users({"data": {"result": [
+        {"mid": 7, "uname": "小米汽车", "official_verify": {"type": 1}},
+        {"mid": 8, "uname": "路人", "official_verify": {"type": -1}}]}})
+    assert users == [{"mid": 7, "name": "小米汽车", "verified": True},
+                     {"mid": 8, "name": "路人", "verified": False}]

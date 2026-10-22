@@ -39,6 +39,30 @@ def _import_playwright():
     return sync_playwright
 
 
+#: 本机常见的有界面浏览器
+_HEADED_CANDIDATES = (
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
+)
+
+
+def headed_browser(executable: str | None) -> str | None:
+    """要弹窗让人登录时用的浏览器。
+
+    渲染概念动画用的 chrome-headless-shell 没有界面,拿它开"有头"窗口什么也看不到;
+    这种情况换成本机装的 Chrome / Edge。"""
+    if executable and "headless" not in Path(executable).name.lower():
+        return executable
+    for cand in _HEADED_CANDIDATES:
+        if Path(cand).is_file():
+            return cand
+    return executable
+
+
 def state_path(key: str) -> Path:
     """某个平台的登录态文件。"""
     path = config.DATA_DIR / "_browser" / f"{key}.json"
@@ -73,6 +97,8 @@ class BrowserSession:
         sync_playwright = _import_playwright()
         self._pw = sync_playwright().start()
         executable = config.BROWSER_PATH
+        if not self.headless:
+            executable = headed_browser(executable)
         launch: dict[str, Any] = {"headless": self.headless}
         if executable and Path(executable).is_file():
             launch["executable_path"] = executable
@@ -158,23 +184,44 @@ class BrowserSession:
             return ""
 
 
-def login(key: str, url: str, *, headless: bool = False, timeout: int = 300) -> Path:
+#: 登录窗口开着时,每隔多少秒存一次登录态
+LOGIN_SAVE_EVERY = 5.0
+
+
+def login(key: str, url: str, *, headless: bool = False, timeout: int = 300,
+          done_cookie: str = "") -> Path:
     """打开有头浏览器让人扫码登录,存下登录态。
 
     用于小红书 / 视频号这类只能扫码的平台。
     **用户关掉浏览器窗口就立刻结束**,不用干等满 5 分钟。
+    登录态每隔几秒存一次:用户登完忘了关窗,登录态也已经落盘。
+    给了 `done_cookie`(登录后才有的 cookie 名)时,一出现就存好并自动关窗。
     """
+    path = state_path(key)
     with BrowserSession(key, headless=headless) as session:
         session.goto(url, wait_ms=1500)
         deadline = time.time() + timeout
+        last_save = 0.0
         while time.time() < deadline:
             try:
-                # 轻量探活:浏览器被关掉时这里会抛
+                # 轻量探活:窗口被关掉时页面会变成 closed,或者这里直接抛
+                if session.page.is_closed() or not session._browser.is_connected():
+                    break
                 session.page.title()
+                if done_cookie and any(c.get("name") == done_cookie and c.get("value")
+                                       for c in session._context.cookies()):
+                    session.page.wait_for_timeout(2000)  # 让登录后的其他 cookie 也写完
+                    return session.save_state()
+                if time.time() - last_save >= LOGIN_SAVE_EVERY:
+                    session.save_state()
+                    last_save = time.time()
             except Exception:  # noqa: BLE001 - 窗口关了就是登完了
                 break
             time.sleep(1)
-        return session.save_state()
+        try:
+            return session.save_state()
+        except Exception:  # noqa: BLE001 - 窗口已关,用最后一次存下的
+            return path
 
 
 def state_exists(key: str) -> bool:

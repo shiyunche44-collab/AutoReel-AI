@@ -44,7 +44,7 @@ from .pipeline import aspect, concept_styles, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
-from .providers import cli
+from .providers import cli, official
 from .publish import accounts as publish_accounts
 from .publish import browser as publish_browser
 from .publish import metadata as publish_metadata
@@ -481,10 +481,20 @@ def project_page(request: Request, project_id: str):
             roster.append({"name": s.name, "group": s.group, "facts": got.get("facts"),
                            "product": got.get("product"), "thin": s.name in thin,
                            "usable_seconds": st["usable_seconds"],
+                           "confirmed_video_seconds": st["confirmed_video_seconds"],
                            "building": library.is_building(s.name)})
         lib = {"vlm_calls": vlm}
+        # 横评每台车只占一小段,门槛按轻量池算
+        thin_at = library.ROUNDUP_ENOUGH_SECONDS / 2
+        footage_thin = [{"name": r["name"], "seconds": r["confirmed_video_seconds"]}
+                        for r in roster if not r["building"]
+                        and r["confirmed_video_seconds"] < thin_at]
     else:
         lib = library.Library.load(detail.subject).stats()
+        footage_thin = ([{"name": detail.subject, "seconds": lib["confirmed_video_seconds"]}]
+                        if not library.is_building(detail.subject)
+                        and lib["confirmed_video_seconds"] < library.CONFIRMED_VIDEO_TARGET
+                        else [])
     estimate["library_vlm_calls"] = lib["vlm_calls"]
     estimate["library"] = costs.estimate_library(lib["vlm_calls"])
     wall_clock = {"render_minutes": _explainer_minutes(beats, detail.aspect)}
@@ -498,6 +508,7 @@ def project_page(request: Request, project_id: str):
             "lint": db.read_json(project_id, "lint.json", []) or [],
             "facts_report": facts_report,
             "roster": roster,
+            "footage_thin": footage_thin,
             "render": db.read_json(project_id, "render.json", {}) or {},
             "events": db.get_events(project_id, limit=40),
             "wall_clock": wall_clock,
@@ -561,7 +572,25 @@ def library_index(request: Request):
                       "updated_at": lib.updated_at, "cover": _pool_cover(lib),
                       "building": library.is_building(lib.subject), "stats": lib.stats()})
     pools.sort(key=lambda p: -p["updated_at"])
-    return templates.TemplateResponse(request, "library.html", {"request": request, "pools": pools})
+    return templates.TemplateResponse(request, "library.html", {
+        "request": request, "pools": pools, "confirmed_target": library.CONFIRMED_VIDEO_TARGET,
+        "dcd_logged_in": official.dongchedi_logged_in()})
+
+
+@app.post("/api/sources/login/dongchedi")
+def source_login_dongchedi():
+    """打开浏览器登录懂车帝(图库要登录)。登录成功自动存好关窗;后台线程跑。"""
+    def _run() -> None:
+        try:
+            publish_browser.login(official.DCD_LOGIN_KEY, "https://www.dongchedi.com/",
+                                  timeout=900, done_cookie=official.DCD_LOGIN_COOKIE)
+        except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
+            pass
+
+    import threading
+
+    threading.Thread(target=_run, name="login-dongchedi", daemon=True).start()
+    return {"ok": True, "message": "浏览器已打开,登录懂车帝后窗口会自动关闭"}
 
 
 @app.get("/library/{slug}", response_class=HTMLResponse)

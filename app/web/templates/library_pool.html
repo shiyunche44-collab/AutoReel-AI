@@ -27,6 +27,8 @@
 <div class="kpi-row pool-kpis">
   <div class="kpi"><span class="kpi-label">{{ m.icon("film", "i-sm") }}视频片段</span><span class="kpi-value">{{ stats.video_usable }}<small>/ {{ stats.video_segments }} 可用</small></span></div>
   <div class="kpi"><span class="kpi-label">{{ m.icon("image", "i-sm") }}图片</span><span class="kpi-value">{{ stats.stills_usable }}<small>/ {{ stats.stills }} 可用</small></span></div>
+  <div class="kpi" title="官方来源或认出是这台车、没有主持人和第三方台标的视频。开场只用这部分"><span class="kpi-label">{{ m.icon("shield", "i-sm") }}确认本车</span><span class="kpi-value">{{ stats.confirmed_video_seconds | int }}<small>秒视频</small></span>
+    <span class="kpi-sub">官方来源 {{ stats.official_sources }} 个</span></div>
   <div class="kpi"><span class="kpi-label">{{ m.icon("link", "i-sm") }}来源</span><span class="kpi-value">{{ stats.sources_done }}<small>/ {{ stats.sources }} 已下载</small></span>
     <span class="kpi-sub">{% if stats.sources_failed %}<span class="text-danger">{{ stats.sources_failed }} 个失败</span>{% else %}&nbsp;{% endif %}</span></div>
   <div class="kpi"><span class="kpi-label">{{ m.icon("sparkles", "i-sm") }}视觉调用</span><span class="kpi-value">{{ stats.vlm_calls }}<small>次</small></span>

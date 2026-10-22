@@ -4,6 +4,10 @@
 """
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from app.categories import load_profile
 from app.providers import official, platform_video
 
@@ -202,3 +206,156 @@ def test_gallery_failures_are_isolated(monkeypatch):
     errors: list[str] = []
     assert official.gallery_images("比亚迪汉", errors=errors) == []
     assert errors
+
+
+# --------------------------------------------------------------------------
+# B 站官方号投稿
+# --------------------------------------------------------------------------
+def test_model_keyword():
+    assert official.model_keyword("小米YU7") == "YU7"
+    assert official.model_keyword("特斯拉Model Y") == "Model Y"
+    assert official.model_keyword("比亚迪海豹") == "比亚迪海豹"
+    assert official.model_keyword("比亚迪海豹06", ["比亚迪", "BYD"]) == "海豹06"
+
+
+def test_sibling_models():
+    aliases = ["小米汽车", "小米SU7", "小米YU7", "Xiaomi SU7", "Xiaomi YU7", "Xiaomi EV"]
+    assert official.sibling_models(aliases, "YU7") == ["SU7"]
+    tesla = ["特斯拉", "Tesla", "Model 3", "Model Y", "Model S", "Model X", "Cybertruck"]
+    assert official.sibling_models(tesla, "Model Y") == ["Model 3", "Model S", "Model X"]
+
+
+def test_rank_uploads_prefers_showcase_in_sweet_spot():
+    H = platform_video.PlatformHit
+    hits = [H("bilibili", "live", "小米YU7八项直播测试,全程回顾", duration=22000),
+            H("bilibili", "launch", "小米YU7发布会", duration=4000),
+            H("bilibili", "tvc", "小米YU7 宣传片", duration=90),
+            H("bilibili", "misc", "小米YU7 七月", duration=60)]
+    assert [h.url for h in official.rank_uploads(hits)] == ["tvc", "misc", "launch", "live"]
+
+
+def test_bilibili_official_filters_titles(monkeypatch):
+    H = platform_video.PlatformHit
+    monkeypatch.setattr(platform_video, "bilibili_users", lambda name, **k: [
+        {"mid": 1, "name": "小米汽车", "verified": True},
+        {"mid": 2, "name": "小米汽车车友会", "verified": True},   # 名字对得上但不像官方号
+        {"mid": 3, "name": "小米汽车官方粉丝", "verified": False},  # 没有机构认证
+    ])
+    seen: list[int] = []
+
+    def uploads(mid, keyword, **k):
+        seen.append(mid)
+        assert keyword == "YU7"
+        return [H("bilibili", "a", "YU7 GT 高环极速测试", duration=60),
+                H("bilibili", "b", "SU7 和 YU7 一起出发", duration=60),
+                H("bilibili", "c", "小米汽车七月权益", duration=60)]
+
+    monkeypatch.setattr(platform_video, "bilibili_uploads", uploads)
+    monkeypatch.setattr(platform_video, "_cached_hits", lambda p, q, n, fetch: fetch())
+    got = official.bilibili_official("小米YU7", ["小米汽车", "小米SU7", "小米YU7"],
+                                     markers=("汽车",))
+    assert seen == [1]
+    assert [h.url for h in got] == ["a"] and got[0].official
+
+
+def test_url_names_model_codes():
+    assert official.url_names("https://www.tesla.cn/modely", "Model Y")
+    assert official.url_names("https://x/Model-Y-Premium-Desktop.mp4", "Model Y")
+    assert official.url_names("https://s1.xiaomiev.com/images/yu7_20260521/pc/1.jpg", "YU7")
+    assert not official.url_names("https://s1.xiaomiev.com/images/su7_20260107/a.png", "YU7")
+    assert not official.url_names("https://x/Model-Y-Premium.mp4", "Model S")
+
+
+STRICT_HTML = """
+<video src="https://cdn.xiaomiev.com/yu7/pc/hero.mp4"></video>
+<video src="https://cdn.xiaomiev.com/yu7/m/hero.mp4"></video>
+<video src="https://cdn.xiaomiev.com/su7/pc/hero.mp4"></video>
+<img src="https://cdn.xiaomiev.com/yu7/pc/exterior-01.jpg">
+<img src="https://cdn.xiaomiev.com/su7_2026/pc/app_photo.jpg">
+"""
+
+
+def test_site_media_strict_keeps_only_this_model(monkeypatch):
+    monkeypatch.setattr(official.webassets, "bing_web", lambda q, **k: [
+        "https://www.xiaomiev.com/", "https://www.xiaomiev.com/yu7"])
+    pages: list[str] = []
+
+    def fetch(url, **k):
+        pages.append(url)
+        return STRICT_HTML
+
+    monkeypatch.setattr(official.clips, "fetch_page", fetch)
+    spec = {"aliases": ("小米汽车", "小米SU7", "小米YU7"), "sites": ("xiaomiev.com",), "media": ()}
+    vids, stills = official.site_media("小米YU7", spec, strict=True)
+    assert pages == ["https://www.xiaomiev.com/yu7"]          # 首页不要
+    assert [v.url for v in vids] == ["https://cdn.xiaomiev.com/yu7/pc/hero.mp4"]
+    assert [s.url for s in stills] == ["https://cdn.xiaomiev.com/yu7/pc/exterior-01.jpg"]
+
+
+def test_dongchedi_login_shell_returns_nothing(monkeypatch):
+    monkeypatch.setattr(official, "dongchedi_cookies", lambda: {})
+    monkeypatch.setattr(official, "find_dongchedi_series", lambda s: "20041")
+    shell = '<img src="https://p6-dcd.byteimg.com/img/tos-cn-i-dcdx/abc~1200x0.jpg">'
+    monkeypatch.setattr(official.webassets, "_http_text", lambda url, **k: shell)
+    assert official.dongchedi_images("小米YU7") == []
+
+
+def _dcd_page(series_id, trims):
+    props = {"props": {"pageProps": {
+        "seriesInfo": {"series_id": series_id},
+        "pictureInfo": {"series_id": series_id, "picture_list": trims}}}}
+    return ('<html><script id="__NEXT_DATA__" type="application/json">'
+            + json.dumps(props) + "</script></html>")
+
+
+def test_parse_dongchedi_gallery_upsizes_and_puts_new_year_first():
+    body = _dcd_page(20041, [
+        {"year": 2025, "large_pic_url": [
+            "http://p9-dcd.byteimg.com/a.jpg~tplv-x-original:750:0.jpg?psm=1"]},
+        {"year": 2026, "large_pic_url": [
+            "http://p9-dcd.byteimg.com/b.jpg~tplv-x-original:750:0.jpg?psm=1"]},
+    ])
+    urls = official.parse_dongchedi_gallery(body, "20041")
+    assert urls == ["https://p9-dcd.byteimg.com/b.jpg~tplv-x-original:1920:0.jpg?psm=1",
+                    "https://p9-dcd.byteimg.com/a.jpg~tplv-x-original:1920:0.jpg?psm=1"]
+    # 别的车系的页面(跳走了 / 没登录)不认
+    assert official.parse_dongchedi_gallery(body, "99999") == []
+    assert official.parse_dongchedi_gallery("<html>请登录</html>", "20041") == []
+
+
+def test_dongchedi_gallery_requires_login(monkeypatch):
+    monkeypatch.setattr(official, "dongchedi_cookies", lambda: {})
+    with pytest.raises(official.DongchediLoginRequired):
+        official.GALLERIES["dongchedi"].fetch("小米YU7", {}, [])
+
+
+def test_dongchedi_logged_in_takes_official_first(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(official, "dongchedi_cookies", lambda: {"sessionid": "x"})
+    monkeypatch.setattr(official, "find_dongchedi_series", lambda s: "20041")
+
+    def handler(request):
+        cat = str(request.url).rsplit("-", 1)[1]
+        urls = [f"http://p9-dcd.byteimg.com/{cat}{i}.jpg~t-original:750:0.jpg" for i in range(20)]
+        return httpx.Response(200, text=_dcd_page(20041, [{"year": 2026, "large_pic_url": urls}]))
+
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    refs = official.dongchedi_images("小米YU7", require_login=True)
+    assert [r.note for r in refs[:12]] == ["懂车帝官方图"] * 12
+    assert [r.angle for r in refs[12:]] == ["exterior_45"] * 6 + ["interior"] * 6
+    assert all("original:1920:0" in r.url for r in refs)
+
+
+def test_dongchedi_expired_login_raises(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(official, "dongchedi_cookies", lambda: {"sessionid": "old"})
+    monkeypatch.setattr(official, "find_dongchedi_series", lambda s: "20041")
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>")), **kw))
+    with pytest.raises(official.DongchediLoginRequired):
+        official.dongchedi_images("小米YU7", require_login=True)

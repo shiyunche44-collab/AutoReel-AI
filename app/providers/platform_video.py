@@ -246,6 +246,177 @@ def search_bilibili(query: str, *, limit: int = 10, order: str = "",
     return hits[:limit]
 
 
+# --------------------------------------------------------------------------
+# B 站官方号投稿:按 UP 主列视频
+# --------------------------------------------------------------------------
+# 关键词搜索只能捞到官方号的两三条(小米YU7 搜 8 个词,官方号的只有 5 条),
+# 而「小米汽车」号下标题带 YU7 的投稿有 300 多条 —— 宣传片、测试实拍、功能演示,
+# 全是确认是这台车、没有别人台标的画面。所以官方素材直接按号列投稿。
+_BILI_USER_SEARCH = "https://api.bilibili.com/x/web-interface/search/type"
+_BILI_NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+_BILI_SPACE_API = "https://api.bilibili.com/x/space/wbi/arc/search"
+#: wbi 签名的混淆表(B 站前端写死的常量,和 yt-dlp 用的同一张)
+_WBI_TABLE = (46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9,
+              42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1,
+              60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52)
+def bili_dm_params() -> dict[str, Any]:
+    """空间接口要的浏览器指纹(和 yt-dlp 同一套造法)。不带回 412;**写死成固定串**
+    连发几次就被风控成 -352,所以每次随机。"""
+    import base64
+    import json
+    import random
+    import string
+
+    def junk(lo: int, hi: int) -> str:
+        raw = "".join(random.choices(string.printable, k=random.randint(lo, hi))).encode()
+        return base64.b64encode(raw)[:-2].decode()
+
+    r1, r2 = random.randint(0, 113), random.randint(0, 513)
+    top = random.randint(0, 100)
+    inter = {"ds": [], "wh": [2 * 1920 + 2 * 1080 + 3 * r1, 4 * 1920 - 1080 + r1, r1],
+             "of": [3 * top + r2, 4 * top + 2 * r2, r2]}
+    return {"dm_img_list": "[]", "dm_img_str": junk(16, 64), "dm_cover_img_str": junk(32, 128),
+            "dm_img_inter": json.dumps(inter, separators=(",", ":"))}
+
+
+def wbi_mixin_key(img_url: str, sub_url: str) -> str:
+    """nav 接口给的两张图的文件名拼起来,按混淆表重排取前 32 位。"""
+    def stem(u: str) -> str:
+        return u.rsplit("/", 1)[-1].split(".")[0]
+    raw = stem(img_url) + stem(sub_url)
+    return "".join(raw[i] for i in _WBI_TABLE if i < len(raw))[:32]
+
+
+def wbi_sign(params: dict[str, Any], mixin: str, *, now: int | None = None) -> dict[str, Any]:
+    """给参数加 `wts` + `w_rid`。值里的 !'()* 要先去掉(B 站前端也这么做)。"""
+    import hashlib
+
+    signed = dict(params, wts=int(time.time() if now is None else now))
+    clean = {k: "".join(ch for ch in str(v) if ch not in "!'()*") for k, v in signed.items()}
+    query = urllib.parse.urlencode(sorted(clean.items()))
+    signed["w_rid"] = hashlib.md5((query + mixin).encode()).hexdigest()
+    return signed
+
+
+def _bili_client() -> Any:
+    import httpx
+
+    client = httpx.Client(headers={"User-Agent": webassets.BROWSER_UA,
+                                   "Referer": "https://space.bilibili.com/",
+                                   "Origin": "https://space.bilibili.com"}, timeout=20)
+    client.get("https://www.bilibili.com/")  # 种 buvid3 等匿名 cookie
+    return client
+
+
+def parse_bili_users(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """用户搜索结果 → [{mid, name, verified}]。`official_verify.type` 1 = 机构认证。"""
+    out: list[dict[str, Any]] = []
+    for u in (payload.get("data") or {}).get("result") or []:
+        if not isinstance(u, dict) or not u.get("mid"):
+            continue
+        verify = u.get("official_verify") or {}
+        out.append({"mid": int(u["mid"]), "name": html.unescape(str(u.get("uname") or "")),
+                    "verified": _as_int(verify.get("type")) == 1})
+    return out
+
+
+def bilibili_users(name: str, *, limit: int = 5) -> list[dict[str, Any]]:
+    """按名字搜 UP 主。失败抛 PlatformError(调用方降级)。"""
+    import uuid
+
+    import httpx
+
+    try:
+        resp = httpx.get(_BILI_USER_SEARCH, params={"search_type": "bili_user", "keyword": name},
+                         headers={"User-Agent": webassets.BROWSER_UA,
+                                  "Referer": "https://search.bilibili.com/",
+                                  "Cookie": f"buvid3={uuid.uuid4()}infoc"}, timeout=20)
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise PlatformError(f"B 站用户搜索不可用:{str(exc)[:80]}") from exc
+    if payload.get("code") not in (0, None):
+        raise PlatformError(f"B 站用户搜索返回 code={payload.get('code')}")
+    return parse_bili_users(payload)[:limit]
+
+
+def parse_bili_space(payload: dict[str, Any], uploader: str = "") -> list[PlatformHit]:
+    """空间投稿接口 → PlatformHit。官方号列出来的,`verified` 由调用方定。"""
+    vlist = (((payload.get("data") or {}).get("list") or {}).get("vlist")) or []
+    hits: list[PlatformHit] = []
+    for v in vlist:
+        if not isinstance(v, dict) or not v.get("bvid"):
+            continue
+        hits.append(PlatformHit(
+            platform="bilibili", url=f"https://www.bilibili.com/video/{v['bvid']}",
+            title=html.unescape(str(v.get("title") or "")),
+            uploader=str(v.get("author") or uploader),
+            duration=parse_bili_duration(v.get("length")),
+            extra={"play": _as_int(v.get("play")), "pubdate": _as_int(v.get("created"))},
+        ))
+    return hits
+
+
+#: 空间接口的风控很敏感:翻页之间歇一下;被拦(412 / -352)就换一个新会话再试
+BILI_SPACE_PAGE_GAP = 1.0
+BILI_SPACE_RETRIES = 2
+BILI_SPACE_RETRY_WAIT = 3.0
+
+
+def bilibili_uploads(mid: int, keyword: str, *, uploader: str = "", pages: int = 2,
+                     page_size: int = 50) -> list[PlatformHit]:
+    """一个 UP 主标题含 `keyword` 的投稿(新的在前)。失败抛 PlatformError。"""
+    last: Exception | None = None
+    for attempt in range(BILI_SPACE_RETRIES):
+        if attempt:
+            time.sleep(BILI_SPACE_RETRY_WAIT)
+        try:
+            return _bilibili_uploads_once(mid, keyword, uploader=uploader, pages=pages,
+                                          page_size=page_size)
+        except PlatformError as exc:
+            last = exc
+    raise last or PlatformError("B 站空间接口不可用")
+
+
+def _bilibili_uploads_once(mid: int, keyword: str, *, uploader: str, pages: int,
+                           page_size: int) -> list[PlatformHit]:
+    client = None
+    try:
+        client = _bili_client()
+        wbi = client.get(_BILI_NAV_API).json()["data"]["wbi_img"]
+        mixin = wbi_mixin_key(wbi["img_url"], wbi["sub_url"])
+        hits: list[PlatformHit] = []
+        for pn in range(1, pages + 1):
+            if pn > 1:
+                time.sleep(BILI_SPACE_PAGE_GAP)
+            params = wbi_sign({"mid": mid, "ps": page_size, "pn": pn, "keyword": keyword,
+                               "order": "pubdate", "order_avoided": "true", "platform": "web",
+                               "tid": 0, "web_location": "333.1387", "special_type": "",
+                               "index": 0, **bili_dm_params()}, mixin)
+            resp = client.get(_BILI_SPACE_API, params=params,
+                              headers={"Referer": f"https://space.bilibili.com/{mid}/video",
+                                       "Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8"})
+            if resp.status_code != 200:
+                raise PlatformError(f"B 站空间接口 HTTP {resp.status_code}")
+            payload = resp.json()
+            if payload.get("code") not in (0, None):
+                if hits:  # 后面的页被拦:前面拿到的照样用
+                    break
+                raise PlatformError(f"B 站空间接口返回 code={payload.get('code')}")
+            got = parse_bili_space(payload, uploader)
+            hits += got
+            count = _as_int(((payload.get("data") or {}).get("page") or {}).get("count"))
+            if len(got) < page_size or len(hits) >= count:
+                break
+    except PlatformError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise PlatformError(f"B 站空间接口不可用:{str(exc)[:80]}") from exc
+    finally:
+        if client is not None:
+            client.close()
+    return hits
+
+
 def parse_yt_entries(info: dict[str, Any]) -> list[PlatformHit]:
     hits: list[PlatformHit] = []
     for e in info.get("entries") or []:
