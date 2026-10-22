@@ -13,6 +13,7 @@ ffprobe 用于时长探测。所有子进程都用 list 形式传参(不过 shel
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -262,8 +263,23 @@ def _build_audio_graph(
         )
     elif has_narration:
         filters.append(f"[narr0]loudnorm={TARGET_LOUDNESS}[aout]")
-    else:
+    elif has_bgm:
         filters.append(f"[bgmraw]loudnorm={TARGET_LOUDNESS}[aout]")
+    else:
+        # **既没旁白也没 BGM**:TTS 全失败 + BGM 也失败时就是这种。
+        #
+        # 这里必须自己造一路静音,**不能**碰 loudnorm:
+        # - `[bgmraw]` 这个标签这时根本不存在(它只在有 BGM 时才建),
+        #   引用它 ffmpeg 会直接报 "Invalid stream specifier";
+        # - 即便换成 `[0:a]`,loudnorm 作用在纯数字静音上会算出 NaN,
+        #   aac 编码器随后报 "Input contains (near) NaN/+-Inf" 而失败。
+        #
+        # 归一化时每拍都带了 anullsrc 静音音轨,所以拼接流本身就有音轨,
+        # 直接取过来用:成片是"哑片"(有音轨、没声音),但**是能出的片**。
+        # 哑片这件事由调用方的警告告诉人,不该让成片直接出不来。
+        filters.append(
+            "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]"
+        )
     return ";".join(f for f in filters if f), "[aout]"
 
 
@@ -285,6 +301,16 @@ def compose(
     """
     project_dir = config.project_dir(project_id)
     output = project_dir / output_name
+    # **原子写**:ffmpeg 先写临时文件,解码校验过了再改名。
+    #
+    # 直接写 output.mp4 的话,进程在编码中途被杀(README:托管后台任务有
+    # 1 小时上限)会留下半截文件 —— 而 `has_output` 只看"文件在不在",
+    # 会把一个打不开的坏片当成成片报出去。改名是原子的,读者要么看到
+    # 完整的成片,要么看不到。
+    #
+    # 临时文件**保留原扩展名**:ffmpeg 靠扩展名推断封装格式,
+    # 叫 "output.mp4.part" 它会直接报 "Unable to find a suitable output format"。
+    tmp_output = project_dir / f"{Path(output_name).stem}.part{Path(output_name).suffix}"
     work_dir = project_dir / "_render"
     w, h = _size(size)
 
@@ -299,7 +325,10 @@ def compose(
     if narration_path is None:
         # 没有旁白的成片等于没有解说。允许它产出来(TTS 全部失败时就是这种),
         # 但一定要让人看见,而不是事后才发现成片是哑的。
-        warnings.append("没有旁白音轨,成片将只有背景音乐")
+        if bgm_path is None or not Path(bgm_path).is_file():
+            warnings.append("没有旁白也没有 BGM,成片是哑片(有音轨、没声音)")
+        else:
+            warnings.append("没有旁白音轨,成片将只有背景音乐")
     elif not Path(narration_path).is_file():
         warnings.append(f"旁白文件不存在,成片将没有解说声:{narration_path}")
 
@@ -339,18 +368,18 @@ def compose(
     ]
     if audio_filter:
         args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
-    args += [str(output)]
+    args += [str(tmp_output)]
 
     proc = _run(args, timeout=2400, cwd=project_dir)
-    if proc.returncode == 0 and output.is_file() and not _decodes_clean(output):
+    if proc.returncode == 0 and tmp_output.is_file() and not _decodes_clean(tmp_output):
         # 2026-10-21 实测:同样的参数,管线里合出的成片偶发 H.264 NAL 损坏(满屏
         # "Invalid NAL unit size"),重合一次就干净。出片前整片解码验一遍,坏了重合。
         warnings.append("成片解码校验未通过,已重新合成一次")
-        output.unlink(missing_ok=True)
+        tmp_output.unlink(missing_ok=True)
         proc = _run(args, timeout=2400, cwd=project_dir)
-        if proc.returncode == 0 and output.is_file() and not _decodes_clean(output):
+        if proc.returncode == 0 and tmp_output.is_file() and not _decodes_clean(tmp_output):
             warnings.append("成片重合后仍有解码错误,请检查后重新合成")
-    if proc.returncode != 0 or not output.is_file():
+    if proc.returncode != 0 or not tmp_output.is_file():
         # 字幕烧录是 Windows 上最容易出问题的一环,失败时退化为"无字幕重试"
         if ass_filter:
             warnings.append("烧录字幕失败,已输出无字幕版本")
@@ -360,11 +389,15 @@ def compose(
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations,
             )
+        # 别把半截文件留在那儿 —— 它不是成片
+        tmp_output.unlink(missing_ok=True)
         return RenderResult(
             ok=False, warnings=warnings + [f"合成失败:{proc.stderr[-500:]}"],
             log=proc.stderr[-2000:],
         )
 
+    # 校验过了,改名成正式成片(同卷内是原子替换)
+    os.replace(tmp_output, output)
     duration = timeline_mod.probe_safe(output, default=0.0)
     if duration <= 0:
         warnings.append("成片时长探测失败")

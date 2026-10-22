@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -666,7 +667,21 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
                           stroke_width=2, stroke_fill=stroke)
                 y += int(line_h * 0.8)
 
-        image.save(dest, quality=92)
+        # 原子写:先写临时文件再改名。进程在保存时被杀会留下半张封面 ——
+        # 封面是决定点击率的那一帧,半张比没有更糟(看着像有,其实打不开)。
+        #
+        # 临时文件**保留原扩展名**:PIL 靠扩展名推断格式,叫 "cover.jpg.part"
+        # 它会直接抛 "unknown file extension"。
+        tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
+        try:
+            image.save(tmp, quality=92)
+            os.replace(tmp, dest)
+        except BaseException:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return dest
     except Exception:  # noqa: BLE001
         return None
