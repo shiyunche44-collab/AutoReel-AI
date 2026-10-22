@@ -347,6 +347,10 @@ def _env() -> dict[str, str]:
         env["HYPERFRAMES_BROWSER_PATH"] = config.MOTION_BROWSER
     if config.FFMPEG_PATH:
         env["PATH"] = str(config.FFMPEG_PATH.parent) + os.pathsep + env.get("PATH", "")
+    node = config.motion_node()
+    if node:
+        # HyperFrames 内部再起的 node 子进程也要用同一个 22+
+        env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
     return env
 
 
@@ -362,7 +366,7 @@ def _run_cli(scene: str, work: Path, out: Path, seconds: float) -> subprocess.Co
     from .render import FPS
 
     global _gpu_hung
-    base = ["node", str(_cli()), "render", str(work), "-o", str(out), "--fps", str(FPS), "--quiet"]
+    base = [config.motion_node() or "node", str(_cli()), "render", str(work), "-o", str(out), "--fps", str(FPS), "--quiet"]
     # 软件渲染下页面要先装上几百个中文字体分片,默认 60 秒导航超时常常不够
     software = base + ["--workers", "1", "--no-browser-gpu", "--browser-timeout", "240",
                        "--player-ready-timeout", "180000"]
@@ -498,7 +502,7 @@ def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
     try:
         _prepare(work, scene, data, seconds, bg, photo, style, size)
         shots = work / "snaps"
-        base = ["node", str(_cli()), "snapshot", str(work), "-o", str(shots),
+        base = [config.motion_node() or "node", str(_cli()), "snapshot", str(work), "-o", str(shots),
                 "--at", ",".join(f"{t:g}" for t in at), "--no-end", "--describe", "false",
                 "--timeout", "20000"]
         gpu = not (_gpu_hung or config.MOTION_BROWSER_GPU == "off")

@@ -321,3 +321,50 @@ def test_portrait_plan_gives_each_section_two_beats():
         assert len(sections) <= max(core, p.shots_for(d) // PORTRAIT_SHOTS_PER_SECTION)
     # 横屏不受影响
     assert p.slots_for(240, "buyguide") == p.slots_for(240, "buyguide", portrait=False)
+
+
+class _ShortenLLM:
+    def __init__(self, reply):
+        self.reply, self.calls = reply, 0
+
+    def structured(self, system, user, **kw):
+        self.calls += 1
+        if isinstance(self.reply, Exception):
+            raise self.reply
+        return self.reply
+
+
+def _segs(*pairs):
+    from app.models import ScriptSegment
+    return [ScriptSegment(idx=i, section=s, text=t, fact_refs=[]) for i, (s, t) in enumerate(pairs)]
+
+
+def test_fit_length_shortens_only_when_far_over_budget():
+    from app.pipeline import script_gen
+
+    long = _segs(("开场", "甲" * 40), ("三电", "乙" * 60), ("结论", "丙" * 40))
+    short_reply = {"segments": [{"section": "开场", "text": "甲" * 20},
+                                {"section": "三电", "text": "乙" * 30, "fact_refs": ["f_1"]},
+                                {"section": "结论", "text": "丙" * 20}]}
+    llm = _ShortenLLM(short_reply)
+    out = script_gen.fit_length(long, 100, llm)
+    assert llm.calls == 1 and script_gen.spoken_chars(out) == 70
+    assert [s.idx for s in out] == [0, 1, 2] and out[1].fact_refs == ["f_1"]
+    # 没超 20%:不调 LLM
+    llm = _ShortenLLM(short_reply)
+    assert script_gen.fit_length(long, 120, llm) is long and llm.calls == 0
+
+
+def test_fit_length_keeps_original_when_result_is_bad():
+    from app.pipeline import script_gen
+
+    long = _segs(("开场", "甲" * 40), ("三电", "乙" * 60), ("结论", "丙" * 40))
+    bad = [
+        RuntimeError("超时"),
+        {"segments": []},
+        {"segments": [{"section": "三电", "text": "乙" * 10}, {"section": "结论", "text": "丙"}]},  # 丢了开场
+        {"segments": [{"section": "开场", "text": "甲"}, {"section": "瞎编", "text": "丁"}]},  # 丢了结论
+        {"segments": [{"section": "开场", "text": "甲" * 80}, {"section": "结论", "text": "丙" * 80}]},  # 没变短
+    ]
+    for reply in bad:
+        assert script_gen.fit_length(long, 50, _ShortenLLM(reply)) is long

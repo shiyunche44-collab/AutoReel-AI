@@ -8,6 +8,8 @@ lint 是这个模块存在的核心理由。解说视频的两类翻车:
 """
 from __future__ import annotations
 
+import json
+import logging
 import re
 from typing import Iterable, Sequence
 
@@ -15,6 +17,8 @@ from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
 from .grounding import arabicize, numbers_in
 from .timeline import narration_budget_chars
+
+log = logging.getLogger(__name__)
 
 #: 阿拉伯数字/百分号/单位 —— 出现即视为"数据型陈述",必须有事实引用
 _NUMERIC_RE = re.compile(r"\d")
@@ -292,6 +296,10 @@ def generate(
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)
+    if not roundup and not any(_is_comparison_section(s) for s in plan):
+        # 段落计划里没有对比段(竖屏短时长会精简掉):对比事实只能用在对比段,
+        # 给了 LLM 也只会写进本车段落、被 lint 拦下
+        facts = [f for f in facts if not f.compare_with]
     def _line(f: Fact) -> str:
         tags = scope_label.get(f.scope, "company")
         if f.topic == QUALITY_TOPIC:
@@ -382,7 +390,65 @@ def generate(
 
     title = str(data.get("title") or "").strip() or f"{subject} 详解"
     thesis = str(data.get("thesis") or "").strip()
+    if portrait:
+        segments = fit_length(segments, budget, llm)
     return segments, title, thesis
+
+
+#: 竖屏脚本念出来超过目标字数这么多倍,就让 LLM 压一遍。实测 90 秒竖屏目标 522 字,
+#: 提示词里写明「硬上限」、段落砍到 6 段后仍写到 870 字 —— 光靠提示词压不住。
+#: 竖屏的时长是平台规则(60/90 秒档)而不是估算,超了就不是选的那个时长
+PORTRAIT_LENGTH_TOLERANCE = 1.2
+
+SHORTEN_SYSTEM = """你是短视频解说的剪辑编导。下面这份脚本念出来太长,把它压到 {chars} 字以内(空白不算字)。
+
+规则:
+- 只删不加:不新增段落、不新增事实、不新增数字,不改数字;每段的 section 和 fact_refs 原样保留
+  (删掉的句子里如果有数字,对应的 fact_refs 也删掉);
+- 先删次要参数、重复的解释和过渡句,每段留最硬的一两个数字和一句观点;
+- 可以整段删除,但第一段(开场钩子)和最后一段(结论)必须保留原意;
+- 输出 JSON:{{"segments": [{{"section": "...", "text": "...", "fact_refs": ["..."]}}]}}"""
+
+
+def spoken_chars(segments: Sequence[ScriptSegment]) -> int:
+    """念出来的字数(空白不算)。"""
+    return sum(len(re.sub(r"\s+", "", s.text or "")) for s in segments)
+
+
+def fit_length(segments: list[ScriptSegment], budget: int, llm,
+               tolerance: float = PORTRAIT_LENGTH_TOLERANCE) -> list[ScriptSegment]:
+    """超出目标字数 `tolerance` 倍时让 LLM 删一遍。压坏了(空、没变短、丢了开场或结论)就用原稿。"""
+    have = spoken_chars(segments)
+    if not segments or budget <= 0 or have <= budget * tolerance:
+        return segments
+    draft = json.dumps({"segments": [{"section": s.section, "text": s.text, "fact_refs": s.fact_refs}
+                                     for s in segments]}, ensure_ascii=False)
+    try:
+        data = llm.structured(SHORTEN_SYSTEM.format(chars=budget),
+                              f"目标 {budget} 字,现在 {have} 字。\n{draft}",
+                              required_keys=["segments"], temperature=0.3)
+    except Exception as exc:  # noqa: BLE001 —— 压缩是锦上添花,失败不拦脚本
+        log.warning("脚本压缩失败,用原稿:%s", exc)
+        return segments
+    known = {s.section for s in segments}
+    out: list[ScriptSegment] = []
+    for item in data.get("segments") or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", "")).strip()
+        section = str(item.get("section", "")).strip()
+        if not text or section not in known:
+            continue
+        refs = item.get("fact_refs") or []
+        refs = [refs] if isinstance(refs, str) else refs
+        out.append(ScriptSegment(idx=len(out), section=section, text=text,
+                                 fact_refs=[str(r) for r in refs if str(r)]))
+    if not out or spoken_chars(out) >= have or out[0].section != segments[0].section \
+            or out[-1].section != segments[-1].section:
+        log.warning("脚本压缩结果不可用(%d 段),用原稿", len(out))
+        return segments
+    log.info("脚本压缩:%d → %d 字(目标 %d)", have, spoken_chars(out), budget)
+    return out
 
 
 # --------------------------------------------------------------------------

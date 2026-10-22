@@ -211,12 +211,58 @@ PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
 DATA_SIZE_WARN_BYTES = int(os.getenv("DATA_SIZE_WARN_BYTES", str(10 * 1024 ** 3)))
 
 
+#: HyperFrames 要求的 Node 主版本
+MOTION_NODE_MIN = 22
+_node_cache: list[str] = []
+
+
+def _node_major(exe: str) -> int:
+    import subprocess
+    try:
+        out = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10).stdout
+        return int(out.strip().lstrip("v").split(".")[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def motion_node() -> str:
+    """跑 HyperFrames 的 node(22+)。空串 = 找不到。
+
+    顺序:`MOTION_NODE` 环境变量 → PATH 上的 node(版本够才用)→ nvm-windows
+    目录(`NVM_HOME`)里装着的最新一个 22+。全局 `nvm use 16` 之后概念动画不再
+    悄悄退回数据卡。结果进程内缓存。"""
+    if _node_cache:
+        return _node_cache[0]
+    found = ""
+    env = os.getenv("MOTION_NODE", "").strip()
+    if env and _node_major(env) >= MOTION_NODE_MIN:
+        found = env
+    on_path = shutil.which("node")
+    if not found and on_path and _node_major(on_path) >= MOTION_NODE_MIN:
+        found = on_path
+    nvm = os.getenv("NVM_HOME", "").strip()
+    if not found and nvm and Path(nvm).is_dir():
+        def ver(d: Path) -> tuple[int, ...]:
+            try:
+                return tuple(int(x) for x in d.name.lstrip("v").split("."))
+            except ValueError:
+                return (0,)
+        for d in sorted(Path(nvm).glob("v*"), key=ver, reverse=True):
+            exe = d / ("node.exe" if os.name == "nt" else "bin/node")
+            if ver(d)[0] >= MOTION_NODE_MIN and exe.is_file():
+                found = str(exe)
+                break
+    _node_cache.append(found)
+    return found
+
+
 def motion_status() -> tuple[bool, str]:
     """概念动画能不能渲染。不能也不拦流水线:concept 拍退回数据卡。"""
-    node = shutil.which("node")
+    node = motion_node()
     cli = MOTION_DIR / "node_modules" / "hyperframes" / "bin" / "hyperframes.mjs"
     if not node:
-        return False, "未找到 node(需要 22+),概念动画将退回数据卡"
+        return False, (f"未找到 node {MOTION_NODE_MIN}+(PATH 上的是 v{_node_major(shutil.which('node') or '')}"
+                       f",可在 .env 配 MOTION_NODE),概念动画将退回数据卡")
     if not cli.is_file():
         return False, f"未安装 HyperFrames:在 {MOTION_DIR} 下运行 npm install,概念动画将退回数据卡"
     if not MOTION_BROWSER:
