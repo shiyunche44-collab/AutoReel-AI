@@ -125,3 +125,5 @@ def test_health_exposes_provider_call_stats(store):
     assert "provider_calls" in body, "健康检查应暴露外部调用统计"
     assert "scheduler" in body
     assert body["scheduler"]["concurrency"] == config.PIPELINE_CONCURRENCY
+    assert "disk" in body, "健康检查应暴露磁盘水位"
+    assert body["disk"]["data_bytes"] >= 0

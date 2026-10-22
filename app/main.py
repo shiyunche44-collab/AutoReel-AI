@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from . import config, costs, db, logging_setup
+from . import config, costs, db, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile
 from .llm.deepseek import DeepSeekProvider
 from .llm.minimax import MiniMaxProvider
@@ -253,6 +253,12 @@ async def lifespan(app: FastAPI):
     # 日志:控制台 + data/logs/aimovice.log(按天轮转)。此前整个项目
     # 一次也没用过 logging,排障只能看 serve.ps1 重定向的 stdout 文本。
     logging_setup.setup()
+    # 清掉上次的临时物(data/_probe、data/_tmp 与散落的 _tmp_*.mp4)。
+    # 它们是纯中间产物,却一直没有清理入口,已经积了 40 多 MB。
+    try:
+        maintenance.prune_temp()
+    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
+        log.warning("清理临时目录失败", exc_info=True)
 
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()
@@ -574,6 +580,21 @@ def library_frame(slug: str, item_id: str):
     return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.delete("/api/library/{slug}")
+def delete_library_pool(slug: str, force: bool = False):
+    """驱逐一个素材池(删掉它的目录)。
+
+    素材池是跨项目共享的:还有项目在用这个池时会拒绝,除非 `force=true`。
+    重建一个池要重新下载 + 视觉打标签,很贵 —— 所以别把别的项目正用着的
+    池子删了。
+    """
+    lib = _load_pool(slug)
+    out = maintenance.evict_pool(lib.subject, force=force)
+    if not out.get("ok"):
+        raise HTTPException(409, str(out.get("reason") or "驱逐失败"))
+    return out
+
+
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
@@ -588,6 +609,14 @@ def health():
         "interval": SCHEDULER_INTERVAL,
         "failures": dict(scheduler._failures),
         "busy_projects": locks_busy_ids(),
+    }
+    # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
+    size = maintenance.data_size()
+    out["disk"] = {
+        "data_bytes": size,
+        "data_human": maintenance.human(size),
+        "over_budget": size > config.DATA_SIZE_WARN_BYTES,
+        "warn_bytes": config.DATA_SIZE_WARN_BYTES,
     }
     return out
 
@@ -678,7 +707,12 @@ def get_project(project_id: str, stage: str = "final"):
 
 
 @app.delete("/api/projects/{project_id}")
-def delete_project(project_id: str):
+def delete_project(project_id: str, pool: bool = False):
+    """删项目。
+
+    `pool=true` 连这辆车（或这几台车）的**素材池**一起删 —— 池子是跨项目
+    共享的,删之前会先看还有谁在用,有别人在用就拒绝。
+    """
     row = db.get_project(project_id)
     if not row:
         raise HTTPException(404, "项目不存在")
@@ -688,7 +722,26 @@ def delete_project(project_id: str):
     db.delete_shots(project_id, "final")
     db.update_project(project_id, state=str(State.CANCELLED))
     shutil.rmtree(config.project_dir(project_id), ignore_errors=True)
-    return {"ok": True}
+    out: dict[str, Any] = {"ok": True}
+    if pool:
+        names = [row.get("subject") or ""]
+        try:
+            items = json.loads(row.get("subjects") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            items = []
+        for item in items or []:
+            if isinstance(item, dict) and item.get("name"):
+                names.append(str(item["name"]))
+        evicted = []
+        blocked = []
+        for name in names:
+            if not name:
+                continue
+            res = maintenance.evict_pool(name, force=True)
+            (evicted if res.get("ok") else blocked).append(name)
+        out["pools_evicted"] = evicted
+        out["pools_blocked"] = blocked
+    return out
 
 
 class AdvanceRequest(BaseModel):

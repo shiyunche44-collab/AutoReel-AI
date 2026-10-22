@@ -160,6 +160,9 @@ MOTION_BROWSER_GPU = os.getenv("MOTION_BROWSER_GPU", "auto").strip().lower()
 #: 吃紧就保持 1,确认有余量再往上调。
 PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
 
+#: data/ 体积超过这个值就在首页提示(字节)。默认 10 GB。
+DATA_SIZE_WARN_BYTES = int(os.getenv("DATA_SIZE_WARN_BYTES", str(10 * 1024 ** 3)))
+
 
 def motion_status() -> tuple[bool, str]:
     """概念动画能不能渲染。不能也不拦流水线:concept 拍退回数据卡。"""
