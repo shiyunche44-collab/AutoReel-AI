@@ -43,6 +43,7 @@ from .models import (
 )
 from .pipeline import concept_styles, library, orchestrator
 from .pipeline import render as render_mod
+from .pipeline.locks import ProjectBusy
 from .pipeline import vertical
 from .providers import cli
 from .publish import accounts as publish_accounts
@@ -208,6 +209,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="aimovice", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "web" / "static")), name="static")
+
+
+@app.exception_handler(ProjectBusy)
+async def _project_busy(request: Request, exc: ProjectBusy) -> JSONResponse:
+    """项目正被别的执行流推进 → 409。
+
+    这是**预期内**的并发(后台调度器与用户手动操作撞上了),不是错误。
+    统一在这里转,免得每个写接口各写一遍 try/except。
+    """
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 # --------------------------------------------------------------------------
@@ -594,9 +605,13 @@ class AdvanceRequest(BaseModel):
 @app.post("/api/projects/{project_id}/advance")
 def advance_project(project_id: str):
     try:
-        return orchestrator.advance(project_id)
+        out = orchestrator.advance(project_id)
     except orchestrator.PipelineError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if out.get("busy"):
+        # 同一个项目正被后台调度器推进,这一轮就让给它
+        raise HTTPException(409, "该项目正在推进中,请稍后重试")
+    return out
 
 
 @app.post("/api/projects/{project_id}/gate")

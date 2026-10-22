@@ -19,7 +19,7 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition
-from . import concept_styles, explainer, intake, library, motion, rhythm, script_gen
+from . import concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
@@ -50,9 +50,25 @@ def _profile(project: dict[str, Any]):
 
 def _set_state(project_id: str, src: State | str, dst: State | str,
                reason: str = "", cost: float = 0.0) -> None:
+    """推进项目状态,并留一条事件。
+
+    两件事合在一个**事务**里:状态与事件必须同生共死 ——
+    事件流是本项目唯一的排障依据,"状态变了但没事件"的裂缝
+    比没有事件更误导人。
+
+    状态写用 CAS(`WHERE state = :expected`):原来的"读出来 → 判断
+    转移合法 → 无条件 UPDATE"中间有 TOCTOU 窗口,两个执行流都读到
+    DRAFT_RENDERING 时会各自开渲同一批拍。CAS 把判断和写合成一条
+    SQL,窗口就没了。CAS 失败说明状态已被别人推进,放弃本轮。
+    """
     assert_transition(src, dst)
-    db.update_project(project_id, state=str(dst), state_reason=reason)
-    db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost)
+    with db.transaction() as conn:
+        moved = db.cas_state(project_id, str(src), str(dst), conn=conn, reason=reason)
+        if not moved:
+            raise PipelineError(
+                f"状态已被并发推进(期望 {src},实际不是),本轮放弃"
+            )
+        db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost, conn=conn)
 
 
 def _facts(project_id: str) -> list:
@@ -222,7 +238,22 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False) ->
     advance(),若它能自行放行门禁,两道人工审核就形同虚设。
 
     `force=True` 表示门禁 A 的 lint error 明知故犯仍然放行(只给显式确认用)。
+
+    **本函数自己是加锁的那一层**:所有会写项目的入口都从这里过一遍,
+    保证同一时刻只有一个执行流在推进这个项目(见 `pipeline/locks.py`)。
+    拿不到锁时返回 `{"busy": True}`,不阻塞、不报错 —— 正在跑的那一路
+    会把这活干完,下一轮再来。
     """
+    with locks.project_lock(project_id) as got:
+        if not got:
+            row = db.get_project(project_id) or {}
+            return {"state": row.get("state") or "", "action": "项目正在推进中",
+                    "busy": True, "waiting": False}
+        return _advance(project_id, confirmed=confirmed, force=force)
+
+
+def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
+    """`advance` 的临界区部分。调用方必须已持有项目锁。"""
     project = db.get_project(project_id)
     if not project:
         raise PipelineError("项目不存在")
@@ -465,7 +496,12 @@ def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
 
 
 def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
-    """确认门禁,推进到下一阶段。门禁 B 一次审完全片。"""
+    """确认门禁,推进到下一阶段。门禁 B 一次审完全片。
+
+    ⚠️ 这里**不自己加锁**:`advance()` 内部已经加了项目锁,而项目锁是
+    **非重入**的 —— 这里再拿一次会自己把自己锁死。状态检查因此保留在
+    外面(给用户一个明确的错误),而真正的推进在锁内重新读一次状态。
+    """
     project = db.get_project(project_id)
     if not project:
         raise PipelineError("项目不存在")
@@ -479,7 +515,10 @@ def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"confirmed": True}
     if request.force:
         kwargs["force"] = True
-    return advance(project_id, **kwargs)
+    out = advance(project_id, **kwargs)
+    if out.get("busy"):
+        raise locks.ProjectBusy("该项目正在推进中,请稍后重试")
+    return out
 
 
 def review_progress(project_id: str) -> dict[str, Any]:
@@ -524,53 +563,66 @@ def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[Sho
 
 def update_script(project_id: str, segments: list[ScriptSegment],
                   title: str | None, thesis: str | None = None) -> list[dict]:
-    """保存脚本,并返回这一稿的 lint 结果(门禁 A 的预审报告)。"""
-    project = db.get_project(project_id)
-    if not project:
-        raise PipelineError("项目不存在")
-    if State(project["state"]) not in (State.GATE_A, State.STORYBOARD_READY):
-        raise PipelineError("只有门禁 A 阶段可以修改脚本")
-    # 先同步再落盘:同步不过(段落数对不上、大字全废)就别改坏现有状态
-    _sync_storyboard(project_id, segments)
-    _save_script(project_id, segments)
-    fields: dict[str, Any] = {}
-    if title:
-        fields["title"] = title
-    if thesis is not None:
-        fields["thesis"] = thesis.strip()
-    if fields:
-        db.update_project(project_id, **fields)
-    profile, theme = _theme_of(project)
-    issues = script_gen.compliance_lint(segments, profile, _facts(project_id), theme=theme,
-                                       thesis=fields.get("thesis", project.get("thesis") or ""))
-    db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
-    return [i.to_dict() for i in issues]
+    """保存脚本,并返回这一稿的 lint 结果(门禁 A 的预审报告)。
+
+    持项目锁:此刻流水线可能正在同步分镜或渲染,两个执行流同时写
+    storyboard.json 会后写覆盖先写。拿不到锁就抛 ProjectBusy(409),
+    不阻塞 —— 正在跑的那一轮会自己推进。
+    """
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        if State(project["state"]) not in (State.GATE_A, State.STORYBOARD_READY):
+            raise PipelineError("只有门禁 A 阶段可以修改脚本")
+        # 先同步再落盘:同步不过(段落数对不上、大字全废)就别改坏现有状态
+        _sync_storyboard(project_id, segments)
+        _save_script(project_id, segments)
+        fields: dict[str, Any] = {}
+        if title:
+            fields["title"] = title
+        if thesis is not None:
+            fields["thesis"] = thesis.strip()
+        if fields:
+            db.update_project(project_id, **fields)
+        profile, theme = _theme_of(project)
+        issues = script_gen.compliance_lint(segments, profile, _facts(project_id), theme=theme,
+                                           thesis=fields.get("thesis", project.get("thesis") or ""))
+        db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
+        return [i.to_dict() for i in issues]
 
 
 def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
-    project = db.get_project(project_id)
-    if not project:
-        raise PipelineError("项目不存在")
-    if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
-        raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
-    profile, _theme = _theme_of(project)
-    specs = explainer.enforce_rhythm(list(specs), profile)
-    problems = explainer.validate_beats(specs)
-    if problems:
-        raise PipelineError("分镜自检未通过:" + "; ".join(problems))
-    _save_specs(project_id, specs)
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
+            raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
+        profile, _theme = _theme_of(project)
+        specs = explainer.enforce_rhythm(list(specs), profile)
+        problems = explainer.validate_beats(specs)
+        if problems:
+            raise PipelineError("分镜自检未通过:" + "; ".join(problems))
+        _save_specs(project_id, specs)
 
 
 def retry(project_id: str, idx: int, stage: str) -> None:
     """解说轨的"重拍" = 换一组背景重渲这一拍。渲染只在 DRAFT_RENDERING 里跑,
-    门禁 B 上点重拍要先退回去,渲完会自己回到门禁 B。"""
-    project = db.get_project(project_id)
-    if not project:
-        raise PipelineError("项目不存在")
-    explainer.rerender(project_id, idx)
-    if State(project["state"]) == State.GATE_B:
-        _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
-                   reason=f"重拍第 {idx} 拍(换背景)")
+    门禁 B 上点重拍要先退回去,渲完会自己回到门禁 B。
+
+    持项目锁:渲染途中重拍,会把该拍重置为 pending,而在途的渲染随后
+    把状态覆盖回 succeeded —— 用户的"换背景重拍"就被静默吞掉了。
+    拿不到锁说明正有人在渲染,直接告诉用户稍后重试。
+    """
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        explainer.rerender(project_id, idx)
+        if State(project["state"]) == State.GATE_B:
+            _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                       reason=f"重拍第 {idx} 拍(换背景)")
 
 
 #: 概念动画还没开始渲染的状态:换模版只记下来,渲染时就用新模版
@@ -587,30 +639,35 @@ def project_names(project: dict[str, Any]) -> tuple[str, list[str]]:
 
 def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
     """选定概念动画模版。渲染前选:只记下来。门禁 B 上换:只把概念动画那几拍退回去用新模版重渲
-    (背景、其他拍都不动),渲完自己回到门禁 B。渲染中 / 成片阶段不让换(会和正在跑的渲染打架)。"""
-    project = db.get_project(project_id)
-    if not project:
-        raise PipelineError("项目不存在")
-    if style not in {s.id for s in motion.styles()}:
-        raise PipelineError(f"没有这个模版:{style}")
-    state = State(project["state"])
-    if state not in _STYLE_FREE and state != State.GATE_B:
-        raise PipelineError("现在不能换概念动画模版:渲染中请等到审片(门禁 B),成片阶段已经定稿")
-    before = explainer.concept_style_of(project_id)
-    db.write_json(project_id, "concept_style.json", {"style": style})
-    redo: list[int] = []
-    if state == State.GATE_B and style != before:
-        redo = [s.idx for s in concept_styles.concept_beats(project_id)]
-        for idx in redo:
-            db.update_shot(project_id, idx, "draft", status="pending", draft_path=None, error=None)
-            db.update_shot(project_id, idx, "final", status="pending", final_path=None, error=None)
-        if redo:
-            _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
-                       reason=f"概念动画换模版 {motion.get_style(style).name},重渲 {len(redo)} 拍")
-    elif style != before:
-        db.add_event(project_id, str(state), src=str(state),
-                     reason=f"概念动画模版:{motion.get_style(style).name}")
-    return {"style": style, "rerender": redo}
+    (背景、其他拍都不动),渲完自己回到门禁 B。渲染中 / 成片阶段不让换(会和正在跑的渲染打架)。
+
+    持项目锁:换模版要把概念动画那几拍退回 pending,与在途渲染抢同一批
+    拍,不加锁就会两路一起写。
+    """
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        if style not in {s.id for s in motion.styles()}:
+            raise PipelineError(f"没有这个模版:{style}")
+        state = State(project["state"])
+        if state not in _STYLE_FREE and state != State.GATE_B:
+            raise PipelineError("现在不能换概念动画模版:渲染中请等到审片(门禁 B),成片阶段已经定稿")
+        before = explainer.concept_style_of(project_id)
+        db.write_json(project_id, "concept_style.json", {"style": style})
+        redo: list[int] = []
+        if state == State.GATE_B and style != before:
+            redo = [s.idx for s in concept_styles.concept_beats(project_id)]
+            for idx in redo:
+                db.update_shot(project_id, idx, "draft", status="pending", draft_path=None, error=None)
+                db.update_shot(project_id, idx, "final", status="pending", final_path=None, error=None)
+            if redo:
+                _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                           reason=f"概念动画换模版 {motion.get_style(style).name},重渲 {len(redo)} 拍")
+        elif style != before:
+            db.add_event(project_id, str(state), src=str(state),
+                         reason=f"概念动画模版:{motion.get_style(style).name}")
+        return {"style": style, "rerender": redo}
 
 
 def run_until_waiting(project_id: str, max_steps: int = 12) -> list[dict[str, Any]]:

@@ -1307,6 +1307,14 @@ def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
         ])
 
 
+def _shot_status(project_id: str, idx: int) -> str:
+    """取某一拍在草稿档的当前状态(找不到就是空串)。"""
+    for r in db.get_shots(project_id, "draft"):
+        if r["idx"] == idx:
+            return str(r.get("status") or "")
+    return ""
+
+
 def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                    profile: CategoryProfile, limit: int = 3,
                    subjects: Sequence[str] | None = None) -> dict[str, Any]:
@@ -1329,6 +1337,11 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     style = concept_style_of(project_id)
     done, errors = [], []
     for s in todo:
+        # 逐拍重读一次状态。todo 是开头那份快照 —— 若这一拍在快照之后
+        # 已经被渲好了(succeeded),再渲一遍会与它抢同一个输出文件,
+        # 产出半截 mp4。重拍(置回 pending)不受影响:那样本来就该重渲。
+        if _shot_status(project_id, s.idx) == "succeeded":
+            continue
         pos = next(n for n, x in enumerate(specs) if x.idx == s.idx)
         car = beat_subject(s, subjects, subject)
         if car not in bg_cache:
