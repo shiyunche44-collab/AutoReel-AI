@@ -738,8 +738,7 @@ npm run format             # prettier 统一格式
 - **类型检查**用 JSDoc + `checkJs`,不加 TS 也不加构建步骤。它已经抓出过真 bug:
   `project.js` 的 `act()` 忘了 `return`,导致"门禁 A 被 lint 拦下 → 仍然继续"
   的二次确认永远不触发,用户被卡死 —— 现在类型检查会直接报出来。
-- **CI**(.github/workflows/ci.yml)跑两件事:后端 `pytest`、前端 `npm run check`。
-  Python 侧用 `requirements-ci.txt`(本机预装的包在 CI 上要显式列出来)。
+- 不接 CI,检查都在本机跑:后端 `python -m pytest tests -q`、前端 `npm run check`。
 
 > 并行跑两个 pytest 会互相污染真实的 `data/` 目录,预算那类用共享状态的测试会假失败。
 > 要并行请给每个进程单独的 `DATA_DIR`。
