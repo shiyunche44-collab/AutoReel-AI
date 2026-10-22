@@ -212,6 +212,35 @@ def deepseek_model() -> str:
 DEFAULT_CATEGORY = os.getenv("DEFAULT_CATEGORY", "auto_long")
 
 
+# --------------------------------------------------------------------------
+# 分发(多平台发布 + 数据监控)
+# --------------------------------------------------------------------------
+#: 分发总开关。关掉后发布与监控都不跑,成片主链路不受影响。
+PUBLISH_ENABLED = os.getenv("PUBLISH_ENABLED", "1") not in ("0", "false", "False")
+#: 跨账号并发度。**同一账号永远串行** —— 单账号高频上传会触发平台风控。
+PUBLISH_CONCURRENCY = int(os.getenv("PUBLISH_CONCURRENCY", "2"))
+#: 同账号两次发布之间的随机间隔(秒),避免被判机器批量。
+PUBLISH_MIN_INTERVAL = float(os.getenv("PUBLISH_MIN_INTERVAL", "30"))
+PUBLISH_MAX_INTERVAL = float(os.getenv("PUBLISH_MAX_INTERVAL", "90"))
+#: 平台数据监控
+METRICS_ENABLED = os.getenv("METRICS_ENABLED", "1") not in ("0", "false", "False")
+METRICS_INTERVAL_MIN = int(os.getenv("METRICS_INTERVAL_MIN", "30"))
+#: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
+#: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
+ACCOUNTS_FILE = DATA_DIR / "accounts.json"
+
+#: 应用级密钥 —— 开发者资产,不随账号变
+DOUYIN_CLIENT_KEY = os.getenv("DOUYIN_CLIENT_KEY", "").strip()
+DOUYIN_CLIENT_SECRET = os.getenv("DOUYIN_CLIENT_SECRET", "").strip()
+YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "").strip()
+YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip()
+
+#: 浏览器自动化(小红书 / 视频号 / 抖音网页版兜底)。留空则复用本机 Chrome / Edge
+#: —— 装 Playwright 的 Python 包即可,**不需要** `playwright install` 再下一份浏览器。
+BROWSER_PATH = os.getenv("BROWSER_PATH", "").strip() or MOTION_BROWSER
+BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "1") not in ("0", "false", "False")
+
+
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)

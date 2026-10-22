@@ -1,0 +1,23 @@
+{
+  "name": "aimovice-web",
+  "private": true,
+  "description": "Web 前端的工程化工具链:单元测试、类型检查、代码规范。前端代码本身零依赖、零构建,工具链只用来检查。",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint app/web/static/js",
+    "lint:fix": "eslint app/web/static/js --fix",
+    "format": "prettier --write \"app/web/static/js/**/*.js\"",
+    "format:check": "prettier --check \"app/web/static/js/**/*.js\"",
+    "typecheck": "tsc -p app/web/jsconfig.json",
+    "check": "npm run lint && npm run typecheck && npm run test"
+  },
+  "devDependencies": {
+    "eslint": "^9.17.0",
+    "jsdom": "^26.0.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

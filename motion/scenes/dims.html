@@ -1,14 +1,7 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 产品镜:正侧面实车图,长 / 轴距 / 高三条尺寸线从车身本身量出来 -->
-  <meta name="hf-bg" content="studio" />
-  <meta name="hf-photo" content="exterior_side" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-  <style>
+<!-- 产品镜:正侧面实车图,长 / 轴距 / 高三条尺寸线从车身本身量出来 -->
+<meta name="hf-bg" content="studio" />
+<meta name="hf-photo" content="exterior_side" />
+<style>
     .dbox { position: absolute; white-space: nowrap; }
     .dbox.mid { transform: translateX(-50%); text-align: center; }
     .dbox.mid .bn { justify-content: center; }
@@ -16,16 +9,9 @@
     .dbox.end .bn { justify-content: flex-end; }
     .dbox .co-lab { font-size: 26px; margin-bottom: 4px; }
   </style>
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, P = D.photo, rows = HF.rows;
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const P = D.photo, rows = HF.rows;
     // 车头朝哪边,车尾那一侧就留给高度线
     const facingLeft = P && P.facing === "left";
     const CW = 1100;
@@ -139,5 +125,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

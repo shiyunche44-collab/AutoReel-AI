@@ -1,6 +1,6 @@
-/* 概念动画风格:看固定示例图,点一下就选定。
+/* 概念动画模版:看固定示例图,点一下就选定。每套模版的版式、动效、字体、配色都不一样。
  *
- * 示例图是仓库里的静态文件(同一份示例数据),不在运行时生成;项目渲染时才按选定风格出动画。
+ * 示例图是仓库里的静态文件(同一份示例数据),不在运行时生成;项目渲染时才按选定模版出动画。
  * 渲染前选只是记下;审片(门禁 B)时换,只重渲概念动画那几拍。
  */
 import { $, h, icon } from '../ui/dom.js';
@@ -15,7 +15,7 @@ export function initConceptStyle(pid, { onRerender } = {}) {
   const atGateB = card.dataset.state === 'GATE_B';
 
   let styles = [];      // [{id, name, desc, light, image}]
-  let current = null;   // 项目当前风格 id
+  let current = null;   // 项目当前模版 id
   let busy = false;
 
   const nameOf = (id) => (styles.find((s) => s.id === id) || {}).name || id;
@@ -42,8 +42,8 @@ export function initConceptStyle(pid, { onRerender } = {}) {
     if (atGateB) {
       const ok = await confirmDialog({
         title: `换成「${nameOf(sid)}」?`,
-        body: '概念动画那几拍会用新风格重渲,其他拍不动,渲完自动回到审片。',
-        confirmText: '换风格并重渲',
+        body: '概念动画那几拍会用新模版重渲,其他拍不动,渲完自动回到审片。',
+        confirmText: '换模版并重渲',
         tone: 'success',
       });
       if (!ok) return;
@@ -54,11 +54,11 @@ export function initConceptStyle(pid, { onRerender } = {}) {
       current = res.style;
       paint();
       const redo = (res.rerender || []).length;
-      toast(redo ? `已换成「${nameOf(sid)}」,正在重渲 ${redo} 拍概念动画` : `概念动画风格:${nameOf(sid)}`,
+      toast(redo ? `已换成「${nameOf(sid)}」,正在重渲 ${redo} 拍概念动画` : `概念动画模版:${nameOf(sid)}`,
         { type: 'success' });
       if (redo && onRerender) onRerender();
     } catch (err) {
-      toast(err.message, { type: 'danger', title: '换风格失败' });
+      toast(err.message, { type: 'danger', title: '换模版失败' });
     } finally {
       busy = false;
     }
@@ -78,8 +78,8 @@ export function initConceptStyle(pid, { onRerender } = {}) {
     card.classList.remove('hidden');
     $('#cs-hint', card).textContent = `本片 ${st.beats} 拍概念动画`;
     $('#cs-intro', card).textContent = atGateB
-      ? '示例图是同一份示例数据的效果示意。换风格只重渲概念动画那几拍,其他拍不动。'
-      : '示例图是同一份示例数据的效果示意,点一下就选定,确认渲染时按选定的风格出动画。不选就用「实车标注」。';
+      ? '示例图是同一份示例数据的效果示意。换模版只重渲概念动画那几拍,其他拍不动。'
+      : '20 套模版版式和动效各不相同,示例图是同一份示例数据的效果示意。点一下就选定,确认渲染时按选定的模版出动画;不选就用「实车标注」。';
     paint();
   })();
 

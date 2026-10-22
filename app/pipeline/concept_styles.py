@@ -1,9 +1,10 @@
-"""概念动画选风格:看固定示例图选,不在运行时生成任何东西。
+"""概念动画选模版:看固定示例图选,不在运行时生成任何东西。
 
-每种风格一张示例图(同一份示例数据的电池拍),是仓库里的静态文件 `motion/styles/samples/<风格>.jpg`。
-页面直接展示这些图,点一下就选定;项目渲染时才按选定的风格真正出动画。
+每套模版一张示例图(同一份示例数据的电池拍),是仓库里的静态文件 `motion/templates/samples/<模版>.jpg`。
+模版之间版式、动效、字体、配色都不同(见 `motion.styles`);页面直接展示这些图,点一下就选定,
+项目渲染时才按选定的模版真正出动画。
 
-改了模板或风格文件、想更新示例图时手动跑一次(约 1~2 分钟,需要 HyperFrames + 浏览器):
+改了模版、想更新示例图时手动跑一次(约 1~2 分钟,需要 HyperFrames + 浏览器):
 
     python -m app.pipeline.concept_styles            # 只补缺的
     python -m app.pipeline.concept_styles --all      # 全部重截
@@ -41,7 +42,7 @@ SAMPLE_DATA: dict[str, Any] = {
 
 
 def samples_dir() -> Path:
-    return motion.styles_dir() / "samples"
+    return motion.templates_dir() / "samples"
 
 
 def sample_path(style_id: str) -> Path:
@@ -49,7 +50,7 @@ def sample_path(style_id: str) -> Path:
 
 
 def gallery() -> dict[str, Any]:
-    """全部风格 + 示例图文件名(没有示例图为 None)。只读文件,不生成。"""
+    """全部模版 + 示例图文件名(没有示例图为 None)。只读文件,不生成。"""
     items = []
     for st in motion.styles():
         p = sample_path(st.id)
@@ -99,7 +100,7 @@ def _sample_photo() -> motion_assets.Cutout | None:
 
 
 def make_samples(everything: bool = False) -> list[str]:
-    """截示例图写进 `motion/styles/samples/`,返回失败的风格。everything=False 只补缺的。"""
+    """截示例图写进 `motion/templates/samples/`,返回失败的模版。everything=False 只补缺的。"""
     ok, why = config.motion_status()
     if not ok:
         raise SystemExit(why)
@@ -110,7 +111,8 @@ def make_samples(everything: bool = False) -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
         def one(sid: str) -> None:
             try:
-                png = motion.snapshot(SAMPLE_SCENE, SAMPLE_DATA, SAMPLE_SECONDS, SAMPLE_AT, SIZE,
+                at = [motion.get_style(sid).sample_at] if motion.get_style(sid).sample_at else SAMPLE_AT
+                png = motion.snapshot(SAMPLE_SCENE, SAMPLE_DATA, SAMPLE_SECONDS, at, SIZE,
                                       Path(tmp), photo=photo, style=sid)[0]
             except motion.MotionError as exc:
                 print(f"  {sid} 失败:{str(exc)[:200]}")
@@ -127,7 +129,7 @@ def make_samples(everything: bool = False) -> list[str]:
 
 
 def _main() -> None:
-    ap = argparse.ArgumentParser(description="重截概念动画风格示例图")
+    ap = argparse.ArgumentParser(description="重截概念动画模版示例图")
     ap.add_argument("--all", action="store_true", help="全部重截(默认只补缺的)")
     args = ap.parse_args()
     failed = make_samples(args.all)

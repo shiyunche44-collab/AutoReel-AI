@@ -6,11 +6,18 @@
 - 模板在 `motion/scenes/<名>.html`(品类在 `vocab.concept_scenes` 里声明用哪些);
 - 数据由这里写成 `window.__DATA__` 注入模板 —— 只放**核对过事实**的行,模板只负责画,
   图形本身(刻度、曲线、线稿)是示意,不承载任何未核对的数;
-- 每次渲染一个独立工作目录(模板 + `_lib.js` + `_base.css` + 本地 gsap),不联网;
-- 风格(`motion/styles/*.css`)只换皮:覆盖 `_base.css` 的颜色变量、换字体、加少量附加规则,
-  动画结构 7 个模板共用;
+- 每次渲染一个独立工作目录(模板 + `_lib.js` + 本地 gsap),不联网;
+- 模版:默认用每个场景的专用模板;另有一批通用模版(`motion/templates/*.html`),
+  一个 HTML 套所有场景,版式、动效、字体、配色各不相同(不是换皮);
 - 结果按 (模板内容 + 风格 + 数据 + 时长 + 画幅) 缓存在 `data/_cache/motion/`,重拍、重合成不重渲;
 - `snapshot` 只截几个时刻的 PNG(十几秒),给"先看风格再渲染"用。
+
+骨架:模版文件只写自己的东西(说明与 meta、样式、动效),HTML 外壳只有一份 ——
+`motion/_shell.html` 负责画幅、复位、根容器和脚本挂载,`motion/_lib.js` 是共用的小工具
+(起手用 `HF.boot()`),家族样式在 `scenes/_base.css` 和 `templates/_base.css`。
+渲染时 `compose_html` 把骨架和模版片段拼成完整 HTML 再交给 HyperFrames。
+**骨架文件里只能写 ASCII**:HyperFrames 按页面上出现过的字符裁内嵌字体子集,
+连注释里的中文也算,子集一变字形度量就变,文字会有亚像素位移。
 
 渲染不了(没装 node / HyperFrames / Chrome,或渲染报错)抛 `MotionError`,
 调用方退回数据卡,流水线照常出片。
@@ -30,21 +37,30 @@ from typing import Any
 from .. import config
 from .motion_assets import Cutout
 
-#: 模板目录里每次渲染都要拷进工作目录的公用文件
-SHARED_FILES = ("_lib.js", "_base.css")
-#: 模板里的占位符:时长写进根节点 data-duration,数据写进 window.__DATA__
+#: 渲染时要拷进工作目录的公用文件(模版片段之外、页面要单独引的)
+SHARED_FILES = ("_lib.js",)
+#: 模版片段里的占位符:时长写进根节点 data-duration,数据写进 window.__DATA__
 SECONDS_TOKEN = "__SECONDS__"
 DATA_TOKEN = "/*__DATA__*/{}"
-#: 模板里的底占位:有实拍就换成 <video>,没有就换成暗色径向底
+#: 模版片段里的底占位:有实拍就换成 <video>,没有就换成暗色径向底
 BACKGROUND_TOKEN = "<!--__BACKGROUND__-->"
 
+#: 概念动画画幅。骨架(_shell.html)里的画幅占位也用它 —— 改画幅只改这一处。
+SIZE = (1920, 1080)
+#: HTML 骨架:所有模版共用这一份(模版片段只写自己的 meta / 样式 / 动效)
+SHELL_FILE = "_shell.html"
+#: 骨架里的槽位
+SHELL_META = "<!--__META__-->"
+SHELL_CSS = "<!--__CSS__-->"
+SHELL_JS = "<!--__JS__-->"
+#: 骨架里的画幅占位
+WIDTH_TOKEN = "__WIDTH__"
+HEIGHT_TOKEN = "__HEIGHT__"
 
-#: 模板里引用公用样式的那一行,渲染前换成内联 <style>
-BASE_CSS_LINK = '<link rel="stylesheet" href="_base.css" />'
-#: 模板声明自己要什么底:<meta name="hf-bg" content="studio|footage">。
-#: studio = 模板自带暗色影棚底(产品镜,不铺实拍);footage = 压在这一拍的一段实拍上(默认)
+#: 模版声明自己要什么底:<meta name="hf-bg" content="studio|footage">。
+#: studio = 模版自带暗色影棚底(产品镜,不铺实拍);footage = 压在这一拍的一段实拍上(默认)
 _BG_META = re.compile(r'<meta\s+name="hf-bg"\s+content="(\w+)"')
-#: 模板声明想要哪个视角的车图:<meta name="hf-photo" content="exterior_side,exterior_45">;没有 = 不要车图
+#: 模版声明想要哪个视角的车图:<meta name="hf-photo" content="exterior_side,exterior_45">;没有 = 不要车图
 _PHOTO_META = re.compile(r'<meta\s+name="hf-photo"\s+content="([\w,]+)"')
 #: 车图在渲染工作目录里的文件名
 PHOTO_FILE = "car.png"
@@ -58,72 +74,67 @@ class MotionError(RuntimeError):
 # --------------------------------------------------------------------------
 # 风格
 # --------------------------------------------------------------------------
-#: 默认风格:_base.css 自身的取值(实车图 + 标注,暗色影棚 + 荧光绿)
+#: 默认模版:每个场景各自的专用模板(`motion/scenes/<场景>.html`,实车图 + 标注)
 DEFAULT_STYLE = "studio"
-#: 模板里默认的字体名字面量;风格换字体时整段替换(HyperFrames 只内嵌页面里写明的字体)
-NUM_FONT = '"Montserrat"'
-CN_FONT = '"Noto Sans SC", "Microsoft YaHei"'
+#: 通用模版声明自己要不要车图:<meta name="hf-photo" content="scene"> = 用这个场景模板要的视角
+_SCENE_PHOTO = "scene"
 _META = re.compile(r"@(\w[\w-]*)\s+(.+)")
+#: 场景的中文栏目名(通用模版的眉标用)
+KICKERS = {"accel": "加速", "battery": "电池", "charging": "补能", "chip": "智驾芯片",
+           "compare": "对比", "dims": "尺寸", "lidar": "感知"}
 
 
 @dataclass(frozen=True)
 class Style:
+    """概念动画模版。默认模版用每个场景的专用模板;其余是通用模版(一个 HTML 套所有场景),
+    版式、动效、字体、配色各成一套,不是换皮。"""
     id: str
     name: str
     desc: str
     order: int
-    css: str
-    #: 数字字体(HyperFrames 内置的那几种之一,如 "JetBrains Mono");空 = 不换
-    font_num: str = ""
-    #: 中文字体栈(本机字体,如 "STSong", "SimSun");空 = 不换
-    font_cn: str = ""
-    #: 浅色风格(界面上分组用)
+    #: 通用模版的 HTML;None = 默认模版(用场景专用模板)
+    path: Path | None = None
+    #: 浅色模版(界面上分组用)
     light: bool = False
+    #: 通用模版要不要车图(要的话按场景模板声明的视角取)
+    photo: bool = False
+    #: 截示例图的时刻(秒,7 秒示例里画面最完整的一刻);0 = 用默认时刻
+    sample_at: float = 0.0
 
     def summary(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "desc": self.desc, "light": self.light}
 
 
-def styles_dir() -> Path:
-    return config.MOTION_DIR / "styles"
+def templates_dir() -> Path:
+    return config.MOTION_DIR / "templates"
 
 
-def _parse_style(path: Path) -> Style:
-    css = path.read_text(encoding="utf-8")
-    head = css.split("*/", 1)[0] if css.lstrip().startswith("/*") else ""
-    meta = {m.group(1): m.group(2).strip() for m in _META.finditer(head)}
-    # 只注入头注释之后的规则;只有头注释的风格(默认风格)注入为空,和不选风格一字不差
-    body = css.split("*/", 1)[1].strip() if head else css.strip()
+def _parse_template(path: Path) -> Style:
+    html = path.read_text(encoding="utf-8")
+    m = re.search(r"<!--(.*?)-->", html, re.S)
+    meta = {k.group(1): k.group(2).strip() for k in _META.finditer(m.group(1))} if m else {}
+    pm = _PHOTO_META.search(html)
     return Style(id=path.stem, name=meta.get("name", path.stem), desc=meta.get("desc", ""),
-                 order=int(meta.get("order", "99")), css=body,
-                 font_num=meta.get("font-num", ""), font_cn=meta.get("font-cn", ""),
-                 light=meta.get("light", "") in ("1", "yes", "true"))
+                 order=int(meta.get("order", "99")), path=path,
+                 light=meta.get("light", "") in ("1", "yes", "true"),
+                 photo=bool(pm and pm.group(1) == _SCENE_PHOTO),
+                 sample_at=float(meta.get("sample", "0") or 0))
 
 
 def styles() -> list[Style]:
-    """全部风格,按 @order 排。目录不存在时只有默认风格(空 CSS)。"""
-    d = styles_dir()
-    found = [_parse_style(p) for p in d.glob("*.css") if not p.stem.startswith("_")] if d.is_dir() else []
-    if not any(s.id == DEFAULT_STYLE for s in found):
-        found.append(Style(id=DEFAULT_STYLE, name="实车标注", desc="", order=0, css=""))
+    """全部模版,默认模版排第一,其余按 @order 排。"""
+    d = templates_dir()
+    found = [_parse_template(p) for p in d.glob("*.html") if not p.stem.startswith("_")] if d.is_dir() else []
+    found = [s for s in found if s.id != DEFAULT_STYLE]
+    found.append(Style(id=DEFAULT_STYLE, name="实车标注",
+                       desc="影棚实车 + X 光扫描 + 引线标注,每个场景专门设计的动画", order=0))
     return sorted(found, key=lambda s: (s.order, s.id))
 
 
 def get_style(style_id: str | None) -> Style:
-    """按 id 取风格;不认识的 id 退回默认风格(风格文件被删了也照常出片)。"""
+    """按 id 取模版;不认识的 id 退回默认模版(模版文件被删了也照常出片)。"""
     all_ = {s.id: s for s in styles()}
     return all_.get(style_id or DEFAULT_STYLE) or all_[DEFAULT_STYLE]
-
-
-def _apply_style(html: str, style: Style) -> str:
-    """风格 CSS 接在公用样式后面(覆盖变量),再换字体字面量。只动模板,不碰数据。"""
-    if style.css:
-        html = html.replace("</head>", f"<style>\n/* style: {style.id} */\n{style.css}\n</style>\n</head>", 1)
-    if style.font_num:
-        html = html.replace(NUM_FONT, style.font_num)
-    if style.font_cn:
-        html = html.replace(CN_FONT, style.font_cn)
-    return html
 
 
 def scenes_dir() -> Path:
@@ -140,14 +151,19 @@ def _template(scene: str) -> str:
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
-def scene_background(scene: str) -> str:
-    """模板要的底:studio(自带影棚)或 footage(压在实拍上)。"""
+def scene_background(scene: str, style: str | None = None) -> str:
+    """模板要的底:studio(自带影棚)或 footage(压在实拍上);通用模版自带底(own),不铺实拍。"""
+    if get_style(style).path is not None:
+        return "own"
     m = _BG_META.search(_template(scene))
     return m.group(1) if m else "footage"
 
 
-def scene_photo_views(scene: str) -> list[str]:
-    """模板想要的车图视角(按优先级);空 = 模板不用车图。"""
+def scene_photo_views(scene: str, style: str | None = None) -> list[str]:
+    """模板想要的车图视角(按优先级);空 = 模板不用车图。通用模版要车图时用场景模板声明的视角。"""
+    st = get_style(style)
+    if st.path is not None and not st.photo:
+        return []
     m = _PHOTO_META.search(_template(scene))
     return [v for v in m.group(1).split(",") if v] if m else []
 
@@ -164,37 +180,92 @@ def _gsap() -> Path:
     return config.MOTION_DIR / "node_modules" / "gsap" / "dist" / "gsap.min.js"
 
 
+def _three() -> Path:
+    return config.MOTION_DIR / "node_modules" / "three" / "build" / "three.min.js"
+
+
+#: 模版页面里引用了它才拷 three.js(真 3D 模版用,600KB,别的模版不带)
+THREE_TAG = 'src="three.min.js"'
+
+
+def _shell() -> str:
+    """HTML 骨架:所有模版共用这一份。"""
+    path = config.MOTION_DIR / SHELL_FILE
+    if not path.is_file():
+        raise MotionError(f"缺少骨架 {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _split_fragment(frag: str, name: str) -> tuple[str, str, str]:
+    """模版片段 -> (说明与 meta, 样式, 动效)。片段写坏了直接报错。"""
+    if "<style>" not in frag or "</style>" not in frag or "<script>" not in frag or "</script>" not in frag:
+        raise MotionError(f"模版 {name} 不是合法片段:要有 <style> 和 <script>")
+    head, _, rest = frag.partition("<style>")
+    css, _, rest = rest.partition("</style>")
+    js = rest.partition("<script>")[2].rpartition("</script>")[0]
+    return head.strip(), css, js
+
+
+def _family_css(family: str) -> str:
+    """家族样式:场景专用(scenes)或通用模版专用(templates)。缩进对齐片段里的样式。"""
+    path = config.MOTION_DIR / family / "_base.css"
+    if not path.is_file():
+        return ""
+    css = path.read_text(encoding="utf-8")
+    return "\n".join("    " + ln if ln.strip() else ln for ln in css.splitlines()) + "\n"
+
+
 def compose_html(scene: str, data: dict[str, Any], seconds: float, background: bool = False,
                  photo: Cutout | None = None, style: str | None = None) -> str:
-    """把数据和时长灌进模板,返回完整 HTML。模板缺占位符直接报错(模板写错了)。
+    """把数据和时长灌进模版片段,按骨架拼成完整 HTML。
+
+    模版片段(`motion/scenes/*.html`、`motion/templates/*.html`)只写自己的 meta、样式、动效;
+    骨架(`motion/_shell.html`)负责画幅、复位、根容器和脚本挂载 —— 骨架里改一处,全部模版跟着变。
+
     background=True:底是工作目录里的 bg.mp4(这一拍的实拍),否则用暗色径向底。
     photo:抠好的车图,几何信息写进 `__DATA__.photo`,图片本身由 render 拷成 car.png。"""
     path = scenes_dir() / f"{scene}.html"
     if not path.is_file():
         raise MotionError(f"没有动画模板 {scene}({path})")
-    html = path.read_text(encoding="utf-8")
-    if SECONDS_TOKEN not in html or DATA_TOKEN not in html or BACKGROUND_TOKEN not in html:
-        raise MotionError(f"模板 {scene} 缺少占位符 {SECONDS_TOKEN} / {DATA_TOKEN} / {BACKGROUND_TOKEN}")
+    st = get_style(style)
+    tpl = st.path or path
+    meta, css, js = _split_fragment(tpl.read_text(encoding="utf-8"), tpl.stem)
+    family = "templates" if st.path is not None else "scenes"
+
+    html = _shell()
+    missing = [t for t in (SECONDS_TOKEN, DATA_TOKEN, BACKGROUND_TOKEN, SHELL_META, SHELL_CSS,
+                           SHELL_JS, WIDTH_TOKEN, HEIGHT_TOKEN) if t not in html]
+    if missing:
+        raise MotionError(f"骨架缺少占位符 {' / '.join(missing)}")
+    html = html.replace(SHELL_META, meta)
+    html = html.replace(SHELL_CSS, _family_css(family) + css)
+    html = html.replace(SHELL_JS, js)
     if background:
         bg = (f'<div class="bgwrap" id="bgwrap"><video id="bg" class="clip" src="bg.mp4" data-start="0" '
               f'data-duration="{seconds:.3f}" muted playsinline></video></div>')
     else:
         bg = '<div class="bgwrap nobg" id="bgwrap"></div>'
     html = html.replace(BACKGROUND_TOKEN, bg)
-    # 公用样式内联进页面:HyperFrames 只扫页面里的 font-family 来内嵌字体(Montserrat),
-    # 外链的 _base.css 它看不到,数字会退回衬线体
-    css = scenes_dir() / "_base.css"
-    if BASE_CSS_LINK in html and css.is_file():
-        html = html.replace(BASE_CSS_LINK, "<style>\n" + css.read_text(encoding="utf-8") + "\n</style>")
-    html = _apply_style(html, get_style(style))
     extra: dict[str, Any] = {"seconds": round(seconds, 3)}
+    if st.path is not None:
+        # 通用模版不知道自己在画哪个场景:告诉它场景名和栏目名
+        extra.update(scene=scene, kicker=KICKERS.get(scene, ""))
     if photo is not None:
         extra["photo"] = {**photo.geometry(), "src": PHOTO_FILE,
                           "edges": EDGES_FILE if photo.edges else ""}
     payload = json.dumps({**data, **extra}, ensure_ascii=False)
     # 防止数据里出现 </script> 把脚本块提前截断
     payload = payload.replace("</", "<\\/")
-    return html.replace(SECONDS_TOKEN, f"{seconds:.3f}").replace(DATA_TOKEN, payload)
+    html = (html.replace(SECONDS_TOKEN, f"{seconds:.3f}")
+                .replace(WIDTH_TOKEN, str(SIZE[0]))
+                .replace(HEIGHT_TOKEN, str(SIZE[1]))
+                .replace(DATA_TOKEN, payload))
+    # 骨架里的槽位必须全部换掉(替换是纯文本,写在注释里也会被换 —— 残留就是槽位写错了)
+    leftover = [t for t in (WIDTH_TOKEN, HEIGHT_TOKEN, SHELL_META, SHELL_CSS, SHELL_JS)
+                if t in html]
+    if leftover:
+        raise MotionError(f"拼装后还有没换掉的槽位 {' / '.join(leftover)}")
+    return html
 
 
 def _file_sha(path: Path | None) -> str:
@@ -215,7 +286,7 @@ def cache_key(scene: str, data: dict[str, Any], seconds: float, size: tuple[int,
              f"{size[0]}x{size[1]}", _file_sha(bg),
              _file_sha(Path(photo.png)) if photo else "nophoto"]
     for name in SHARED_FILES:
-        p = scenes_dir() / name
+        p = config.MOTION_DIR / name
         parts.append(p.read_text(encoding="utf-8") if p.is_file() else "")
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:20]
 
@@ -265,9 +336,9 @@ def _check(size: tuple[int, int]) -> None:
     ok, why = config.motion_status()
     if not ok:
         raise MotionError(why)
-    if tuple(size) != (1920, 1080):
-        # 模板按 1920×1080 写死布局;别的画幅等到真有需要再做
-        raise MotionError(f"概念动画只支持 1920×1080,收到 {size[0]}×{size[1]}")
+    if tuple(size) != SIZE:
+        # 骨架按 1920×1080 写死布局;别的画幅等到真有需要再做
+        raise MotionError(f"概念动画只支持 {SIZE[0]}×{SIZE[1]},收到 {size[0]}×{size[1]}")
 
 
 def _inputs(background: str | Path | None, photo: Cutout | None) -> tuple[Path | None, Cutout | None]:
@@ -292,8 +363,12 @@ def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: P
         if photo.edges and Path(photo.edges).is_file():
             shutil.copyfile(photo.edges, work / EDGES_FILE)
     for name in SHARED_FILES:
-        shutil.copyfile(scenes_dir() / name, work / name)
+        shutil.copyfile(config.MOTION_DIR / name, work / name)
     shutil.copyfile(_gsap(), work / "gsap.min.js")
+    if THREE_TAG in (work / "index.html").read_text(encoding="utf-8"):
+        if not _three().is_file():
+            raise MotionError(f"模版要用 three.js,但没装:到 motion/ 下跑 npm install({_three()})")
+        shutil.copyfile(_three(), work / "three.min.js")
 
 
 def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, int],

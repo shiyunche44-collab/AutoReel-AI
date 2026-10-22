@@ -1,0 +1,84 @@
+<!-- @name 赛道遥测
+     @desc 碳纤维黑底 + 黄色斜切面板,车带速度线冲进画面,遥测条目从右侧飞入,换挡灯一格格亮
+     @order 13 -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #0d0d0e; }
+    #root { color: #fff;
+            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            background:
+              repeating-linear-gradient(45deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 6px, transparent 6px, transparent 12px),
+              repeating-linear-gradient(-45deg, rgba(0,0,0,0.35) 0px, rgba(0,0,0,0.35) 6px, transparent 6px, transparent 12px),
+              radial-gradient(ellipse 1200px 700px at 600px 600px, #26272b 0%, #0d0d0e 75%); }
+    .chk { position: absolute; left: 0; right: 0; top: 0; height: 36px; overflow: hidden; }
+    .chk div { position: absolute; left: 0; top: 0; width: 4000px; height: 36px;
+               background: conic-gradient(#fff 0 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 36px 36px; }
+    .lines { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; }
+    .lines i { position: absolute; height: 3px; border-radius: 2px; background: linear-gradient(90deg, rgba(255,212,0,0), rgba(255,212,0,0.7)); }
+    .photo { position: absolute; display: block; }
+    .hd { position: absolute; left: 90px; top: 90px; transform: skewX(-12deg); }
+    .hd .k { display: inline-block; background: #ffd400; color: #111; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 40px; padding: 2px 22px; letter-spacing: 0.08em; }
+    .hd .t { margin-top: 10px; font-size: 92px; font-weight: 900; font-style: italic; white-space: nowrap; letter-spacing: 0.02em; text-shadow: 6px 6px 0 rgba(0,0,0,0.6); }
+    .panel { position: absolute; right: 70px; width: 760px; height: 170px; transform: skewX(-12deg); background: rgba(16,16,18,0.92);
+             border-left: 14px solid #ffd400; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .panel .in { position: absolute; inset: 0; transform: skewX(12deg); padding: 18px 34px; }
+    .panel .lab { font-size: 30px; font-weight: 900; color: #ffd400; letter-spacing: 0.06em; }
+    .panel .val { position: absolute; left: 34px; bottom: 8px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; line-height: 1; letter-spacing: 0.02em; white-space: nowrap; font-style: italic; }
+    .panel .b { position: absolute; right: 40px; bottom: 22px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 54px; color: #8a8a90; font-style: italic; white-space: nowrap; }
+    .panel .b em { font-style: normal; font-size: 24px; margin-right: 10px; font-family: "HYZhongHeiTi", sans-serif; }
+    .leds { position: absolute; right: 40px; top: 24px; display: flex; gap: 6px; }
+    .leds i { width: 22px; height: 14px; border-radius: 3px; background: #2a2a2e; }
+    .src { position: absolute; left: 90px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.4); letter-spacing: 0.1em; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    // 速度线:固定种子,一直往左飞
+    const lines = add(HF.el("div", "lines")); const rng = HF.rng(3); const ls = [];
+    for (let k = 0; k < 26; k++) { const l = HF.el("i"); const w = 200 + rng() * 500;
+      Object.assign(l.style, { top: (260 + rng() * 620) + "px", width: w + "px" }); l._x = rng() * 2400; l._v = 1400 + rng() * 1600; l._w = w;
+      lines.appendChild(l); ls.push(l); }
+    HF.drive(tl, (t) => { ls.forEach((l) => { const x = ((l._x - t * l._v) % 2600 + 2600) % 2600 - 700; l.style.transform = `translateX(${x.toFixed(0)}px)`; }); }, 0, S);
+    const chk = add(HF.el("div", "chk")); const cb = HF.el("div"); chk.appendChild(cb);
+    tl.fromTo(cb, { x: 0 }, { x: -72 * Math.ceil(S * 4), duration: S, ease: "none" }, 0);
+
+    let car = null;
+    if (P) {
+      car = add(HF.photoImg("photo"));
+      const pw = 1000, hh = pw * P.height / P.width;
+      Object.assign(car.style, { width: pw + "px", height: hh + "px", left: "40px", top: (900 - P.floor * hh) + "px" });
+      if (P.facing === "left") car.style.transform = "scaleX(-1)";
+      tl.fromTo(car, { x: -1300, filter: "blur(16px)" }, { x: 0, filter: "blur(0px)", duration: 0.75, ease: "expo.out" }, 0.15);
+      // 停留:车身微震 + 缓慢前移
+      HF.drive(tl, (t) => { car.style.translate = `${(t * 8).toFixed(1)}px ${(Math.sin(t * 47) * 1.6).toFixed(1)}px`; }, 0.9, Math.max(0.1, S - 0.9));
+    }
+    const hd = add(HF.el("div", "hd"));
+    hd.appendChild(HF.el("div", "k", ((D.subject || "") + "  " + (HF.kicker || "")).trim()));
+    const ttl = HF.el("div", "t", D.title || ""); ttl.style.fontSize = HF.fit(D.title || "", 1000, 92) + "px"; hd.appendChild(ttl);
+    tl.fromTo(hd.children, { x: -400, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: "expo.out", stagger: 0.08 }, 0.25);
+
+    const n = Math.max(1, items.length), gap = 22, ph = 170, top0 = Math.max(330, 1000 - n * (ph + gap));
+    const t0 = T(0.9), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
+    const panels = [];
+    items.forEach((it, k) => {
+      const p = add(HF.el("div", "panel")); p.style.top = (top0 + k * (ph + gap)) + "px";
+      const inn = HF.el("div", "in"); p.appendChild(inn);
+      inn.appendChild(HF.el("div", "lab", it.label));
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 380 : 560, 108, 0.6) + "px"; inn.appendChild(val);
+      if (it.b) { const b = HF.el("div", "b"); b.appendChild(HF.el("em", "", HF.cols[1])); b.appendChild(document.createTextNode(it.b)); inn.appendChild(b); }
+      const leds = HF.el("div", "leds"); const cells = [];
+      for (let j = 0; j < 10; j++) { const c = HF.el("i"); leds.appendChild(c); cells.push(c); }
+      inn.appendChild(leds);
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.fromTo(p, { x: 900 }, { x: 0, duration: 0.45, ease: "expo.out" }, at);
+      HF.countText(tl, val, it.value, at + 0.1, 0.7, { ease: "power3.out" });
+      cells.forEach((c, j) => tl.to(c, { backgroundColor: j < 6 ? "#2bd96b" : j < 9 ? "#ffd400" : "#ff2d2d", duration: 0.05 }, at + 0.15 + j * 0.05));
+      panels.push(p);
+    });
+    const src = add(HF.el("div", "src", D.source || ""));
+    tl.fromTo(src, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 1.0);
+    tl.to(panels, { x: 900, duration: A.outDur, ease: "power3.in", stagger: 0.03 }, A.outAt);
+    tl.to([hd, src, car, lines].filter(Boolean), { opacity: 0, duration: A.outDur }, A.outAt);
+    HF.register(tl);
+  </script>

@@ -102,6 +102,17 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 8. **黄金三秒**:第 1 段的第一句话必须在 18 字以内(约 3 秒读完),直接抛出一个反常识、
    争议或最硬的一个结论/数字,让人想听下去。不许用"大家好""今天来聊聊""欢迎""这期视频"
    这类开场白,不许先自我介绍或交代背景。{angle_policy}
+9. **主论点** `thesis`:先定一句话,再照着它写全片。
+   - 不超过 30 字,是一个**判断**而不是话题(「{subject}适合既要又要的人」而不是「{subject}的配置」);
+   - 全片每一段都要为它服务:每段开头能接住它,最后一段必须**原样包含这句话**;
+   - 不要写成广告语(「闭眼入」「太香了」这类),要写成有取舍的判断。
+10. **开头三段式,结尾给行动**:
+   - 开头三段分开写,各司其职:① **先给冲突** —— 一句带判断的反常识话
+     (「看起来更贵的那台,反而更划算」这种),不是「XX 值不值得买」这种平的问题;
+     ② **立刻兑现** —— 把上一段抛出的那个数字或判断摆出来,不许绕;
+     ③ **建立可信度** —— 一句话说明每个数字都能查到出处,全片只说这一次。
+   - 结尾要给**行动**,不只给总结:最后一段必须有一句提问(「你在纠结哪款?评论区说」)
+     或一句下期预告(「下期做同价位横评」),让人知道下一步做什么。
 
 可用事实清单(只能用这里的 ID,已标注层级;来源 derived 是由其它事实推算的体感数字):
 {facts}
@@ -114,7 +125,7 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
 
 必需关键词: {keywords}
 
-必需键: segments, title"""
+必需键: segments, title, thesis"""
 
 #: 事实层级使用策略。
 #:
@@ -159,6 +170,10 @@ def _scope_policy(theme, vocab: Vocab) -> str:
 
 #: 质量记录(召回 / 抽检 / 假冒)类事实的主题标签,与 intake.QUALITY_TOPIC 一致
 QUALITY_TOPIC = "quality"
+
+#: 对比事实的主题标签:一条事实里写清本车与对比车同一维度的取值。
+#: 这类事实只能用在竞品对比段,混进本车的参数面板就是把别家的数字安到本车头上。
+COMPARE_TOPIC = "对比"
 
 #: 质量记录类事实的讲法。只在事实里有这类记录时追加
 _QUALITY_RULE = ("topic=quality 的事实是品牌 / 公司名下的召回、抽检、假冒记录,"
@@ -247,8 +262,8 @@ def generate(
     angle: str = "",
     slots: Sequence[Slot] | None = None,
     subjects: Sequence[dict[str, str]] | None = None,
-) -> tuple[list[ScriptSegment], str]:
-    """生成解说脚本。返回 (段落列表, 标题)。
+) -> tuple[list[ScriptSegment], str, str]:
+    """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
     `angle`:选题角度(热点选题)。为空时 prompt 与无角度版本逐字一致。
     `slots` / `subjects`:多车横评的段落位(段落 + 车名)与车单。不传时 prompt 与单车版逐字一致。
@@ -261,8 +276,12 @@ def generate(
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)
     def _line(f: Fact) -> str:
-        return (f"- {f.id} [{scope_label.get(f.scope, 'company')}"
-                f"{' · topic=quality' if f.topic == QUALITY_TOPIC else ''}] | {f.claim} | "
+        tags = scope_label.get(f.scope, "company")
+        if f.topic == QUALITY_TOPIC:
+            tags += " · topic=quality"
+        if f.compare_with:
+            tags += f" · 对比[{f.compare_with}]"
+        return (f"- {f.id} [{tags}] | {f.claim} | "
                 f"口径:{f.basis or '未注明'} | 来源:{f.source_kind or f.source_tool} | "
                 f"可信度:{f.confidence}")
 
@@ -314,9 +333,10 @@ def generate(
             scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
             angle_policy=_angle_policy(angle),
+            subject=subject,
         ),
         user,
-        required_keys=["segments", "title"],
+        required_keys=["segments", "title", "thesis"],
         temperature=0.7,
     )
 
@@ -344,7 +364,8 @@ def generate(
         )
 
     title = str(data.get("title") or "").strip() or f"{subject} 详解"
-    return segments, title
+    thesis = str(data.get("thesis") or "").strip()
+    return segments, title, thesis
 
 
 # --------------------------------------------------------------------------
@@ -364,13 +385,66 @@ _DISPARAGING_TERMS = ("智商税", "劝退", "垃圾", "辣鸡", "韭菜", "坑�
 #: "第一类人""第一种情况""第一档"是列举,同样不是排名
 _BENIGN_FIRST_RE = re.compile(r"第一(?=感|眼|印象|次|步|句|段|时间|反应|排|个问题|类|种|档|条|项)")
 
+#: 竞品 / 对比类章节的识别词。段落名里出现这些字,这段就是在跟别人比。
+_COMPARISON_SECTION_WORDS = ("竞品", "对比", "横评", "比较", "比一比")
+
+#: 厂商口径的标志:把结论归给厂商,或归给厂商里的人。
+#:
+#: 为什么要拦:厂商自己做的"消费者选择调查"拿来证明本车比对手强,
+#: 等于替厂商站台。实测见过"卢伟冰说,对比试驾后多数消费者选了YU7"被当横评论据 ——
+#: 车评引用它,掉的是自己的可信度。这类话在**对比章节**里一律不算论据。
+_VENDOR_CLAIM_MARKERS = (
+    "官方表示", "官方称", "官方说", "官方宣称", "官方口径", "官方数据",
+    "厂商表示", "厂商称", "厂商说", "厂家表示", "厂家称", "品牌方",
+    "调研显示", "调研结果", "问卷显示", "调查显示", "消费者调研", "调研数据",
+    "CEO", "总裁", "董事长", "高管", "创始人",
+)
+
+#: 人名 + 说话的引述句式:"卢伟冰说,……"。
+#:
+#: 动词后必须紧跟标点,否则「这类车说白了就是」会把"这类车"当人名。
+_PERSON_QUOTE_RE = re.compile(r"([一-龥]{2,4})(说|表示|称|指出|坦言)\s*[，,：:]")
+
+#: 不是人名的常见词,别当引述主体
+_NOT_A_NAME = frozenset({
+    "现在", "其实", "所以", "但是", "如果", "这个", "那个", "我们", "你们",
+    "他们", "有人", "大家", "已经", "可以", "应该", "不能", "不会", "就是",
+    "还是", "以及", "或者", "不过", "而且", "然后", "例如", "比如", "通常",
+    "一般", "基本", "真的", "确实", "当然", "因此", "由于", "为了", "关于",
+    "针对", "按照", "根据", "通过", "经过", "随着", "作为", "这么", "那么",
+    "怎么", "为什么", "多少", "如何", "所谓", "别看", "别忘", "要知", "要说",
+})
+
+
+def _is_comparison_section(section: str) -> bool:
+    """这一段是不是在跟别的东西比。"""
+    return any(w in (section or "") for w in _COMPARISON_SECTION_WORDS)
+
+
+def vendor_attribution(text: str) -> str:
+    """文本里的厂商口径。返回命中的那截,没有则返回空串。"""
+    hit = next((m for m in _VENDOR_CLAIM_MARKERS if m in text), None)
+    if hit:
+        return hit
+    for m in _PERSON_QUOTE_RE.finditer(text or ""):
+        if m.group(1) not in _NOT_A_NAME:
+            return m.group(0).strip()
+    return ""
+
+
 #: 口径词之后多远内出现的数字算"这个口径下的数"(如 "CLTC续航643公里")
 _BASIS_WINDOW = 40
 
 
 #: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.8 字/秒)与禁用的开场套话
 HOOK_MAX_CHARS = 18
-HOOK_FILLER = ("大家好", "今天来聊", "今天我们", "欢迎", "这期视频", "本期视频", "哈喽", "各位")
+#: 开场套话。命中即判定为"没抛钩子" —— 这些是自我介绍,不是钩子。
+#:
+#: 收得比直觉宽:模型实际写出来的是"朋友们好,今天聊小米YU7",只禁"今天来聊"会整条漏掉。
+#: 宁可多拦一次让人改句,也不让"大家好"这种开场进成片。
+HOOK_FILLER = ("大家好", "大伙好", "朋友们好", "朋友好", "各位好", "各位朋友",
+               "今天来聊", "今天聊", "今天我们", "今天带大家", "今天给大家",
+               "欢迎", "这期视频", "本期视频", "这期我们", "哈喽", "哈啰", "各位")
 
 
 def first_sentence(text: str) -> str:
@@ -378,18 +452,43 @@ def first_sentence(text: str) -> str:
     return re.split(r"[。!?!?;;\n]", (text or "").strip(), maxsplit=1)[0].strip()
 
 
+#: 开场段的识别词。**只有第一段是开场时**才套用黄金三秒的规矩 ——
+#: 「使用成本」「品牌历史」这类方向的第一段本来就不是钩子,套上去是误伤。
+_HOOK_SECTION_WORDS = ("开场", "钩子", "hook", "intro")
+
+
+def _is_hook_section(section: str) -> bool:
+    """这一段是不是开场。段落名没给出来时,按开场处理(第一段默认就是开场)。"""
+    s = (section or "").strip().lower()
+    if not s:
+        return True
+    return any(w in s for w in _HOOK_SECTION_WORDS)
+
+
 def hook_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
-    """开场第一句太长或是套话 → warning(提示重写,不硬拦)。"""
+    """开场第一句太长或是套话 → **error**。
+
+    这条以前只是 warning,结果模型照写不误(实测成片开场就是"朋友们好,今天聊…")。
+    黄金三秒是脚本层唯一的硬性结构约束,必须在进分镜前拦住,而不是等人用眼睛找。
+
+    只对**开场段**生效:成本、品牌这类方向的第一段本来就不是钩子。
+    """
     if not segments:
         return []
-    first = first_sentence(segments[0].text)
+    first_seg = segments[0]
+    if not _is_hook_section(first_seg.section):
+        return []
+    first = first_sentence(first_seg.text)
     issues: list[LintIssue] = []
-    if len(first) > HOOK_MAX_CHARS:
-        issues.append(LintIssue(segments[0].idx, "warning",
-                                f"开场第一句 {len(first)} 字,超过黄金三秒的 {HOOK_MAX_CHARS} 字:{first}"))
+    # 字数按"念出来要多久"算:空格不占时间,数字一位算一个音
+    spoken = len(re.sub(r"\s+", "", first))
+    if spoken > HOOK_MAX_CHARS:
+        issues.append(LintIssue(first_seg.idx, "error",
+                                f"开场第一句 {spoken} 字,超过黄金三秒的 {HOOK_MAX_CHARS} 字:"
+                                f"{first}(请直接抛结论或硬数字)"))
     for term in HOOK_FILLER:
         if term in first:
-            issues.append(LintIssue(segments[0].idx, "warning",
+            issues.append(LintIssue(first_seg.idx, "error",
                                     f"开场第一句是套话「{term}」,应直接抛钩子:{first}"))
             break
     return issues
@@ -400,10 +499,15 @@ def depth_lint(
     profile: CategoryProfile,
     facts: Sequence[Fact],
 ) -> list[LintIssue]:
-    """技术深度提醒(warning,不硬拦):空话、该讲原理的段落没讲、数字没带口径。
+    """技术深度检查:空话(挡)、该讲原理的段落没讲(提醒)、数字没带口径(提醒)。
 
     合规 lint 管"不许错",这里管"不够专业":只念参数、用"很猛"代替论据,
     观众听完不知道这台车为什么好、好在哪、代价是什么。
+
+    空洞评价是 **error**:profile 的 script_rules 把它列为硬规则
+    ("不许用'很猛'这类空洞评价代替论据"),而且它是成片里最容易被观众听出来的
+    一类偷懒 —— 模型写"这个数据很猛"是因为拿不出论据,与其放过去让人在门禁 A
+    里逐条找,不如在这里直接拦住。其余两条是 warning。
     """
     vocab = profile.vocab
     principle_ids = {p.id for p in profile.principles}
@@ -414,7 +518,7 @@ def depth_lint(
         text = seg.text or ""
         hit = next((t for t in vocab.filler_terms if t in text), None)
         if hit:
-            issues.append(LintIssue(seg.idx, "warning",
+            issues.append(LintIssue(seg.idx, "error",
                                     f"空洞评价「{hit}」:说清楚比什么、好在哪,或删掉:{text[:40]}"))
         if has_numeric_claim(text):
             said = numbers_in(text)
@@ -456,20 +560,120 @@ def depth_lint(
     return issues
 
 
+#: 结论段的识别词。主论点要在这里落地。
+_CONCLUSION_SECTION_WORDS = ("结论",)
+
+
+def _is_conclusion_section(section: str) -> bool:
+    return any(w in (section or "") for w in _CONCLUSION_SECTION_WORDS)
+
+
+def thesis_lint(segments: Sequence[ScriptSegment], thesis: str) -> list[LintIssue]:
+    """结论段有没有回扣主论点。
+
+    主论点(全片那句判断)是视频的脊椎:每一段为它服务,最后一段把它落地。
+    提示词要求结论段**原样包含**这句话,所以这里是精确匹配。
+    """
+    if not thesis.strip():
+        return []
+    ends = [s for s in segments if _is_conclusion_section(s.section)]
+    if not ends:
+        return []
+    if any(thesis in (s.text or "") for s in ends):
+        return []
+    return [LintIssue(ends[-1].idx, "warning",
+                     f"结论段没有回扣主论点「{thesis}」——"
+                     f"全片每一段都为它服务,最后一段要把它落地"
+                     f"(原样写进结论即可):{ends[-1].text[:40]}")]
+
+
+#: 结尾要给行动:一句提问,或一句下期预告 / 互动引导
+_ENDING_ACTION = ("?", "？", "评论区", "留言", "私信", "下期", "下一期", "下一集",
+                  "想看", "关注", "扣1", "打在评论区")
+
+
+def ending_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+    """结尾要给行动,不只给总结。
+
+    复盘原话:「现在结尾停在『标准版闭眼入』,没有下一步。补一句提问
+    (你在纠结哪台?评论区说车型,我下期做横评)或下期预告 —— 评论区互动和连看
+    都靠这一句。」
+
+    只报 warning:结尾怎么写是风格问题,不该拦住出片。
+    """
+    if not segments:
+        return []
+    last = segments[-1]
+    text = last.text or ""
+    if any(w in text for w in _ENDING_ACTION):
+        return []
+    return [LintIssue(last.idx, "warning",
+                     "结尾只有总结,没有下一步:补一句提问(你在纠结哪款?评论区说)"
+                     "或下期预告(下期做同价位横评)—— 评论区互动和连看都靠它")]
+
+
+def duplicate_lint(
+    segments: Sequence[ScriptSegment],
+    facts: Sequence[Fact],
+) -> list[LintIssue]:
+    """重复检测:同一条事实被多个章节反复引用、同一个数字在多段重复出现。
+
+    车评最常见的观感问题是"这段刚才不是讲过了吗"。实测典型:同一张价格表在
+    「定位与价格」和「版本选择」各讲一遍,后者只是复读,没有新增信息。
+
+    这里只报 warning:价格在「定位」和「版本选择」里各出现一次是合理的,
+    真正的重复靠**跨章节引用同一条事实**来判定更准 —— 同一个章节里连续几段
+    引用同一条事实是正常的(那一段的参数本来就出自它)。
+    """
+    issues: list[LintIssue] = []
+    by_id = {f.id: f for f in facts}
+
+    # 1. 同一条事实被几个不同章节引用
+    seen: dict[str, list[int]] = {}
+    for seg in segments:
+        for ref in seg.fact_refs:
+            seen.setdefault(ref, []).append(seg.idx)
+    for ref, idxs in seen.items():
+        secs = sorted({segments[i].section for i in idxs if i < len(segments)})
+        if len(secs) >= 2:
+            claim = by_id[ref].claim[:26] if ref in by_id else ref
+            issues.append(LintIssue(idxs[0], "warning",
+                                    f"同一条事实被「{'、'.join(secs)}」多个章节引用"
+                                    f"({claim}):这几段是不是在重说同一件事?"))
+
+    # 2. 同一个数字在多段重复出现。跳过个位数(3 块屏、3 米轴距不算重复)
+    #    和年款年份(2026 款会出现在好几段)。
+    hits: dict[str, list[int]] = {}
+    for seg in segments:
+        for n in numbers_in(seg.text or ""):
+            if len(n) < 2 or _YEAR_RE.fullmatch(n):
+                continue
+            hits.setdefault(n, []).append(seg.idx)
+    for n, idxs in hits.items():
+        if len(idxs) >= 3:
+            where = "、".join(str(i + 1) for i in idxs)
+            issues.append(LintIssue(idxs[0], "warning",
+                                    f"数字 {n} 在第 {where} 段反复出现,考虑删掉重复的一次"))
+    return issues
+
+
 def compliance_lint(
     segments: Sequence[ScriptSegment],
     profile: CategoryProfile,
     facts: Sequence[Fact],
     theme=None,
+    thesis: str = "",
 ) -> list[LintIssue]:
     """机械校验脚本。error 级问题必须修复后才能进入分镜阶段。"""
     issues: list[LintIssue] = []
     known_ids = {f.id for f in facts}
+    by_id = {f.id: f for f in facts}
     principle_ids = {p.id for p in profile.principles}
     forbidden = list(profile.forbidden_terms)
     if theme is not None:
         forbidden.extend(theme.extra_forbidden_terms)
     allow_critique = bool(getattr(theme, "allow_subject_critique", False))
+    theme_roundup = bool(getattr(theme, "roundup", False))
     # 规则 5 只在**产品是叙事主体**的方向生效。
     #
     # 它的触发词表里含"电池""充电""配置"这类词,而这些词在品牌叙事里同样高频
@@ -561,8 +765,43 @@ def compliance_lint(
                               "或把比较挪到开场 / 结论")
                 )
 
+        # 8. 对比章节不许拿厂商口径当论据。
+        #    厂商自己做的消费者选择调查,拿来证明本车比对手好,是替厂商站台;
+        #    车评引用它掉的是自己的可信度。改用可比参数(售价/续航/加速/配置)。
+        if _is_comparison_section(seg.section):
+            vendor = vendor_attribution(text)
+            if vendor:
+                issues.append(
+                    LintIssue(
+                        seg.idx,
+                        "error",
+                        f"对比章节拿厂商口径当论据「{vendor}」:{text[:40]}..."
+                        "请换成可比参数(售价/续航/加速/配置),或删掉这句",
+                    )
+                )
+
+        # 9. 对比事实(讲的是别家车的那条数字)只能出现在竞品对比段。
+        #    拿到「版本选择」段里讲,就是把别家的参数安到本车头上。
+        #    横评方向不管这事:那里每台车的事实本来就带车名,规则 7 已经管住了张冠李戴。
+        if not theme_roundup and not _is_comparison_section(seg.section):
+            for ref in seg.fact_refs:
+                f = by_id.get(ref)
+                if f is not None and f.compare_with:
+                    issues.append(
+                        LintIssue(
+                            seg.idx,
+                            "error",
+                            f"这段引用了讲{f.compare_with}的对比事实({f.id}),"
+                            "只能用在竞品对比段 —— 别家的数字不能出现在本车的段落里",
+                        )
+                    )
+                    break
+
     issues.extend(hook_lint(segments))
     issues.extend(depth_lint(segments, profile, facts))
+    issues.extend(duplicate_lint(segments, facts))
+    issues.extend(thesis_lint(segments, thesis))
+    issues.extend(ending_lint(segments))
     return issues
 
 
@@ -617,4 +856,93 @@ def normalize_segments(
         # LLM 偶尔整篇写中文数字:字幕全是汉字,lint 的引用检查也会被绕过
         seg.text = arabicize(seg.text)
         seg.subject = slots[i].subject if i < len(slots) else ""
+    return out
+
+
+#: 一拍最多多少字。按实测 TTS 语速 4.8 字/秒,28 字 ≈ 5.8 秒。
+#:
+#: 为什么在脚本层就拆:复盘要求「每 5–6 秒必须有一次画面变化」,而**一段脚本 = 一拍**
+#: (`explainer.build_beats` 一段一版式)。拍太长,这一拍里就只剩一张画面撑着 ——
+#: 实测成片 24 拍平均 8 秒一拍,后半程好几拍是同一张参数面板杵着不走。
+SHOOT_CHARS_MAX = 28
+#: 拆出来的碎块太短就别单独成拍(2 个字的一拍纯属浪费画面)
+MIN_PART_CHARS = 8
+#: 句子边界(标点跟着前一句)
+_SENT_END = "。!?!?;；\n"
+#: 次级边界:逗号、顿号、冒号
+_CLAUSE_END = "，,、：:"
+
+
+def _split_keep(text: str, chars: str) -> list[str]:
+    """按 `chars` 里的标点断句,标点留在前半句。"""
+    out: list[str] = []
+    buf = ""
+    for ch in text:
+        buf += ch
+        if ch in chars:
+            if buf.strip():
+                out.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        out.append(buf.strip())
+    return out
+
+
+#: 拆完落在句尾的半个标点 —— 字幕末尾挂着逗号不像话,换成句号
+_TRAILING_MARKS = "，,、；;：:"
+
+
+def _split_text(text: str, max_chars: int) -> list[str]:
+    """把一段话切成每块不超过 `max_chars` 字的几块,尽量断在句末标点上。"""
+    parts: list[str] = []
+    for sent in _split_keep(text, _SENT_END):
+        if len(sent) <= max_chars:
+            parts.append(sent)
+            continue
+        # 一句太长:再按逗号切
+        for clause in _split_keep(sent, _CLAUSE_END):
+            if len(clause) <= max_chars:
+                parts.append(clause)
+                continue
+            # 连逗号都没有(纯数字长串):只能硬切,宁可切坏也不能留一个 30 秒的拍
+            for k in range(0, len(clause), max_chars):
+                parts.append(clause[k:k + max_chars])
+    # 切在逗号上的块,句尾那个逗号换成句号:字幕末尾挂半个标点不像话,
+    # TTS 也需要一个明确的断句。
+    parts = [(p[:-1] + "。" if p and p[-1] in _TRAILING_MARKS else p) for p in parts]
+    # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话
+    merged: list[str] = []
+    for p in parts:
+        if merged and (len(p) < MIN_PART_CHARS or len(merged[-1]) < MIN_PART_CHARS) \
+                and len(merged[-1]) + len(p) <= max_chars:
+            merged[-1] += p
+            continue
+        merged.append(p)
+    if len(merged) > 1 and len(merged[-1]) < MIN_PART_CHARS and \
+            len(merged[-2]) + len(merged[-1]) <= max_chars:
+        merged[-2] += merged[-1]
+        merged.pop()
+    return merged
+
+
+def split_segments(segments: Sequence[ScriptSegment],
+                   max_chars: int = SHOOT_CHARS_MAX) -> list[ScriptSegment]:
+    """把过长的段落拆成句子级的小段 —— 一段 = 一拍,拍太长就没有画面变化。
+
+    拆在句末标点;一句太长再拆到逗号。拆出来的每一段保留原来的段落名、
+    车名和事实引用(引用跟着数字走,拆开也不丢出处)。
+
+    开场段也拆:复盘要的「0–3 秒先给冲突、3–10 秒立刻兑现承诺」正好对应
+    开场的第一句和第二句,拆开这两句才分得开。拆完第一段仍然是钩子段
+    (`hook_lint` 只看第一段,黄金三秒的规矩不变)。
+    """
+    out: list[ScriptSegment] = []
+    for seg in segments:
+        text = (seg.text or "").strip()
+        if not text:
+            continue
+        parts = _split_text(text, max_chars) if len(text) > max_chars else [text]
+        for p in parts:
+            out.append(ScriptSegment(idx=len(out), section=seg.section, text=p,
+                                     fact_refs=list(seg.fact_refs), subject=seg.subject))
     return out

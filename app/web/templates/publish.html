@@ -1,0 +1,168 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}分发台 · aimovice{% endblock %}
+{% block body_class %}page-publish{% endblock %}
+{% set active_nav = 'publish' %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑"><span class="sep">/</span><span class="cur">分发台</span></nav>
+{% endblock %}
+
+{% block main %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">分发台</h1>
+    <p class="muted">一条解说视频一次点击发到多个平台,并把各平台的作品数据抓回来做看板。凭据只存在本机,不进仓库。</p>
+  </div>
+  <div class="row">
+    <a class="btn btn-ghost" href="/analytics">{{ m.icon("activity", "i-sm") }}数据看板</a>
+  </div>
+</section>
+
+<!-- 账号 -->
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("layers", "i-sm") }}平台账号</h2>
+    <span class="subtle small">{{ accounts | length }} 个账号</span>
+  </div>
+  <div class="card-body stack">
+    {% if accounts %}
+    <div class="rows" id="account-list">
+      {% for a in accounts %}
+      <div class="rowline" data-account="{{ a.id }}">
+        <span class="badge tone-brand">{{ a.platform_label }}</span>
+        <strong>{{ a.name }}</strong>
+        <span class="subtle small">{{ a.auth_kind }}{% if a.enabled %} · 已启用{% else %} · 已停用{% endif %}</span>
+        <span class="grow subtle small mono-id" data-cred="{{ a.credential | tojson }}"></span>
+        <span class="row-actions">
+          <button class="btn btn-sm" type="button" data-act="check" data-id="{{ a.id }}">自检</button>
+          <button class="btn btn-sm btn-ghost" type="button" data-act="edit" data-id="{{ a.id }}">编辑</button>
+          <button class="btn btn-sm btn-ghost" type="button" data-act="login" data-platform="{{ a.platform }}">登录</button>
+          <button class="btn btn-sm btn-ghost" type="button" data-act="del" data-id="{{ a.id }}">{{ m.icon("trash", "i-sm") }}</button>
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">{{ m.icon("layers", "i-lg") }}</div>
+      <div class="empty-title">还没有平台账号</div>
+      <div>先加一个账号:填上凭据,点「自检」确认登录态是好的。</div>
+    </div>
+    {% endif %}
+
+    <details class="pub-add" id="account-form-wrap">
+      <summary class="btn btn-primary">{{ m.icon("plus", "i-sm") }}添加账号</summary>
+      <form class="stack-sm" id="account-form">
+        <div class="form-row">
+          <label class="field">
+            <span class="field-label">平台</span>
+            <select class="select" name="platform" id="acc-platform" required>
+              {% for p in platforms %}
+              <option value="{{ p.key }}">{{ p.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">账号名</span>
+            <input class="input" name="name" id="acc-name" placeholder="比如:我的B站号" required>
+          </label>
+        </div>
+        <div class="form-row" id="acc-cred-fields"></div>
+        <label class="field">
+          <span class="field-label">平台设置(可选,JSON)</span>
+          <input class="input" name="meta" id="acc-meta" placeholder='{"tid": 21}'>
+          <span class="field-help">B站分区 tid、YouTube 频道 ID、可见范围等</span>
+        </label>
+        <p class="field-help" id="acc-hint"></p>
+        <div class="row">
+          <button class="btn btn-primary" type="submit" id="acc-save">保存账号</button>
+          <button class="btn btn-ghost" type="button" id="acc-cancel">取消</button>
+        </div>
+      </form>
+    </details>
+  </div>
+</section>
+
+<!-- 批量发布 -->
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("external", "i-sm") }}一键发布</h2>
+    <span class="subtle small">已发过的会自动跳过</span>
+  </div>
+  <div class="card-body stack">
+    {% if projects %}
+    <label class="field">
+      <span class="field-label">选项目</span>
+      <select class="select" id="batch-project">
+        {% for p in projects %}
+        <option value="{{ p.id }}" data-vertical="{{ '1' if p.has_vertical else '0' }}">{{ p.title }}（{{ p.subject }}）</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="form-row" id="batch-platforms"></div>
+    <div class="row">
+      <button class="btn btn-primary" type="button" id="batch-publish">{{ m.icon("external", "i-sm") }}发布</button>
+      <span class="subtle small" id="batch-note"></span>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">{{ m.icon("film", "i-lg") }}</div>
+      <div class="empty-title">还没有成片</div>
+      <div>先做出一条解说视频,成片之后才能发。</div>
+      <a class="btn btn-primary" href="/#create">{{ m.icon("plus", "i-sm") }}新建解说</a>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- 队列 -->
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("list", "i-sm") }}发布队列</h2>
+    <span class="subtle small">{{ queue | length }} 条</span>
+  </div>
+  <div class="card-body">
+    {% if queue %}
+    <div class="table-wrap">
+      <table class="table" id="queue-table">
+        <thead>
+          <tr><th>平台</th><th>标题</th><th>画幅</th><th>状态</th><th class="num">尝试</th><th>结果</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for q in queue %}
+          <tr data-pub="{{ q.id }}">
+            <td><span class="badge tone-brand">{{ q.platform_label }}</span></td>
+            <td class="pub-title" title="{{ q.title }}">{{ q.title }}</td>
+            <td class="subtle">{{ q.aspect }}</td>
+            <td><span class="badge tone-neutral" data-state>{{ q.state }}</span></td>
+            <td class="num">{{ q.attempts }}</td>
+            <td class="subtle small" data-result>
+              {% if q.remote_url %}<a href="{{ q.remote_url }}" target="_blank" rel="noopener">{{ m.icon("external", "i-sm") }}查看</a>
+              {% elif q.error %}{{ q.error }}{% else %}<span class="subtle">—</span>{% endif %}
+            </td>
+            <td><button class="btn btn-sm btn-ghost" type="button" data-act="retry" data-id="{{ q.id }}">重试</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty-icon">{{ m.icon("inbox", "i-lg") }}</div>
+      <div class="empty-title">队列是空的</div>
+      <div>发一次就会出现在这里,状态实时更新。</div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
+
+{% block page_data %}
+<script type="application/json" id="page-data">{{ {
+  "platforms": platforms,
+  "accounts": accounts,
+} | tojson }}</script>
+{% endblock %}
+
+{% block script %}publish{% endblock %}

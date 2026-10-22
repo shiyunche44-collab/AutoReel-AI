@@ -1,0 +1,91 @@
+<!-- @name 杂志内页
+     @desc 米白纸张 + 宋体大标题 + 衬线数字,实车图压在红色色块上,像汽车杂志的跨页
+     @order 3
+     @light yes -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #f2ede3; }
+    #root { color: #1b1a17; background: #f2ede3;
+            font-family: "STSong", "SimSun", serif; }
+    .folio { position: absolute; left: 110px; right: 110px; top: 60px; display: flex; justify-content: space-between;
+             font-family: "Playfair Display", serif; font-style: italic; font-size: 24px; color: #6d675c; }
+    .folio-rule { position: absolute; left: 110px; right: 110px; top: 104px; height: 1px; background: #1b1a17; transform-origin: 0 50%; }
+    .kick { position: absolute; left: 110px; top: 170px; font-family: "Playfair Display", "STSong", serif; font-size: 26px; letter-spacing: 0.3em; color: #c8102e; }
+    .ttl-mask { position: absolute; left: 104px; top: 214px; overflow: hidden; padding: 0 6px 12px; }
+    .ttl { font-size: 104px; font-weight: 700; line-height: 1.12; white-space: nowrap; letter-spacing: 0.02em; }
+    .list { position: absolute; left: 110px; width: 760px; }
+    .row { position: relative; padding: 22px 0 18px; display: flex; align-items: baseline; }
+    .row .rule { position: absolute; left: 0; right: 0; top: 0; height: 1px; background: rgba(27,26,23,0.35); transform-origin: 0 50%; }
+    .row .no { width: 76px; font-family: "Playfair Display", serif; font-style: italic; font-size: 38px; color: #c8102e; }
+    .row .lab { flex: 1; font-size: 34px; letter-spacing: 0.06em; }
+    .row .val { font-family: "Playfair Display", serif; font-weight: 700; white-space: nowrap; letter-spacing: -0.01em; }
+    .row .b { position: absolute; right: 0; top: 100%; margin-top: -10px; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 26px; color: #6d675c; white-space: nowrap; }
+    .block { position: absolute; left: 1060px; top: 150px; width: 800px; height: 640px; background: #c8102e; transform-origin: 0 50%; }
+    .photo { position: absolute; display: block; }
+    .cap { position: absolute; left: 1060px; top: 812px; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 24px; color: #6d675c; }
+    .bignum { position: absolute; left: 1060px; top: 250px; width: 700px; text-align: center; font-family: "Playfair Display", serif;
+              font-weight: 700; font-style: italic; color: #f2ede3; white-space: nowrap; }
+    .drop { position: absolute; left: 1084px; top: 170px; font-family: "Playfair Display", serif; font-size: 30px; font-style: italic; color: #f2ede3; letter-spacing: 0.1em; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    const folio = add(HF.el("div", "folio"));
+    folio.appendChild(HF.el("span", "", "Vol. 07 — " + (D.subject || "")));
+    folio.appendChild(HF.el("span", "", D.source ? "Source · " + D.source : "Spec Sheet"));
+    const frule = add(HF.el("div", "folio-rule"));
+    tl.fromTo(frule, { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: "expo.inOut" }, 0.05);
+    tl.fromTo(folio, { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.3);
+
+    // 右:红色色块 + 车图(没有车图就是首个数字的巨型斜体)
+    const block = add(HF.el("div", "block"));
+    tl.fromTo(block, { scaleX: 0 }, { scaleX: 1, duration: 0.8, ease: "expo.inOut" }, 0.2);
+    const drop = add(HF.el("div", "drop", (HF.kicker || "Feature").toUpperCase()));
+    tl.fromTo(drop, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.5 }, 0.8);
+    const exitEls = [folio, frule, drop];
+    let photoEl = null;
+    if (P) {
+      photoEl = add(HF.photoImg("photo"));
+      const pw = 960, ph = pw * P.height / P.width;
+      Object.assign(photoEl.style, { width: pw + "px", height: ph + "px", left: "955px", top: (780 - P.floor * ph) + "px" });
+      tl.fromTo(photoEl, { x: 260, opacity: 0 }, { x: 0, opacity: 1, duration: 1.0, ease: "expo.out" }, 0.55);
+      tl.fromTo(photoEl, { scale: 1 }, { scale: 1.04, duration: S, ease: "none" }, 0);
+    } else if (items[0]) {
+      const big = add(HF.el("div", "bignum"));
+      big.style.fontSize = HF.fit(items[0].value, 680, 240, 0.9) + "px";
+      HF.countText(tl, big, items[0].value, 0.7, 1.2);
+      tl.fromTo(big, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.8, ease: "expo.out" }, 0.6);
+      exitEls.push(big);
+    }
+    const cap = add(HF.el("div", "cap", "图 / " + (D.subject || "") + (P ? " · 实车" : "") + (HF.kicker ? " · " + HF.kicker : "")));
+    tl.fromTo(cap, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.0);
+
+    // 左:眉标 + 大标题 + 编号列表
+    const kick = add(HF.el("div", "kick", (HF.kicker || "") + "  /  专题"));
+    const tm = add(HF.el("div", "ttl-mask")); const ttl = HF.el("div", "ttl", D.title || ""); tm.appendChild(ttl);
+    ttl.style.fontSize = HF.fit(D.title || "", 860, 104) + "px";
+    tl.fromTo(kick, { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.5 }, 0.35);
+    tl.fromTo(ttl, { yPercent: 110 }, { yPercent: 0, duration: 0.8, ease: "expo.out" }, 0.45);
+    const list = add(HF.el("div", "list"));
+    list.style.top = (items.length > 3 ? 400 : 430) + "px";
+    const rowH = items.length > 3 ? 132 : 150;
+    const t0 = T(1.2), span = Math.max(0, Math.min(A.outAt - 1.4, S * 0.55) - t0);
+    items.forEach((it, k) => {
+      const row = HF.el("div", "row"); row.style.height = rowH + "px";
+      const rule = HF.el("div", "rule"); row.appendChild(rule);
+      row.appendChild(HF.el("div", "no", String(k + 1).padStart(2, "0")));
+      row.appendChild(HF.el("div", "lab", it.label));
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, 380, 80, 0.9) + "px"; row.appendChild(val);
+      if (it.b) row.appendChild(HF.el("div", "b", HF.cols[1] + "  " + it.b));
+      list.appendChild(row);
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "expo.inOut" }, at);
+      tl.fromTo(Array.from(row.children).slice(1), { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.07 }, at + 0.15);
+      HF.countText(tl, val, it.value, at + 0.25, 1.0);
+    });
+    exitEls.push(kick, tm, list, block, cap);
+    if (photoEl) exitEls.push(photoEl);
+    tl.to(exitEls, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.register(tl);
+  </script>

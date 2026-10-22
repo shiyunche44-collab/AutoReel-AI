@@ -1,0 +1,87 @@
+<!-- @name 电影片头
+     @desc 宽银幕黑边 + 暗调实车慢推 + 居中衬线字幕,一句一句淡入淡出,带横向镜头光晕
+     @order 9
+     @sample 6.4 -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #000; }
+    #root { background: #000; color: #f3ead8;
+            font-family: "STSong", "SimSun", serif; }
+    .plate { position: absolute; inset: 0;
+             background: radial-gradient(ellipse 1000px 520px at 60% 55%, #2b2a2e 0%, #121216 55%, #050506 100%); }
+    .photo { position: absolute; display: block; filter: brightness(0.55) contrast(1.15) saturate(0.7) sepia(0.15); }
+    .grade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.25) 0%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.55) 100%),
+             radial-gradient(ellipse 1100px 700px at 50% 50%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.75) 100%); }
+    .bar { position: absolute; left: 0; right: 0; height: 132px; background: #000; z-index: 5; }
+    .card { position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .k { font-family: "Playfair Display", "STSong", serif; font-size: 28px; letter-spacing: 0.6em; color: rgba(243,234,216,0.7); text-transform: uppercase; }
+    .t { margin-top: 24px; font-size: 120px; font-weight: 700; letter-spacing: 0.18em; white-space: nowrap; }
+    .lab { font-size: 36px; letter-spacing: 0.5em; color: rgba(243,234,216,0.75); }
+    .val { margin-top: 18px; font-family: "Playfair Display", "STSong", serif; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; line-height: 1.05; }
+    .b { margin-top: 20px; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 40px; color: rgba(243,234,216,0.65); }
+    .rule { width: 120px; height: 1px; background: rgba(243,234,216,0.6); margin-top: 26px; }
+    .flare { position: absolute; left: 0; top: 520px; width: 1400px; height: 6px; z-index: 4; border-radius: 3px;
+             background: linear-gradient(90deg, rgba(90,160,255,0) 0%, rgba(140,190,255,0.85) 50%, rgba(90,160,255,0) 100%);
+             box-shadow: 0 0 30px 8px rgba(80,140,255,0.35); mix-blend-mode: screen; }
+    .credit { position: absolute; left: 0; right: 0; bottom: 160px; text-align: center; font-family: "Playfair Display", "STSong", serif;
+              font-style: italic; font-size: 24px; color: rgba(243,234,216,0.45); letter-spacing: 0.2em; z-index: 6; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    const plate = add(HF.el("div", "plate"));
+    tl.fromTo(plate, { opacity: 0 }, { opacity: 1, duration: 1.0 }, 0);
+    let ph = null;
+    if (P) {
+      ph = add(HF.photoImg("photo"));
+      const pw = 1900, hh = pw * P.height / P.width;
+      Object.assign(ph.style, { width: pw + "px", height: hh + "px", left: "10px", top: (980 - P.floor * hh) + "px" });
+      tl.fromTo(ph, { opacity: 0 }, { opacity: 1, duration: 1.4, ease: "power1.inOut" }, 0.1);
+      tl.fromTo(ph, { scale: 1.0, x: 40 }, { scale: 1.1, x: -60, duration: S, ease: "none" }, 0);
+    }
+    add(HF.el("div", "grade"));
+    const topBar = add(HF.el("div", "bar")), botBar = add(HF.el("div", "bar"));
+    topBar.style.top = "0"; botBar.style.bottom = "0";
+    tl.fromTo(topBar, { yPercent: -100 }, { yPercent: 0, duration: 0.9, ease: "expo.out" }, 0);
+    tl.fromTo(botBar, { yPercent: 100 }, { yPercent: 0, duration: 0.9, ease: "expo.out" }, 0);
+
+    // 字幕卡:片名 + 每行一张;一张淡出下一张才淡入
+    const cards = [];
+    const c0 = add(HF.el("div", "card"));
+    c0.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
+    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", 1270, 120) + "px"; c0.appendChild(t);
+    c0.appendChild(HF.el("div", "rule"));
+    cards.push({ el: c0 });
+    items.forEach((it) => {
+      const c = add(HF.el("div", "card"));
+      c.appendChild(HF.el("div", "lab", it.label));
+      const v = HF.el("div", "val"); v.style.fontSize = HF.fit(it.value, 1500, 230, 0.9) + "px"; c.appendChild(v);
+      if (it.b) c.appendChild(HF.el("div", "b", HF.cols[0] + "  ·  " + HF.cols[1] + "  " + it.b));
+      else if (it.tag) c.appendChild(HF.el("div", "b", it.tag));
+      cards.push({ el: c, v, txt: it.value });
+    });
+    const starts = HF.slots(cards.length, 0.6, A.outAt + 0.2);
+    const L = (A.outAt + 0.2 - 0.6) / cards.length;
+    cards.forEach((c, k) => {
+      const at = starts[k], last = k === cards.length - 1;
+      tl.set(c.el, { opacity: 0 }, 0);
+      tl.fromTo(c.el, { opacity: 0, filter: "blur(14px)", letterSpacing: "0.3em" },
+                      { opacity: 1, filter: "blur(0px)", letterSpacing: "0em", duration: Math.min(0.9, L * 0.4), ease: "power2.out" }, at);
+      tl.fromTo(c.el, { scale: 1 }, { scale: 1.04, duration: L, ease: "none" }, at);
+      if (c.v) HF.countText(tl, c.v, c.txt, at + 0.1, Math.min(1.2, L * 0.5), { ease: "power3.out" });
+      if (!last) tl.to(c.el, { opacity: 0, filter: "blur(10px)", duration: Math.min(0.5, L * 0.25), ease: "power1.in" }, at + L - Math.min(0.5, L * 0.25));
+      else tl.to(c.el, { opacity: 0, duration: A.outDur }, A.outAt);
+    });
+    // 镜头光晕:每张卡出现时横扫一道
+    const flare = add(HF.el("div", "flare"));
+    tl.set(flare, { opacity: 0 }, 0);
+    starts.forEach((at) => {
+      tl.fromTo(flare, { x: -1400, opacity: 0.9 }, { x: 1920, opacity: 0.9, duration: 1.1, ease: "power1.inOut", immediateRender: false }, at - 0.1);
+      tl.set(flare, { opacity: 0 }, at + 1.0);
+    });
+    const credit = add(HF.el("div", "credit", D.source ? "— " + D.source + " —" : ""));
+    tl.fromTo(credit, { opacity: 0 }, { opacity: 1, duration: 0.8 }, 1.2);
+    tl.to([credit, ph, plate].filter(Boolean), { opacity: 0, duration: A.outDur }, A.outAt);
+    HF.register(tl);
+  </script>

@@ -101,7 +101,7 @@ def test_build_beats_grounds_panel_and_downgrades_bad_data():
     assert all(s.chapter for s in specs)
 
 
-def test_panel_with_unsupported_number_falls_back():
+def test_panel_with_unsupported_number_drops_only_the_bad_row():
     p = load_profile("auto_long")
     segs = _segments(p)
     i_price = next(i for i, s in enumerate(segs) if s.section == "定位与价格")
@@ -111,8 +111,13 @@ def test_panel_with_unsupported_number_falls_back():
     ]}}])
     specs = explainer.build_beats(subject="小米YU7", profile=p, segments=segs,
                                   facts=_facts(), llm=llm)
-    # 核掉一行只剩 1 行,不够撑一块面板
-    assert specs[i_price].layout == "broll" and specs[i_price].overlay is None
+    # 编造的那行(23.99万元)必须不上屏;核过的那行要上屏 ——
+    # 只剩一行也上屏(退成大数字),整拍退成 broll 等于把核对过的参数白白扔了
+    got = specs[i_price]
+    assert got.layout in ("stat", "panel")
+    blob = str(got.overlay)
+    assert "23.99" not in blob and "835" in blob
+    assert not explainer.validate_beats([got])
 
 
 def test_llm_failure_still_yields_valid_beats():

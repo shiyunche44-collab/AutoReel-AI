@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import zlib
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -35,7 +36,7 @@ from typing import Any, Sequence
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import cards, library, motion, motion_assets, narration, overlays
+from . import cards, library, motion, motion_assets, narration, overlays, rhythm
 from . import render as render_mod
 from .grounding import numbers_in
 
@@ -85,6 +86,9 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
 - card:整屏数据卡。段落标了「卡片」时优先用。给 `card`:
   {{"title": "卡片标题(12 字内)", "columns": [两个对比对象名,仅对比卡需要],
     "rows": [{{"label": "...", "values": ["..."], "fact_id": "f_xxx"}}]}}
+- 对比卡(compare):每行引用**一条同时写着两台车取值的事实**(事实清单里带 [对比:车名] 的那些),
+  `values` 按 `columns` 的顺序给两台车的取值,只填这一条 fact_id。两台车没写在同一条事实里
+  就别做对比卡 —— 核不过会自动作废。口径不一致的数字不放在一起比。
 - stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}{concept_guide}
 
 硬性要求:
@@ -98,7 +102,8 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
    必须与事实原文一字不差(含单位),不得换算、取整或估算。找不到就换版式,不要编。
 5. keywords 里的型号、芯片名、英文和数字必须在这一拍的旁白或可用事实里出现过,不得自创。
 6. 节奏:不要连续 3 拍以上用 card;panel、highlight、stat 穿插着用,不要连续两拍 stat,
-   全片大约四成是 broll。
+   **全片 broll 不超过三成**(共 {count} 拍,最多 {broll_cap} 拍)。旁白里讲到了参数、数字,
+   这一拍就用 panel / stat / concept 把它放上屏 —— broll 只留给讲感受、讲取舍、做过渡的拍。
 7. view:{view_guide}
 
 必需键: beats"""
@@ -126,9 +131,50 @@ def _hint(sec_angle: str, view: str, vocab: Vocab) -> str:
     return vocab.hint_of_angle.get(sec_angle, vocab.default_hint)
 
 
-def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact]) -> list[str]:
+def _norm_words(text: str) -> str:
+    """去掉标点与空白,只留可比对的字。"""
+    return re.sub(r"[^\w一-鿿]+", "", text or "")
+
+
+#: 一个分句至少这么长才可能被认成"整句照抄"
+_ECHO_MIN_CLAUSE = 4
+#: 大字本身至少这么长,才算"抄了旁白的一段"而不是一个短标签
+_ECHO_MIN_KEY = 6
+
+
+def echoes_narration(keyword: str, narration: str) -> bool:
+    """大字是不是把旁白原话搬上了屏。
+
+    旁白本身有字幕,大字再抄一遍,同一句话就在画面里出现两次(实测观感最差的一类
+    问题:大字和字幕逐字重复,大字既没加信息又挡住画面)。判定口径:
+
+    - 大字**包含**旁白的某个完整分句(≥4 字)→ 复读;
+    - 大字本身就是旁白里的一段(≥6 字)→ 复读。
+
+    只抄两三个字("标配""终身免费")不算 —— 关键词本来就该出现在旁白里,
+    那是它的出处,不是冗余。
+    """
+    key = _norm_words(keyword)
+    if not key:
+        return True
+    whole = _norm_words(narration)
+    clauses = [_norm_words(c) for c in re.split(r"[，,。、;:!?\s]+", narration or "")]
+    for c in (x for x in clauses if x):
+        if len(c) >= _ECHO_MIN_CLAUSE and c in key:
+            return True
+    if len(key) >= _ECHO_MIN_KEY and key in whole:
+        return True
+    return False
+
+
+def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact],
+                    drop_echo: bool = False) -> list[str]:
     """核对两行大字。中文描述放行;数字、英文、型号这类**最容易编**的记号,
-    必须在这一拍的旁白或启用的事实里出现过。核不过的行直接丢。"""
+    必须在这一拍的旁白或启用的事实里出现过。核不过的行直接丢。
+
+    `drop_echo=True` 时再丢一遍"照抄旁白"的大字(见 `echoes_narration`)。
+    冷开场(`hook`)不这么判:3 秒里把钩子放大本来就是刻意设计,不是冗余。
+    """
     if isinstance(lines, str):
         lines = [lines]
     pool = narration_text + " " + " ".join(f.claim for f in facts if f.enabled)
@@ -143,6 +189,8 @@ def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact]) -> l
             continue
         tokens = re.findall(r"[A-Za-z][A-Za-z0-9\-+]*", text)
         if any(t.upper() not in pool_up for t in tokens):
+            continue
+        if drop_echo and echoes_narration(text, narration_text):
             continue
         out.append(text[: KEYWORD_CHARS + 4])
     return out[:2]
@@ -166,6 +214,82 @@ def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]
             "tag": r.get("tag", "")}, dropped
 
 
+#: 取值要带单位,不然屏幕上只有一个"643",观众不知道那是什么
+_UNITS = ("万元", "公里", "分钟", "秒", "马力", "匹", "度电", "kWh", "KWh", "TOPS",
+          "rpm", "km/h", "N·m", "MPa", "GPa", "kg", "mm", "cm", "km", "Nm", "nm",
+          "kg", "L", "V", "kW", "W", "m", "元", "块", "%", "°", "度")
+#: 这些 topic 当不了参数行名
+_BAD_TOPICS = {"对比", "quality", ""}
+
+
+def _fact_value(claim: str, wanted: set[str]) -> str:
+    """从事实原文里取出旁白提到的那个数字(带单位)。取不到返回空串。
+
+    `wanted` 是旁白里的数字集合(`numbers_in` 的去小数点形式)。
+    """
+    for m in re.finditer(r"\d+(?:\.\d+)?", claim or ""):
+        if m.group(0).replace(".", "") not in wanted:
+            continue
+        tail = claim[m.end():]
+        for u in _UNITS:
+            if tail.startswith(u):
+                return m.group(0) + u
+        return m.group(0)
+    return ""
+
+
+def _fact_label(fact: Fact) -> str:
+    """参数行名:优先用事实的主题词,不行就从原文里截一小段。
+
+    行名里不能有数字 —— `cards.ground` 会核对"行名 + 取值"里的每个数字是不是
+    都在事实原文里,带个 2026 款就会把整行作废。
+    """
+    topic = str(getattr(fact, "topic", "") or "").strip()
+    if topic and topic not in _BAD_TOPICS and len(topic) <= 6:
+        return topic
+    claim = str(getattr(fact, "claim", "") or "")
+    m = re.search(r"\d+(?:\.\d+)?", claim)
+    head = claim[:m.start()] if m else claim
+    head = re.sub(r"[0-9A-Za-z]+", "", head).strip("的，。,、 ")
+    return head[-6:] or "参数"
+
+
+def _panel_from_rows(rows: Any, facts: Sequence[Fact]) -> dict | None:
+    """用一批行做左侧参数面板。核不过返回 None。"""
+    if not isinstance(rows, list) or not rows:
+        return None
+    grounded, _ = cards.ground(cards.normalise({"title": "", "rows": rows}, "spec"), facts)
+    if not grounded:
+        return None
+    return {**grounded, "kind": "panel"}
+
+
+def _stat_overlay(row: dict, source: str = "") -> dict | None:
+    """把一行核对过的参数做成大数字版式。取值里没有能滚的数字就做不了。"""
+    values = row.get("values") or []
+    value = str(values[0]) if values else ""
+    if overlays.split_number(value) is None:
+        return None
+    return {"kind": "stat", "label": str(row.get("label", ""))[:KEYWORD_CHARS],
+            "value": value, "fact_id": row.get("fact_id", ""), "source": source,
+            "tag": row.get("tag", "")}
+
+
+def _as_panel_overlay(spec: ShotSpec) -> dict | None:
+    """把一拍的叠加数据改成左侧参数面板 —— 核过的数据换个版式照样上屏。"""
+    ov = spec.overlay if isinstance(spec.overlay, dict) else {}
+    card = spec.card if isinstance(spec.card, dict) else {}
+    rows = ov.get("rows") or card.get("rows") or []
+    if not rows and ov.get("value"):
+        rows = [{"label": ov.get("label", ""), "values": [ov["value"]],
+                 "fact_id": ov.get("fact_id", ""), "tag": ov.get("tag", "")}]
+    if not rows:
+        return None
+    return {"kind": "panel", "title": ov.get("title") or card.get("title", ""),
+            "rows": rows, "source": ov.get("source") or card.get("source", "")}
+
+
+
 def concept_guide(vocab: Vocab) -> str:
     """分镜提示词里 concept 版式的说明。品类没配动画模板时为空(提示词与之前一字不差)。
     返回值作为 format 参数填进 SYSTEM,里面的花括号不会再被解析。"""
@@ -182,13 +306,23 @@ def concept_guide(vocab: Vocab) -> str:
     )
 
 
-def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile) -> str:
+def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile,
+               facts: Sequence[Fact] = ()) -> str:
     sec = profile.section(seg.section if seg else "")
     options = list(sec.layouts) or list(LAYOUTS)
     card = f" | 卡片:{cards.KIND_GUIDE[sec.card]}" if sec.card in cards.KIND_GUIDE else ""
     car = f"〔{seg.subject}〕" if seg is not None and seg.subject else ""
+    # 本拍可用事实:脚本给这一拍引用过的那几条。
+    #
+    # 为什么必须逐拍给:事实清单是全片一起给的,模型得自己猜"这条参数属于哪一拍",
+    # 猜不准就退一步选 broll —— 实测九成 broll 是这么来的(核对失败退下来的只有两三拍)。
+    # 把该拍的事实摆到它面前,它才敢往 panel / stat 上填。
+    own = [f for f in facts if f.id in set(seg.fact_refs or [])] if seg is not None else []
+    own_txt = ""
+    if own:
+        own_txt = " | 本拍事实:" + ";".join(f"{f.claim}({f.id})" for f in own[:3])
     return (f"[第 {i + 1} 拍] 段落:{sec.name or '未分类'}{car}({sec.beat or '无'}) | "
-            f"可选版式:{'/'.join(options)}{card} | 旁白:{seg.text if seg else ''}")
+            f"可选版式:{'/'.join(options)}{card} | 旁白:{seg.text if seg else ''}{own_txt}")
 
 
 #: 横评时追加到分镜 SYSTEM 末尾的规则
@@ -205,16 +339,20 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
     `subjects`:多车横评车单。给了就按车标注事实与拍,核对时每拍只认本车 + 共用事实。"""
     usable = [f for f in facts if f.enabled and f.confidence in ("high", "medium")]
     if subjects:
-        facts_payload = "\n".join(f"- {f.id} [{f.subject or '共用'}]: {f.claim}"
+        facts_payload = "\n".join(f"- {f.id} [{f.subject or '共用'}]"
+                                  + (f" [对比:{f.compare_with}]" if f.compare_with else "")
+                                  + f": {f.claim}"
                                   for f in usable)[:9000] or "(无)"
     else:
-        facts_payload = "\n".join(f"- {f.id}: {f.claim}" for f in usable)[:5000] or "(无)"
+        facts_payload = "\n".join(
+            f"- {f.id}" + (f" [对比:{f.compare_with}]" if f.compare_with else "")
+            + f": {f.claim}" for f in usable)[:5000] or "(无)"
     vocab = profile.vocab
     from .script_gen import roster_line
     user = USER.format(
         subject_label=vocab.subject_label if not subjects else "横评车单",
         subject=subject if not subjects else roster_line(subjects), count=len(segments),
-        beats="\n".join(_beat_line(i, s, profile) for i, s in enumerate(segments)),
+        beats="\n".join(_beat_line(i, s, profile, usable) for i, s in enumerate(segments)),
         facts=facts_payload,
     )
     try:
@@ -222,6 +360,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             kw=KEYWORD_CHARS, domain=vocab.domain, subject_noun=vocab.subject_noun,
             keyword_examples=vocab.keyword_examples, stat_examples=vocab.stat_examples,
             view_enum=vocab.view_enum, view_guide=vocab.view_guide,
+            count=len(segments),
+            broll_cap=max(1, int(len(segments) * rhythm.BROLL_RATIO_MAX)),
             concept_guide=concept_guide(vocab))
         if subjects:
             system = system.replace("\n\n必需键: beats", ROUNDUP_BEAT_RULE + "\n\n必需键: beats")
@@ -239,16 +379,66 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
                 by_idx[n] = item
 
     specs = [_ground_beat(i, seg, by_idx.get(i, {}), subject, profile,
-                          facts_for(facts, seg.subject), card_log)
+                          facts_for(facts, seg.subject, profile.section(seg.section).name),
+                          card_log)
              for i, seg in enumerate(segments)]
-    return assign_broll_styles(enforce_rhythm(specs))
+    # broll 兜底:这一拍讲的数字还有事实支撑,就把它放上屏(见 rescue_broll)
+    specs = rescue_broll(specs, segments, facts, profile)
+    return assign_broll_styles(enforce_rhythm(specs, profile))
 
 
-def facts_for(facts: Sequence[Fact], subject: str) -> list[Fact]:
-    """一拍能用来核对叠加数字的事实:讲某台车的拍只认这台车 + 共用事实;共用拍全认。"""
-    if not subject:
-        return list(facts)
-    return [f for f in facts if not f.subject or f.subject == subject]
+def facts_for(facts: Sequence[Fact], subject: str, section: str = "") -> list[Fact]:
+    """一拍能用来核对叠加数字的事实:讲某台车的拍只认这台车 + 共用事实;共用拍全认。
+
+    竞品对比段之外的拍**不认对比事实** —— 讲别家车的那条数字只该出现在对比卡上,
+    混进本车的参数面板就是把别家的参数安到本车头上。
+    """
+    from .script_gen import _is_comparison_section
+
+    out = list(facts)
+    if subject:
+        out = [f for f in out if not f.subject or f.subject == subject]
+    if not _is_comparison_section(section):
+        out = [f for f in out if not f.compare_with]
+    return out
+
+
+def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
+                   facts: Sequence[Fact]) -> list[ShotSpec]:
+    """把改过的脚本同步进分镜。
+
+    门禁 A 的脚本编辑器改的是 script.json,而 TTS 读的是分镜里的 `narration_zh` ——
+    不同步的话,在门禁 A 改的稿根本进不了成片(改完看着像生效,成片还是旧词)。
+    这里只同步旁白,并**按新旁白重新核对**依赖旁白的那部分叠加数据
+    (highlight / hook 的大字):大字是照抄旁白的话,旁白一改就可能变成复读,
+    或者引用了已经被删掉的数字。
+
+    版式、叠加卡片这些是按事实核过的,不受旁白改写影响,原样保留。
+    """
+    if len(specs) != len(segments):
+        raise ValueError(f"分镜 {len(specs)} 拍与脚本 {len(segments)} 段对不上,没法按拍同步")
+    out: list[ShotSpec] = []
+    for spec, seg in zip(specs, segments):
+        text = (seg.text or "").strip()
+        spec = spec.model_copy(deep=True)
+        if spec.narration_zh != text:
+            spec.narration_zh = text
+        ov = spec.overlay
+        if isinstance(ov, dict) and ov.get("kind") in ("highlight", "hook"):
+            kept = ground_keywords(ov.get("lines") or [], text, facts,
+                                   drop_echo=(ov.get("kind") == "highlight"))
+            if kept:
+                spec.overlay = {**ov, "lines": kept}
+            elif ov.get("kind") == "highlight" or not ov.get("stat"):
+                # 大字全废:这一拍退回 broll(没字可弹,硬留个空框更难看)
+                spec.layout = SAFE_LAYOUT
+                spec.overlay = None
+                spec.card = None
+                spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
+            else:
+                spec.overlay = {**ov, "lines": []}
+        out.append(spec)
+    return out
 
 
 def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: CategoryProfile,
@@ -266,10 +456,27 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         grounded, dropped = cards.ground(cards.normalise(item.get("panel"), "spec"), facts)
         if grounded and len(grounded["rows"]) >= 2:
             overlay = {**grounded, "kind": "panel"}
+        elif grounded:
+            # 只剩一行也上屏:能滚成大数字就滚,不能就一行面板。
+            # 退成 broll 等于把这条核对过的参数白白扔了 —— 实测 broll 占比四成就是这么来的。
+            stat = _stat_overlay(grounded["rows"][0], grounded.get("source", ""))
+            if stat:
+                overlay, layout = stat, "stat"
+            else:
+                overlay = {**grounded, "kind": "panel"}
         else:
             layout = SAFE_LAYOUT
     elif layout == "highlight":
-        lines = ground_keywords(item.get("keywords"), seg.text, facts)
+        # drop_echo:大字照抄旁白的直接丢。旁白有字幕,同一句话在画面里出现两次
+        # 既没加信息又挡住画面 —— 这两行白扔,行都扔光就退回 broll。
+        asked = item.get("keywords")
+        asked = [asked] if isinstance(asked, str) else list(asked or [])
+        lines = ground_keywords(asked, seg.text, facts, drop_echo=True)
+        echoed = [str(x).strip() for x in asked
+                  if str(x).strip() and str(x).strip() not in lines
+                  and echoes_narration(str(x), seg.text)]
+        if echoed:
+            dropped = [f"大字与旁白逐字重复,已丢:{'、'.join(echoed)}"]
         if lines:
             overlay = {"kind": "highlight", "lines": lines}
         else:
@@ -277,7 +484,15 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
     elif layout == "stat":
         overlay, dropped = ground_stat(item.get("stat"), facts)
         if overlay is None:
-            layout = SAFE_LAYOUT
+            # 大数字做不出来(取值里没有能滚的数字):同一行数据改成参数面板照样上屏
+            raw = item.get("stat")
+            row = ({"label": raw.get("label"), "values": [raw.get("value")],
+                    "fact_id": raw.get("fact_id")} if isinstance(raw, dict) else None)
+            rescued = _panel_from_rows([row] if row else [], facts)
+            if rescued:
+                overlay, layout = rescued, "panel"
+            else:
+                layout = SAFE_LAYOUT
     elif layout == "hook":
         lines = ground_keywords(item.get("keywords"), seg.text, facts)
         stat = None
@@ -293,9 +508,14 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
     elif layout == "concept":
         raw = item.get("concept")
         scene = str(raw.get("scene") or "").strip() if isinstance(raw, dict) else ""
+        raw_rows = raw.get("rows") if isinstance(raw, dict) else None
         if scene not in profile.vocab.concept_scenes:
             dropped = [f"concept 模板 {scene or '(空)'} 不在可选模板里"]
-            layout = SAFE_LAYOUT
+            rescued = _panel_from_rows(raw_rows, facts)
+            if rescued:
+                overlay, layout = rescued, "panel"
+            else:
+                layout = SAFE_LAYOUT
         else:
             kind = "compare" if scene == "compare" else "spec"
             grounded, dropped = cards.ground(cards.normalise(raw, kind), facts)
@@ -303,13 +523,24 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
                 overlay = {**grounded, "kind": "concept", "scene": scene,
                            "rows": grounded["rows"][:4]}
             else:
-                layout = SAFE_LAYOUT
+                rescued = _panel_from_rows(raw_rows, facts)
+                if rescued:
+                    overlay, layout = rescued, "panel"
+                else:
+                    layout = SAFE_LAYOUT
     elif layout == "card":
         raw_card = item.get("card")
         kind = sec.card or (raw_card.get("kind") if isinstance(raw_card, dict) else "") or "spec"
         card, dropped = cards.ground(cards.normalise(raw_card, kind), facts)
         if card is None:
-            layout = SAFE_LAYOUT
+            # 整屏卡作废(行不够 / 对比卡两栏不齐):同一批行改成左侧面板,信息不丢。
+            # 对比卡除外 —— 它的信息天生是两栏的,压成一栏就是误导。
+            rows = raw_card.get("rows") if isinstance(raw_card, dict) else None
+            rescued = _panel_from_rows(rows, facts) if kind != "compare" else None
+            if rescued:
+                overlay, layout = rescued, "panel"
+            else:
+                layout = SAFE_LAYOUT
     if card_log is not None and (dropped or layout != str(item.get("layout") or layout)):
         card_log.append({"idx": i, "section": sec.name, "asked": item.get("layout"),
                          "layout": layout, "dropped": dropped})
@@ -327,32 +558,103 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
     )
 
 
-def enforce_rhythm(specs: list[ShotSpec]) -> list[ShotSpec]:
-    """连续超过 MAX_CARD_RUN 拍整屏卡片时,把多出来的那拍退回 broll;
-    连着两拍大数字也把后一拍退回 broll(一个接一个滚数字像在念参数表);
-    概念动画同理不连着放,全片超过 MAX_CONCEPT 拍的也退回 broll。"""
+def auto_panel(seg: ScriptSegment, facts: Sequence[Fact]) -> dict | None:
+    """给还剩 broll 的拍自动配一个参数面板。
+
+    判据只有一个:**事实里的数字在这一拍的旁白里说过**。
+    脚本里的数字按合规 lint 必须来自它引用的事实,所以"数字对得上"就等于
+    "这一拍真的在讲这条事实" —— 不会把别的参数安到这一拍上(那正是复盘里
+    「画面和旁白各走各的」的病根)。一条都对不上就不配面板,老老实实留 broll。
+    """
+    said = numbers_in(seg.text or "")
+    if not said:
+        return None
+    by_id = {f.id: f for f in facts}
+    rows: list[dict] = []
+    for ref in seg.fact_refs or []:
+        f = by_id.get(ref)
+        if f is None or not f.enabled or f.confidence == "low":
+            continue
+        value = _fact_value(f.claim, said)
+        if not value:
+            continue
+        rows.append({"label": _fact_label(f), "values": [value], "fact_id": f.id})
+        if len(rows) >= 4:
+            break
+    if not rows:
+        return None
+    return _panel_from_rows(rows, facts)
+
+
+def rescue_broll(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
+                 facts: Sequence[Fact], profile: CategoryProfile) -> list[ShotSpec]:
+    """把还剩 broll 的拍救成参数面板。
+
+    为什么要有这一步:实测九成 broll 是分镜自己选的 —— 提示词原来写着
+    「全片大约四成是 broll」,而事实清单是全片一起给的,模型猜不准哪条参数
+    属于哪一拍,猜不准就退一步选 broll(核对失败退下来的只有两三拍)。
+    复盘要求 broll 压到三成以内,光改提示词不保险,这里用脚本引用过的事实兜底:
+    这一拍讲到了哪个数字,就把那个数字放上屏。
+    """
+    for n, spec in enumerate(specs):
+        if spec.layout != SAFE_LAYOUT or n >= len(segments):
+            continue
+        sec = profile.section(spec.section)
+        if "panel" not in (sec.layouts or ()):
+            continue  # 这一段的视觉语法里没有面板,不硬塞
+        overlay = auto_panel(segments[n], facts)
+        if overlay:
+            spec.layout = "panel"
+            spec.overlay = overlay
+            spec.visual_zh = re.sub(r"^\[[^\]]*\]", "[panel]", spec.visual_zh)
+    return specs
+
+
+def _demote(spec: ShotSpec, profile: CategoryProfile | None = None) -> None:
+    """把这一拍降级:能用已核过的数据改成面板就改,否则退回 broll。
+
+    降级不是直接扔回 broll —— 这一拍的数据都已经核对过了,改成左侧面板照样上屏
+    (前提是这一段的视觉语法里允许面板)。扔掉就是白扔,broll 占比就是这么滚上去的。
+    """
+    if profile is not None:
+        sec = profile.section(spec.section)
+        if "panel" in (sec.layouts or ()):
+            ov = _as_panel_overlay(spec)
+            if ov:
+                spec.layout = "panel"
+                spec.overlay = ov
+                spec.card = None
+                spec.visual_zh = re.sub(r"^\[[^\]]*\]", "[panel]", spec.visual_zh)
+                return
+    spec.layout, spec.overlay, spec.card = SAFE_LAYOUT, None, None
+    spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
+
+
+def enforce_rhythm(specs: list[ShotSpec], profile: CategoryProfile | None = None
+                   ) -> list[ShotSpec]:
+    """连续超过 MAX_CARD_RUN 拍整屏卡片时,把多出来的那一拍降级;
+    连着两拍大数字也把后一拍降级(一个接一个滚数字像在念参数表);
+    概念动画同理不连着放,全片超过 MAX_CONCEPT 拍的也降级。
+
+    降级优先改成参数面板(见 `_demote`),实在没有数据才退回 broll。
+    """
     run = 0
     prev = ""
     concepts = 0
     for pos, s in enumerate(specs):
         if s.layout == "hook" and pos > 0:
-            s.layout, s.overlay = SAFE_LAYOUT, None
-            s.visual_zh = re.sub(r"^\[hook\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+            _demote(s, profile)
         if s.layout in ("stat", "concept") and prev == s.layout:
-            old = s.layout
-            s.layout, s.overlay = SAFE_LAYOUT, None
-            s.visual_zh = re.sub(rf"^\[{old}\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+            _demote(s, profile)
         if s.layout == "concept":
             concepts += 1
             if concepts > MAX_CONCEPT:
-                s.layout, s.overlay = SAFE_LAYOUT, None
-                s.visual_zh = re.sub(r"^\[concept\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+                _demote(s, profile)
         prev = s.layout
         if s.layout == "card":
             run += 1
             if run > MAX_CARD_RUN:
-                s.layout, s.card = SAFE_LAYOUT, None
-                s.visual_zh = re.sub(r"^\[card\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+                _demote(s, profile)
                 run = 0
         else:
             run = 0
@@ -477,6 +779,23 @@ def _ff(args: Sequence[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return render_mod._run(["-y", "-v", "error", *args], timeout=timeout)
 
 
+#: 竖版渲染时置位:背景一律走「前景完整 + 模糊铺底」,不按"裁掉底部烧录字幕"处理。
+#: 横屏下那一支滤镜是"裁完放大铺满",竖版用等于把车头车尾全裁掉。
+_FIT_BACKGROUND = False
+
+
+@contextmanager
+def fit_background():
+    """上下文:本次渲染的背景不做底部裁切。退出时自动还原。"""
+    global _FIT_BACKGROUND
+    old = _FIT_BACKGROUND
+    _FIT_BACKGROUND = True
+    try:
+        yield
+    finally:
+        _FIT_BACKGROUND = old
+
+
 def _fit_filter(w: int, h: int, crop_bottom: float = 0.0) -> str:
     """任意比例的视频放进 w×h:前景完整缩进画幅,空出的地方用同一画面放大模糊铺满。
     横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。
@@ -498,7 +817,9 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
         return render_mod.still_to_clip(piece.path, dest, seconds=piece.length,
                                         motion=motion, size=size)
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐
-    vf = _fit_filter(w, h, piece.crop_bottom) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+    # 竖版渲染时 crop_bottom 归零:那一支滤镜是"裁完放大铺满",竖版下等于把车裁掉
+    crop = 0.0 if _FIT_BACKGROUND else piece.crop_bottom
+    vf = _fit_filter(w, h, crop) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -735,12 +1056,18 @@ def concept_card(overlay: dict) -> dict:
 def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
                 used: dict[str, int], recent: list[str], card_bg: Path | None
                 ) -> tuple[Path, list[library.Piece]]:
-    """broll / panel / highlight / stat 的背景。分屏样式铺 2–3 条不同的背景再并排。"""
+    """broll / panel / highlight / stat 的背景。分屏样式铺 2–3 条不同的背景再并排。
+
+    `detail` 把这一拍的旁白交给素材池:讲刹车时别配一个门把手特写
+    (特写太抢戏,观众会以为屏幕上那个部件就是正在讲的东西)。
+    """
+    detail = spec.narration_zh or spec.visual_zh or ""
     if broll_style(spec) == "split" and seconds >= SPLIT_MIN_SECONDS:
         count = 3 if seconds <= 5 else 2
         clips, pieces = [], []
         for k in range(count):
-            got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
+            got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
+                               detail=detail)
             if not got:
                 break
             pieces += got
@@ -750,7 +1077,8 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
             return split_clip(clips, seconds, size, work / "split.mp4"), pieces
         if clips:
             return clips[0], pieces
-    pieces = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent)
+    pieces = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
+                          detail=detail)
     if not pieces and card_bg:
         pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
     return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
@@ -795,14 +1123,14 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
 
 
 def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
-                   used: dict[str, int], recent: list[str]
+                   used: dict[str, int], recent: list[str], style: str | None = None
                    ) -> tuple[Path | None, motion_assets.Cutout | None, list[library.Piece]]:
     """concept 拍的素材:(实拍底, 车图, 用到的片段)。正式渲染和选风格预览共用,保证预览看到的就是成片的样子。
-    产品镜(studio)用模板自带的影棚底,不铺实拍;其余压在一段实拍上。"""
+    产品镜(studio)用模板自带的影棚底,不铺实拍;通用模版自带底;其余压在一段实拍上。"""
     scene = (spec.overlay or {}).get("scene", "")
     bg_clip: Path | None = None
     pieces: list[library.Piece] = []
-    if motion.scene_background(scene) != "studio":
+    if motion.scene_background(scene, style) == "footage":
         # 一个长镜头放慢铺满;库里没有够长的才退回多段拼接
         take = library.long_take(subject, seconds, hint=CONCEPT_FOOTAGE_HINT, used=used, recent=recent)
         got = [take] if take else library.fill(subject, seconds, hint=CONCEPT_FOOTAGE_HINT,
@@ -814,7 +1142,7 @@ def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int
                 pieces = got
             except Exception:
                 bg_clip = None
-    views = motion.scene_photo_views(scene)
+    views = motion.scene_photo_views(scene, style)
     photo = motion_assets.hero_still(subject, views) if views else None
     return bg_clip, photo, pieces
 
@@ -861,7 +1189,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     elif spec.layout == "concept" and spec.overlay:
         scene = spec.overlay.get("scene", "")
         bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
-                                                used, recent)
+                                                used, recent, style)
         try:
             base = motion.render(scene, motion.scene_data(spec.overlay, subject), seconds, size,
                                  work / "concept.mp4", background=bg_clip, photo=photo, style=style)
@@ -1057,6 +1385,58 @@ def promote_all(project_id: str, specs: Sequence[ShotSpec]) -> int:
     return n
 
 
+def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
+    """从事实里取入门价。返回 (价格文案, 事实 id)。
+
+    封面上的价格和脚本里的数字一样,必须来自事实层 —— 不能手写"23.35万"。
+    取**最低**的那一条:入门价就是最低售价,封面报最高价是误导。
+    口径(basis)在封面上放不下,只在这里记下,供 render.json 留痕。
+
+    `facts` 是 facts.json 里的原始字典(不是 Fact 模型):落盘的是 model_dump,
+    早期版本的 enabled 存的是字符串,所以取值都做兼容。
+    """
+    def get(f: Any, key: str, default: Any = "") -> Any:
+        if isinstance(f, dict):
+            return f.get(key, default)
+        return getattr(f, key, default)
+
+    best: tuple[float, str, str, str] | None = None  # (值, 文案, fact id, basis)
+    for f in facts or []:
+        if get(f, "enabled", True) in (False, "False", "false", 0, "0"):
+            continue
+        if get(f, "scope", "") != "product":
+            continue
+        if get(f, "confidence", "") == "low":
+            continue
+        claim = str(get(f, "claim", "") or "")
+        if not any(w in claim for w in ("售价", "价格", "起售", "定价", "官降", "落地")):
+            continue
+        for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(万)?元", claim):
+            value = float(m.group(1)) * (10000 if m.group(2) else 1)
+            text = f"{m.group(1)}{'万' if m.group(2) else ''}元"
+            if best is None or value < best[0]:
+                best = (value, text, str(get(f, "id", "")), str(get(f, "basis", "") or ""))
+    if best is None:
+        return "", ""
+    return f"{best[1]}起", best[2]
+
+
+def cover_meta(project_id: str, profile: CategoryProfile, total: float) -> dict[str, Any]:
+    """封面上的两行文字:角标(主体 + 入门价)和副标题(主论点)。
+
+    副标题用主论点而不是"X分X秒 · 品类名":主论点是全片那句判断,
+    放在封面上就是一句完整的钩子;时长信息对观众没有意义。
+    """
+    project = db.get_project(project_id) or {}
+    subject = str(project.get("subject") or "")
+    thesis = str(project.get("thesis") or "").strip()
+    facts = db.read_json(project_id, "facts.json", []) or []
+    price, fact_id = _price_of(facts)
+    kicker = " · ".join(x for x in (subject, price) if x)
+    subtitle = thesis or f"{int(total // 60)}分{int(total % 60)}秒 · {profile.label}"
+    return {"kicker": kicker, "subtitle": subtitle, "price_fact": fact_id}
+
+
 def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
             title: str) -> dict[str, Any]:
     """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。"""
@@ -1079,10 +1459,16 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
     total = sum(s.duration for s in beats)
+    meta = cover_meta(project_id, profile, total)
+    # 封面底图优先用素材池里的干净官图(白底棚拍图没有第三方水印);
+    # 没有官图才从成片抽帧。
+    subject = str((db.get_project(project_id) or {}).get("subject") or "")
+    still = library.cover_still(subject) if subject else None
     cover = render_mod.build_cover(result.output_path, title, project_dir / "cover.jpg",
-                                   subtitle=f"{int(total // 60)}分{int(total % 60)}秒 · {profile.label}",
-                                   size=profile.frame_size)
+                                   subtitle=meta["subtitle"], size=profile.frame_size,
+                                   still=still, kicker=meta["kicker"])
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
+               "cover_meta": meta, "cover_still": str(still) if still else None,
                "source_note": "画面素材:品牌官方宣传片与官方图片,仅作"
                f"{profile.vocab.subject_label}展示"}
     db.write_json(project_id, "render.json", payload)

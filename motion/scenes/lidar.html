@@ -1,23 +1,10 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 产品镜:正侧面实车图转 X 光,车顶激光雷达向前打出扫描扇面,前方地面和障碍物逐层被点云勾出来 -->
-  <meta name="hf-bg" content="studio" />
-  <meta name="hf-photo" content="exterior_side" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, P = D.photo, rows = HF.rows;
+<!-- 产品镜:正侧面实车图转 X 光,车顶激光雷达向前打出扫描扇面,前方地面和障碍物逐层被点云勾出来 -->
+<meta name="hf-bg" content="studio" />
+<meta name="hf-photo" content="exterior_side" />
+<style></style>
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const P = D.photo, rows = HF.rows;
     // 版面按"车头朝右"设计,车头朝左时整体镜像:dir = 前方方向,X() 把设计坐标映射过去
     const dir = P && P.facing === "left" ? -1 : 1;
     const X = (x) => dir > 0 ? x : 1920 - x;
@@ -167,5 +154,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

@@ -83,8 +83,10 @@ async function act(btn, url, body, label) {
         toast(data.reason || (data.waiting ? '正在等待确认' : `${label}完成`), { type: 'brand' });
         refreshStatus();
       }
+      return null;
     } catch (err) {
       toast(err.message, { type: 'danger', title: `${label}失败` });
+      return err.message || '失败';
     }
   });
 }
@@ -92,8 +94,11 @@ async function act(btn, url, body, label) {
 const btnAdvance = $('#btn-advance');
 if (btnAdvance) btnAdvance.addEventListener('click', () => act(btnAdvance, `/api/projects/${PID}/advance`, undefined, '推进'));
 
-// 概念动画风格面板(本片有概念拍时才显示);门禁 B 上换风格会退回渲染,刷新页面跟上状态
+// 概念动画模版面板(本片有概念拍时才显示);门禁 B 上换模版会退回渲染,刷新页面跟上状态
 const conceptStyle = initConceptStyle(PID, { onRerender: () => setTimeout(reloadPreserving, 700) });
+
+// 门禁 A 被 lint 拦下时,后端错误消息里的标记
+const LINT_BLOCK_MARK = '门禁 A 未放行';
 
 const btnGateA = $('#btn-gate-a');
 if (btnGateA) {
@@ -109,11 +114,27 @@ if (btnGateA) {
         h('p', {}, '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'),
         h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`),
         conceptStyle && conceptStyle.hasConcepts()
-          ? h('p', {}, `概念动画风格:${conceptStyle.currentName()}(审片时还能换,只重渲概念动画那几拍)`) : null),
+          ? h('p', {}, `概念动画模版:${conceptStyle.currentName()}(审片时还能换,只重渲概念动画那几拍)`) : null),
       confirmText: '确认并开始渲染',
       tone: 'success',
     });
-    if (ok) await act(btnGateA, `/api/projects/${PID}/gate`, { gate: 'A' }, '确认 A');
+    if (ok) {
+      const err = await act(btnGateA, `/api/projects/${PID}/gate`, { gate: 'A' }, '确认 A');
+      // 门禁 A 被 lint 拦下(套话开场、空洞评价、没出处的数字、对比章节拿厂商口径
+      // 当论据)。改完再确认最省事,也给一个"明知有问题仍然继续"的出口。
+      if (err && err.includes(LINT_BLOCK_MARK)) {
+        const go = await confirmDialog({
+          title: '脚本还有必须修的问题',
+          body: h('div', {},
+            h('p', {}, '门禁 A 被拦下了:脚本里有机器查得出的问题(套话开场、空洞评价、没出处的数字、对比章节拿厂商口径当论据)。'),
+            h('p', {}, '改完再确认最省事 —— 确认时会自动重跑一遍检查。也可以明知有问题直接继续。')),
+          confirmText: '仍然继续',
+          cancelText: '我去改',
+          tone: 'danger',
+        });
+        if (go) await act(btnGateA, `/api/projects/${PID}/gate`, { gate: 'A', force: true }, '确认 A');
+      }
+    }
   });
 }
 
@@ -139,6 +160,8 @@ const scriptRows = $$('.script-row');
 const saveBtn = $('#btn-save-script');
 const savebar = $('#savebar');
 const original = new Map(scriptRows.map((r) => [r, r.querySelector('.script-text').value]));
+const thesisInput = $('#thesis-input');
+let originalThesis = thesisInput ? thesisInput.value : '';
 
 function autosize(ta) {
   ta.style.height = 'auto';
@@ -161,6 +184,7 @@ function updateCounts() {
 }
 
 function scriptDirty() {
+  if (thesisInput && thesisInput.value !== originalThesis) return true;
   return scriptRows.some((r) => r.querySelector('.script-text').value !== original.get(r));
 }
 
@@ -177,9 +201,11 @@ function updateDirty() {
     r.classList.toggle('is-dirty', d);
     if (d) n++;
   }
+  const thesisDirty = thesisInput && thesisInput.value !== originalThesis;
   if (!savebar || !DATA.editable) return;
-  savebar.classList.toggle('is-dirty', n > 0);
-  setStatus(n ? `${n} 段有未保存的修改` : '所有修改已保存', n ? null : 'check');
+  savebar.classList.toggle('is-dirty', n > 0 || thesisDirty);
+  const total = n + (thesisDirty ? 1 : 0);
+  setStatus(total ? `${total} 处有未保存的修改` : '所有修改已保存', total ? null : 'check');
 }
 
 async function saveScript() {
@@ -190,11 +216,15 @@ async function saveScript() {
     text: row.querySelector('.script-text').value.trim(),
     fact_refs: $$('.script-refs code', row).map((c) => c.textContent.trim()),
   }));
+  const thesisInput = $('#thesis-input');
+  const thesis = thesisInput ? thesisInput.value.trim() : undefined;
   await withLoading(saveBtn, async () => {
     try {
-      const data = await api.patch(`/api/projects/${PID}/script`, { segments });
+      const data = await api.patch(`/api/projects/${PID}/script`, { segments, thesis });
       scriptRows.forEach((r) => original.set(r, r.querySelector('.script-text').value));
+      if (thesisInput) originalThesis = thesisInput.value;
       updateDirty();
+      renderLint(data.issues || []);
       toast(`已保存 ${data.segments} 段脚本`);
     } catch (err) {
       toast(err.message, { type: 'danger', title: '保存失败' });
@@ -202,11 +232,37 @@ async function saveScript() {
   });
 }
 
+// 门禁 A 的预审报告:机器查得出的问题直接摆出来,人只看剩下的判断题
+function renderLint(issues) {
+  const panel = $('#lint-panel');
+  if (!panel) return;
+  const errors = issues.filter((i) => i.severity === 'error');
+  const warns = issues.filter((i) => i.severity !== 'error');
+  if (!issues.length) {
+    panel.hidden = false;
+    panel.replaceChildren(h('div', { class: 'lint-head tone-ok' },
+      h('strong', {}, '检查通过'), h('span', { class: 'subtle small' }, '没有必须修的问题,可以确认门禁 A')));
+    return;
+  }
+  panel.hidden = false;
+  const line = (i) => h('div', { class: 'rowline' },
+    h('span', { class: `badge tone-${i.severity === 'error' ? 'danger' : 'warning'}` },
+      h('span', { class: 'dot' }), i.severity === 'error' ? '错误' : '提醒'),
+    h('span', { class: 'subtle num' }, `段落 ${i.segment_idx}`),
+    h('span', { class: 'grow' }, i.message));
+  panel.replaceChildren(
+    h('div', { class: 'lint-head' },
+      h('strong', {}, errors.length ? `${errors.length} 处必须修` : '没有必须修的问题'),
+      h('span', { class: 'subtle small' }, warns.length ? `另有 ${warns.length} 条提醒` : '')),
+    h('div', { class: 'rows' }, ...issues.map(line)));
+}
+
 if (scriptRows.length) {
   scriptRows.forEach((r) => {
     const ta = r.querySelector('.script-text');
     ta.addEventListener('input', () => { autosize(ta); updateCounts(); updateDirty(); });
   });
+  if (thesisInput) thesisInput.addEventListener('input', updateDirty);
   updateCounts();
   window.addEventListener('resize', debounce(autosizeAll, 150));
   if (saveBtn) saveBtn.addEventListener('click', saveScript);
@@ -454,6 +510,121 @@ if (copyBtn) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// 一键发布
+// ---------------------------------------------------------------------------
+/**
+ * 打开发布抽屉:选平台(按账号可用性置灰)、看各平台文案、可改标题、立即发。
+ *
+ * 文案是后端按平台规则生成的(长度、话题、免责声明都在那边统一处理),
+ * 这里只做展示和微调 —— 改了会随发布任务一起存下来。
+ */
+async function openPublish() {
+  let preview;
+  try {
+    preview = await api.get(`/api/projects/${PID}/publish/preview`);
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+    return;
+  }
+  const platforms = Object.values(preview.platforms || {});
+  if (!platforms.length) {
+    toast('还没有平台账号,先去分发台加一个', { type: 'warning' });
+    return;
+  }
+  const published = new Map((preview.published || []).map((p) => [p.platform, p]));
+
+  const picks = new Map();
+  const body = h('div', { class: 'pub-drawer' });
+  body.appendChild(h('p', { class: 'muted small' },
+    preview.has_vertical
+      ? '横版与竖版都已就绪。'
+      : '竖版还在生成 —— 发布到竖屏平台时会自动先补一版。'));
+  if (preview.has_output === false) {
+    body.appendChild(h('div', { class: 'callout tone-danger' }, '横屏成片还没生成,先出成片。'));
+  }
+
+  for (const p of platforms) {
+    const done = published.get(p.platform);
+    const check = h('input', { type: 'checkbox', class: 'pub-check' });
+    check.checked = !done || done.state === 'failed';
+    check.disabled = !p.accounts.length;
+    const titleInput = h('input', { class: 'input', type: 'text', value: p.title || '' });
+    const descInput = h('textarea', { class: 'textarea', rows: 3 });
+    descInput.value = p.description || '';
+    picks.set(p.platform, { check, titleInput, descInput, accountIds: p.accounts.map((a) => a.id) });
+
+    const stateBadge = done
+      ? h('span', { class: `badge tone-${done.state === 'published' ? 'success' : (done.state === 'failed' ? 'danger' : 'neutral')}` },
+        done.state === 'published' ? '已发布' : (done.state === 'failed' ? '上次失败' : done.state))
+      : null;
+
+    body.appendChild(h('div', { class: 'pub-pick-card' },
+      h('div', { class: 'pub-pick-head' },
+        check,
+        h('strong', {}, p.rule.label),
+        h('span', { class: 'subtle small' }, `${p.aspect} · ${p.accounts.length} 个账号`),
+        stateBadge),
+      h('label', { class: 'field' },
+        h('span', { class: 'field-label' }, `标题(上限 ${p.rule.title_max} 字)`),
+        titleInput),
+      h('label', { class: 'field' },
+        h('span', { class: 'field-label' }, '简介 / 正文'),
+        descInput),
+      h('p', { class: 'subtle small' },
+        `标签:${(p.tags || []).join('、') || '(无)'}`)));
+  }
+
+  const content = h('div', {},
+    h('div', { class: 'modal-head' },
+      h('div', { class: 'modal-icon tone-brand' }, icon('external', 'i-lg')),
+      h('div', {},
+        h('div', { class: 'modal-title' }, '一键发布'),
+        h('div', { class: 'muted small' }, preview.title || ''))),
+    h('div', { class: 'modal-body' }, body));
+
+  const publishBtn = h('button', { class: 'btn btn-primary', type: 'button' }, '发布');
+  const cancel = h('button', { class: 'btn btn-ghost', type: 'button' }, '取消');
+  content.appendChild(h('div', { class: 'modal-foot' }, cancel, publishBtn));
+
+  const { close } = openModal(content, { size: 'modal-lg', label: '一键发布' });
+  cancel.addEventListener('click', () => close());
+  publishBtn.addEventListener('click', async () => {
+    const accountIds = [];
+    const overrides = {};
+    for (const [key, pick] of picks) {
+      if (!pick.check.checked) continue;
+      accountIds.push(...pick.accountIds);
+      overrides[key] = {
+        title: pick.titleInput.value.trim(),
+        description: pick.descInput.value.trim(),
+        tags: (preview.platforms[key].tags || []),
+      };
+    }
+    if (!accountIds.length) { toast('至少勾一个平台', { type: 'warning' }); return; }
+    const ok = await confirmDialog({
+      title: '发布到这些平台?',
+      body: `共 ${accountIds.length} 个账号。发布后不可撤回,各平台会各自走一遍审核。`,
+      confirmText: '发布',
+    });
+    if (!ok) return;
+    await withLoading(publishBtn, async () => {
+      try {
+        const r = await api.post(`/api/projects/${PID}/publish`, { account_ids: accountIds, overrides });
+        const n = (r.created || []).length;
+        const s = (r.skipped || []).length;
+        toast(`已排入 ${n} 条${s ? `,跳过 ${s} 条(已发过)` : ''}`);
+        close();
+      } catch (err) {
+        toast(err.message, { type: 'danger' });
+      }
+    });
+  });
+}
+
+$('#btn-publish')?.addEventListener('click', openPublish);
+$('#btn-publish-out')?.addEventListener('click', openPublish);
 
 // ---------------------------------------------------------------------------
 // 状态轮询:就地刷新徽标、用量、进度;状态跃迁时才整页刷新

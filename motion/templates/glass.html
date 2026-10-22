@@ -1,0 +1,65 @@
+<!-- @name 极光玻璃
+     @desc 流动的马卡龙色光斑背景 + 磨砂玻璃卡片,卡片轻轻漂浮,柔和明亮
+     @order 18
+     @light yes -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #f4ecff; }
+    #root { background: #f4ecff; color: #1d1838;
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    .blob { position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.85; }
+    .card { position: absolute; border-radius: 40px; background: rgba(255,255,255,0.28); border: 2px solid rgba(255,255,255,0.7);
+            backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4);
+            box-shadow: 0 30px 60px rgba(80,40,140,0.15), inset 0 1px 0 rgba(255,255,255,0.8); }
+    .main { left: 120px; top: 110px; width: 1680px; height: 400px; }
+    .main .k { position: absolute; left: 70px; top: 64px; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 26px; font-weight: 700; letter-spacing: 0.2em; color: #6b4fd8; }
+    .main .t { position: absolute; left: 66px; top: 116px; font-weight: 800; line-height: 1.1; white-space: nowrap; }
+    .main .s { position: absolute; left: 70px; bottom: 60px; font-size: 26px; color: rgba(29,24,56,0.55); }
+    .main .photo { position: absolute; display: block; filter: drop-shadow(0 30px 30px rgba(60,30,120,0.25)); }
+    .mini { height: 380px; top: 560px; }
+    .mini .lab { position: absolute; left: 50px; top: 46px; font-size: 32px; font-weight: 700; color: rgba(29,24,56,0.7); }
+    .mini .val { position: absolute; left: 46px; bottom: 70px; font-family: "Inter", sans-serif; font-weight: 800; letter-spacing: -0.04em; white-space: nowrap; line-height: 1; }
+    .mini .b { position: absolute; left: 50px; bottom: 30px; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 28px; font-weight: 700; color: #d6457f; white-space: nowrap; }
+    .mini .tag { position: absolute; left: 50px; bottom: 30px; font-size: 24px; color: rgba(29,24,56,0.5); white-space: nowrap; }
+    .mini .dot { position: absolute; right: 46px; top: 46px; width: 22px; height: 22px; border-radius: 50%; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    // 光斑:慢慢绕圈漂移
+    const blobs = [["#ff8fc7", 760, 300, 260], ["#8f7bff", 900, 1200, 200], ["#5fd4ff", 700, 1500, 760], ["#ffc46b", 620, 350, 860], ["#b5f28a", 520, 1000, 600]]
+      .map(([c, s, x, y], k) => { const b = add(HF.el("div", "blob")); Object.assign(b.style, { background: c, width: s + "px", height: s + "px", left: (x - s / 2) + "px", top: (y - s / 2) + "px" }); b._k = k; return b; });
+    HF.drive(tl, (t) => blobs.forEach((b) => { const a = t * 0.45 + b._k * 1.3;
+      b.style.transform = `translate(${(Math.cos(a) * 140).toFixed(1)}px, ${(Math.sin(a * 1.2) * 100).toFixed(1)}px) scale(${(1 + 0.12 * Math.sin(a * 0.7)).toFixed(3)})`; }), 0, S);
+
+    const main = add(HF.el("div", "card main"));
+    main.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
+    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", P ? 780 : 1500, 120) + "px"; main.appendChild(t);
+    if (D.source) main.appendChild(HF.el("div", "s", D.source));
+    if (P) { const ph = HF.photoImg("photo"); const pw = 760, hh = pw * P.height / P.width;
+      Object.assign(ph.style, { width: pw + "px", height: hh + "px", right: "40px", top: (370 - P.floor * hh) + "px" }); main.appendChild(ph);
+      tl.fromTo(ph, { x: 160, opacity: 0 }, { x: 0, opacity: 1, duration: 1.0, ease: "expo.out" }, 0.4); }
+    tl.fromTo(main, { y: 60, opacity: 0 }, { y: 0, opacity: 1, duration: 0.8, ease: "expo.out" }, 0.05);
+    tl.fromTo(Array.from(main.children).filter((e) => e.tagName !== "IMG"), { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out", stagger: 0.1 }, 0.3);
+
+    const n = Math.max(1, items.length), gap = 36, w = (1680 - gap * (n - 1)) / n;
+    const dots = ["#ff5fa8", "#7a5cff", "#22b8ff", "#ff9d2e"];
+    const t0 = T(0.8), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.5) - t0);
+    const cards = [main];
+    items.forEach((it, k) => {
+      const c = add(HF.el("div", "card mini")); Object.assign(c.style, { left: (120 + k * (w + gap)) + "px", width: w + "px" });
+      c.appendChild(HF.el("div", "lab", it.label));
+      const dot = HF.el("div", "dot"); dot.style.background = dots[k]; dot.style.boxShadow = `0 0 20px ${dots[k]}`; c.appendChild(dot);
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, w - 90, 150, 1.1) + "px"; c.appendChild(val);
+      if (it.b) c.appendChild(HF.el("div", "b", HF.cols[1] + "  " + it.b)); else if (it.tag) c.appendChild(HF.el("div", "tag", it.tag));
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.fromTo(c, { y: 120, opacity: 0, scale: 0.94 }, { y: 0, opacity: 1, scale: 1, duration: 0.8, ease: "expo.out" }, at);
+      HF.countText(tl, val, it.value, at + 0.2, 1.0);
+      cards.push(c);
+    });
+    // 停留:卡片各自轻轻上下漂
+    HF.drive(tl, (tt) => cards.forEach((c, k) => { if (tt > 1.4) c.style.translate = `0 ${(Math.sin((tt - 1.4) * 1.6 + k) * 8).toFixed(1)}px`; else c.style.translate = "0 0"; }), 0, S);
+    tl.to(cards, { opacity: 0, y: -30, duration: A.outDur, ease: "power2.in", stagger: 0.03 }, A.outAt);
+    HF.register(tl);
+  </script>

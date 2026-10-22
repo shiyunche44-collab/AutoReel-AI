@@ -1,0 +1,91 @@
+<!-- @name 巨字快切
+     @desc 黑底满屏巨字,一屏一个数字,逐字弹起、黄色硬切转场,节奏感最强
+     @order 1 -->
+<style>
+    html, body { background: #0a0a0a; }
+    #root { background: #0a0a0a; color: #fff;
+            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    .top { position: absolute; left: 96px; right: 96px; top: 70px; display: flex; justify-content: space-between;
+           font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 26px; font-weight: 600; letter-spacing: 0.14em; color: rgba(255,255,255,0.55); }
+    .top b { color: #ffe600; font-weight: 800; }
+    .intro { position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+    .intro .ln { overflow: hidden; padding: 0 10px; }
+    .intro .ch { font-size: 190px; font-weight: 900; line-height: 1.15; }
+    .slot { position: absolute; left: 96px; right: 96px; top: 0; bottom: 0; }
+    .lab { position: absolute; left: 0; top: 250px; font-size: 64px; font-weight: 900; color: #ffe600; white-space: nowrap; }
+    .lab-mask { overflow: hidden; position: absolute; left: 0; top: 250px; height: 90px; width: 1728px; }
+    .lab-mask .lab { top: 0; }
+    .val { position: absolute; left: -8px; top: 350px; overflow: hidden; white-space: nowrap; padding-bottom: 20px; }
+    .val .ch { font-family: "Archivo Black", "HYZhongHeiTi", sans-serif; line-height: 1; letter-spacing: -0.02em; }
+    .sub { position: absolute; left: 0; bottom: 150px; font-size: 34px; font-weight: 600; color: rgba(255,255,255,0.7);
+           font-family: "Inter", "Noto Sans SC", sans-serif; white-space: nowrap; }
+    .sub b { color: #fff; font-family: "Archivo Black", sans-serif; font-weight: 400; margin-left: 14px; }
+    .idx { position: absolute; right: 0; bottom: 150px; font-family: "Archivo Black", sans-serif; font-size: 40px; color: rgba(255,255,255,0.35); }
+    .idx b { color: #ffe600; font-weight: 400; }
+    .wipe { position: absolute; top: 0; bottom: 0; left: 0; width: 1920px; background: #ffe600; }
+    .bar { position: absolute; left: 96px; bottom: 96px; height: 6px; width: 1728px; background: rgba(255,255,255,0.12); }
+    .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; background: #ffe600; transform-origin: 0 50%; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+
+    // 顶栏:车型 · 栏目 / 来源
+    const topb = add(HF.el("div", "top"));
+    const tL = HF.el("div"); tL.innerHTML = "";
+    tL.appendChild(HF.el("b", "", D.subject || "")); tL.appendChild(document.createTextNode("  /  " + (HF.kicker || D.title || "")));
+    topb.appendChild(tL); topb.appendChild(HF.el("div", "", D.source || ""));
+    tl.fromTo(topb, { opacity: 0, y: -20 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 0.1);
+
+    // 开场:标题逐字从下弹起,再整体往上甩出
+    const intro = add(HF.el("div", "intro"));
+    const ln = HF.el("div", "ln"); intro.appendChild(ln);
+    const tch = HF.chars(ln, D.title || HF.kicker || "");
+    const tSize = HF.fit(D.title || "", 1600, 190);
+    tch.forEach((c) => { c.style.fontSize = tSize + "px"; });
+    const introEnd = items.length ? T(1.25) : A.outAt;
+    tl.fromTo(tch, { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: "expo.out", stagger: 0.035 }, 0.05);
+    if (items.length) tl.to(tch, { yPercent: -110, duration: 0.3, ease: "power3.in", stagger: 0.015 }, introEnd - 0.3);
+
+    // 进度条
+    const bar = add(HF.el("div", "bar")); const bi = HF.el("i"); bar.appendChild(bi);
+    tl.fromTo(bi, { scaleX: 0 }, { scaleX: 1, duration: S, ease: "none" }, 0);
+
+    // 每行一屏
+    const starts = HF.slots(items.length, introEnd, A.outAt);
+    const L = items.length ? (A.outAt - introEnd) / items.length : 0;
+    const exitEls = [topb, bar];
+    items.forEach((it, k) => {
+      const at = starts[k], last = k === items.length - 1;
+      const slot = add(HF.el("div", "slot"));
+      const lm = HF.el("div", "lab-mask"); const lab = HF.el("div", "lab", it.label); lm.appendChild(lab); slot.appendChild(lm);
+      const val = HF.el("div", "val"); slot.appendChild(val);
+      const vch = HF.chars(val, it.value);
+      const vs = HF.fit(it.value, 1700, 380, 1.4);
+      vch.forEach((c) => { c.style.fontSize = vs + "px"; });
+      val.style.top = (360 + Math.max(0, (400 - vs) * 0.45)) + "px";
+      const sub = HF.el("div", "sub");
+      if (it.b) { sub.textContent = HF.cols[0] + " vs " + HF.cols[1]; const bb = HF.el("b", "", it.b); sub.appendChild(bb); }
+      else sub.textContent = it.tag;
+      slot.appendChild(sub);
+      const idx = HF.el("div", "idx"); idx.appendChild(HF.el("b", "", String(k + 1).padStart(2, "0")));
+      idx.appendChild(document.createTextNode(" / " + String(items.length).padStart(2, "0"))); slot.appendChild(idx);
+      // 黄色硬切:整屏黄条扫过,扫完露出这一屏
+      const wipe = add(HF.el("div", "wipe"));
+      tl.fromTo(wipe, { xPercent: -100 }, { xPercent: 100, duration: 0.42, ease: "power4.inOut" }, at - 0.12);
+      tl.set(slot, { opacity: 0 }, 0);
+      tl.set(slot, { opacity: 1 }, at + 0.06);
+      tl.fromTo(lab, { yPercent: 110 }, { yPercent: 0, duration: 0.45, ease: "expo.out" }, at + 0.12);
+      tl.fromTo(vch, { yPercent: 105, skewY: 12 }, { yPercent: 0, skewY: 0, duration: 0.55, ease: "expo.out", stagger: 0.04 }, at + 0.16);
+      tl.fromTo([sub, idx], { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.4, ease: "power3.out", stagger: 0.08 }, at + 0.45);
+      // 停留:巨字缓慢放大,一直在动
+      tl.fromTo(val, { scale: 1, transformOrigin: "0% 50%" }, { scale: 1.05, duration: Math.max(0.5, L), ease: "none" }, at + 0.16);
+      if (!last) {
+        const out = at + L - 0.28;
+        tl.to(vch, { yPercent: -105, duration: 0.28, ease: "power3.in", stagger: 0.015 }, out);
+        tl.to([lab, sub, idx], { opacity: 0, duration: 0.2 }, out);
+      } else exitEls.push(slot);
+    });
+    if (!items.length) exitEls.push(intro);
+    tl.to(exitEls, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.register(tl);
+  </script>

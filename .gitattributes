@@ -1,0 +1,29 @@
+# 行尾统一:仓库内一律 LF,检出时也是 LF。
+#
+# 之前没有这个文件,而本机 core.autocrlf=true,于是每次 checkout 都会把
+# 工作区的 LF 换成 CRLF,18 个文件持续报 "LF will be replaced by CRLF",
+# 换来的是一堆无意义的整文件 diff。这里把策略写死在仓库里。
+* text=auto eol=lf
+
+# 二进制:不做行尾转换,不当文本 diff
+*.mp4 binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.mp3 binary
+*.m4a binary
+*.wav binary
+*.zip binary
+*.pdf binary
+*.db binary
+
+# 锁文件:由包管理器生成,保持原样
+package-lock.json -diff linguist-generated
+motion/package-lock.json -diff linguist-generated

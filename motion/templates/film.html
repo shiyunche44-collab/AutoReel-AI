@@ -1,0 +1,206 @@
+<!-- @name 电影质感
+     @desc 宽银幕汽车广告片的拍法:同一辆车用广角、轮毂、车顶线、车尾几个机位缓慢推拉,一盏主光 + 地面倒影,参数像片名字幕留白淡入淡出,胶片颗粒
+     @order 1
+     @sample 2.6 -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #000; }
+    #root { background: #05070a; color: #e9eaec;
+            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    #world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+    #world .wall { position: absolute; left: -4000px; top: -3000px; width: 8000px; height: 3000px; }
+    #world .ground { position: absolute; left: -4000px; width: 8000px; height: 3000px; }
+    #world .pool { position: absolute; border-radius: 50%; }
+    #world img { position: absolute; display: block; }
+    .grade { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: soft-light;
+             background: linear-gradient(180deg, rgba(60,110,150,0.55) 0%, rgba(0,0,0,0) 45%, rgba(210,130,70,0.35) 100%); }
+    .vig { position: absolute; inset: 0; pointer-events: none;
+           background: radial-gradient(ellipse 1500px 800px at 50% 50%, rgba(0,0,0,0) 45%, rgba(0,0,0,0.8) 100%); }
+    #grain { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; mix-blend-mode: overlay; opacity: 0.3; pointer-events: none; image-rendering: pixelated; }
+    .bar { position: absolute; left: 0; right: 0; height: 138px; background: #000; }
+    .txt { position: absolute; bottom: 168px; display: flex; align-items: flex-end; gap: 44px; white-space: nowrap; }
+    .txt.l { left: 150px; } .txt.r { right: 150px; flex-direction: row-reverse; text-align: right; }
+    .txt .main { display: flex; flex-direction: column; }
+    .txt .n { font-family: "Inter", sans-serif; font-size: 16px; font-weight: 500; letter-spacing: 0.5em; color: rgba(233,234,236,0.42); }
+    .txt .num { font-family: "Playfair Display", "STSong", "HYZhongHeiTi", serif; font-weight: 400; letter-spacing: -0.01em; line-height: 1; color: #f4f1ea; }
+    .txt .vr { width: 1px; align-self: stretch; margin: 8px 0; background: rgba(233,234,236,0.4); }
+    .txt .side { display: flex; flex-direction: column; justify-content: flex-end; padding-bottom: 10px; }
+    .txt .lab { font-size: 30px; font-weight: 300; letter-spacing: 0.28em; color: rgba(233,234,236,0.85); }
+    .txt .tag { margin-top: 12px; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 18px; letter-spacing: 0.14em; color: rgba(233,234,236,0.42); }
+    .txt .vs { margin-top: 12px; font-family: "Playfair Display", "STSong", serif; font-size: 30px; color: rgba(233,234,236,0.6); }
+    .txt .vs em { font-style: normal; font-family: "HYZhongHeiTi", sans-serif; font-size: 18px; letter-spacing: 0.2em; margin-right: 14px; color: rgba(233,234,236,0.4); }
+    .title { position: absolute; left: 0; right: 0; top: 138px; height: 804px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .title .k { font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 18px; font-weight: 500; letter-spacing: 0.7em; color: rgba(233,234,236,0.55); padding-left: 0.7em; }
+    .title .t { margin-top: 34px; font-family: "STSong", "Playfair Display", "HYZhongHeiTi", serif; font-weight: 400; letter-spacing: 0.2em; white-space: nowrap; color: #f4f1ea; padding-left: 0.2em; }
+    .title .hr { margin-top: 38px; width: 64px; height: 1px; background: rgba(233,234,236,0.5); }
+    .credits { position: absolute; left: 0; right: 0; top: 138px; height: 804px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .credits .ct { font-family: "STSong", "Playfair Display", serif; font-size: 40px; letter-spacing: 0.3em; padding-left: 0.3em; color: #f4f1ea; white-space: nowrap; }
+    .credits .row { margin-top: 30px; width: 900px; display: flex; align-items: baseline; }
+    .credits .row .l { font-size: 24px; font-weight: 300; letter-spacing: 0.24em; color: rgba(233,234,236,0.7); white-space: nowrap; }
+    .credits .row .d { flex: 1; margin: 0 20px; border-bottom: 1px dotted rgba(233,234,236,0.25); transform: translateY(-6px); }
+    .credits .row .v { font-family: "Playfair Display", "STSong", "HYZhongHeiTi", serif; font-size: 38px; color: #f4f1ea; white-space: nowrap; }
+    .src { position: absolute; left: 0; right: 0; bottom: 50px; text-align: center; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 16px; letter-spacing: 0.3em; color: rgba(233,234,236,0.3); }
+    .flare { position: absolute; left: 0; top: 0; width: 1920px; height: 8px; margin-top: -4px; opacity: 0;
+             background: linear-gradient(90deg, rgba(120,170,255,0) 0%, rgba(150,190,255,0.5) 35%, rgba(235,245,255,0.95) 50%, rgba(150,190,255,0.5) 65%, rgba(120,170,255,0) 100%); filter: blur(2px); mix-blend-mode: screen; }
+    .black { position: absolute; inset: 0; background: #000; }
+  </style>
+<script>
+    const { tl, D, add, items } = HF.boot();
+    const P = D.photo;
+    const n = Math.max(1, items.length);
+    const PL = HF.plan(n, { intro: 2.4, outro: 2.4 }), S = PL.S;
+    const eio = HF.ease("power3.inOut"), eo = HF.ease("power2.out");
+    const lerp = HF.lerp;
+
+    // ---------------- 世界:墙、地、光池、车 ----------------
+    const CW = 1400;
+    const CH = P ? CW * P.height / P.width : 480;
+    const FL = P ? P.floor * CH : CH * 0.94;     // 地线
+    const world = add(HF.el("div")); world.id = "world";
+    const wall = HF.el("div", "wall"); wall.style.top = (FL - 3000) + "px";
+    wall.style.background = "linear-gradient(180deg, #070a0f 0%, #0b1118 55%, #121a24 100%)";
+    const ground = HF.el("div", "ground"); ground.style.top = FL + "px";
+    ground.style.background = "linear-gradient(180deg, #0e141c 0%, #080b10 8%, #040608 40%, #020304 100%)";
+    world.appendChild(wall); world.appendChild(ground);
+    // 墙上的主光:左上方一大片冷光,车后一片弱的轮廓光
+    const key = HF.el("div", "pool"); Object.assign(key.style, { left: (CW * 0.5 - 1500) + "px", top: (FL - 1500) + "px", width: "3000px", height: "1200px",
+      background: "radial-gradient(ellipse at 50% 55%, rgba(120,160,205,0.26) 0%, rgba(70,100,140,0.10) 42%, rgba(0,0,0,0) 70%)" });
+    const rim = HF.el("div", "pool"); Object.assign(rim.style, { left: (CW * 0.5 - 900) + "px", top: (FL - 520) + "px", width: "1800px", height: "420px",
+      background: "radial-gradient(ellipse at 50% 70%, rgba(190,215,255,0.22) 0%, rgba(0,0,0,0) 65%)" });
+    // 地面光池
+    const pool = HF.el("div", "pool"); Object.assign(pool.style, { left: (CW * 0.5 - 1100) + "px", top: (FL - 40) + "px", width: "2200px", height: "420px",
+      background: "radial-gradient(ellipse at 50% 20%, rgba(150,180,220,0.34) 0%, rgba(80,105,140,0.12) 45%, rgba(0,0,0,0) 72%)" });
+    world.appendChild(key); world.appendChild(rim); world.appendChild(pool);
+    let car = null, refl = null;
+    if (P) {
+      refl = HF.photoImg(); Object.assign(refl.style, { left: "0px", top: (2 * FL - CH) + "px", width: CW + "px", height: CH + "px", opacity: 0.4, transform: "scaleY(-1)",
+        webkitMaskImage: "linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 12%, rgba(0,0,0,1) 100%)", maskImage: "linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0) 12%, rgba(0,0,0,1) 100%)" });
+      refl.style.filter = "blur(2.5px)";
+      car = HF.photoImg(); Object.assign(car.style, { left: "0px", top: "0px", width: CW + "px", height: CH + "px" });
+      world.appendChild(refl); world.appendChild(car);
+      // 车底接地阴影
+      const sh = HF.el("div", "pool"); Object.assign(sh.style, { left: (CW * 0.06) + "px", top: (FL - 22) + "px", width: (CW * 0.88) + "px", height: "46px",
+        background: "radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 70%)" });
+      world.appendChild(sh); world.insertBefore(sh, car);
+    } else {
+      // 没有车图:一条地平线上的长光,保持"空镜"的气质
+      const bar = HF.el("div", "pool"); Object.assign(bar.style, { left: "-300px", top: (FL - 3) + "px", width: (CW + 600) + "px", height: "3px", borderRadius: "0",
+        background: "linear-gradient(90deg, rgba(180,205,240,0), rgba(200,220,250,0.7), rgba(180,205,240,0))" });
+      world.appendChild(bar);
+    }
+
+    // ---------------- 机位 ----------------
+    // 每个机位:焦点(车图归一化坐标)、画面里焦点落的位置、景别、慢推的量。文字在画面另一侧
+    const wh = P ? P.wheels : [0.23, 0.78];
+    // fy:地线落在画面的 y(车永远在上半幅,下三分之一留给字幕)
+    const FR = [
+      { u: 0.5, v: 0.56, x: 1090, fy: 640, s: 0.95, d: 0.07, text: "l" },                    // 广角
+      { u: wh[1], v: 0.74, x: 700, fy: 650, s: 1.5, d: 0.06, text: "r" },                     // 前轮特写
+      { u: 0.46, v: 0.34, x: 1130, fy: 660, s: 1.3, d: 0.05, text: "l" },                     // 车顶线
+      { u: wh[0], v: 0.7, x: 1000, fy: 650, s: 1.45, d: 0.06, text: "r" },                    // 后轮
+    ];
+    const frame = (k) => FR[k % FR.length];
+    const withY = (o) => Object.assign(o, { y: o.fy - (FL - o.v * CH) * o.s });
+    const pose = (fr, f) => withY({ u: fr.u, v: fr.v, x: fr.x - 22 * f * (fr.text === "l" ? -1 : 1), fy: fr.fy, s: fr.s * (1 + fr.d * f) });
+    const WIDE = withY({ u: 0.5, v: 0.56, x: 960, fy: 600, s: 0.8 }), START = withY({ u: 0.5, v: 0.56, x: 960, fy: 600, s: 0.72 });
+    const mix = (a, b, f) => ({ u: lerp(a.u, b.u, f), v: lerp(a.v, b.v, f), x: lerp(a.x, b.x, f), y: lerp(a.y, b.y, f), fy: 0, s: Math.exp(lerp(Math.log(a.s), Math.log(b.s), f)) });
+    const mv = Math.min(1.1, PL.L * 0.46);
+    const camAt = (t) => {
+      if (t < PL.intro[1]) {
+        const f0 = HF.prog(t, 0, PL.intro[1] - mv * 0.2);
+        const base = mix(START, WIDE, HF.ease("power1.inOut")(f0));
+        const u = HF.prog(t, PL.intro[1] - mv, PL.intro[1]);
+        return u > 0 ? mix(base, pose(frame(0), 0), eio(u)) : base;
+      }
+      for (let k = 0; k < PL.shots.length; k++) {
+        const [a, b] = PL.shots[k];
+        if (t < b || (k === PL.shots.length - 1 && t < PL.outro[0] + 0.001)) {
+          const c = pose(frame(k), HF.prog(t, a, b));
+          if (k + 1 < PL.shots.length) { const u = HF.prog(t, b - mv, b); if (u > 0) return mix(c, pose(frame(k + 1), 0), eio(u)); }
+          else { const u = HF.prog(t, PL.outro[0] - mv, PL.outro[0]); if (u > 0) return mix(c, WIDE, eio(u)); }
+          return c;
+        }
+      }
+      return mix(WIDE, withY({ u: 0.5, v: 0.56, x: 960, fy: 600, s: 0.88 }), HF.prog(t, PL.outro[0], S));
+    };
+
+    // ---------------- 画面叠层 ----------------
+    const flare = add(HF.el("div", "flare"));
+    add(HF.el("div", "grade")); add(HF.el("div", "vig"));
+    const gc = HF.el("canvas"); gc.id = "grain"; gc.width = 480; gc.height = 270; add(gc); const gx = gc.getContext("2d");
+    const gimg = gx.createImageData(480, 270);
+    const bt = add(HF.el("div", "bar")); bt.style.top = "0"; const bb = add(HF.el("div", "bar")); bb.style.bottom = "0";
+
+    // 片头:黑场里先亮起光,再出现标题
+    const title = add(HF.el("div", "title"));
+    title.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("   ·   ")));
+    const tt = title.appendChild(HF.el("div", "t", D.title || "")); tt.style.fontSize = HF.fit(D.title || "", 1400, 84, 0.9) + "px";
+    title.appendChild(HF.el("div", "hr"));
+    const tin = Math.min(0.7, PL.intro[1] * 0.3), tout = Math.max(tin + 0.6, PL.intro[1] - 0.55);
+    tl.fromTo(title.children, { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.9, ease: "power2.out", stagger: 0.3 }, tin);
+    tl.to(title, { opacity: 0, duration: 0.45, ease: "power1.in" }, tout);
+    // 标题期间车压暗一档,标题出去后车亮起来
+    tl.fromTo(world, { opacity: 0.3 }, { opacity: 1, duration: 0.9, ease: "power2.inOut" }, tout);
+
+    // 参数字幕:机位到位后淡入,收镜头前淡出
+    const tIn = Math.min(0.55, PL.L * 0.2), tOut = Math.min(0.7, PL.L * 0.3);
+    items.forEach((it, k) => {
+      const [a, b] = PL.shots[k], fr = frame(k);
+      const el = add(HF.el("div", "txt " + fr.text));
+      const main = el.appendChild(HF.el("div", "main"));
+      main.appendChild(HF.el("div", "n", String(k + 1).padStart(2, "0") + "  /  " + String(items.length).padStart(2, "0")));
+      const num = main.appendChild(HF.el("div", "num")); num.style.fontSize = HF.fit(it.value, 640, 128, 0.95) + "px"; num.style.marginTop = "14px";
+      el.appendChild(HF.el("div", "vr"));
+      const side = el.appendChild(HF.el("div", "side"));
+      side.appendChild(HF.el("div", "lab", it.label));
+      if (it.b) { const vs = side.appendChild(HF.el("div", "vs")); vs.appendChild(HF.el("em", "", (HF.cols[1] || "对比"))); vs.appendChild(document.createTextNode(it.b)); }
+      else if (it.tag) side.appendChild(HF.el("div", "tag", it.tag));
+      const kids = [main, el.children[1], side], dx = fr.text === "l" ? -18 : 18;
+      tl.set(el, { opacity: 0 }, 0);
+      tl.set(el, { opacity: 1 }, a + 0.01);
+      tl.fromTo(kids, { opacity: 0, x: dx }, { opacity: 1, x: 0, duration: 1.1, ease: "power2.out", stagger: 0.14 }, a + (k === 0 ? 0.1 : mv * 0.55));
+      HF.countText(tl, num, it.value, a + (k === 0 ? 0.1 : mv * 0.55), Math.min(1.6, (b - a) * 0.6), { ease: "power2.out" });
+      tl.to(el, { opacity: 0, duration: Math.max(0.3, tOut), ease: "power1.in" }, b - tOut - 0.05);
+    });
+
+    // 片尾:拉回全景,字幕像职员表
+    const cr = add(HF.el("div", "credits"));
+    cr.appendChild(HF.el("div", "ct", D.title || "")); cr.firstChild.style.fontSize = HF.fit(D.title || "", 1200, 40, 0.9) + "px";
+    items.forEach((it) => { const r = cr.appendChild(HF.el("div", "row")); r.appendChild(HF.el("div", "l", it.label)); r.appendChild(HF.el("div", "d"));
+      const v = r.appendChild(HF.el("div", "v", it.value)); v.style.fontSize = HF.fit(it.value, 380, 38, 0.95) + "px"; });
+    tl.to(world, { opacity: 0.12, duration: 1.0, ease: "power2.inOut" }, PL.outro[0] + 0.15);
+    const crEnd = S - Math.min(0.9, S * 0.1);
+    tl.fromTo(cr.children, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.9, ease: "power2.out", stagger: 0.12 }, PL.outro[0] + 0.45);
+    tl.set(cr, { opacity: 0 }, 0); tl.set(cr, { opacity: 1 }, PL.outro[0] + 0.4);
+    const src = add(HF.el("div", "src", D.source ? "数据来源  " + D.source : ""));
+    tl.fromTo(src, { opacity: 0 }, { opacity: 1, duration: 1.0 }, 1.6);
+
+    // 一道变形镜头光斑:开场灯亮的一瞬划过车身
+    tl.fromTo(flare, { opacity: 0 }, { opacity: 0.55, duration: 0.5, ease: "power2.out" }, 0.55);
+    tl.to(flare, { opacity: 0, duration: 1.6, ease: "power1.in" }, 1.05);
+
+    // 从黑里亮起、最后淡出到黑
+    const black = add(HF.el("div", "black"));
+    tl.fromTo(black, { opacity: 1 }, { opacity: 0, duration: 1.6, ease: "power1.out" }, 0.1);
+    tl.to(black, { opacity: 1, duration: Math.min(0.9, S * 0.1), ease: "power1.in" }, crEnd);
+    // 文字的黑边要盖在黑场之上
+    root.appendChild(bt); root.appendChild(bb);
+
+    // ---------------- 逐帧:机位 + 颗粒 + 呼吸的光 ----------------
+    const [CWID, CHT] = [1400, CH];
+    HF.drive(tl, (t) => {
+      const c = camAt(t);
+      const wx = c.u * CW, wy = c.v * CH;
+      world.style.transform = `translate(${c.x.toFixed(2)}px, ${c.y.toFixed(2)}px) scale(${c.s.toFixed(5)}) translate(${(-wx).toFixed(2)}px, ${(-wy).toFixed(2)}px)`;
+      // 主光缓慢呼吸;开场灯亮
+      const lit = HF.prog(t, 0.1, 1.9), br = 0.92 + 0.08 * Math.sin(t * 0.7);
+      key.style.opacity = (lit * br).toFixed(3); rim.style.opacity = (lit * (0.8 + 0.2 * Math.sin(t * 0.5 + 1))).toFixed(3); pool.style.opacity = lit.toFixed(3);
+      if (car) { car.style.opacity = HF.prog(t, 0.2, 2.0).toFixed(3); refl.style.opacity = (0.4 * HF.prog(t, 0.4, 2.2)).toFixed(3); }
+      flare.style.top = (wy ? (c.y + (FL * 0.5 - wy) * c.s) : 560).toFixed(1) + "px";
+      // 胶片颗粒:24 格一秒,种子按格数定,seek 到哪都一样
+      const fr = Math.floor(t * 24), rg = HF.rng(fr * 7919 + 13), d = gimg.data;
+      for (let i = 0; i < 480 * 270; i++) { const v = 100 + Math.floor(rg() * 56); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+      gx.putImageData(gimg, 0, 0);
+    }, 0, S);
+    HF.register(tl);
+  </script>

@@ -300,11 +300,14 @@ def test_concept_beat_is_grounded():
     assert not explainer.validate_beats([s])
 
 
-def test_concept_with_invented_number_or_unknown_scene_falls_back():
+def test_concept_with_invented_number_or_unknown_scene_never_renders_as_concept():
     bad_num = _concept_beats("battery", [{"label": "续航", "values": ["900公里"], "fact_id": "f_1"}])
+    # 编造的数字:整拍没有任何可上屏的数据,只能退回 broll
     assert bad_num.layout == "broll"
     bad_scene = _concept_beats("rocket", [{"label": "CLTC续航", "values": ["835公里"], "fact_id": "f_1"}])
-    assert bad_scene.layout == "broll"
+    # 模板不存在:这一拍不再是 concept,但那行核对过的数据不该跟着一起扔掉
+    assert bad_scene.layout != "concept"
+    assert "835" in str(bad_scene.overlay)
 
 
 def test_enforce_rhythm_spaces_and_caps_concepts():
@@ -330,9 +333,11 @@ def test_every_declared_scene_has_a_template():
     declared = set(load_profile("auto_long").vocab.concept_scenes)
     assert declared <= motion.available_scenes()
     for name in declared:
-        html = (motion.scenes_dir() / f"{name}.html").read_text(encoding="utf-8")
-        assert motion.SECONDS_TOKEN in html and motion.DATA_TOKEN in html, name
-        assert motion.BACKGROUND_TOKEN in html, name
+        # 占位符在骨架里,片段拼装后必须齐全
+        html = motion.compose_html(name, {"rows": []}, 6.0)
+        assert 'data-duration="6.000"' in html, name
+        assert 'data-width="1920"' in html and 'data-height="1080"' in html, name
+        assert '<script src="_lib.js"></script>' in html, name
 
 
 # --------------------------------------------------------------------------
@@ -561,8 +566,8 @@ def test_compose_html_inlines_base_css_and_photo_geometry(tmp_path, monkeypatch)
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     photo = motion_assets.cutout(_studio_car(tmp_path / "car.png"))
     html = motion.compose_html("battery", {"rows": []}, 5.0, photo=photo)
-    # 字体:Montserrat 的声明必须在页面里,HyperFrames 才会内嵌
-    assert motion.BASE_CSS_LINK not in html and '"Montserrat"' in html
+    # 字体:Montserrat 的声明必须在页面里,HyperFrames 才会内嵌(样式一律内联,不留外链)
+    assert '<link rel="stylesheet"' not in html and '"Montserrat"' in html
     assert '"src": "car.png"' in html and '"edges": "car_edges.png"' in html
     assert str(tmp_path) not in html                                   # 不泄漏本机路径
     data = {"rows": []}
@@ -602,7 +607,7 @@ def test_lib_parts_splits_number_unit_and_tag(tmp_path):
     script = tmp_path / "t.js"
     script.write_text(
         "global.window = {}; global.document = {};\n"
-        + (motion.scenes_dir() / "_lib.js").read_text(encoding="utf-8")
+        + (motion.config.MOTION_DIR / "_lib.js").read_text(encoding="utf-8")
         + "\nconst H = window.HF; console.log(JSON.stringify(["
           "H.parts('752V碳化硅'), H.parts('3.23 秒'), H.parts('4999 mm'), H.parts('全系标配'),"
           "H.parts('CLTC 835公里')]));\n", encoding="utf-8")

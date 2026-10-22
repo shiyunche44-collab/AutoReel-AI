@@ -1179,6 +1179,87 @@ def _probe(item: Item) -> str:
     return item.frame or (item.path if item.kind == "still" else "")
 
 
+#: 封面底图:边缘取样带宽(占图宽/高的比例)
+COVER_EDGE = 0.045
+#: 棚拍白底判据:边缘平均亮度 ≥ 这个且边缘颜色标准差 ≤ 这个 → 白底棚拍图
+COVER_STUDIO_LUMA = 236
+COVER_STUDIO_SPREAD = 26
+
+
+def is_studio_shot(path: str | Path) -> bool:
+    """是不是白底棚拍图:四边取样都是接近纯白、颜色又很均匀。
+
+    判据是"边缘"而不是"整体":白底棚拍图的车只占中间一小块,整体亮度被拉低;
+    而实拍图哪怕主体是白车,背景也一定有灰度渐变和杂色,边缘标准差大得多。
+
+    封面为什么在意这个:棚拍白底图既没有第三方水印(汽车之家之类),
+    又能给深色标题留出干净的底,比任何实拍帧都更像"官方海报"。
+    """
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            ex, ey = max(2, int(w * COVER_EDGE)), max(2, int(h * COVER_EDGE))
+            edges = [im.crop((0, 0, w, ey)), im.crop((0, h - ey, w, h)),
+                     im.crop((0, 0, ex, h)), im.crop((w - ex, 0, w, h))]
+            for e in edges:
+                st = ImageStat.Stat(e)
+                if min(st.mean) < COVER_STUDIO_LUMA:
+                    return False
+                if sum(st.stddev) > COVER_STUDIO_SPREAD:
+                    return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def cover_still(subject: str) -> Path | None:
+    """挑一张能当封面底图的官图。没有就返回 None(调用方退回抽帧)。
+
+    封面是唯一决定点击率的一帧,对底图的要求比背景高:
+    1. **完整** —— 车在画面里,不能是半个车头;
+    2. **干净** —— 不带字幕 / 角标 / 第三方水印;
+    3. **无水印优先** —— 白底棚拍图最理想(汽车之家这类图库图带角标水印,
+       发出去等于替别人打广告);
+    4. 认得出是这台车(target == yes)优先。
+    """
+    try:
+        lib = Library.load(subject)
+    except Exception:  # noqa: BLE001
+        return None
+    vocab = vocab_of(lib)
+    # 主体视角(主背景那一组):整车 / 整体,不做局部特写
+    hero = vocab.primary_views or set(vocab.views)
+    cands = [i for i in lib.items
+             if i.kind == "still" and i.usable and Path(i.path).is_file()
+             and i.problem not in ("cropped", "unclear", "poster")
+             and i.view in hero]
+    if not cands:
+        return None
+
+    def rank(i: Item) -> tuple:
+        studio = is_studio_shot(i.path)
+        # 白底棚拍 > 认得出是这台车 > 分辨率高
+        return (not studio, i.target != "yes", i.problem != "",
+                -_still_area(i.path), i.id)
+
+    for item in sorted(cands, key=rank):
+        return Path(item.path)
+    return None
+
+
+def _still_area(path: str | Path) -> int:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            return im.size[0] * im.size[1]
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def near_dup_groups(items: Sequence[Item], bits: int = FILL_DUP_BITS) -> dict[str, str]:
     """item_id → 所在簇的代表 id。跨来源比代表帧的 dHash,贪心入簇;
     没有代表帧(读不了)的条目自成一簇。"""
@@ -1198,8 +1279,60 @@ def near_dup_groups(items: Sequence[Item], bits: int = FILL_DUP_BITS) -> dict[st
     return out
 
 
-def fill(subject: str, seconds: float, *, hint: str = "",
-         used: dict[str, int] | None = None, recent: list[str] | None = None) -> list[Piece]:
+def _pool_seconds(pool: Sequence[Item]) -> float:
+    """这批素材大概能铺多少秒(静图按 STILL_SECONDS 算)。"""
+    total = 0.0
+    for i in pool:
+        if i.kind == "video":
+            total += i.length if i.length >= FILL_MIN_PIECE else 0.0
+        else:
+            total += STILL_SECONDS
+    return total
+
+
+def _detail_conflict(item: Item, want_detail: set[str], vocab: Vocab) -> bool:
+    """这条素材是不是"讲 A 却配了 B 的特写"。
+
+    特写(局部近景)是很抢戏的画面:观众会以为屏幕上这个部件就是正在讲的东西。
+    旁白讲碳陶刹车,背景却是一个车门把手特写 —— 观众会以为在讲门把手。
+    所以:这一拍讲的是某个细节时,背景就不能是**别的**细节的特写。
+
+    判据:
+    - 素材本身得是特写视角(局部近景),整车 / 内饰全景不算冲突;
+    - 素材描述里得能认出是哪个细节(描述只说"白色车身特写"认不出,就不拦);
+    - 认出的细节和这一拍讲的细节不是同一个 → 冲突。
+    """
+    if not want_detail or not vocab.detail_types:
+        return False
+    if item.view not in vocab.closeup_views:
+        return False
+    shown = vocab.detail_types_in(item.desc or "")
+    if not shown:
+        return False
+    return not (shown & want_detail)
+
+
+def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
+    """这条素材和这一拍讲的细节有多合。数字越小越合。
+
+    0 = 正是讲的这个细节的特写(讲车门 → 门把手特写);
+    1 = 特写,但看不出是哪个细节(只能算"不冲突",不算合);
+    2 = 不是特写(整车 / 全景)—— 不冲突,但也没对上。
+
+    旁白点名了某个部件时,把那个部件的特写排前面,画面和口播才是一件事。
+    """
+    if not want_detail or not vocab.detail_types:
+        return 2
+    if item.view not in vocab.closeup_views:
+        return 2
+    shown = vocab.detail_types_in(item.desc or "")
+    if not shown:
+        return 1
+    return 0 if (shown & want_detail) else 1
+
+
+def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
+         recent: list[str] | None = None, detail: str = "") -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -1211,6 +1344,7 @@ def fill(subject: str, seconds: float, *, hint: str = "",
     计数按**近重复簇**算(`near_dup_groups`):同角度的几张官图用掉一张,其余也算用过。
     `recent` 是全片最近用过的 item_id(调用方跨节拍传同一个列表,这里就地追加):
     和最近几刀同簇的、和上一刀同视角的往后排 —— 只是排序,池子不够时照样铺满。
+    `detail` 是这一拍在讲的细节(旁白原文),用来避开配错的特写(见 `_detail_conflict`)。
     返回空列表表示池子里什么都没有。
     """
     seconds = float(seconds)
@@ -1219,10 +1353,18 @@ def fill(subject: str, seconds: float, *, hint: str = "",
     lib = Library.load(subject)
     vocab = vocab_of(lib)
     want = vocab.hint_views(hint)
+    want_detail = vocab.detail_types_in(detail) if detail else set()
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
     pool = _drop_hard_bad(pool, _host_sources(lib.items))
+    # 讲某个部件时,把**别的**部件的特写整类剔掉:特写太抢戏,配错了观众就
+    # 以为在讲那个部件。池子剔完不够铺满这一拍时,才退回"降权排序"
+    # (宁可配得不对,也不要这一拍没有背景)。
+    if want_detail and vocab.detail_types:
+        keep = [i for i in pool if not _detail_conflict(i, want_detail, vocab)]
+        if _pool_seconds(keep) >= seconds:
+            pool = keep
 
     group = near_dup_groups(pool)
     by_id = {i.id: i for i in lib.items}
@@ -1237,9 +1379,16 @@ def fill(subject: str, seconds: float, *, hint: str = "",
         # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
         # 混着 SU7 的赛道活动),背景里出现别的车比画面不对口严重得多
         n = group_used(i)
-        return (_fill_tier(i, n), i.target != "yes", group[i.id] in recent_groups,
+        fit = _detail_fit(i, want_detail, vocab)
+        tier = _fill_tier(i, n)
+        if fit == 0 and i.kind == "still":
+            # 这一拍讲的正是这个部件,那张特写就是最贴的素材 —— 提档到和干净
+            # 视频同档。否则永远选不到它:静图本来比视频低一档。
+            tier = 0
+        return (tier, i.target != "yes", group[i.id] in recent_groups,
                 bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
-                _dirt(i), not i.official, -i.length)
+                _dirt(i), fit, _detail_conflict(i, want_detail, vocab),
+                not i.official, -i.length)
 
     out: list[Piece] = []
     covered = 0.0
@@ -1272,9 +1421,33 @@ def fill(subject: str, seconds: float, *, hint: str = "",
         del recent[:-RECENT_PIECES]
         covered += take
     if out and covered < seconds - 0.05:
-        # 池子太小铺不满:把最后一段拉长到结尾(图片推拉 / 视频截到原片允许的长度)
-        last = out[-1]
-        last.length = round(last.length + (seconds - covered), 3)
+        # 池子太小铺不满:把剩下的时间**再切几刀**补上,而不是把最后一帧冻到底。
+        #
+        # 冻住 = 这一拍后半程画面一动不动(实测内饰这类素材少的视角会这样),
+        # 复盘要的「每 5–6 秒一次画面变化」就断在这里。优先拿还没用过的干净官图
+        # 补:同一批图配不同运镜,读起来像换了镜头,比冻帧强得多。
+        rest = seconds - covered
+        spare = [i for i in lib.items if i.kind == "still" and i.usable
+                 and Path(i.path).is_file() and not is_dark(i)
+                 and i.problem not in ("cropped", "unclear", "poster")
+                 and not (want_detail and _detail_conflict(i, want_detail, vocab))]
+        spare.sort(key=lambda i: (bool(want) and i.view not in want,
+                                   used.get(i.id, 0), i.target != "yes", i.id))
+        k = 0
+        while rest > 0.05 and spare:
+            i = spare[k % len(spare)]
+            k += 1
+            take = min(rest, FILL_MAX_PIECE)
+            out.append(Piece(item_id=i.id, kind="still", path=i.path, start=0.0,
+                             length=round(take, 3)))
+            used[i.id] = used.get(i.id, 0) + 1
+            recent.append(i.id)
+            del recent[:-RECENT_PIECES]
+            rest -= take
+        if rest > 0.05:
+            # 连一张能用的官图都没有:只能把最后一段拉长(总比这一拍没有背景强)
+            last = out[-1]
+            last.length = round(last.length + rest, 3)
     return out
 
 

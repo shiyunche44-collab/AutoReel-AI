@@ -197,7 +197,8 @@ def test_allows_qualitative_claim_without_reference(auto_profile, facts):
 @pytest.mark.parametrize(
     "text",
     [
-        "今天聊比亚迪汉 EV 2026 款。",
+        # 这条测的是"年款年份不算性能参数",不是开场怎么写 —— 别用套话开场当样本
+        "这台比亚迪汉 EV 2026 款。",
         "这台 2024 款改款后的变化主要在内饰。",
     ],
 )

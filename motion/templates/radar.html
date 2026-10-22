@@ -1,0 +1,87 @@
+<!-- @name 雷达扫描
+     @desc 军用雷达屏:扫描扇面一圈圈转,扫到目标点就"叮"地亮起,右侧目标清单逐条锁定
+     @order 17 -->
+<style>
+    html, body { background: #010a05; }
+    #root { color: #8dffb0; font-family: "JetBrains Mono", "SimHei", monospace;
+            background: radial-gradient(ellipse 1100px 900px at 620px 560px, #042414 0%, #010a05 70%); }
+    .scope { position: absolute; left: 180px; top: 150px; width: 820px; height: 820px; border-radius: 50%; overflow: hidden;
+             border: 3px solid rgba(141,255,176,0.6); box-shadow: 0 0 40px rgba(60,255,120,0.15), inset 0 0 80px rgba(60,255,120,0.12); }
+    .scope svg { position: absolute; left: 0; top: 0; }
+    .sweep { position: absolute; inset: 0; border-radius: 50%;
+             background: conic-gradient(from 0deg, rgba(60,255,120,0) 0deg, rgba(60,255,120,0) 290deg, rgba(60,255,120,0.10) 330deg, rgba(120,255,160,0.55) 359deg, rgba(60,255,120,0) 360deg); }
+    .blip { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: #c8ffd8; box-shadow: 0 0 20px #3dff7a, 0 0 40px #3dff7a; }
+    .ping { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 3px solid #8dffb0; }
+    .bl { position: absolute; font-size: 22px; white-space: nowrap; color: #c8ffd8; }
+    .hd { position: absolute; left: 1100px; top: 150px; }
+    .hd .k { width: 720px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 24px; letter-spacing: 0.3em; color: rgba(141,255,176,0.6); }
+    .hd .t { margin-top: 12px; font-size: 60px; font-weight: 700; white-space: nowrap; color: #d6ffe2; letter-spacing: 0.04em; }
+    .list { position: absolute; left: 1100px; top: 340px; width: 720px; }
+    .it { position: relative; height: 150px; border-top: 2px solid rgba(141,255,176,0.3); padding-top: 16px; }
+    .it .id { font-size: 22px; color: rgba(141,255,176,0.6); letter-spacing: 0.15em; }
+    .it .lab { position: absolute; left: 0; top: 52px; font-size: 34px; color: #d6ffe2; white-space: nowrap; }
+    .it .val { position: absolute; right: 0; top: 34px; font-weight: 700; color: #fff; white-space: nowrap; text-shadow: 0 0 16px rgba(60,255,120,0.8); }
+    .it .b { position: absolute; right: 0; top: 104px; font-size: 26px; color: #ffd36b; white-space: nowrap; }
+    .it .lock { position: absolute; right: 0; top: 14px; font-size: 20px; padding: 2px 10px; border: 2px solid #8dffb0; letter-spacing: 0.2em; }
+    .foot { position: absolute; left: 180px; bottom: 50px; font-size: 22px; color: rgba(141,255,176,0.55); letter-spacing: 0.1em; }
+    .scan { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 2px, transparent 2px 4px); }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+
+    const scope = add(HF.el("div", "scope")); const R = 410;
+    const sv = HF.svg("svg", { width: 820, height: 820, viewBox: "0 0 820 820" }, scope);
+    [0.25, 0.5, 0.75].forEach((f) => HF.svg("circle", { cx: R, cy: R, r: R * f, fill: "none", stroke: "rgba(141,255,176,0.25)", "stroke-width": 2 }, sv));
+    HF.svg("line", { x1: 0, y1: R, x2: 820, y2: R, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
+    HF.svg("line", { x1: R, y1: 0, x2: R, y2: 820, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
+    for (let a = 0; a < 360; a += 5) { const r1 = R - (a % 30 ? 10 : 24), c = Math.cos(a * Math.PI / 180), s = Math.sin(a * Math.PI / 180);
+      HF.svg("line", { x1: R + c * r1, y1: R + s * r1, x2: R + c * R, y2: R + s * R, stroke: "rgba(141,255,176,0.45)", "stroke-width": 2 }, sv); }
+    const sweep = HF.el("div", "sweep"); scope.appendChild(sweep);
+    tl.fromTo(scope, { scale: 0.2, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.6, ease: "expo.out" }, 0.05);
+
+    const hd = add(HF.el("div", "hd"));
+    hd.appendChild(HF.el("div", "k", "TARGET SCAN · " + [D.subject, HF.kicker].filter(Boolean).join(" · ")));
+    const ttl = HF.el("div", "t"); ttl.style.fontSize = HF.fit(D.title || "", 720, 60) + "px"; hd.appendChild(ttl);
+    tl.fromTo(hd.firstChild, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 0.3);
+    HF.type(tl, ttl, D.title || "", 0.4, 12);
+
+    // 扫描:匀速转(每圈 PERIOD 秒);目标安排在"扫到它的那一刻"出现
+    const t0 = T(1.0), span = Math.max(0.01, Math.min(A.outAt - 0.9, S * 0.65) - t0);
+    const times = items.map((_, k) => t0 + (items.length > 1 ? span * k / (items.length - 1) : 0));
+    const PERIOD = 2.4, deg = (t) => (t / PERIOD) * 360;
+    HF.drive(tl, (t) => { sweep.style.transform = `rotate(${deg(t).toFixed(2)}deg)`; }, 0, S);
+    const radii = [0.62, 0.38, 0.8, 0.5];
+    const list = add(HF.el("div", "list"));
+    items.forEach((it, k) => {
+      const at = times[k], a = (deg(at) - 90) * Math.PI / 180;  // 扫描线在 conic 的 0° = 正上方
+      const r = R * radii[k], x = R + Math.cos(a) * r, y = R + Math.sin(a) * r;
+      const blip = HF.el("div", "blip"), ping = HF.el("div", "ping");
+      [blip, ping].forEach((e) => { e.style.left = x + "px"; e.style.top = y + "px"; scope.appendChild(e); });
+      const bl = HF.el("div", "bl", "T" + String(k + 1).padStart(2, "0")); bl.style.left = (x + 20) + "px"; bl.style.top = (y - 34) + "px"; scope.appendChild(bl);
+      tl.set([blip, bl], { opacity: 0 }, 0);
+      tl.to([blip, bl], { opacity: 1, duration: 0.05 }, at);
+      // 之后每圈扫过时再亮一下:余辉衰减
+      for (let tt = at; tt < A.outAt; tt += PERIOD) {
+        tl.fromTo(ping, { scale: 1, opacity: 1 }, { scale: 5, opacity: 0, duration: 0.9, ease: "power2.out", immediateRender: false }, tt);
+        if (tt > at) tl.fromTo(blip, { opacity: 1 }, { opacity: 0.35, duration: PERIOD - 0.1, ease: "power1.in", immediateRender: false }, tt);
+      }
+      tl.set(ping, { opacity: 0 }, 0);
+      const row = HF.el("div", "it"); list.appendChild(row);
+      row.appendChild(HF.el("div", "id", "TARGET " + String(k + 1).padStart(2, "0")));
+      row.appendChild(HF.el("div", "lab", it.label));
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 330 : 400, it.b ? 58 : 72, 1.0) + "px"; row.appendChild(val);
+      const lock = HF.el("div", "lock", "LOCKED"); row.appendChild(lock);
+      if (it.b) { const b = HF.el("div", "b", HF.cols[1] + "  " + it.b); row.appendChild(b); tl.fromTo(b, { opacity: 0 }, { opacity: 1, duration: 0.2 }, at + 0.5); }
+      tl.fromTo(row, { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, at + 0.05);
+      HF.countText(tl, val, it.value, at + 0.1, 0.6, { ease: "power2.out" });
+      tl.set(lock, { opacity: 0 }, 0);
+      [0, 0.08, 0.16, 0.24, 0.32].forEach((d, j) => tl.set(lock, { opacity: j % 2 ? 0 : 1 }, at + 0.5 + d));
+      // 列表行高随条目数
+      row.style.height = (items.length > 3 ? 140 : 160) + "px";
+    });
+    const foot = add(HF.el("div", "foot", "RANGE 4 RINGS · SWEEP " + PERIOD + "s" + (D.source ? " · SRC " + D.source : "")));
+    tl.fromTo(foot, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.8);
+    add(HF.el("div", "scan"));
+    tl.to([scope, hd, list, foot], { opacity: 0, duration: A.outDur, ease: "steps(4)" }, A.outAt);
+    HF.register(tl);
+  </script>

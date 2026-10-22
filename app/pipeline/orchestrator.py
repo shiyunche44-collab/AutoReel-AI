@@ -19,7 +19,7 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition
-from . import concept_styles, explainer, intake, library, motion, script_gen
+from . import concept_styles, explainer, intake, library, motion, rhythm, script_gen
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
@@ -214,12 +214,14 @@ def roundup_subjects(payload: ProjectCreate, theme) -> list[dict[str, str]]:
 EXPLAINER_BEATS_PER_TICK = 4
 
 
-def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
+def advance(project_id: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
     """推进一个步骤。返回本次动作的描述。
 
     `confirmed=True` 表示"人工门禁已通过",允许越过 GATE_A/GATE_B。
     必须显式传这个参数,而不是靠调用方改状态:后台调度循环也在不停调
     advance(),若它能自行放行门禁,两道人工审核就形同虚设。
+
+    `force=True` 表示门禁 A 的 lint error 明知故犯仍然放行(只给显式确认用)。
     """
     project = db.get_project(project_id)
     if not project:
@@ -273,18 +275,21 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
             profile.slots_for(project["duration"], theme.name, names or None),
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
-        segments, title = script_gen.generate(
+        segments, title, thesis = script_gen.generate(
             subject=subject, profile=profile, facts=facts, plan=plan,
             duration=project["duration"], llm=llm, theme=theme, angle=angle,
             **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
         )
         segments = script_gen.normalize_segments(segments, slots)
+        # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次)。
+        # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
+        segments = script_gen.split_segments(segments)
         segments = script_gen.ensure_disclaimers(segments, profile)
-        issues = script_gen.compliance_lint(segments, profile, facts, theme=theme)
+        issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
         blocking = [i for i in issues if i.is_error]
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
         _save_script(project_id, segments)
-        db.update_project(project_id, title=title)
+        db.update_project(project_id, title=title, thesis=thesis)
         _set_state(project_id, state, State.SCRIPT_READY,
                    reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条")
         return {"state": str(State.SCRIPT_READY), "segments": len(segments),
@@ -324,12 +329,27 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         return {"state": str(State.GATE_A), "waiting": True}
 
     if state == State.GATE_A:
-        specs = _specs(project_id)
+        # 门禁 A 是最后一道人工确认。机器查得了的错(套话开场、空洞评价、
+        # 没出处的数字、对比章节拿厂商口径当论据)不该靠眼睛一条条找 ——
+        # 这里再跑一遍 lint,有 error 就不放行,免得带着已知缺陷去烧
+        # TTS 和逐拍渲染的钱。force=True 表示明知有问题仍然继续。
+        blockers = _gate_a_blockers(project_id, profile, theme)
+        if blockers and not force:
+            detail = " | ".join(b["message"] for b in blockers[:5])
+            more = f"(共 {len(blockers)} 处)" if len(blockers) > 5 else ""
+            raise PipelineError(
+                f"门禁 A 未放行:脚本还有 {len(blockers)} 处必须修的问题{more}。{detail}"
+                " —— 改完再确认,或显式选择「仍然继续」。"
+            )
+        specs = _sync_storyboard(project_id, _script(project_id))
         try:
             specs, nar = explainer.time_beats(project_id, specs, profile)
         except RuntimeError as exc:
             raise PipelineError(str(exc)) from exc
         _save_specs(project_id, specs)
+        # 节奏体检:画面变化间隔 + broll 占比。写进 rhythm.json,门禁和前端都能看
+        report = rhythm.report(specs)
+        db.write_json(project_id, "rhythm.json", report)
         total = sum(s.duration for s in specs)
         # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
         spent = float((db.get_project(project_id) or {}).get("spent_cost") or 0.0)
@@ -339,13 +359,15 @@ def advance(project_id: str, *, confirmed: bool = False) -> dict[str, Any]:
         cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
             (",BGM 复用曲库" if nar.bgm_reused else "")
         _set_state(project_id, state, State.ASSETS_READY,
-                   reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒")
+                   reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
+                          + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))
         _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
                    reason="解说轨不编译生成提示词")
         _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
                    reason=f"开始逐拍渲染({len(specs)} 拍)")
         return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
-                "warnings": nar.warnings}
+                "warnings": list(nar.warnings or []) + list(report["problems"]),
+                "rhythm": report}
 
     if state == State.PROMPTS_READY:
         _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")
@@ -426,6 +448,22 @@ def _start_library_many(project_id: str, names: list[str], profile, llm=None) ->
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
 
+def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
+    """门禁 A 前的最后一遍 lint,只取 error 级问题。
+
+    读的是**当前**的脚本(用户可能在门禁 A 页面改过稿),所以这里重新跑
+    一遍而不是复用生成时的 lint.json。
+    """
+    try:
+        segments = _script(project_id)
+        facts = _facts(project_id)
+        thesis = (db.get_project(project_id) or {}).get("thesis") or ""
+    except Exception:  # noqa: BLE001 - 读不到脚本就别拦,交给后面报错
+        return []
+    issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
+    return [i.to_dict() for i in issues if i.is_error]
+
+
 def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
     """确认门禁,推进到下一阶段。门禁 B 一次审完全片。"""
     project = db.get_project(project_id)
@@ -438,7 +476,10 @@ def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
     if expected == State.GATE_B:
         _save_review_state(project_id, {"cursor": 1,
                                         "approved": list(range(len(_specs(project_id))))})
-    return advance(project_id, confirmed=True)
+    kwargs: dict[str, Any] = {"confirmed": True}
+    if request.force:
+        kwargs["force"] = True
+    return advance(project_id, **kwargs)
 
 
 def review_progress(project_id: str) -> dict[str, Any]:
@@ -460,15 +501,50 @@ def _save_review_state(project_id: str, state: dict[str, Any]) -> None:
     db.write_json(project_id, "review_state.json", state)
 
 
-def update_script(project_id: str, segments: list[ScriptSegment], title: str | None) -> None:
+def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[ShotSpec]:
+    """脚本改了就同步分镜的旁白,返回同步后的分镜。
+
+    门禁 A 的脚本编辑器改的是 script.json,TTS 读的是却分镜里的 narration_zh。
+    不同步的话,在门禁 A 改的稿根本进不了成片 —— 改完看着像生效,成片还是旧词。
+    """
+    specs = _specs(project_id)
+    if not specs:
+        return specs
+    if len(specs) != len(segments):
+        raise PipelineError(
+            f"脚本 {len(segments)} 段与分镜 {len(specs)} 拍对不上,旁白没法按拍对应。"
+            "请在脚本页保持段落数量不变再保存。")
+    synced = explainer.sync_narration(specs, segments, _facts(project_id))
+    problems = explainer.validate_beats(synced)
+    if problems:
+        raise PipelineError("同步后分镜自检未通过:" + "; ".join(problems))
+    _save_specs(project_id, synced)
+    return synced
+
+
+def update_script(project_id: str, segments: list[ScriptSegment],
+                  title: str | None, thesis: str | None = None) -> list[dict]:
+    """保存脚本,并返回这一稿的 lint 结果(门禁 A 的预审报告)。"""
     project = db.get_project(project_id)
     if not project:
         raise PipelineError("项目不存在")
     if State(project["state"]) not in (State.GATE_A, State.STORYBOARD_READY):
         raise PipelineError("只有门禁 A 阶段可以修改脚本")
+    # 先同步再落盘:同步不过(段落数对不上、大字全废)就别改坏现有状态
+    _sync_storyboard(project_id, segments)
     _save_script(project_id, segments)
+    fields: dict[str, Any] = {}
     if title:
-        db.update_project(project_id, title=title)
+        fields["title"] = title
+    if thesis is not None:
+        fields["thesis"] = thesis.strip()
+    if fields:
+        db.update_project(project_id, **fields)
+    profile, theme = _theme_of(project)
+    issues = script_gen.compliance_lint(segments, profile, _facts(project_id), theme=theme,
+                                       thesis=fields.get("thesis", project.get("thesis") or ""))
+    db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
+    return [i.to_dict() for i in issues]
 
 
 def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
@@ -477,7 +553,8 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
         raise PipelineError("项目不存在")
     if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
         raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
-    specs = explainer.enforce_rhythm(list(specs))
+    profile, _theme = _theme_of(project)
+    specs = explainer.enforce_rhythm(list(specs), profile)
     problems = explainer.validate_beats(specs)
     if problems:
         raise PipelineError("分镜自检未通过:" + "; ".join(problems))
@@ -496,7 +573,7 @@ def retry(project_id: str, idx: int, stage: str) -> None:
                    reason=f"重拍第 {idx} 拍(换背景)")
 
 
-#: 概念动画还没开始渲染的状态:换风格只记下来,渲染时就用新风格
+#: 概念动画还没开始渲染的状态:换模版只记下来,渲染时就用新模版
 _STYLE_FREE = (State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY,
                State.GATE_A, State.ASSETS_READY, State.PROMPTS_READY)
 
@@ -509,16 +586,16 @@ def project_names(project: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
-    """选定概念动画风格。渲染前选:只记下来。门禁 B 上换:只把概念动画那几拍退回去用新风格重渲
+    """选定概念动画模版。渲染前选:只记下来。门禁 B 上换:只把概念动画那几拍退回去用新模版重渲
     (背景、其他拍都不动),渲完自己回到门禁 B。渲染中 / 成片阶段不让换(会和正在跑的渲染打架)。"""
     project = db.get_project(project_id)
     if not project:
         raise PipelineError("项目不存在")
     if style not in {s.id for s in motion.styles()}:
-        raise PipelineError(f"没有这个风格:{style}")
+        raise PipelineError(f"没有这个模版:{style}")
     state = State(project["state"])
     if state not in _STYLE_FREE and state != State.GATE_B:
-        raise PipelineError("现在不能换概念动画风格:渲染中请等到审片(门禁 B),成片阶段已经定稿")
+        raise PipelineError("现在不能换概念动画模版:渲染中请等到审片(门禁 B),成片阶段已经定稿")
     before = explainer.concept_style_of(project_id)
     db.write_json(project_id, "concept_style.json", {"style": style})
     redo: list[int] = []
@@ -529,10 +606,10 @@ def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
             db.update_shot(project_id, idx, "final", status="pending", final_path=None, error=None)
         if redo:
             _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
-                       reason=f"概念动画换风格 {motion.get_style(style).name},重渲 {len(redo)} 拍")
+                       reason=f"概念动画换模版 {motion.get_style(style).name},重渲 {len(redo)} 拍")
     elif style != before:
         db.add_event(project_id, str(state), src=str(state),
-                     reason=f"概念动画风格:{motion.get_style(style).name}")
+                     reason=f"概念动画模版:{motion.get_style(style).name}")
     return {"style": style, "rerender": redo}
 
 

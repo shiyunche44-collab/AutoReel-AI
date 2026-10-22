@@ -1,0 +1,70 @@
+<!-- @name 波普漫画
+     @desc 黄底网点 + 粗黑描边的漫画格,爆炸星芒托着数字砸进来,画格抖动,星芒慢慢旋转
+     @order 14
+     @light yes -->
+<style>
+    html, body { background: #ffde00; }
+    #root { color: #111; font-family: "STHupo", "HYZhongHeiTi", "Microsoft YaHei", sans-serif;
+            background-color: #ffde00; background-image: radial-gradient(#ff3b30 3.2px, transparent 3.6px); background-size: 22px 22px; }
+    .banner { position: absolute; left: 70px; top: 50px; padding: 14px 40px; background: #fff; border: 8px solid #111; box-shadow: 14px 14px 0 #111; transform: rotate(-2deg); }
+    .banner .t { font-size: 84px; line-height: 1.1; white-space: nowrap; }
+    .banner .k { position: absolute; right: -30px; top: -34px; background: #ff3b30; color: #fff; border: 6px solid #111; padding: 4px 20px; font-size: 32px; transform: rotate(6deg); white-space: nowrap; }
+    .pnl { position: absolute; background: #fff; border: 9px solid #111; box-shadow: 16px 16px 0 #111; overflow: hidden; }
+    .pnl.alt { background: #4cc9f0; }
+    .pnl .halftone { position: absolute; inset: 0; background-image: radial-gradient(rgba(17,17,17,0.18) 3px, transparent 3.4px); background-size: 16px 16px; }
+    .pnl svg { position: absolute; left: 50%; top: 56%; overflow: visible; }
+    .pnl .val { position: absolute; left: 0; right: 0; text-align: center; font-family: "Archivo Black", "STHupo", sans-serif; color: #fff;
+                -webkit-text-stroke: 5px #111; paint-order: stroke fill; text-shadow: 7px 7px 0 #111; white-space: nowrap; line-height: 1; }
+    .pnl .bub { position: absolute; left: 30px; top: 26px; background: #fff; border: 6px solid #111; border-radius: 40px; padding: 8px 26px; font-size: 38px; white-space: nowrap; }
+    .pnl .bub::after { content: ""; position: absolute; left: 40px; bottom: -26px; border: 13px solid transparent; border-top: 16px solid #111; }
+    .pnl .b { position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 36px; white-space: nowrap; }
+    .pnl .b span { background: #111; color: #ffde00; padding: 2px 16px; }
+    .src { position: absolute; right: 70px; bottom: 30px; font-size: 26px; background: #111; color: #ffde00; padding: 4px 16px; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+
+    tl.fromTo(root, { backgroundPosition: "0px 0px" }, { backgroundPosition: "44px 22px", duration: S, ease: "none" }, 0);
+    const banner = add(HF.el("div", "banner"));
+    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", 1100, 84) + "px"; banner.appendChild(t);
+    if (HF.kicker || D.subject) banner.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("·")));
+    tl.fromTo(banner, { scale: 2.2, rotation: -14, opacity: 0 }, { scale: 1, rotation: -2, opacity: 1, duration: 0.45, ease: "back.out(2)" }, 0.05);
+
+    // 画格:1~2 个横排大格,3~4 个错落
+    const n = Math.max(1, items.length);
+    const boxes = n === 1 ? [[300, 280, 1320, 700]] : n === 2 ? [[90, 290, 840, 700], [990, 270, 840, 720]]
+      : n === 3 ? [[70, 300, 560, 690], [680, 270, 560, 720], [1290, 300, 560, 690]]
+      : [[70, 290, 870, 340], [990, 270, 860, 360], [70, 670, 870, 340], [990, 670, 860, 340]];
+    const tilt = [-1.5, 1.2, -0.8, 1.6];
+    const burst = (r1, r2, pts) => { let d = ""; for (let k = 0; k < pts * 2; k++) { const r = k % 2 ? r2 : r1, a = Math.PI * k / pts;
+      d += (k ? "L" : "M") + (r * Math.cos(a)).toFixed(1) + " " + (r * Math.sin(a)).toFixed(1) + " "; } return d + "Z"; };
+    const t0 = T(0.6), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
+    const pnls = [];
+    items.forEach((it, k) => {
+      const [x, y, w, h] = boxes[k];
+      const p = add(HF.el("div", "pnl" + (k % 2 ? " alt" : "")));
+      Object.assign(p.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px", transform: `rotate(${tilt[k]}deg)` });
+      p.appendChild(HF.el("div", "halftone"));
+      const R = Math.min(w, h) * 0.46;
+      const sv = HF.svg("svg", { width: 1, height: 1 }, p);
+      const g = HF.svg("g", {}, sv);
+      HF.svg("path", { d: burst(R, R * 0.68, 14), fill: "#111", transform: "translate(10 10)" }, g);
+      HF.svg("path", { d: burst(R, R * 0.68, 14), fill: k % 2 ? "#ff3b30" : "#ffde00", stroke: "#111", "stroke-width": 7, "stroke-linejoin": "round" }, g);
+      p.appendChild(HF.el("div", "bub", it.label));
+      const val = HF.el("div", "val"); const vs = HF.fit(it.value, w - 90, Math.min(190, h * 0.36), 1.45); val.style.fontSize = vs + "px";
+      val.style.top = (h * 0.56 - vs * 0.5) + "px"; p.appendChild(val);
+      if (it.b) { const b = HF.el("div", "b"); b.appendChild(HF.el("span", "", HF.cols[1] + " " + it.b)); p.appendChild(b); }
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.fromTo(p, { scale: 1.6, opacity: 0, rotation: tilt[k] * 6 }, { scale: 1, opacity: 1, rotation: tilt[k], duration: 0.32, ease: "power4.in" }, at);
+      // 砸下去之后画格抖一下
+      tl.to(p, { keyframes: [{ x: -14, duration: 0.04 }, { x: 12, duration: 0.04 }, { x: -6, duration: 0.04 }, { x: 0, duration: 0.04 }] }, at + 0.32);
+      tl.fromTo(g, { scale: 0, rotation: -40, transformOrigin: "0px 0px" }, { scale: 1, rotation: 0, duration: 0.4, ease: "back.out(2.4)" }, at + 0.3);
+      tl.fromTo(g, { rotation: 0 }, { rotation: 30, duration: Math.max(0.5, A.outAt - at - 0.7), ease: "none", immediateRender: false }, at + 0.7);
+      tl.fromTo(val, { scale: 0.2, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.35, ease: "back.out(3)" }, at + 0.4);
+      HF.countText(tl, val, it.value, at + 0.4, 0.5, { ease: "power2.out" });
+      pnls.push(p);
+    });
+    if (D.source) { const s = add(HF.el("div", "src", D.source)); tl.fromTo(s, { opacity: 0 }, { opacity: 1, duration: 0.2 }, 1.0); pnls.push(s); }
+    tl.to([banner].concat(pnls), { scale: 0, opacity: 0, rotation: 8, duration: A.outDur, ease: "back.in(2)", stagger: 0.03 }, A.outAt);
+    HF.register(tl);
+  </script>

@@ -26,8 +26,13 @@ _BAR_BG = (0, 0, 0, 175)
 _BAR_ON = (255, 205, 60, 235)
 _BAR_ON_TEXT = (20, 20, 20, 255)
 
-#: 章节条高度(占画面高度)。字幕的底边距是 0.14H,两者不会打架
-BAR_HEIGHT = 0.05
+#: 章节条高度(占画面高度)。
+#:
+#: 加高是为了手机端:28px 的章名缩到手机屏宽上只有几个像素,看不清当前在讲哪一章。
+#: 字幕的底边距是 0.115H、章节条 0.068H,两者加起来 0.183H,不会打架。
+BAR_HEIGHT = 0.068
+#: 章名字号下限(像素)。条加高之后按比例算会偏小,这里钉一个下限。
+BAR_FONT_MIN = 34
 
 
 def _canvas(size: tuple[int, int]) -> tuple[Image.Image, ImageDraw.ImageDraw]:
@@ -110,7 +115,7 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
     if not chapters:
         img.save(dest)
         return Path(dest)
-    font_size = int(bar_h * 0.52)
+    font_size = max(BAR_FONT_MIN, int(bar_h * 0.52))
     font = _font(font_size, bold=True)
     floor = [d.textlength(name, font=font) + 36 for name, _ in chapters]
     total = sum(max(0.0, s) for _, s in chapters) or 1.0

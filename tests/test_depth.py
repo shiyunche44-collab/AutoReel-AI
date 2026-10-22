@@ -97,11 +97,15 @@ def test_depth_lint_flags_filler_missing_basis_and_missing_principle(auto):
         ScriptSegment(idx=0, section="三电性能", text="续航 643 公里,这个数据很猛。",
                       fact_refs=["f_1"]),
     ]
-    msgs = [i.message for i in depth_lint(segs, auto, facts)]
+    issues = depth_lint(segs, auto, facts)
+    msgs = [i.message for i in issues]
     assert any("很猛" in m for m in msgs)
     assert any("口径" in m and "CLTC" in m for m in msgs)
     assert any("三电性能" in m and "原理" in m for m in msgs)
-    assert all(i.severity == "warning" for i in depth_lint(segs, auto, facts))
+    # 空洞评价是 error(必须改),口径与深度是 warning(提醒)
+    filler = [i for i in issues if i.message.startswith("空洞评价")]
+    assert filler and all(i.is_error for i in filler)
+    assert all(i.severity == "warning" for i in issues if not i.message.startswith("空洞评价"))
 
 
 def test_depth_lint_quiet_on_good_segment(auto):

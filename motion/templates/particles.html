@@ -1,0 +1,94 @@
+<!-- @name 粒子聚合
+     @desc 漆黑星空里上千颗光粒从四处飞来拼成数字,停留时微微闪烁,换下一个时炸开重组
+     @order 16 -->
+<style>
+    html, body { background: #02030a; }
+    #root { color: #fff; font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(ellipse 1200px 700px at 960px 560px, #0b1030 0%, #02030a 70%); }
+    canvas { position: absolute; left: 0; top: 0; }
+    .hd { position: absolute; left: 0; right: 0; top: 90px; text-align: center; }
+    .hd .k { font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 24px; font-weight: 600; letter-spacing: 0.5em; color: rgba(160,190,255,0.75); }
+    .hd .t { margin-top: 14px; font-size: 56px; font-weight: 300; letter-spacing: 0.3em; white-space: nowrap; }
+    .lab { position: absolute; left: 0; right: 0; top: 330px; text-align: center; font-size: 46px; font-weight: 600; letter-spacing: 0.3em; color: rgba(220,230,255,0.9); }
+    .val { position: absolute; left: 0; right: 0; text-align: center; font-family: "Montserrat", sans-serif; font-weight: 800; white-space: nowrap; color: #fff;
+           text-shadow: 0 0 30px rgba(120,160,255,0.8); letter-spacing: -0.01em; line-height: 1; }
+    .b { position: absolute; left: 0; right: 0; top: 820px; text-align: center; font-family: "Montserrat", "Noto Sans SC", sans-serif; font-size: 40px; font-weight: 600; color: #ff9ad5; }
+    .idx { position: absolute; left: 0; right: 0; bottom: 70px; text-align: center; font-family: "Inter", sans-serif; font-size: 24px; letter-spacing: 0.4em; color: rgba(160,190,255,0.6); }
+    .src { position: absolute; right: 80px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.35); }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+
+    const cv = add(HF.el("canvas")); cv.width = 1920; cv.height = 1080; const ctx = cv.getContext("2d");
+    const hd = add(HF.el("div", "hd"));
+    hd.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
+    hd.appendChild(HF.el("div", "t", D.title || ""));
+    tl.fromTo(hd.children, { opacity: 0, letterSpacing: "1em" }, { opacity: 1, letterSpacing: "0.3em", duration: 1.0, ease: "power3.out", stagger: 0.15 }, 0.1);
+
+    // 每行一段:粒子聚成数字 → 停留 → 炸散。真正的文字(一字不差)在聚合完成后叠上来
+    const NP = 1600, rng = HF.rng(42);
+    const P = Array.from({ length: NP }, () => ({ sx: rng() * 1920, sy: rng() * 1080, ph: rng() * 6.28, sz: 1.2 + rng() * 2.2, hue: rng() }));
+    const VY = 600;
+    const sizeOf = (txt) => HF.fit(txt, 1500, 300, 1.05);
+    const targets = {};
+    const targetFor = (k) => {
+      if (targets[k]) return targets[k];
+      const txt = items[k].value, size = sizeOf(txt);
+      const oc = document.createElement("canvas"); oc.width = 1920; oc.height = 1080; const o = oc.getContext("2d");
+      o.fillStyle = "#fff"; o.textAlign = "center"; o.textBaseline = "middle";
+      o.font = `800 ${size}px Montserrat, "Noto Sans SC", sans-serif`;
+      o.fillText(txt, 960, VY);
+      const img = o.getImageData(0, 0, 1920, 1080).data, pts = [];
+      for (let y = 0; y < 1080; y += 6) for (let x = 0; x < 1920; x += 6) if (img[(y * 1920 + x) * 4 + 3] > 128) pts.push([x, y]);
+      const out = P.map((p, i) => pts.length ? pts[Math.floor(i * pts.length / NP)] : [p.sx, p.sy]);
+      if (!document.fonts || document.fonts.status === "loaded") targets[k] = out;
+      return out;
+    };
+    const slotStart = HF.slots(items.length, T(0.8), A.outAt);
+    const L = items.length ? (A.outAt - T(0.8)) / items.length : 0;
+    const conv = Math.min(1.1, L * 0.4);
+    const ease = gsap.parseEase("expo.inOut");
+    const scatter = (p, t) => [p.sx + Math.sin(t * 0.4 + p.ph) * 40, p.sy + Math.cos(t * 0.3 + p.ph) * 30];
+    HF.drive(tl, (t) => {
+      ctx.clearRect(0, 0, 1920, 1080);
+      let k = -1;
+      for (let j = 0; j < slotStart.length; j++) if (t >= slotStart[j]) k = j;
+      let f = 0, tg = null;
+      if (k >= 0) {
+        const u = t - slotStart[k];
+        tg = targetFor(k);
+        const last = k === items.length - 1;
+        const outIn = last ? 1e9 : L - 0.45;
+        f = u < conv ? ease(u / conv) : u < outIn ? 1 : Math.max(0, 1 - (u - outIn) / 0.45);
+      }
+      for (let i = 0; i < NP; i++) {
+        const p = P[i], [sx, sy] = scatter(p, t);
+        let x = sx, y = sy;
+        if (tg && f > 0) { const [tx, ty] = tg[i]; const jit = f >= 1 ? Math.sin(t * 3 + p.ph) * 1.5 : 0;
+          x = sx + (tx - sx) * f + jit; y = sy + (ty - sy) * f + jit; }
+        const tw = 0.55 + 0.45 * Math.sin(t * 4 + p.ph * 3);
+        ctx.fillStyle = `hsla(${(200 + p.hue * 120 + x * 0.03).toFixed(0)}, 90%, ${(70 + 20 * tw).toFixed(0)}%, ${(0.35 + 0.65 * tw * (0.5 + f * 0.5)).toFixed(2)})`;
+        ctx.fillRect(x, y, p.sz, p.sz);
+      }
+    }, 0, S);
+
+    items.forEach((it, k) => {
+      const at = slotStart[k], last = k === items.length - 1;
+      const lab = add(HF.el("div", "lab", it.label));
+      const size = sizeOf(it.value);
+      const val = add(HF.el("div", "val", it.value)); val.style.fontSize = size + "px"; val.style.top = (VY - size * 0.5) + "px";
+      const extra = [lab];
+      if (it.b) extra.push(add(HF.el("div", "b", HF.cols[0] + "  vs  " + HF.cols[1] + "  " + it.b)));
+      else if (it.tag) { const tg = add(HF.el("div", "b", it.tag)); tg.style.color = "rgba(160,190,255,0.7)"; tg.style.fontSize = "30px"; extra.push(tg); }
+      const idx = add(HF.el("div", "idx", String(k + 1).padStart(2, "0") + " / " + String(items.length).padStart(2, "0"))); extra.push(idx);
+      tl.set([val].concat(extra), { opacity: 0 }, 0);
+      tl.to(extra, { opacity: 1, duration: 0.4 }, at + 0.2);
+      tl.to(val, { opacity: 0.92, duration: 0.5 }, at + conv - 0.1);
+      if (!last) tl.to([val].concat(extra), { opacity: 0, duration: 0.3 }, at + L - 0.45);
+      else tl.to([val].concat(extra), { opacity: 0, duration: A.outDur }, A.outAt);
+    });
+    const src = add(HF.el("div", "src", D.source || ""));
+    tl.fromTo(src, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.0);
+    tl.to([hd, src, cv], { opacity: 0, duration: A.outDur }, A.outAt);
+    HF.register(tl);
+  </script>

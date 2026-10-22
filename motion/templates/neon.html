@@ -1,0 +1,82 @@
+<!-- @name 霓虹灯牌
+     @desc 夜色砖墙上的霓虹灯管字,一块块通电闪烁亮起,地面有倒影,持续嗡嗡微颤
+     @order 8 -->
+<style>
+    html, body { background: #0a0510; }
+    #root { background: #0a0510; color: #fff;
+            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    .wall { position: absolute; left: 0; right: 0; top: 0; height: 800px;
+            background:
+              repeating-linear-gradient(0deg, rgba(0,0,0,0.55) 0px, rgba(0,0,0,0.55) 4px, transparent 4px, transparent 64px),
+              repeating-linear-gradient(90deg, rgba(0,0,0,0.4) 0px, rgba(0,0,0,0.4) 4px, transparent 4px, transparent 132px),
+              radial-gradient(ellipse 1200px 600px at 960px 400px, #2a1238 0%, #140a1e 60%, #0a0510 100%); }
+    .floor { position: absolute; left: 0; right: 0; top: 800px; bottom: 0; background: linear-gradient(180deg, #120818 0%, #050208 100%); }
+    .sign { position: absolute; text-align: center; white-space: nowrap; }
+    .neon { color: #fff; }
+    .pink { text-shadow: 0 0 6px #fff, 0 0 16px #ff2bd6, 0 0 36px #ff2bd6, 0 0 70px #ff2bd6, 0 0 110px rgba(255,43,214,0.6); }
+    .cyan { text-shadow: 0 0 6px #fff, 0 0 14px #19e6ff, 0 0 30px #19e6ff, 0 0 60px #19e6ff; }
+    .amber { text-shadow: 0 0 6px #fff, 0 0 16px #ffb21e, 0 0 36px #ffb21e, 0 0 70px #ffb21e; }
+    .ttl { font-size: 96px; font-weight: 900; letter-spacing: 0.08em; }
+    .kick { font-family: "League Gothic", sans-serif; font-size: 44px; letter-spacing: 0.3em; }
+    .lab { font-size: 38px; font-weight: 700; letter-spacing: 0.12em; }
+    .val { font-family: "League Gothic", "HYZhongHeiTi", sans-serif; letter-spacing: 0.02em; line-height: 1; margin-top: 10px; }
+    .b { font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 54px; margin-top: 8px; letter-spacing: 0.04em; }
+    .tube { position: absolute; border: 4px solid #fff; border-radius: 26px; box-shadow: 0 0 10px #19e6ff, 0 0 26px #19e6ff, inset 0 0 14px rgba(25,230,255,0.6); }
+    .refl { position: absolute; left: 0; right: 0; top: 800px; height: 280px; overflow: hidden; opacity: 0.35; filter: blur(4px);
+            -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%); mask-image: linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%); }
+    .refl > div { position: absolute; left: 0; top: -800px; width: 1920px; height: 800px; transform: scaleY(-1); transform-origin: 50% 100%; }
+    .src { position: absolute; right: 80px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.35); letter-spacing: 0.1em; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+
+    add(HF.el("div", "wall")); add(HF.el("div", "floor"));
+    const stage = add(HF.el("div")); stage.style.cssText = "position:absolute;left:0;top:0;width:1920px;height:800px;";
+    const rng = HF.rng(7);
+    const signs = [];
+    // 通电:几下不规则闪烁后稳住
+    const ignite = (el, at) => {
+      tl.set(el, { opacity: 0 }, 0);
+      let t = at;
+      [0.9, 0.1, 0.7, 0.05, 1].forEach((o, n) => { tl.set(el, { opacity: o }, t); t += 0.05 + rng() * 0.07; });
+      signs.push(el);
+    };
+    const kick = HF.el("div", "sign neon cyan kick", [D.subject, HF.kicker].filter(Boolean).join("  ·  "));
+    Object.assign(kick.style, { left: "0", right: "0", top: "90px" }); stage.appendChild(kick);
+    const ttl = HF.el("div", "sign neon pink ttl", D.title || "");
+    Object.assign(ttl.style, { left: "0", right: "0", top: "150px" }); ttl.style.fontSize = HF.fit(D.title || "", 1500, 96) + "px"; stage.appendChild(ttl);
+    ignite(kick, 0.2); ignite(ttl, 0.45);
+
+    const n = Math.max(1, items.length), W = Math.min(520, 1680 / n - 40), gap = (1760 - n * W) / Math.max(1, n + 1);
+    const t0 = T(1.0), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
+    const colors = ["amber", "pink", "cyan", "amber"];
+    items.forEach((it, k) => {
+      const x = 80 + gap + k * (W + gap);
+      const tube = HF.el("div", "tube"); Object.assign(tube.style, { left: x + "px", top: "330px", width: W + "px", height: "400px" }); stage.appendChild(tube);
+      const sg = HF.el("div", "sign"); Object.assign(sg.style, { left: x + "px", width: W + "px", top: "370px" });
+      const lab = HF.el("div", "neon cyan lab", it.label); sg.appendChild(lab);
+      const val = HF.el("div", "neon val " + colors[k % 4], it.value); val.style.fontSize = HF.fit(it.value, W - 50, 200, 0.6) + "px"; sg.appendChild(val);
+      if (it.b) sg.appendChild(HF.el("div", "neon cyan b", HF.cols[1] + " " + it.b));
+      else if (it.tag) { const tg = HF.el("div", "neon cyan", it.tag); tg.style.cssText = "font-size:26px;margin-top:14px;letter-spacing:0.08em"; sg.appendChild(tg); }
+      stage.appendChild(sg);
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      ignite(tube, at); ignite(sg, at + 0.15);
+    });
+    // 地面倒影:复制一份灯牌层
+    const refl = add(HF.el("div", "refl")); const mirror = stage.cloneNode(true); mirror.removeAttribute("style");
+    refl.appendChild(HF.el("div")).appendChild(mirror);
+    mirror.style.cssText = "position:absolute;left:0;top:0;width:1920px;height:800px;";
+    const mirrorKids = Array.from(mirror.children), stageKids = Array.from(stage.children);
+    // 倒影跟着灯牌一起闪:每帧同步透明度
+    // 停留:灯管嗡嗡微颤(亮度轻微起伏),偶尔一块闪一下
+    HF.drive(tl, (t) => {
+      stageKids.forEach((el, k) => { mirrorKids[k].style.opacity = el.style.opacity; });
+      const hum = 0.92 + 0.08 * Math.sin(t * 37) * Math.sin(t * 5.3);
+      stage.style.filter = `brightness(${hum.toFixed(3)})`;
+    }, 0, S);
+    const src = add(HF.el("div", "src", D.source || ""));
+    tl.fromTo(src, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.2);
+    // 断电退场
+    tl.to([stage, refl, src], { opacity: 0, duration: A.outDur, ease: "steps(3)" }, A.outAt);
+    HF.register(tl);
+  </script>

@@ -1,0 +1,87 @@
+<!-- @name 号外报纸
+     @desc 老电影式旋转飞入的报纸头版,大字标题 + 黑白车图,红笔逐个圈出关键数字,底部滚动快讯
+     @order 19
+     @light yes -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #2b2722; }
+    #root { color: #1a1814; font-family: "STZhongsong", "STSong", serif;
+            background: radial-gradient(ellipse 1200px 800px at 960px 540px, #3d3730 0%, #1c1915 80%); }
+    .page { position: absolute; left: 160px; top: 40px; width: 1600px; height: 1000px; background: #ede6d6; box-shadow: 0 40px 80px rgba(0,0,0,0.5); overflow: hidden; }
+    .page::before { content: ""; position: absolute; inset: 0; opacity: 0.5;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 300 300' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.4 0 0 0 0 0.35 0 0 0 0 0.3 0 0 0 0.18 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+    .mast { position: absolute; left: 60px; right: 60px; top: 36px; text-align: center; font-family: "STXingkai", "STKaiti", serif; font-size: 110px; line-height: 1.1; letter-spacing: 0.2em; }
+    .meta { position: absolute; left: 60px; right: 60px; top: 170px; display: flex; justify-content: space-between; padding: 8px 0; font-size: 22px;
+            border-top: 4px double #1a1814; border-bottom: 4px double #1a1814; }
+    .extra { position: absolute; right: 70px; top: 40px; width: 150px; height: 150px; border-radius: 50%; background: #c0261d; color: #ede6d6;
+             display: flex; align-items: center; justify-content: center; font-family: "STXingkai", serif; font-size: 64px; transform: rotate(12deg); }
+    .head { position: absolute; left: 60px; right: 60px; top: 236px; text-align: center; font-family: "HYZhongHeiTi", "STZhongsong", sans-serif; font-weight: 900; white-space: nowrap; line-height: 1.15; }
+    .photo-box { position: absolute; left: 60px; top: 420px; width: 760px; height: 470px; border: 3px solid #1a1814; overflow: hidden; background: #d9d2c2; }
+    .photo-box img { position: absolute; display: block; filter: grayscale(1) contrast(1.3) brightness(1.05); }
+    .photo-box .dots { position: absolute; inset: 0; background-image: radial-gradient(rgba(26,24,20,0.25) 1.2px, transparent 1.6px); background-size: 6px 6px; mix-blend-mode: multiply; }
+    .cap { position: absolute; left: 60px; top: 898px; font-size: 22px; color: #4a453c; }
+    .cols { position: absolute; left: 860px; right: 60px; top: 420px; }
+    .art { position: relative; padding: 14px 0 12px; border-bottom: 2px solid #1a1814; }
+    .art .lab { font-family: "HYZhongHeiTi", sans-serif; font-size: 32px; font-weight: 900; }
+    .art .val { margin-top: 4px; font-family: "Playfair Display", "STZhongsong", serif; font-weight: 700; white-space: nowrap; line-height: 1.05; display: inline-block; position: relative; }
+    .art .val svg { position: absolute; left: -26px; top: -16px; overflow: visible; }
+    .art .b { position: absolute; right: 0; bottom: 18px; font-size: 26px; color: #4a453c; white-space: nowrap; }
+    .art .txt { font-size: 22px; color: #4a453c; margin-top: 2px; }
+    .ticker { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: #1a1814; color: #ede6d6; overflow: hidden; z-index: 3; }
+    .ticker div { position: absolute; top: 12px; left: 0; white-space: nowrap; font-family: "HYZhongHeiTi", sans-serif; font-size: 32px; }
+    .ticker b { color: #ffcf3d; font-weight: 400; margin: 0 14px; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    const page = add(HF.el("div", "page"));
+    const pin = (el) => { page.appendChild(el); return el; };
+    pin(HF.el("div", "mast", "汽车参数周报"));
+    const meta = pin(HF.el("div", "meta"));
+    ["第 07 期", (D.subject || "") + " 特刊", "本期 · " + (HF.kicker || "参数")].forEach((s) => meta.appendChild(HF.el("span", "", s)));
+    const ex = pin(HF.el("div", "extra", "号外"));
+    const head = pin(HF.el("div", "head", D.title || "")); head.style.fontSize = HF.fit(D.title || "", 1460, 150) + "px";
+    const pb = pin(HF.el("div", "photo-box"));
+    if (P) { const im = HF.photoImg(); const pw = 820, hh = pw * P.height / P.width;
+      Object.assign(im.style, { width: pw + "px", height: hh + "px", left: "-30px", top: (430 - P.floor * hh) + "px" }); pb.appendChild(im);
+      tl.fromTo(im, { scale: 1 }, { scale: 1.08, duration: S, ease: "none" }, 0); }
+    else { const big = HF.el("div"); big.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'STXingkai',serif;font-size:220px;color:rgba(26,24,20,0.75)";
+      big.textContent = HF.kicker || "参数"; pb.appendChild(big); }
+    pb.appendChild(HF.el("div", "dots"));
+    pin(HF.el("div", "cap", "▲ " + (D.subject || "") + (D.source ? "  · 资料来源:" + D.source : "")));
+
+    // 报纸转着飞进来
+    tl.fromTo(page, { scale: 0.05, rotation: -720, opacity: 0 }, { scale: 1, rotation: -1.5, opacity: 1, duration: Math.max(0.8, T(1.1)), ease: "power3.out" }, 0);
+    tl.fromTo(ex, { scale: 3, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.25, ease: "power4.in" }, T(1.1));
+
+    const cols = pin(HF.el("div", "cols"));
+    const t0 = T(1.4), span = Math.max(0, Math.min(A.outAt - 1.1, S * 0.62) - t0);
+    const rowH = items.length > 3 ? 112 : 150;
+    items.forEach((it, k) => {
+      const art = HF.el("div", "art"); art.style.height = rowH + "px"; cols.appendChild(art);
+      art.appendChild(HF.el("div", "lab", it.label));
+      const val = HF.el("div", "val"); const vs = HF.fit(it.value, 420, rowH * 0.5, 0.9); val.style.fontSize = vs + "px"; art.appendChild(val);
+      const vt = HF.el("span", "", it.value); val.appendChild(vt);
+      if (it.b) art.appendChild(HF.el("div", "b", HF.cols[1] + ":" + it.b)); else if (it.tag) { const tg = HF.el("div", "b", it.tag); art.appendChild(tg); }
+      // 红笔圈:手绘感椭圆
+      const w = Math.max(120, HF.textW(it.value) * vs * 0.82 + 56), h = vs * 1.25;
+      const sv = HF.svg("svg", { width: w, height: h }, val);
+      const d = `M${w * 0.1} ${h * 0.25} C${w * 0.3} ${-h * 0.05}, ${w * 0.95} ${-h * 0.02}, ${w * 0.98} ${h * 0.45} C${w * 1.0} ${h * 0.95}, ${w * 0.2} ${h * 1.02}, ${w * 0.03} ${h * 0.6} C${-w * 0.02} ${h * 0.35}, ${w * 0.15} ${h * 0.1}, ${w * 0.35} ${h * 0.05}`;
+      const ring = HF.svg("path", { d, fill: "none", stroke: "#c0261d", "stroke-width": 5, "stroke-linecap": "round", pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.to(ring, { attr: { "stroke-dashoffset": 0 }, duration: 0.55, ease: "power2.inOut" }, at);
+      tl.fromTo(val, { scale: 1 }, { scale: 1.08, duration: 0.2, yoyo: true, repeat: 1, ease: "power1.inOut", transformOrigin: "0% 50%" }, at);
+    });
+    // 镜头:报纸到位后慢慢推近
+    tl.to(page, { scale: 1.06, rotation: -0.5, duration: Math.max(0.5, A.outAt - T(1.2)), ease: "none" }, T(1.2));
+
+    // 底部滚动快讯
+    const tk = add(HF.el("div", "ticker")); const tx = HF.el("div"); tk.appendChild(tx);
+    const news = items.map((it) => `${it.label}<b>${it.value}</b>`).join("  ◆  ");
+    tx.innerHTML = ("快讯 ◆  " + news + "  ◆  ").repeat(4);
+    tl.fromTo(tk, { yPercent: 100 }, { yPercent: 0, duration: 0.4, ease: "power3.out" }, T(1.3));
+    tl.fromTo(tx, { x: 0 }, { x: -240 * S, duration: S, ease: "none" }, 0);
+    tl.to([page, tk], { opacity: 0, duration: A.outDur }, A.outAt);
+    HF.register(tl);
+  </script>

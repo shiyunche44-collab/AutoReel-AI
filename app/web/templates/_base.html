@@ -33,6 +33,8 @@
       <a class="nav-item" href="/#topics">{{ m.icon("flame") }}热点选题</a>
       <a class="nav-item {{ 'is-active' if nav == 'projects' }}" href="/#projects">{{ m.icon("folder") }}我的项目</a>
       <a class="nav-item {{ 'is-active' if nav == 'library' }}" href="/library">{{ m.icon("image") }}素材库</a>
+      <a class="nav-item {{ 'is-active' if nav == 'publish' }}" href="/publish">{{ m.icon("external") }}分发台</a>
+      <a class="nav-item {{ 'is-active' if nav == 'analytics' }}" href="/analytics">{{ m.icon("activity") }}数据看板</a>
     </nav>
 
     {% block sidebar_extra %}{% endblock %}

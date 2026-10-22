@@ -40,11 +40,16 @@ themes:
     fact_sources:
       - ifind.product_news
       - ifind.tech_news
+      # 竞品与用车成本:没有这两条,「竞品对比」只能靠形容词、「用车成本」整段写不了
+      - ifind.compare_news
+      - ifind.cost_news
       - ifind.news
     script_rules:
       - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
       - 结论段必须说清楚适合哪类人、不适合哪类人。
       - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
+      - 开头三段分开写:先抛冲突,立刻兑现刚才抛出的那个数字,再用一句话亮出"每个数字都能查到出处"。
+      - 结尾要给行动:最后一句要么提问(你在纠结哪款?评论区说),要么预告下期做什么。
       - 讲技术按"是什么 → 为什么(原理)→ 对你意味着什么 → 代价或边界"走。三电性能、智能配置两段,
         每段至少一句引用原理清单(k_ 开头)讲清为什么,并至少一句讲代价或适用边界。
       - 代价和缺点只能用原理条目里写明的"代价/边界",或事实清单里明确写到的问题;
@@ -52,15 +57,23 @@ themes:
       - 续航、电耗、加速这类数字必须带口径或版本(如"CLTC 标称""GT 版"),口径取自事实的"口径"一栏。
       - 能用推算事实(来源 derived)把参数翻译成体感时优先用,比如把补能写成"每分钟补多少公里"。
       - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据:要评价,就说清楚比什么、好在哪。
+      - 竞品对比段必须给**可比的数字**:引用「对比」类事实(一条事实里写清两台车同一维度的取值),
+        说清本车这一项高在哪、低在哪。没有可用对比事实就把这段改成定性描述,
+        不许写"配置给得足""门槛压得低"这种没有数字的比较。
+      - 用车成本段讲落地价之后还要花的钱:电费、保险、保养、保值率。
+        有事实就写数字并说明口径;算不出年成本就只讲定性,不许编。
     blocks:
       - {section: 开场, weight: 1, remainder: false}
+      - {section: 兑现承诺, weight: 1, remainder: false}
+      - {section: 亮出出处, weight: 1, remainder: false}
       - {section: 定位与价格, weight: 2}
       - {section: 外观设计, weight: 2}
       - {section: 内饰空间, weight: 2}
       - {section: 三电性能, weight: 3}
       - {section: 智能配置, weight: 2}
       - {section: 版本选择, weight: 2}
-      - {section: 竞品对比, weight: 1}
+      - {section: 竞品对比, weight: 2}
+      - {section: 用车成本, weight: 2}
       - {section: 结论建议, weight: 1, remainder: false}
 
   # 多车横评:建项目时填车单(3–5 台),subject 是选题名(如「15 万级纯电 SUV 横评」)。
@@ -111,6 +124,16 @@ sections:
     chapter: 开头
     angle: exterior_45
     layouts: [hook, highlight, broll]
+  兑现承诺:
+    beat: 立刻兑现开场抛出的那句话:把那个数字或判断摆出来,不许绕,不许拖到后面
+    chapter: 开头
+    angle: exterior_45
+    layouts: [panel, stat, highlight, broll]
+  亮出出处:
+    beat: 一句话亮出「每个数字都能查到出处」,全片只说这一次,说完恢复正常解说
+    chapter: 开头
+    angle: exterior_45
+    layouts: [highlight, broll]
   定位与价格:
     beat: 它卖多少钱、打谁、在品牌里是什么位置
     chapter: 定位价格
@@ -153,8 +176,15 @@ sections:
     angle: exterior_45
     layouts: [card, concept, broll]
     card: compare
+  用车成本:
+    beat: 落地价之后还要花的钱:电费、保险、保养、保值率
+    chapter: 用车成本
+    angle: exterior_45
+    layouts: [card, panel, stat, highlight, broll]
+    card: spec
+    requires_fact: true
   结论建议:
-    beat: 适合谁、不适合谁
+    beat: 适合谁、不适合谁;最后一句给行动:一句提问(你在纠结哪款?评论区说)或下期预告
     chapter: 结论
     angle: exterior_45
     layouts: [broll, highlight]
@@ -407,6 +437,18 @@ vocab:
                  很能打, 拉满, 越级, 不讲武德, 炸裂, 无脑冲]
   depth_sections: [三电性能, 智能配置]
   basis_terms: [CLTC, WLTP, EPA, NEDC]
+  # 背景冲突:这一拍在讲某个部件时,背景别配另一个部件的特写。
+  # 特写太抢戏 —— 讲碳陶刹车却配一个门把手特写,观众会以为在讲门把手。
+  detail_types:
+    刹车: [刹车, 制动, 卡钳, 刹车盘, 碳陶]
+    车轮: [车轮, 轮毂, 轮胎, 轮圈, 悬挂, 减振]
+    车灯: [大灯, 车灯, 灯组, 尾灯, 转向灯]
+    车门: [车门, 门把手, 后视镜, 雨刷, 尾门, 行李箱]
+    座舱: [中控屏, 车机, 仪表, 方向盘, 座椅, 头枕]
+    充电: [充电口, 充电枪, 补能口, 慢充, 快充]
+    车漆: [车漆, 漆面, 烤漆, 车身颜色]
+    屏幕: [屏幕, 显示屏, 中控, 车机]
+  closeup_views: [detail]
 
   # 挑"车多人少"的视频类型
   discovery_zh: ["{subject} 宣传片", "{subject} 官方", "{subject} 实拍 外观 内饰",

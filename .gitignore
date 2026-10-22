@@ -22,6 +22,20 @@ cookies/
 # 概念动画子工程的依赖(motion/ 下 npm install 生成)
 motion/node_modules/
 motion/.browser/
+
+# 前端工程化工具链的依赖(根目录 npm install 生成)
+node_modules/
+
+# 根目录的演示成片:输出物,不是源码。已进过历史,移出只对未来的克隆生效。
+/bakeoff_A.mp4
+/bakeoff_B.mp4
+/bakeoff_C.mp4
+/bakeoff_all.mp4
+/demo_motion.mp4
+/yu7_depth_demo.mp4
+/yu7_landscape_demo.mp4
+/concept_samples_v3.mp4
+/concept_v3_all.mp4
 # 风格小样:素材是素材库的拷贝,字体从 C:\Windows\Fonts 拷来(17MB),出片可重渲
 motion/bakeoff/assets/
 motion/bakeoff/fonts/

@@ -98,6 +98,7 @@
       <button class="btn btn-success btn-lg" id="btn-gate-b" type="button">{{ m.icon("check") }}<span id="gate-b-label">确认通过,合成成片</span></button>
     {% elif p.state == 'DONE' %}
       <button class="btn btn-ghost" type="button" data-goto="output">{{ m.icon("play", "i-sm") }}预览</button>
+      <button class="btn btn-ghost" type="button" id="btn-publish">{{ m.icon("external", "i-sm") }}一键发布</button>
       <a class="btn btn-primary btn-lg" href="/api/projects/{{ p.id }}/download">{{ m.icon("download") }}下载 MP4</a>
     {% elif meta.group == 'error' %}
       <a class="btn btn-ghost" href="/project/{{ p.id }}/logs">{{ m.icon("file-text", "i-sm") }}查看日志</a>
@@ -110,11 +111,11 @@
   </div>
 </section>
 
-{# 概念动画风格:渲染前(门禁 A 前后)和审片时可选;JS 拉到本片有概念拍才显示 #}
+{# 概念动画模版:渲染前(门禁 A 前后)和审片时可选;JS 拉到本片有概念拍才显示 #}
 {% if p.state in ('STORYBOARD_READY', 'GATE_A', 'ASSETS_READY', 'PROMPTS_READY', 'GATE_B') %}
 <section class="card cs-card hidden" id="concept-style" data-state="{{ p.state }}">
   <div class="card-head">
-    <h2>{{ m.icon("sparkles", "i-sm") }}概念动画风格<span class="tag tone-brand" id="cs-current"></span></h2>
+    <h2>{{ m.icon("sparkles", "i-sm") }}概念动画模版<span class="tag tone-brand" id="cs-current"></span></h2>
     <span class="subtle small" id="cs-hint"></span>
   </div>
   <div class="card-body stack">
@@ -179,13 +180,7 @@
       <div>
         <h3 class="section-title">{{ m.icon("shield", "i-sm") }}合规检查 <span class="count">{{ lint | length }}</span></h3>
         <div class="rows">
-          {% for i in lint %}
-          <div class="rowline">
-            <span class="badge tone-{{ 'danger' if i.severity == 'error' else 'warning' }}"><span class="dot"></span>{{ '错误' if i.severity == 'error' else '提醒' }}</span>
-            <span class="subtle num">段落 {{ i.segment_idx }}</span>
-            <span class="grow">{{ i.message }}</span>
-          </div>
-          {% endfor %}
+          {{ m.lint_rows(lint) }}
         </div>
       </div>
       {% endif %}
@@ -267,6 +262,26 @@
         </div>
       </div>
       {% endfor %}
+    </div>
+    {% if p.script %}
+    <div class="thesis-bar" id="thesis-bar">
+      <label class="thesis-label" for="thesis-input">
+        {{ m.icon("flag", "i-sm") }}全片主论点
+      </label>
+      <input class="input thesis-input" id="thesis-input" type="text" maxlength="60"
+             value="{{ p.thesis }}" placeholder="一句话说清这台车是什么定位、适合谁(不超过 30 字)"
+             {% if not editable %}readonly{% endif %}>
+      <span class="subtle small">每一段都为它服务,最后一段要落地它</span>
+    </div>
+    {% endif %}
+    <div id="lint-panel" class="lint-panel" {% if not lint %}hidden{% endif %}>
+      {% if lint %}
+      <div class="lint-head">
+        <strong>{{ lint | selectattr('severity', 'equalto', 'error') | list | length }} 处必须修</strong>
+        <span class="subtle small">改完再确认门禁 A;机器查得出的不必用眼睛找</span>
+      </div>
+      <div class="rows">{{ m.lint_rows(lint) }}</div>
+      {% endif %}
     </div>
     <div class="savebar" id="savebar">
       <span class="savebar-status" id="save-status">{% if editable %}{{ m.icon("check", "i-sm") }}所有修改已保存{% else %}只读{% endif %}</span>
@@ -425,6 +440,7 @@
         {% endif %}
         <div class="stack-sm">
           <a class="btn btn-primary btn-lg" href="/api/projects/{{ p.id }}/download">{{ m.icon("download") }}下载 MP4</a>
+          <button class="btn" type="button" id="btn-publish-out">{{ m.icon("external", "i-sm") }}一键发布</button>
           <button class="btn" type="button" id="btn-copy-link">{{ m.icon("copy", "i-sm") }}复制下载链接</button>
         </div>
       </div>

@@ -188,6 +188,6 @@ def test_hot_topic_facts_are_product_scope():
                                "source_tool": intake.HOT_TOPIC_TOOL, "source_query": "q",
                                "confidence": "high", "topic": "销量"}]}
 
-    got = intake.extract_facts("ctx", subject="特斯拉Model Y", category="汽车", llm=_LLM(),
+    got, _ = intake.extract_facts("ctx", subject="特斯拉Model Y", category="汽车", llm=_LLM(),
                                profile=load_profile("auto_long"))
     assert got[0].scope == "product"

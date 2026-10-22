@@ -42,8 +42,12 @@ themes:
       - 适用月龄、承重、尺寸这类数字只能取自事实,查不到就不写数字。
       - 结论段必须说清楚适合哪类家庭、不适合哪类家庭。
       - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
+      - 开头三段分开写:先抛冲突,立刻兑现刚才抛出的那个数字,再用一句话亮出"每个数字都能查到出处"。
+      - 结尾要给行动:最后一句要么提问(你在纠结哪款?评论区说),要么预告下期做什么。
     blocks:
       - {section: 开场, weight: 1, remainder: false}
+      - {section: 兑现承诺, weight: 1, remainder: false}
+      - {section: 亮出出处, weight: 1, remainder: false}
       - {section: 定位与价格, weight: 2}
       - {section: 材质与安全, weight: 2}
       - {section: 质量记录, weight: 1, remainder: false}
@@ -60,6 +64,16 @@ sections:
     chapter: 开头
     angle: product_hero
     layouts: [hook, highlight, broll]
+  兑现承诺:
+    beat: 立刻兑现开场抛出的那句话:把那个数字或判断摆出来,不许绕,不许拖到后面
+    chapter: 开头
+    angle: product_hero
+    layouts: [panel, stat, highlight, broll]
+  亮出出处:
+    beat: 一句话亮出「每个数字都能查到出处」,全片只说这一次,说完恢复正常解说
+    chapter: 开头
+    angle: product_hero
+    layouts: [highlight, broll]
   定位与价格:
     beat: 卖多少钱、对标谁、在品牌里是什么档位
     chapter: 定位价格
@@ -105,7 +119,7 @@ sections:
     layouts: [card, broll]
     card: compare
   结论建议:
-    beat: 适合谁、不适合谁
+    beat: 适合谁、不适合谁;最后一句给行动:一句提问(你在纠结哪款?评论区说)或下期预告
     chapter: 结论
     angle: lifestyle
     layouts: [broll, highlight]
@@ -250,6 +264,16 @@ vocab:
                   折叠, 收车, 遮阳篷, 避震, 坐躺, i-Size, ISOFIX, 3C 认证, 认证, 规格]
   industry_hints: [母婴, 出生率, 新生儿]
   industry_topic: 母婴用品
+  # 背景冲突:这一拍在讲某个部件时,背景别配另一个部件的特写。
+  detail_types:
+    刹车: [刹车, 制动, 锁止, 停车]
+    轮组: [车轮, 轮组, 轮胎, 前轮, 后轮, 滑轮]
+    推杆: [推杆, 把手, 扶手, 拉手]
+    座舱: [座椅, 靠背, 坐垫, 睡篮, 座舱, 躺椅]
+    篷: [遮阳篷, 顶篷, 篷布, 遮阳]
+    安全带: [安全带, 五点式, 腰带, 扣具]
+    折叠: [折叠, 收车, 折叠机构, 开合]
+  closeup_views: [detail]
   extract_spec_examples: 适用月龄 / 承重 / 净重 / 售价 / 材质
   extract_year_example: 2020 年上市的初代款净重 6.5 公斤
   extract_topic_examples: 参数 / 价格 / 安全 / 材质 / 品牌

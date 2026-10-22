@@ -1,14 +1,7 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 动态镜:压在一段放慢的实拍上;有正侧面白底车图时,车沿速度标尺跑完 0→100 -->
-  <meta name="hf-bg" content="footage" />
-  <meta name="hf-photo" content="exterior_side" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-  <style>
+<!-- 动态镜:压在一段放慢的实拍上;有正侧面白底车图时,车沿速度标尺跑完 0→100 -->
+<meta name="hf-bg" content="footage" />
+<meta name="hf-photo" content="exterior_side" />
+<style>
     .dim { position: absolute; inset: 0; background-color: rgba(var(--bg), 0.52); pointer-events: none; }
     #streaks { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
     #streaks i { position: absolute; display: block; height: 2px; border-radius: 1px;
@@ -38,16 +31,9 @@
     .side .it i { position: absolute; left: 0; top: 22px; bottom: 22px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
     .side .co-lab { margin-bottom: 4px; }
   </style>
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, P = D.photo;
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const P = D.photo;
     const rows = HF.rows;
     const bgw = document.getElementById("bgwrap");
 
@@ -182,5 +168,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

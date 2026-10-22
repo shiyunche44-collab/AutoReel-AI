@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "aimovice",
+      "url": "http://127.0.0.1:8848",
+      "port": 8848
+    },
+    {
+      "name": "aimovice-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["run.py", "--port", "8849", "--reload"],
+      "port": 8849
+    }
+  ]
+}

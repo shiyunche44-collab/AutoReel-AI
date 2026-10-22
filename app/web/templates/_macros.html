@@ -73,6 +73,17 @@
 <span class="badge tone-{{ m.tone }}{% if status in ('submitted','queued','running') %} is-live{% endif %}"><span class="dot"></span>{{ m.label }}</span>
 {%- endmacro %}
 
+{#- 合规检查条目:概览页和脚本页的预审面板共用一套标记 -#}
+{% macro lint_rows(items) -%}
+{%- for i in items %}
+<div class="rowline">
+  <span class="badge tone-{{ 'danger' if i.severity == 'error' else 'warning' }}"><span class="dot"></span>{{ '错误' if i.severity == 'error' else '提醒' }}</span>
+  <span class="subtle num">段落 {{ i.segment_idx }}</span>
+  <span class="grow">{{ i.message }}</span>
+</div>
+{%- endfor %}
+{%- endmacro %}
+
 {#- 当前步骤:FAILED / PAUSED 没有固定位置,按已有产物推断卡在哪一步 -#}
 {% macro step_of(p) -%}
 {%- set m = STATE_META.get(p.state, {"step": -1}) -%}

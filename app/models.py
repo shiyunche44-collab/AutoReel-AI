@@ -57,6 +57,10 @@ class Fact(BaseModel):
     source_kind: Literal["official", "media", "derived", ""] = ""
     #: 多车横评:这条事实属于车单里哪台车;空串 = 单车项目或全片共用
     subject: str = ""
+    #: **对比事实**:这条事实讲的是本车与 `compare_with` 这台车的同一维度取值。
+    #: 非空 = 它是竞品对比段专用的料,只能出现在竞品对比段,
+    #: 混进本车的参数面板就是把别家的数字安到本车头上。
+    compare_with: str = ""
     #: 用户是否保留(可在 Web 端剔除)
     enabled: bool = True
 
@@ -190,6 +194,8 @@ class ProjectCreate(BaseModel):
 class ScriptPatch(BaseModel):
     segments: list[ScriptSegment] | None = None
     title: str | None = None
+    #: 全片主论点(那句判断)。改了它,结论段要跟着回扣。
+    thesis: str | None = None
 
 
 class ShotPatch(BaseModel):
@@ -200,6 +206,9 @@ class GateRequest(BaseModel):
     gate: Literal["A", "B"]
     #: 旧前端的逐镜头批准列表;门禁 B 现在一次审完全片,这个字段被忽略
     approved: list[int] | None = None
+    #: 门禁 A:脚本里还有 lint error 时默认拦下,不放行去烧 TTS 和渲染的钱。
+    #: 置 True = 明知有问题仍然继续(需要显式给出,不能默认放行)。
+    force: bool = False
 
 
 class RetryRequest(BaseModel):
@@ -237,6 +246,8 @@ class ProjectDetail(ProjectSummary):
     facts: list[Fact] = Field(default_factory=list)
     script: list[ScriptSegment] = Field(default_factory=list)
     shots: list[Shot] = Field(default_factory=list)
+    #: 全片主论点(那句判断),门禁 A 页面可改
+    thesis: str = ""
     #: 全片共享参考图集条目:{url, angle, origin, note}
 
 

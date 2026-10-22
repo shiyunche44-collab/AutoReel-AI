@@ -1,0 +1,117 @@
+<!-- @name 工程蓝图
+     @desc 蓝底白线工程图纸:网格铺开、车身线稿逐段描出、编号引线 + 右下角图签表
+     @order 7 -->
+<meta name="hf-photo" content="scene" />
+<style>
+    html, body { background: #0c3b8f; }
+    #root { color: #eaf2ff; background: #0c3b8f;
+            font-family: "JetBrains Mono", "STXihei", "Microsoft YaHei", monospace; }
+    .grid { position: absolute; inset: 0;
+            background-image:
+              linear-gradient(rgba(255,255,255,0.16) 1.5px, transparent 1.5px), linear-gradient(90deg, rgba(255,255,255,0.16) 1.5px, transparent 1.5px),
+              linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+            background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px; }
+    .frame { position: absolute; left: 40px; top: 40px; right: 40px; bottom: 40px; border: 3px solid rgba(255,255,255,0.85); }
+    .frame2 { position: absolute; left: 54px; top: 54px; right: 54px; bottom: 54px; border: 1px solid rgba(255,255,255,0.5); }
+    .hd { position: absolute; left: 110px; top: 100px; }
+    .hd .k { font-size: 22px; letter-spacing: 0.25em; color: rgba(234,242,255,0.7); }
+    .hd .t { margin-top: 10px; font-size: 64px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
+    .car { position: absolute; }
+    .car .ln { position: absolute; inset: 0; background-color: #fff;
+               -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+    .car img { position: absolute; inset: 0; width: 100%; height: 100%; filter: grayscale(1) brightness(1.5) contrast(1.4); mix-blend-mode: screen; opacity: 0.5; }
+    #ov { position: absolute; left: 0; top: 0; overflow: visible; }
+    .bub { position: absolute; width: 50px; height: 50px; margin: -25px 0 0 -25px; border: 2px solid #fff; border-radius: 50%;
+           display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; background: #0c3b8f; }
+    table { position: absolute; right: 110px; bottom: 110px; border-collapse: collapse; font-size: 26px; }
+    td { border: 2px solid rgba(255,255,255,0.85); padding: 12px 22px; white-space: nowrap; height: 66px; }
+    td.no { width: 70px; text-align: center; color: rgba(234,242,255,0.7); }
+    td.v { font-weight: 700; font-size: 34px; text-align: right; min-width: 260px; }
+    td.b { font-weight: 700; font-size: 30px; text-align: right; color: #ffd84a; }
+    tr.h td { font-size: 20px; letter-spacing: 0.18em; color: rgba(234,242,255,0.7); height: 50px; }
+    .stamp { position: absolute; right: 110px; top: 100px; text-align: right; font-size: 20px; line-height: 1.7; color: rgba(234,242,255,0.7); letter-spacing: 0.1em; }
+  </style>
+<script>
+    const { tl, D, add, items, A, T, S } = HF.boot();
+    const P = D.photo;
+
+    const grid = add(HF.el("div", "grid"));
+    tl.fromTo(grid, { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 1.0, ease: "expo.out" }, 0);
+    const fr = add(HF.el("div", "frame")), fr2 = add(HF.el("div", "frame2"));
+    tl.fromTo([fr, fr2], { clipPath: "inset(0 100% 100% 0)" }, { clipPath: "inset(0 0% 0% 0)", duration: 0.9, ease: "power2.inOut", stagger: 0.1 }, 0.1);
+    const hd = add(HF.el("div", "hd"));
+    hd.appendChild(HF.el("div", "k", "DWG · " + (D.scene || "SPEC").toUpperCase() + " · " + (D.subject || "")));
+    const ttl = HF.el("div", "t"); hd.appendChild(ttl);
+    tl.fromTo(hd.firstChild, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.3);
+    HF.type(tl, ttl, D.title || "", 0.45, 14);
+    const stamp = add(HF.el("div", "stamp"));
+    stamp.innerHTML = "";
+    ["SCALE 1 : 25", "SHEET 01 / 01", D.source ? "REF · " + D.source : "REV · A"].forEach((s) => stamp.appendChild(HF.el("div", "", s)));
+    tl.fromTo(stamp, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.6);
+
+    // 车身线稿(有线稿图用线稿,只有照片就把照片压成白色线描感;都没有就画示意外框)
+    const sv = HF.svg("svg", { id: "ov", width: 1920, height: 1080, viewBox: "0 0 1920 1080" });
+    const carSlot = add(HF.el("div"));
+    root.appendChild(sv);
+    const CW = 1060, cx = 640, floorY = 650;
+    const geo = P || { width: 100, height: 34, floor: 0.95, roof: 0.05, wheels: [0.239, 0.771], body: [0.02, 0.98] };
+    const ch = CW * geo.height / geo.width, box = { l: cx - CW / 2, t: floorY - geo.floor * ch };
+    const at = (u, v) => [box.l + u * CW, box.t + v * ch];
+    if (P) {
+      const car = HF.el("div", "car"); root.insertBefore(car, carSlot);
+      Object.assign(car.style, { left: box.l + "px", top: box.t + "px", width: CW + "px", height: ch + "px" });
+      if (P.edges) { const l = HF.el("div", "ln"); l.style.webkitMaskImage = l.style.maskImage = `url("${P.edges}")`; car.appendChild(l); }
+      else car.appendChild(HF.photoImg());
+      tl.fromTo(car, { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: Math.max(0.8, T(1.4)), ease: "power1.inOut" }, 0.5);
+    } else {
+      const d = `M${at(0.02, 0.9)} L${at(0.02, 0.7)} Q${at(0.06, 0.55)} ${at(0.2, 0.5)} L${at(0.33, 0.12)} Q${at(0.5, 0.0)} ${at(0.68, 0.1)} L${at(0.82, 0.42)} Q${at(0.98, 0.5)} ${at(0.98, 0.7)} L${at(0.98, 0.9)} Z`;
+      const body = HF.svg("path", { d, fill: "none", stroke: "#fff", "stroke-width": 3, pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+      tl.to(body, { attr: { "stroke-dashoffset": 0 }, duration: 1.4, ease: "power2.inOut" }, 0.5);
+      geo.wheels.forEach((u) => { const [x, y] = at(u, 0.9); const c = HF.svg("circle", { cx: x, cy: y, r: ch * 0.16, fill: "#0c3b8f", stroke: "#fff", "stroke-width": 3, opacity: 0 }, sv);
+        tl.to(c, { opacity: 1, duration: 0.4 }, 1.2); });
+    }
+    // 中心线、地线
+    const ground = HF.svg("line", { x1: box.l - 60, y1: floorY, x2: box.l + CW + 60, y2: floorY, stroke: "rgba(255,255,255,0.6)", "stroke-width": 2, "stroke-dasharray": "18 8 4 8" }, sv);
+    tl.fromTo(ground, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.4);
+    // 整车长度标注线(只画线,不写数)
+    const [lx1] = at(geo.body[0], 0), [lx2] = at(geo.body[1], 0), dy = floorY + 44;
+    const dim = HF.svg("g", {}, sv);
+    [[lx1, dy - 18, lx1, dy + 18], [lx2, dy - 18, lx2, dy + 18], [lx1, dy, lx2, dy]].forEach(([a, b, c, d]) =>
+      HF.svg("line", { x1: a, y1: b, x2: c, y2: d, stroke: "rgba(255,255,255,0.7)", "stroke-width": 2 }, dim));
+    tl.fromTo(dim, { opacity: 0, scaleX: 0, transformOrigin: `${(lx1 + lx2) / 2}px ${dy}px` }, { opacity: 1, scaleX: 1, duration: 0.7, ease: "expo.out" }, 1.3);
+
+    // 图签表 + 编号引线
+    const table = add(HF.el("table"));
+    const hr = HF.el("tr", "h");
+    ["NO.", "项目", HF.cmp ? HF.cols[0] : "数值"].concat(HF.cmp ? [HF.cols[1]] : []).forEach((s) => hr.appendChild(HF.el("td", "", s)));
+    table.appendChild(hr);
+    tl.fromTo(hr, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 1.0);
+    const anchors = [[0.3, 0.55], [0.55, 0.3], [0.78, 0.6], [0.45, 0.75]];
+    const t0 = T(1.5), span = Math.max(0, Math.min(A.outAt - 1.2, S * 0.62) - t0);
+    items.forEach((it, k) => {
+      const tr = HF.el("tr");
+      tr.appendChild(HF.el("td", "no", String(k + 1)));
+      tr.appendChild(HF.el("td", "", it.label));
+      const v = HF.el("td", "v"); tr.appendChild(v);
+      if (HF.cmp) tr.appendChild(HF.el("td", "b", it.b));
+      table.appendChild(tr);
+      const tAt = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
+      tl.fromTo(tr, { opacity: 0 }, { opacity: 1, duration: 0.25 }, tAt);
+      HF.countText(tl, v, it.value, tAt + 0.1, 0.7, { ease: "power2.out" });
+      // 引线:车身上的点 → 往上折 → 编号圈
+      const [ax, ay] = at(anchors[k][0], anchors[k][1]);
+      const bx = ax + 70, by = box.t - 30 - (k % 2) * 56;
+      const ld = HF.svg("path", { d: `M${ax} ${ay} L${ax} ${by} L${bx} ${by}`, fill: "none", stroke: "#fff", "stroke-width": 2,
+        pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
+      const dot = HF.svg("circle", { cx: ax, cy: ay, r: 6, fill: "#fff", opacity: 0 }, sv);
+      const bub = add(HF.el("div", "bub", String(k + 1))); bub.style.left = (bx + 25) + "px"; bub.style.top = by + "px";
+      tl.to(dot, { opacity: 1, duration: 0.15 }, tAt);
+      tl.to(ld, { attr: { "stroke-dashoffset": 0 }, duration: 0.5, ease: "power2.inOut" }, tAt);
+      tl.fromTo(bub, { scale: 0 }, { scale: 1, duration: 0.35, ease: "back.out(2.5)" }, tAt + 0.4);
+    });
+    // 停留:网格缓慢平移
+    tl.fromTo(grid, { backgroundPosition: "0px 0px, 0px 0px, 0px 0px, 0px 0px" },
+                    { backgroundPosition: "-120px 0px, -120px 0px, -120px 0px, -120px 0px", duration: S, ease: "none" }, 0);
+    tl.to(root.children, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    HF.register(tl);
+  </script>

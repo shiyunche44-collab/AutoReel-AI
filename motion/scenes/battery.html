@@ -1,14 +1,7 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 产品镜:自带影棚底,用这台车的正侧面白底官图 -->
-  <meta name="hf-bg" content="studio" />
-  <meta name="hf-photo" content="exterior_side" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-  <style>
+<!-- 产品镜:自带影棚底,用这台车的正侧面白底官图 -->
+<meta name="hf-bg" content="studio" />
+<meta name="hf-photo" content="exterior_side" />
+<style>
     #packwrap { position: absolute; perspective: 1500px; perspective-origin: 50% -40%; }
     .pack { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-style: preserve-3d;
             border-radius: 18px; border: 2px solid rgba(var(--acc), 0.85);
@@ -23,16 +16,9 @@
     .strip { position: absolute; border-radius: 6px; background-color: rgba(var(--acc), 0.9);
              box-shadow: 0 0 24px rgba(var(--acc), calc(0.9 * var(--glow))); transform-origin: 50% 50%; }
   </style>
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, P = D.photo;
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const P = D.photo;
     const rows = HF.rows;
     const rig = HF.carRig(tl, { width: 1120, cx: 1000, floorY: P ? 545 : 470 });
     const stage = rig.stage, floorY = rig.floorY, cx = rig.cx, CW = rig.CW, car = rig.car;
@@ -136,5 +122,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

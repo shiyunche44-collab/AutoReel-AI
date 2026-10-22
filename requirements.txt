@@ -5,3 +5,4 @@
 jinja2>=3.1          # 服务端模板渲染
 pytest>=8.0          # 单元测试
 yt-dlp[default]>=2026.1  # B站 / YouTube / 抖音 视频搜索与分段下载;[default] 带 YouTube 解题脚本 yt-dlp-ejs
+playwright>=1.40     # 小红书 / 视频号 / 抖音网页版兜底:浏览器自动化。浏览器复用本机 Chrome / Edge,不需 playwright install

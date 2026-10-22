@@ -1,0 +1,49 @@
+<!doctype html>
+<!--
+  Concept-animation HTML shell. Shared by every template in motion/scenes/ and
+  motion/templates/.
+
+  A template fragment only carries three things:
+    1. notes and meta tags in the head (which background / which car views it wants)
+    2. its own colours, fonts and layout inside the style block
+    3. its own animation inside the script block
+  The shell owns the canvas size, the reset, the root container and the script tags.
+
+  Slots below are substituted by app/pipeline/motion.py before rendering; the slot
+  names live in that module as SHELL_META / SHELL_CSS / SHELL_JS / WIDTH_TOKEN /
+  HEIGHT_TOKEN and friends.
+
+  Two rules for this file:
+    * Keep it ASCII-only. HyperFrames builds the embedded font subset from every
+      character on the page - including the ones in comments - so Chinese text
+      here changes the subset, which shifts glyph metrics and moves text by a
+      sub-pixel amount. Keep the Chinese notes in app/pipeline/motion.py instead.
+    * Do not write the slot names verbatim here, and do not write tag names in
+      angle brackets. Substitution is a plain text replace, so it would hit the
+      comment too, and tools that split the page by tag would be misled.
+-->
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=__WIDTH__, height=__HEIGHT__" />
+<!--__META__-->
+  <script src="gsap.min.js"></script>
+  <style>
+    /* Shell styles: canvas size, reset, root container. Colours / fonts / layout
+       live in the template's own style block. */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: __WIDTH__px; height: __HEIGHT__px; overflow: hidden; }
+    #root { position: relative; width: 100%; height: 100%; overflow: hidden; }
+<!--__CSS__-->
+  </style>
+</head>
+<body>
+  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
+       data-width="__WIDTH__" data-height="__HEIGHT__"><!--__BACKGROUND__--></div>
+  <script>window.__DATA__ = /*__DATA__*/{};</script>
+  <script src="_lib.js"></script>
+  <script>
+<!--__JS__-->
+  </script>
+</body>
+</html>

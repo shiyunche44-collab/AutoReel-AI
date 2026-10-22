@@ -8,9 +8,15 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
+
+# 直接跑这个文件(`python tests/test_profile_vocab.py --regen`)时,
+# 仓库根不在 sys.path 上,`app` 导不进来
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.categories import load_profile
 from app.models import Fact, ScriptSegment
@@ -93,6 +99,30 @@ def _golden_path(category: str) -> Path:
     return GOLDEN / f"{category}_prompts.json"
 
 
+def regen_golden(category: str) -> Path:
+    """重新生成某个品类的提示词快照。改了提示词就跑这个。"""
+    from _pytest.monkeypatch import MonkeyPatch
+
+    mp = MonkeyPatch()
+    try:
+        got = render_prompts(category, SUBJECTS[category], mp)
+    finally:
+        mp.undo()
+    path = _golden_path(category)
+    path.write_text(json.dumps(got, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+if __name__ == "__main__":
+    # 改了任何提示词之后:python tests/test_profile_vocab.py --regen
+    if "--regen" not in sys.argv:
+        print(__doc__)
+        print("用法:python tests/test_profile_vocab.py --regen")
+        raise SystemExit(0)
+    for cat in sorted(SUBJECTS):
+        print("重生成", regen_golden(cat))
+
+
 @pytest.mark.parametrize("category", sorted(SUBJECTS))
 def test_prompts_match_golden(category, monkeypatch):
     got = render_prompts(category, SUBJECTS[category], monkeypatch)
@@ -168,7 +198,7 @@ def test_quality_facts_are_brand_level_and_scripted_carefully():
                                "source_query": "x", "confidence": "high", "topic": "召回"}]}
 
     llm = LLM()
-    got = intake.extract_facts("材料", subject="X", category=p.label, llm=llm,
+    got, _ = intake.extract_facts("材料", subject="X", category=p.label, llm=llm,
                                source_docs=[{"tool": tool, "query": "x"}], profile=p)
     assert got[0].scope == "company" and got[0].topic == "quality"
     assert "recall" in llm.calls[-1][0]

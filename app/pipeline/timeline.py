@@ -246,12 +246,26 @@ def format_ass(
 
     显式指定 `fontsdir` 与字体名,否则 libass 在 Windows 上可能回退到
     不含中文字形的字体,烧录出来是一排方块。
+
+    **字号与底条是按手机端定的,不是按大屏定的**:
+    1920×1080 烧进平台后按手机屏宽缩放,45px 的字到手机上约等于 10px ——
+    等于没有字幕。所以字号取 60px(≈h×0.056),并加一层半透明黑底:
+    亮背景(白墙、天空、车漆)上纯白字加描边照样看不清,底条才管用。
     """
     w = width or config.OUTPUT_WIDTH
     h = height or config.OUTPUT_HEIGHT
-    # 字号随分辨率缩放,并限制在底部安全区内(避开平台的 UI 遮挡)
-    font_size = max(20, int(h * 0.042))
-    margin_v = int(h * 0.14)
+    # 字号按**短边**缩放,不按高度:1920×1080 与 1080×1920 的短边都是 1080,
+    # 字号就一样(60px)。按高度算的话竖版会得到 107px —— 一行放不下 15 个字。
+    font_size = max(24, int(min(w, h) * 0.056))
+    margin_v = int(h * 0.115)
+    # 半透明底条:BorderStyle=3(盒子)而不是 1(描边)。
+    # 盒子模式下 **OutlineColour 才是盒子的填充色**(描边模式下它才是描边色),
+    # &H80000000 = 50% 透明的黑(ASS 的颜色是 &HAABBGGRR,AA 越大越透明)。
+    # 全黑会挡住画面,纯描边在亮背景(白墙 / 天空 / 车漆)上照样糊。
+    border_style = 3
+    outline = max(3, font_size // 6)      # 盒子模式下这个值是"盒子厚度"(留白)
+    shadow = 0
+    box_colour = "&H80000000"
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -262,7 +276,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,{max(2, font_size // 8)},{max(1, font_size // 12)},2,{int(w * 0.06)},{int(w * 0.06)},{margin_v},1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,{box_colour},&H00000000,-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,{int(w * 0.06)},{int(w * 0.06)},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

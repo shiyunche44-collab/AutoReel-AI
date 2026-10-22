@@ -453,22 +453,147 @@ def extract_cover_frame(video_path: str | Path, dest: str | Path, at: float = 1.
 #: 免得封面标题和视频里的大字叠在一起
 COVER_AT = 3.6
 
+#: 封面版式:留白、强调色、正文色
+COVER_MARGIN = 76
+COVER_ACCENT = (44, 200, 232)
+COVER_TEXT = (245, 247, 250)
+COVER_SUB = (198, 206, 216)
+#: 浅底(白底棚拍图)上的配色:深字 + 白描边
+COVER_DARK_TEXT = (16, 21, 28)
+COVER_DARK_SUB = (74, 82, 94)
+COVER_DARK_ACCENT = (0, 116, 146)
+#: 封面标题最多几行、最大字号、最小字号
+COVER_MAX_LINES = 2
+COVER_TITLE_MAX = 92
+COVER_TITLE_MIN = 40
+#: 文字区(画面下三分之一)平均亮度高于它就按浅底排版 —— 白底图上用白字等于隐形
+COVER_LIGHT_LUMA = 138
+
+
+def _cover_tokens(text: str) -> list[str]:
+    """切成排版单元:中文逐字,拉丁字母与数字不拆词。"""
+    out: list[str] = []
+    buf = ""
+    for ch in text or "":
+        if ch.isascii() and (ch.isalnum() or ch in "._-%"):
+            buf += ch
+        else:
+            if buf:
+                out.append(buf)
+                buf = ""
+            out.append(ch)
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _cover_wrap(text: str, font, max_width: int, max_lines: int) -> list[str]:
+    """按像素宽度折行,超出的部分用省略号收尾。"""
+    lines: list[str] = []
+    cur = ""
+    rest = False
+    for tok in _cover_tokens(text):
+        trial = cur + tok
+        if not cur or font.getlength(trial) <= max_width:
+            cur = trial
+            continue
+        if len(lines) + 1 >= max_lines:
+            rest = True
+            break
+        lines.append(cur)
+        cur = tok
+    if cur and not rest:
+        lines.append(cur)
+    if rest and lines:
+        while lines and font.getlength(lines[-1] + "…") > max_width:
+            lines[-1] = lines[-1][:-1]
+        lines[-1] = lines[-1].rstrip() + "…"
+    return lines[:max_lines]
+
+
+def _cover_fit(text: str, font_path: str | None, max_width: int) -> tuple[list[str], Any]:
+    """标题自适应缩排:在允许的字号里挑最大的那个,排成不超过两行。"""
+    from PIL import ImageFont
+
+    size = COVER_TITLE_MAX
+    lines: list[str] = []
+    font = None
+    while size >= COVER_TITLE_MIN:
+        try:
+            font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+        except OSError:
+            font = ImageFont.load_default()
+        lines = _cover_wrap(text, font, max_width, COVER_MAX_LINES)
+        if len(lines) <= COVER_MAX_LINES and all(
+                font.getlength(line) <= max_width for line in lines):
+            return lines, font
+        size -= 6
+    return lines, font
+
+
+def _cover_is_light(image: Any) -> bool:
+    """判断底图是不是浅色(白底棚拍官图)。
+
+    浅底上白字等于隐形,必须换成深字。判据:画面下三分之一(文字要放的地方)
+    的平均亮度 —— 棚拍白底图那一带接近纯白,实拍/视频帧那一带是暗的。
+    """
+    from PIL import ImageStat
+
+    try:
+        w, h = image.size
+        band = image.crop((0, int(h * 0.66), w, h)).convert("L").resize((64, 24))
+        return float(ImageStat.Stat(band).mean[0]) >= COVER_LIGHT_LUMA
+    except Exception:  # noqa: BLE001
+        return False
+
 
 def make_cover(video_path: str | Path, title: str, dest: str | Path,
-               subtitle: str = "", size: tuple[int, int] | None = None) -> Path | None:
-    """抽帧 + Pillow 合成带标题的封面(默认竖屏,`size` 给横屏尺寸)。"""
+               subtitle: str = "", size: tuple[int, int] | None = None,
+               still: str | Path | None = None, kicker: str = "") -> Path | None:
+    """封面:优先用干净的官方图当底,没有才从成片抽帧。
+
+    封面是唯一决定点击率的一帧,不能是"随便截的一帧"——从成片抽出来的画面上
+    带着章节条和字幕,标题再压上去就是三层字叠在一起。所以:
+    - 有官图(`still`)就用官图:干净的整车,没有烧录字;
+    - 只能抽帧时把底部的章节条裁掉,再把字往上放;
+    - 标题按宽度**自适应缩排**,不再 `title[:14]` 硬截断;
+    - 白底棚拍图自动换成深色字,不然白字压在白底上等于没有标题。
+    """
     from PIL import Image, ImageDraw, ImageFont
 
     dest = Path(dest)
-    raw = dest.parent / "_cover_raw.jpg"
-    total = probe_safe(video_path, default=0.0)
-    at = min(COVER_AT, total / 2) if total > 0 else 1.0
-    if not extract_cover_frame(video_path, raw, at=at):
-        return None
+    out_w, out_h = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+    image = None
+    from_video = False
+    if still and Path(still).is_file():
+        try:
+            image = Image.open(still).convert("RGB")
+        except Exception:  # noqa: BLE001 - 官图打不开就退回抽帧
+            image = None
+    if image is None:
+        raw = dest.parent / "_cover_raw.jpg"
+        total = probe_safe(video_path, default=0.0)
+        at = min(COVER_AT, total / 2) if total > 0 else 1.0
+        if not extract_cover_frame(video_path, raw, at=at):
+            return None
+        try:
+            image = Image.open(raw).convert("RGB")
+            from_video = True
+        except Exception:  # noqa: BLE001
+            return None
+        finally:
+            if raw.is_file():
+                try:
+                    raw.unlink()
+                except OSError:
+                    pass
     try:
-        image = Image.open(raw).convert("RGB")
-        # 统一裁剪为成片画幅
-        out_w, out_h = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+        # 裁成成片画幅。抽帧来的先切掉底部 7%(章节条在那儿),再取景;
+        # 官图不用切,直接取景。
+        w, h = image.size
+        if from_video:
+            h = int(h * 0.93)
+            image = image.crop((0, 0, w, h))
         target_ratio = out_w / out_h
         w, h = image.size
         if w / h > target_ratio:
@@ -481,42 +606,70 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
             image = image.crop((0, top, w, top + new_h))
         image = image.resize((out_w, out_h), Image.LANCZOS)
 
-        draw = ImageDraw.Draw(image, "RGBA")
-        # 底部渐变条,保证文字可读
+        light = _cover_is_light(image)
+        text_color = COVER_DARK_TEXT if light else COVER_TEXT
+        sub_color = COVER_DARK_SUB if light else COVER_SUB
+        accent = COVER_DARK_ACCENT if light else COVER_ACCENT
+        stroke = (255, 255, 255) if light else (0, 0, 0)
+
+        # 底部渐变,保证文字可读。浅底上用白色渐变(不然白字压在白底上等于没有)
         overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
         odraw = ImageDraw.Draw(overlay)
-        band_top = int(out_h * 0.52)
+        if light:
+            # 浅底:白色渐变从更低处起、浓度也低 —— 白底棚拍图的主体就压在这
+            # 一带上,渐变一早就压上去等于把车洗白。
+            band_top, max_alpha, gamma = int(out_h * 0.60), 205, 1.5
+            grad = (255, 255, 255, max_alpha)
+        else:
+            band_top, max_alpha, gamma = int(out_h * 0.42), 205, 0.85
+            grad = (8, 10, 14, max_alpha)
         for y in range(band_top, out_h):
-            alpha = int(200 * (y - band_top) / (out_h - band_top))
-            odraw.line([(0, y), (out_w, y)], fill=(0, 0, 0, alpha))
+            alpha = int(grad[3] * ((y - band_top) / (out_h - band_top)) ** gamma)
+            odraw.line([(0, y), (out_w, y)], fill=(grad[0], grad[1], grad[2], alpha))
         image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
         draw = ImageDraw.Draw(image)
         font_path = _font_file(bold=True)
         sub_font_path = _font_file(bold=False)
         try:
-            title_font = ImageFont.truetype(font_path, 72) if font_path else ImageFont.load_default()
-            sub_font = ImageFont.truetype(sub_font_path, 40) if sub_font_path else ImageFont.load_default()
+            kicker_font = ImageFont.truetype(sub_font_path, 34) if sub_font_path \
+                else ImageFont.load_default()
+            sub_font = ImageFont.truetype(sub_font_path, 40) if sub_font_path \
+                else ImageFont.load_default()
         except OSError:
-            title_font = sub_font = ImageFont.load_default()
+            kicker_font = sub_font = ImageFont.load_default()
 
-        y = int(out_h * 0.60)
-        draw.text((70, y), title[:14], font=title_font, fill=(255, 255, 255),
-                  stroke_width=4, stroke_fill=(0, 0, 0))
-        if subtitle:
-            draw.text((70, y + 100), subtitle[:24], font=sub_font, fill=(230, 230, 230),
-                      stroke_width=3, stroke_fill=(0, 0, 0))
+        max_width = out_w - COVER_MARGIN * 2
+        lines, title_font = _cover_fit(title, font_path, max_width)
+        line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
+        block_h = line_h * len(lines)
+        # 副标题(主论点)放在标题下面
+        sub_lines = _cover_wrap(subtitle, sub_font, max_width, 2) if subtitle else []
+        if sub_lines:
+            block_h += 16 + line_h * 0.8 * len(sub_lines)
+        y = out_h - COVER_MARGIN - block_h
+
+        if kicker:
+            draw.rectangle([COVER_MARGIN, y, COVER_MARGIN + 6, y + 34], fill=accent)
+            draw.text((COVER_MARGIN + 18, y), kicker, font=kicker_font, fill=accent,
+                      stroke_width=2, stroke_fill=stroke)
+            y += 52
+
+        for line in lines:
+            draw.text((COVER_MARGIN, y), line, font=title_font, fill=text_color,
+                      stroke_width=3, stroke_fill=stroke)
+            y += line_h
+        if sub_lines:
+            y += 16
+            for line in sub_lines:
+                draw.text((COVER_MARGIN, y), line, font=sub_font, fill=sub_color,
+                          stroke_width=2, stroke_fill=stroke)
+                y += int(line_h * 0.8)
 
         image.save(dest, quality=92)
         return dest
     except Exception:  # noqa: BLE001
         return None
-    finally:
-        if raw.is_file():
-            try:
-                raw.unlink()
-            except OSError:
-                pass
 
 
 def _font_file(bold: bool = True) -> str | None:

@@ -230,6 +230,15 @@ class Vocab:
     #: 口径词:引用的事实原文里有它、句子里却没说,depth_lint 提醒补口径(如 CLTC)
     basis_terms: tuple[str, ...] = ()
 
+    # ---- 背景细节冲突 ----
+    #: 细节类型 → 该类型在旁白 / 画面描述里的各种说法。
+    #: 用途:这一拍在讲"刹车"时,背景就别配一个"车门把手特写"——
+    #: 特写是很抢戏的画面,观众会以为它就是正在讲的东西。
+    #: 空 = 该品类不做这个过滤(背景只按视角挑)。
+    detail_types: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: 算"特写"的视角。特写是局部近景,讲某个部件时最容易配错。
+    closeup_views: tuple[str, ...] = ("detail",)
+
     # ---- 素材检索 ----
     discovery_zh: tuple[str, ...] = ("{subject} 宣传片", "{subject} 官方", "{subject} 产品展示",
                                      "{subject} 实拍")
@@ -263,6 +272,24 @@ class Vocab:
     def primary_views(self) -> set[str]:
         """主背景的视角(第一组),数据卡底图从这里挑。"""
         return set(next(iter(self.hint_groups.values()), ()))
+
+    # ---- 背景细节冲突 ----
+    def detail_types_in(self, text: str) -> set[str]:
+        """文本里提到了哪些细节类型(按 detail_types 的说法匹配)。"""
+        low = (text or "").lower()
+        out: set[str] = set()
+        for name, words in self.detail_types.items():
+            if any(w.lower() in low for w in words):
+                out.add(name)
+        return out
+
+    def detail_words(self, names: Iterable[str]) -> set[str]:
+        """这些细节类型在描述里会出现的各种说法(小写)。"""
+        out: set[str] = set()
+        for name in names:
+            for w in self.detail_types.get(name, ()):
+                out.add(w.lower())
+        return out
 
 
 @dataclass(frozen=True)
@@ -318,6 +345,9 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         if isinstance(default, tuple):
             kwargs[key] = tuple(str(x) for x in (value or ()))
         elif isinstance(default, dict) and key == "hint_groups":
+            kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
+        elif isinstance(default, dict) and key == "detail_types":
+            # 细节类型 → 各种说法(说法本身是词表,所以是元组)
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict):
             kwargs[key] = {str(k): str(v) for k, v in (value or {}).items()}

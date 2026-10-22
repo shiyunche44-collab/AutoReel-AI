@@ -161,7 +161,7 @@ EXTRACT_SYSTEM = """You extract atomic, verifiable facts from Chinese raw materi
 
 Rules:
 1. Output ONE JSON object only. No markdown fences, no commentary.
-2. `facts` is an array. Each element: {{claim, source_tool, source_query, retrieved_at, confidence, topic, basis, source_kind}}
+2. `facts` is an array. Each element: {{claim, source_tool, source_query, retrieved_at, confidence, topic, basis, source_kind, compare_with}}
    - claim: ONE factual sentence in Chinese. Include concrete numbers ONLY if they appear verbatim in the material.
    - source_tool / source_query / retrieved_at: copy EXACTLY from the material header for that fact.
    - confidence: "high" if a specific number or official record; "medium" if descriptive; "low" if vague.
@@ -170,6 +170,9 @@ Rules:
      (e.g. "{basis_example}"). Only what the material states; "" if it states none.
    - source_kind: "official" if the material attributes it to the maker (launch event, official site, press
      release, an executive's statement); otherwise "media".
+   - compare_with: WHICH PRODUCT this fact compares against. Write the subject's own name for a
+     fact about the subject itself; when the material talks about a comparison product, write THAT
+     product's name instead.
 3. NEVER invent, extrapolate, round, or estimate a number. If the material does not state it, do not create the fact.
 4. Keep 10-35 facts. Product facts first, then company / industry context; drop sales and earnings trivia
    before dropping any product fact.
@@ -178,16 +181,29 @@ Rules:
    Do not merge several mechanisms into one sentence.
 6. Required keys: facts
 
+COMPARISON FACTS (critical for the comparison section):
+7. When the material gives the SAME dimension ({spec_examples}) for the subject AND a comparison
+   product, write it as ONE fact that names BOTH and BOTH values (两边的名字都要写全,别用「前者」「后者」),
+   for example:
+   {subject} 高配版售价 29999 元,竞品同级别售价 32999 元
+   Set `compare_with` to the comparison product's name and `topic` to "对比".
+   One fact = one row of the comparison card.
+8. A fact that carries ONLY the comparison product's number is useless and dangerous — it can only be
+   misread as the subject's own number. Do not create such a fact. If the material never states the
+   subject's value for that dimension, drop the comparison entirely rather than reporting one side.
+9. Two values may only be compared when their basis (measurement standard / variant) matches. If the
+   material states different standards, write two separate facts about the subject, each with its own basis.
+
 RECENCY RULES (critical for product specifications):
-7. News material carries a 日期 field per article. A product specification ({spec_examples})
+10. News material carries a 日期 field per article. A product specification ({spec_examples})
    is only valid for the CURRENT model if the article is recent. Today is given in the user message.
-8. If a product-spec fact comes from an article OLDER than 12 months, you MUST either
+11. If a product-spec fact comes from an article OLDER than 12 months, you MUST either
    (a) drop it, or (b) keep it but state the article's year explicitly in the claim
        (e.g. "{year_example}") and set confidence to "low".
    Never present an old article's numbers as the current configuration.
-9. When the same specification appears in several articles with different values, prefer the most
+12. When the same specification appears in several articles with different values, prefer the most
    recent article and mention the value's year. Do not average them and do not pick silently.
-10. Company-level facts (注册资本 / 法定代表人 / 证券代码 / 财报) are useful context but must never be
+13. Company-level facts (注册资本 / 法定代表人 / 证券代码 / 财报) are useful context but must never be
    phrased as product attributes."""
 
 #: 质量记录类事实的主题标签。脚本按它套"只能说成品牌曾…"的规则
@@ -195,7 +211,7 @@ QUALITY_TOPIC = script_gen.QUALITY_TOPIC
 
 #: 材料里有召回 / 抽检 / 假冒记录时追加的抽取规则
 QUALITY_RULE = """
-11. Material from product recall / spot-check / counterfeit registries describes the BRAND or COMPANY,
+14. Material from product recall / spot-check / counterfeit registries describes the BRAND or COMPANY,
     not necessarily this exact product. Keep only records from the last 3 years that concern this
     product category; phrase each claim with the record's date and the product named in the record
     (e.g. "2024 年 3 月,该品牌一款婴儿推车因折叠锁扣缺陷被召回"). Set topic to "quality".
@@ -213,6 +229,30 @@ RAW MATERIAL
 Extract the atomic facts now. Remember: no invented numbers, and product specifications must respect the recency rules."""
 
 
+#: 质量记录类事实的主题标签(句中同时写清本车与对比车的同一维度取值)
+COMPARE_TOPIC = "对比"
+
+
+def subject_tokens(subject: str) -> tuple[str, ...]:
+    """本车名的可匹配形式:全名 + 最长的字母数字串。
+
+    材料里常常只写型号不写品牌("YU7 标准版"而不是"小米YU7 标准版"),
+    所以型号名也要能认出来。
+    """
+    name = (subject or "").strip()
+    out = [name] if name else []
+    tokens = re.findall(r"[A-Za-z0-9]+", name)
+    if tokens:
+        out.append(max(tokens, key=len))
+    return tuple(dict.fromkeys(t for t in out if t))
+
+
+def mentions_subject(claim: str, subject: str) -> bool:
+    """句子里有没有提到本车。全名或型号名都算。"""
+    text = claim or ""
+    return any(tok in text for tok in subject_tokens(subject))
+
+
 def extract_facts(
     context: str,
     *,
@@ -222,20 +262,24 @@ def extract_facts(
     source_docs: list[dict[str, Any]] | None = None,
     profile: CategoryProfile | None = None,
     others: Sequence[str] = (),
-) -> list[Fact]:
+) -> tuple[list[Fact], int]:
     """把原始材料抽取为结构化事实。LLM 不可用时返回空列表(由上层决定降级)。
 
     `others`:横评车单里的其它车。材料(尤其热点依据)常把几台车写在一起,
-    抽取这一台时要跳过讲别的车的句子,否则 B 车的销量会挂到 A 车名下。"""
+    抽取这一台时要跳过讲别的车的句子,否则 B 车的销量会挂到 A 车名下。
+
+    返回 (事实列表, 被丢掉的"只讲别家车"事实条数)。
+    """
     if not context.strip():
-        return []
+        return [], 0
 
     vocab = profile.vocab if profile is not None else Vocab()
     system = EXTRACT_SYSTEM.format(topic_examples=vocab.extract_topic_examples,
                                    spec_examples=vocab.extract_spec_examples,
                                    year_example=vocab.extract_year_example,
                                    basis_example=vocab.extract_basis_example,
-                                   tech_examples=vocab.extract_tech_examples)
+                                   tech_examples=vocab.extract_tech_examples,
+                                   subject=subject)
     if any(d.get("tool") in facts_provider.QUALITY_TOOLS for d in source_docs or []):
         system += QUALITY_RULE
     data = llm.structured(
@@ -258,6 +302,7 @@ def extract_facts(
         ref_index[(doc.get("tool", ""), doc.get("query", ""))] = doc.get("raw_path")
 
     facts: list[Fact] = []
+    dropped_competitor = 0
     for item in data.get("facts") or []:
         if not isinstance(item, dict) or not str(item.get("claim", "")).strip():
             continue
@@ -267,9 +312,16 @@ def extract_facts(
         if confidence not in ("high", "medium", "low"):
             confidence = "medium"
         kind = str(item.get("source_kind", "")).strip().lower()
+        claim = str(item["claim"]).strip()
+        car = str(item.get("compare_with", "")).strip()
+        # 讲的是别家车、句子里又没有本车 —— 这条数字挂到本车名下就是张冠李戴。
+        # 丢掉它,好过让它混进本车的参数面板。
+        if car and car != subject and not mentions_subject(claim, subject):
+            dropped_competitor += 1
+            continue
         facts.append(
             Fact(
-                claim=str(item["claim"]).strip(),
+                claim=claim,
                 source_tool=tool or "unknown",
                 source_query=query,
                 retrieved_at=str(item.get("retrieved_at") or time.strftime("%Y-%m-%d")),
@@ -278,9 +330,8 @@ def extract_facts(
                 topic=str(item.get("topic", "")).strip(),
                 basis=str(item.get("basis") or "").strip(),
                 source_kind=kind if kind in ("official", "media") else "media",  # type: ignore[arg-type]
-                scope=classify_scope(
-                    str(item["claim"]).strip(), str(item.get("topic", "")).strip(), vocab
-                ),
+                scope=classify_scope(claim, str(item.get("topic", "")).strip(), vocab),
+                compare_with=car if car and car != subject else "",
             )
         )
         if tool in facts_provider.QUALITY_TOOLS:
@@ -290,7 +341,7 @@ def extract_facts(
             # 热点依据全是这一款车自己的榜单名次/销量/事件。按关键词兜底会把
             # 「月销 5 万、销量榜第 1 名」判成公司层,脚本一引用就被层级规则拦下
             facts[-1].scope = "product"
-    return facts
+    return facts, dropped_competitor
 
 
 def run(
@@ -329,9 +380,10 @@ def run(
 
     facts: list[Fact] = []
     error = None
+    dropped_competitor = 0
     if llm is not None:
         try:
-            facts = extract_facts(
+            facts, dropped_competitor = extract_facts(
                 collected.bounded_context(EXTRACT_CONTEXT_CHARS),
                 subject=subject,
                 category=profile.label,
@@ -361,6 +413,13 @@ def run(
         "product_gap": product_gap_warning(facts, profile, theme),
         "extract_error": error,
     }
+    if dropped_competitor:
+        # 只讲别家车、句中没有本车的数字:丢掉了,免得挂到本车名下
+        report["competitor_only_dropped"] = dropped_competitor
+        report["competitor_only_note"] = (
+            f"丢掉了 {dropped_competitor} 条只讲别家车、句中没有本车的数字"
+            "(挂到本车名下就是张冠李戴)。竞品对比段需要**同一条事实里写清两台车**的取值。"
+        )
     db.write_json(project_id, "facts_report.json", report)
     return facts, report
 
@@ -415,7 +474,7 @@ def run_roundup(
         own: list[Fact] = []
         if llm is not None:
             try:
-                own = extract_facts(
+                own, _ = extract_facts(
                     collected.bounded_context(ROUNDUP_CONTEXT_CHARS),
                     subject=name, category=profile.label, llm=llm,
                     others=[s["name"] for s in subjects if s["name"] != name],

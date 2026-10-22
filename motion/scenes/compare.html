@@ -1,13 +1,6 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 对比镜:影棚底,两列从中线向两侧长出的细光条;只摆原文数字,不判输赢 -->
-  <meta name="hf-bg" content="studio" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-  <style>
+<!-- 对比镜:影棚底,两列从中线向两侧长出的细光条;只摆原文数字,不判输赢 -->
+<meta name="hf-bg" content="studio" />
+<style>
     .colname { position: absolute; top: 262px; font-size: 46px; font-weight: 800; white-space: nowrap; }
     .colname.a { right: 1080px; text-align: right; }
     .colname.b { left: 1080px; }
@@ -32,16 +25,9 @@
     .bar i { position: absolute; top: 0; bottom: 0; width: 120px;
              background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 100%); }
   </style>
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, cols = D.columns || [];
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const cols = D.columns || [];
     const bgw = document.getElementById("bgwrap");
     if (bgw) bgw.classList.add("studio");
     tl.fromTo(bgw, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0);
@@ -123,5 +109,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

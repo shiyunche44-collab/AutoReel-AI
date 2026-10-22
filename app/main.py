@@ -43,7 +43,15 @@ from .models import (
 )
 from .pipeline import concept_styles, library, orchestrator
 from .pipeline import render as render_mod
+from .pipeline import vertical
 from .providers import cli
+from .publish import accounts as publish_accounts
+from .publish import browser as publish_browser
+from .publish import metadata as publish_metadata
+from .publish import service as publish_service
+from .publish.registry import PLATFORMS, platforms_info
+from .metrics import store as metrics_store
+from .metrics import worker as metrics_worker
 from .state import State
 
 # Windows 注册表可能把 .js 登记成 text/plain,浏览器会拒绝按 ES Module 加载前端脚本
@@ -185,8 +193,17 @@ async def lifespan(app: FastAPI):
     )
 
     scheduler.start()
+    # 分发侧的后台循环:发布任务、指标抓取、竖版补产。
+    # 都是守护线程,进程退出即结束,不挡 Web。
+    publish_accounts.import_from_file()
+    publish_service.start()
+    metrics_worker.start()
+    vertical.start()
     yield
     await scheduler.stop()
+    publish_service.stop()
+    metrics_worker.stop()
+    vertical.stop()
 
 
 app = FastAPI(title="aimovice", version="0.1.0", lifespan=lifespan)
@@ -258,6 +275,7 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         facts=[Fact(**d) for d in db.read_json(project_id, "facts.json", []) or []],
         script=[ScriptSegment(**d) for d in db.read_json(project_id, "script.json", []) or []],
         shots=_shots_to_models(shot_rows),
+        thesis=row.get("thesis") or "",
     )
 
 
@@ -607,10 +625,10 @@ def patch_script(project_id: str, payload: ScriptPatch):
         ScriptSegment(**d) for d in db.read_json(project_id, "script.json", []) or []
     ]
     try:
-        orchestrator.update_script(project_id, segments, payload.title)
+        issues = orchestrator.update_script(project_id, segments, payload.title, payload.thesis)
     except orchestrator.PipelineError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "segments": len(segments)}
+    return {"ok": True, "segments": len(segments), "issues": issues}
 
 
 @app.patch("/api/projects/{project_id}/shots")
@@ -722,6 +740,229 @@ def media(project_id: str, kind: str, name: str):
 @app.get("/api/render/selfcheck")
 def render_selfcheck():
     return render_mod.self_check()
+
+
+# --------------------------------------------------------------------------
+# 分发:一键发布多平台
+# --------------------------------------------------------------------------
+class AccountPayload(BaseModel):
+    """账号(凭据)。`id` 为空 = 新建。"""
+
+    id: str | None = None
+    platform: str
+    name: str = ""
+    auth_kind: str = "cookie"
+    #: 凭据。**只写不读** —— 读回来永远是打码的
+    credential: dict[str, Any] = {}
+    #: 平台特定设置:B站分区 tid、YouTube 频道 ID、可见范围 …
+    meta: dict[str, Any] = {}
+    enabled: bool = True
+
+
+class PublishPayload(BaseModel):
+    """一次「一键发布」。"""
+
+    #: 要发到哪些账号
+    account_ids: list[str] = []
+    #: 要发哪些画幅(空 = 按平台推荐)
+    aspects: list[str] | None = None
+    #: 逐平台的文案覆盖:{"bilibili": {"title": ..., "description": ..., "tags": [...]}}
+    overrides: dict[str, dict[str, Any]] | None = None
+    #: 已发过的是否重发
+    force: bool = False
+
+
+@app.get("/publish", response_class=HTMLResponse)
+def publish_page(request: Request):
+    """分发台:账号管理 + 发布队列。"""
+    accounts = [publish_accounts.account_view(a)
+                for a in publish_accounts.list_accounts()]
+    queue = [publish_service.publication_view(r) for r in db.list_publications(limit=200)]
+    projects = []
+    for row in db.list_projects(limit=100):
+        if row["state"] != "DONE":
+            continue
+        projects.append({
+            "id": row["id"], "title": row["title"], "subject": row["subject"],
+            "has_output": (config.project_dir(row["id"]) / "output.mp4").is_file(),
+            "has_vertical": vertical.exists(row["id"]),
+        })
+    return templates.TemplateResponse(
+        request, "publish.html",
+        {"request": request, "accounts": accounts, "queue": queue,
+         "projects": projects, "platforms": platforms_info()},
+    )
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+def analytics_page(request: Request):
+    """数据看板:作品指标 + 趋势。"""
+    data = metrics_store.overview()
+    return templates.TemplateResponse(
+        request, "analytics.html",
+        {"request": request, "items": data["items"], "by_platform": data["by_platform"],
+         "platforms": platforms_info()},
+    )
+
+
+@app.get("/api/publish/platforms")
+def publish_platforms():
+    return platforms_info()
+
+
+@app.get("/api/publish/accounts")
+def publish_accounts_list():
+    return [publish_accounts.account_view(a) for a in publish_accounts.list_accounts()]
+
+
+@app.get("/api/publish/queue")
+def publish_queue():
+    """发布队列(轮询用)。"""
+    return [publish_service.publication_view(r) for r in db.list_publications(limit=200)]
+
+
+@app.post("/api/publish/accounts")
+def publish_account_save(payload: AccountPayload):
+    try:
+        account = publish_accounts.save_account(
+            platform=payload.platform, name=payload.name or payload.platform,
+            credential=payload.credential, meta=payload.meta,
+            auth_kind=payload.auth_kind, account_id=payload.id, enabled=payload.enabled)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return publish_accounts.account_view(account)
+
+
+@app.delete("/api/publish/accounts/{account_id}")
+def publish_account_delete(account_id: str):
+    if not db.get_account(account_id):
+        raise HTTPException(404, "账号不存在")
+    publish_accounts.delete_account(account_id)
+    return {"ok": True}
+
+
+@app.post("/api/publish/accounts/{account_id}/check")
+def publish_account_check(account_id: str):
+    """连通性自检:登录态还在吗、缺哪个权限。"""
+    account = publish_accounts.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "账号不存在")
+    from .publish.registry import adapter_for
+
+    try:
+        status = adapter_for(account.platform).check_account(account)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"{type(exc).__name__}: {exc}", "hint": ""}
+    return {"ok": status.ok, "message": status.message, "hint": status.hint,
+            "detail": status.detail}
+
+
+@app.post("/api/publish/login/{platform}")
+def publish_login(platform: str):
+    """打开浏览器扫码登录(小红书 / 视频号)。后台线程跑,不占住请求。"""
+    urls = {"xiaohongshu": "https://creator.xiaohongshu.com/login",
+            "channels": "https://channels.weixin.qq.com/login",
+            "douyin": "https://creator.douyin.com/"}
+    if platform not in urls:
+        raise HTTPException(400, f"这个平台不用扫码登录:{platform}")
+
+    def _run() -> None:
+        try:
+            publish_browser.login(platform, urls[platform])
+        except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
+            pass
+
+    import threading
+
+    threading.Thread(target=_run, name=f"login-{platform}", daemon=True).start()
+    return {"ok": True, "message": "浏览器已打开,扫码登录后关掉窗口即可"}
+
+
+@app.get("/api/projects/{project_id}/publish")
+def project_publish_records(project_id: str):
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    return publish_service.list_for_project(project_id)
+
+
+@app.get("/api/projects/{project_id}/publish/preview")
+def project_publish_preview(project_id: str):
+    """发布前的预览:各平台的文案、画幅、产物是否就绪。"""
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    ctx = publish_service.build_context(project_id)
+    accounts = publish_accounts.list_accounts(only_enabled=True)
+    by_platform: dict[str, dict[str, Any]] = {}
+    for account in accounts:
+        if account.platform in by_platform:
+            continue
+        meta = publish_metadata.metadata_for(account.platform, ctx)
+        rule = PLATFORMS[account.platform]
+        by_platform[account.platform] = {
+            **meta,
+            "accounts": [{"id": a.id, "name": a.name}
+                         for a in accounts if a.platform == account.platform],
+            "aspect": rule.aspect,
+        }
+    return {
+        "project_id": project_id,
+        "title": project["title"],
+        "has_output": (config.project_dir(project_id) / "output.mp4").is_file(),
+        "has_vertical": vertical.exists(project_id),
+        "platforms": by_platform,
+        "published": publish_service.list_for_project(project_id),
+    }
+
+
+@app.post("/api/projects/{project_id}/publish")
+def project_publish(project_id: str, payload: PublishPayload):
+    """一键发布:给每个 (账号 × 画幅) 建一条发布任务。"""
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    if not payload.account_ids:
+        raise HTTPException(400, "没有选平台")
+    try:
+        result = publish_service.enqueue(
+            project_id, account_ids=payload.account_ids, aspects=payload.aspects,
+            overrides=payload.overrides, force=payload.force)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "created": [publish_service.publication_view(r) for r in result["created"]],
+        "skipped": [publish_service.publication_view(r) for r in result["skipped"]],
+    }
+
+
+@app.post("/api/publish/{pub_id}/retry")
+def publish_retry(pub_id: str):
+    """重试一条失败的任务。"""
+    if not db.get_publication(pub_id):
+        raise HTTPException(404, "任务不存在")
+    try:
+        return publish_service.retry(pub_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+# --------------------------------------------------------------------------
+# 分发:数据看板
+# --------------------------------------------------------------------------
+@app.get("/api/metrics/overview")
+def metrics_overview():
+    return metrics_store.overview()
+
+
+@app.get("/api/metrics/publications/{pub_id}")
+def metrics_publication(pub_id: str):
+    if not db.get_publication(pub_id):
+        raise HTTPException(404, "作品不存在")
+    return {"trend": metrics_store.trend(pub_id)}
+
+
+@app.get("/api/metrics/platform/{platform}")
+def metrics_platform(platform: str, days: int = 30):
+    return {"series": metrics_store.platform_series(platform, days=days)}
 
 
 @app.get("/favicon.ico")

@@ -1,14 +1,7 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=1920, height=1080" />
-  <!-- 产品镜:正侧面实车图转 X 光,能量流从车尾一侧涌进底板电池,电池条从车尾往车头充满(示意,不代表电量数字) -->
-  <meta name="hf-bg" content="studio" />
-  <meta name="hf-photo" content="exterior_side" />
-  <script src="gsap.min.js"></script>
-  <link rel="stylesheet" href="_base.css" />
-  <style>
+<!-- 产品镜:正侧面实车图转 X 光,能量流从车尾一侧涌进底板电池,电池条从车尾往车头充满(示意,不代表电量数字) -->
+<meta name="hf-bg" content="studio" />
+<meta name="hf-photo" content="exterior_side" />
+<style>
     .cell { position: absolute; border-radius: 8px; border: 1.5px solid rgba(var(--acc), 0.6);
             background-color: rgba(var(--acc), 0.04); overflow: hidden; }
     .cell .lvl { position: absolute; left: 0; top: 0; bottom: 0; width: 100%;
@@ -19,16 +12,9 @@
     .front { position: absolute; width: 4px; border-radius: 2px; background-color: rgb(var(--hi));
              box-shadow: 0 0 20px 6px rgba(var(--acc), calc(0.7 * var(--glow))); }
   </style>
-</head>
-<body>
-  <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="1920" data-height="1080"><!--__BACKGROUND__--></div>
-  <script>window.__DATA__ = /*__DATA__*/{};</script>
-  <script src="_lib.js"></script>
-  <script>
-    const A = HF.acts(), T = A.T, S = A.S;
-    const tl = gsap.timeline({ paused: true });
-    const D = HF.data, P = D.photo, rows = HF.rows;
+<script>
+    const { tl, D, A, T, S } = HF.boot();
+    const P = D.photo, rows = HF.rows;
     const rig = HF.carRig(tl, { width: 1120, cx: 1000, floorY: 560, ghost: true });
     const stage = rig.stage, geo = rig.geo, floorY = rig.floorY;
     const fr = geo.facing === "left" ? -1 : 1;          // 车头方向
@@ -134,5 +120,3 @@
     HF.grain();
     HF.register(tl);
   </script>
-</body>
-</html>

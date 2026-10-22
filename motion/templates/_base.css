@@ -1,0 +1,6 @@
+/* Family styles for the general templates: every template brings its own background,
+   so the footage layer is always hidden.
+   Keep this file ASCII-only: HyperFrames builds the embedded font subset from every
+   character on the page, so Chinese here would change the subset and shift the text
+   by a sub-pixel amount (see app/pipeline/motion.py). */
+.bgwrap { display: none; }
