@@ -622,3 +622,42 @@ def test_lib_parts_splits_number_unit_and_tag(tmp_path):
     assert (mm["num"], mm["unit"]) == (4999, "mm")
     assert none is None
     assert (km["head"], km["num"], km["unit"]) == ("CLTC", 835, "公里")
+
+
+def test_compose_html_follows_aspect():
+    data = {"subject": "车", "title": "t", "rows": []}
+    land = motion.compose_html("battery", data, 4.0)
+    port = motion.compose_html("battery", data, 4.0, size=motion.size_for(motion.PORTRAIT))
+    assert 'data-width="1920" data-height="1080" data-aspect="landscape"' in land
+    assert 'data-width="1080" data-height="1920" data-aspect="portrait"' in port
+    assert "width: 1080px; height: 1920px" in port
+    # 画幅进缓存 key:横竖两版不会互相命中
+    assert motion.cache_key("battery", data, 4.0, (1920, 1080)) != \
+        motion.cache_key("battery", data, 4.0, (1080, 1920))
+
+
+def test_motion_accepts_both_frame_sizes_only(monkeypatch):
+    monkeypatch.setattr(config, "motion_status", lambda: (True, "ok"))
+    motion._check((1920, 1080))
+    motion._check((1080, 1920))
+    with pytest.raises(motion.MotionError, match="640×360"):
+        motion._check((640, 360))
+
+
+def test_supports_portrait_reads_header_meta(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MOTION_DIR", tmp_path)
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "scenes").mkdir()
+    (tmp_path / "templates" / "tall.html").write_text(
+        "<!-- @name 竖\n     @portrait yes -->\n<style></style><script></script>", encoding="utf-8")
+    (tmp_path / "templates" / "wide.html").write_text(
+        "<!-- @name 横 -->\n<style></style><script></script>", encoding="utf-8")
+    (tmp_path / "scenes" / "battery.html").write_text(
+        "<!-- 电池\n     @portrait yes -->\n<style></style><script></script>", encoding="utf-8")
+    (tmp_path / "scenes" / "accel.html").write_text(
+        "<!-- 加速 -->\n<style></style><script></script>", encoding="utf-8")
+    assert motion.supports_portrait("tall")
+    assert not motion.supports_portrait("wide")
+    assert motion.supports_portrait(None, "battery")
+    assert not motion.supports_portrait(None, "accel")
+    assert not motion.supports_portrait(None)

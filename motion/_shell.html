@@ -11,7 +11,8 @@
 
   Slots below are substituted by app/pipeline/motion.py before rendering; the slot
   names live in that module as SHELL_META / SHELL_CSS / SHELL_JS / WIDTH_TOKEN /
-  HEIGHT_TOKEN and friends.
+  HEIGHT_TOKEN / ASPECT_TOKEN and friends. The canvas size follows the project
+  aspect (landscape or portrait); the root carries it as data-aspect.
 
   Two rules for this file:
     * Keep it ASCII-only. HyperFrames builds the embedded font subset from every
@@ -39,7 +40,7 @@
 </head>
 <body>
   <div id="root" data-composition-id="main" data-start="0" data-duration="__SECONDS__"
-       data-width="__WIDTH__" data-height="__HEIGHT__"><!--__BACKGROUND__--></div>
+       data-width="__WIDTH__" data-height="__HEIGHT__" data-aspect="__ASPECT__"><!--__BACKGROUND__--></div>
   <script>window.__DATA__ = /*__DATA__*/{};</script>
   <script src="_lib.js"></script>
   <script>

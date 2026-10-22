@@ -45,8 +45,17 @@ DATA_TOKEN = "/*__DATA__*/{}"
 #: 模版片段里的底占位:有实拍就换成 <video>,没有就换成暗色径向底
 BACKGROUND_TOKEN = "<!--__BACKGROUND__-->"
 
-#: 概念动画画幅。骨架(_shell.html)里的画幅占位也用它 —— 改画幅只改这一处。
-SIZE = (1920, 1080)
+#: 概念动画画幅:横屏 16:9 / 竖屏 9:16,尺寸取自 config(画幅的单一来源)。
+#: 骨架(_shell.html)里的画幅占位按传入的 size 替换,根节点带 data-aspect 告诉模版是横是竖。
+#: (getattr 兜底:config 的画幅常量和本模块分两步合入,单独跑这个模块时也能用)
+LANDSCAPE = getattr(config, "LANDSCAPE", "16:9")
+PORTRAIT = getattr(config, "PORTRAIT", "9:16")
+_SIZES = {LANDSCAPE: getattr(config, "LANDSCAPE_SIZE", (1920, 1080)),
+          PORTRAIT: getattr(config, "PORTRAIT_SIZE", (1080, 1920))}
+#: 横屏画幅(默认)。老调用方仍用 motion.SIZE
+SIZE = _SIZES[LANDSCAPE]
+#: 根节点 data-aspect 的取值
+ASPECT_ATTR = {LANDSCAPE: "landscape", PORTRAIT: "portrait"}
 #: HTML 骨架:所有模版共用这一份(模版片段只写自己的 meta / 样式 / 动效)
 SHELL_FILE = "_shell.html"
 #: 骨架里的槽位
@@ -56,6 +65,21 @@ SHELL_JS = "<!--__JS__-->"
 #: 骨架里的画幅占位
 WIDTH_TOKEN = "__WIDTH__"
 HEIGHT_TOKEN = "__HEIGHT__"
+ASPECT_TOKEN = "__ASPECT__"
+
+
+def size_for(aspect: str | None) -> tuple[int, int]:
+    """画幅名 -> 概念动画像素尺寸。未知画幅退回横屏。"""
+    fn = getattr(config, "size_for_aspect", None)
+    if fn is not None:
+        return tuple(fn(aspect))
+    return _SIZES.get(aspect or LANDSCAPE, SIZE)
+
+
+def aspect_of(size: tuple[int, int]) -> str:
+    """像素尺寸 -> 画幅名:竖着的就是竖屏。"""
+    w, h = size
+    return PORTRAIT if w and h and h > w else LANDSCAPE
 
 #: 模版声明自己要什么底:<meta name="hf-bg" content="studio|footage">。
 #: studio = 模版自带暗色影棚底(产品镜,不铺实拍);footage = 压在这一拍的一段实拍上(默认)
@@ -100,6 +124,8 @@ class Style:
     photo: bool = False
     #: 截示例图的时刻(秒,7 秒示例里画面最完整的一刻);0 = 用默认时刻
     sample_at: float = 0.0
+    #: 布局适配过竖屏(注释 meta 里写 `@portrait yes`)
+    portrait: bool = False
 
     def summary(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "desc": self.desc, "light": self.light}
@@ -109,16 +135,26 @@ def templates_dir() -> Path:
     return config.MOTION_DIR / "templates"
 
 
+def _header_meta(html: str) -> dict[str, str]:
+    """模版文件头第一段注释里的 `@键 值`。"""
+    m = re.search(r"<!--(.*?)-->", html, re.S)
+    return {k.group(1): k.group(2).strip() for k in _META.finditer(m.group(1))} if m else {}
+
+
+def _yes(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "yes", "true")
+
+
 def _parse_template(path: Path) -> Style:
     html = path.read_text(encoding="utf-8")
-    m = re.search(r"<!--(.*?)-->", html, re.S)
-    meta = {k.group(1): k.group(2).strip() for k in _META.finditer(m.group(1))} if m else {}
+    meta = _header_meta(html)
     pm = _PHOTO_META.search(html)
     return Style(id=path.stem, name=meta.get("name", path.stem), desc=meta.get("desc", ""),
                  order=int(meta.get("order", "99")), path=path,
-                 light=meta.get("light", "") in ("1", "yes", "true"),
+                 light=_yes(meta.get("light")),
                  photo=bool(pm and pm.group(1) == _SCENE_PHOTO),
-                 sample_at=float(meta.get("sample", "0") or 0))
+                 sample_at=float(meta.get("sample", "0") or 0),
+                 portrait=_yes(meta.get("portrait")))
 
 
 def styles() -> list[Style]:
@@ -149,6 +185,16 @@ def available_scenes() -> set[str]:
 def _template(scene: str) -> str:
     path = scenes_dir() / f"{scene}.html"
     return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+
+def supports_portrait(style: str | None, scene: str | None = None) -> bool:
+    """这个模版的布局适配过竖屏没有(文件头注释里写 `@portrait yes`)。
+    通用模版看模版文件自己;默认模版用场景专用模板,看那个场景文件的文件头(不给 scene 算没适配)。
+    没适配的模版也能按竖屏尺寸渲,只是版式还是横屏那套,会挤会出界。"""
+    st = get_style(style)
+    if st.path is not None:
+        return st.portrait
+    return bool(scene) and _yes(_header_meta(_template(scene)).get("portrait"))
 
 
 def scene_background(scene: str, style: str | None = None) -> str:
@@ -216,14 +262,16 @@ def _family_css(family: str) -> str:
 
 
 def compose_html(scene: str, data: dict[str, Any], seconds: float, background: bool = False,
-                 photo: Cutout | None = None, style: str | None = None) -> str:
+                 photo: Cutout | None = None, style: str | None = None,
+                 size: tuple[int, int] = SIZE) -> str:
     """把数据和时长灌进模版片段,按骨架拼成完整 HTML。
 
     模版片段(`motion/scenes/*.html`、`motion/templates/*.html`)只写自己的 meta、样式、动效;
     骨架(`motion/_shell.html`)负责画幅、复位、根容器和脚本挂载 —— 骨架里改一处,全部模版跟着变。
 
     background=True:底是工作目录里的 bg.mp4(这一拍的实拍),否则用暗色径向底。
-    photo:抠好的车图,几何信息写进 `__DATA__.photo`,图片本身由 render 拷成 car.png。"""
+    photo:抠好的车图,几何信息写进 `__DATA__.photo`,图片本身由 render 拷成 car.png。
+    size:画幅像素尺寸,写进骨架的宽高占位;根节点 data-aspect 标出横竖。"""
     path = scenes_dir() / f"{scene}.html"
     if not path.is_file():
         raise MotionError(f"没有动画模板 {scene}({path})")
@@ -234,7 +282,7 @@ def compose_html(scene: str, data: dict[str, Any], seconds: float, background: b
 
     html = _shell()
     missing = [t for t in (SECONDS_TOKEN, DATA_TOKEN, BACKGROUND_TOKEN, SHELL_META, SHELL_CSS,
-                           SHELL_JS, WIDTH_TOKEN, HEIGHT_TOKEN) if t not in html]
+                           SHELL_JS, WIDTH_TOKEN, HEIGHT_TOKEN, ASPECT_TOKEN) if t not in html]
     if missing:
         raise MotionError(f"骨架缺少占位符 {' / '.join(missing)}")
     html = html.replace(SHELL_META, meta)
@@ -257,11 +305,12 @@ def compose_html(scene: str, data: dict[str, Any], seconds: float, background: b
     # 防止数据里出现 </script> 把脚本块提前截断
     payload = payload.replace("</", "<\\/")
     html = (html.replace(SECONDS_TOKEN, f"{seconds:.3f}")
-                .replace(WIDTH_TOKEN, str(SIZE[0]))
-                .replace(HEIGHT_TOKEN, str(SIZE[1]))
+                .replace(WIDTH_TOKEN, str(size[0]))
+                .replace(HEIGHT_TOKEN, str(size[1]))
+                .replace(ASPECT_TOKEN, ASPECT_ATTR[aspect_of(size)])
                 .replace(DATA_TOKEN, payload))
     # 骨架里的槽位必须全部换掉(替换是纯文本,写在注释里也会被换 —— 残留就是槽位写错了)
-    leftover = [t for t in (WIDTH_TOKEN, HEIGHT_TOKEN, SHELL_META, SHELL_CSS, SHELL_JS)
+    leftover = [t for t in (WIDTH_TOKEN, HEIGHT_TOKEN, ASPECT_TOKEN, SHELL_META, SHELL_CSS, SHELL_JS)
                 if t in html]
     if leftover:
         raise MotionError(f"拼装后还有没换掉的槽位 {' / '.join(leftover)}")
@@ -282,8 +331,9 @@ def cache_key(scene: str, data: dict[str, Any], seconds: float, size: tuple[int,
               background: str | Path | None = None, photo: Cutout | None = None,
               style: str | None = None) -> str:
     bg = Path(background) if background else None
-    parts = [compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style),
-             f"{size[0]}x{size[1]}", _file_sha(bg),
+    parts = [compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style,
+                          size=size),
+             f"{size[0]}x{size[1]}", aspect_of(size), _file_sha(bg),
              _file_sha(Path(photo.png)) if photo else "nophoto"]
     for name in SHARED_FILES:
         p = config.MOTION_DIR / name
@@ -336,9 +386,10 @@ def _check(size: tuple[int, int]) -> None:
     ok, why = config.motion_status()
     if not ok:
         raise MotionError(why)
-    if tuple(size) != SIZE:
-        # 骨架按 1920×1080 写死布局;别的画幅等到真有需要再做
-        raise MotionError(f"概念动画只支持 {SIZE[0]}×{SIZE[1]},收到 {size[0]}×{size[1]}")
+    if tuple(size) not in _SIZES.values():
+        # 只认两种成片画幅:模版按这两种尺寸写版式,别的尺寸渲出来也是错位的
+        ok_sizes = " / ".join(f"{w}×{h}" for w, h in _SIZES.values())
+        raise MotionError(f"概念动画只支持 {ok_sizes},收到 {size[0]}×{size[1]}")
 
 
 def _inputs(background: str | Path | None, photo: Cutout | None) -> tuple[Path | None, Cutout | None]:
@@ -349,12 +400,13 @@ def _inputs(background: str | Path | None, photo: Cutout | None) -> tuple[Path |
 
 
 def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: Path | None,
-             photo: Cutout | None, style: str | None) -> None:
+             photo: Cutout | None, style: str | None, size: tuple[int, int]) -> None:
     """渲染 / 截图共用的工作目录:index.html + 公用文件 + gsap + 底 + 车图。"""
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
     (work / "index.html").write_text(
-        compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style),
+        compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style,
+                     size=size),
         encoding="utf-8")
     if bg is not None:
         shutil.copyfile(bg, work / "bg.mp4")
@@ -375,6 +427,7 @@ def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, in
            dest: str | Path, background: str | Path | None = None,
            photo: Cutout | None = None, style: str | None = None) -> Path:
     """渲染一段概念动画到 `dest`(mp4,size 画幅,FPS 与成片一致)。失败抛 MotionError。
+    size:横屏 1920×1080 或竖屏 1080×1920(`size_for(aspect)`),别的尺寸拒绝。
     background:这一拍的实拍底(mp4),动画压在它上面;不给就用暗色径向底(或模板自带影棚)。
     photo:抠好的车图(`motion_assets.hero_still`),不给时模板走无车图版本。
     style:风格 id(`styles()`),不给 / 不认识用默认风格。"""
@@ -391,7 +444,7 @@ def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, in
 
     work = cache_dir() / f"_work_{key}"
     try:
-        _prepare(work, scene, data, seconds, bg, photo, style)
+        _prepare(work, scene, data, seconds, bg, photo, style, size)
         out = work / "out.mp4"
         proc = _run_cli(scene, work, out, seconds)
         if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
@@ -443,7 +496,7 @@ def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
         return names
     work = cache_dir() / f"_snap_{key}_{tag}"
     try:
-        _prepare(work, scene, data, seconds, bg, photo, style)
+        _prepare(work, scene, data, seconds, bg, photo, style, size)
         shots = work / "snaps"
         base = ["node", str(_cli()), "snapshot", str(work), "-o", str(shots),
                 "--at", ",".join(f"{t:g}" for t in at), "--no-end", "--describe", "false",
