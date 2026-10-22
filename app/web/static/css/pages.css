@@ -732,3 +732,5 @@
 .is-portrait .lb-media { aspect-ratio: 9 / 16; max-height: 78vh; }
 .is-portrait .output-video { aspect-ratio: 9 / 16; width: auto; max-width: 100%; height: min(78vh, 760px); margin-inline: auto; }
 .is-portrait .asset-media { aspect-ratio: 9 / 16; max-height: 360px; }
+.cs-tile.is-pending { opacity: .45; cursor: not-allowed; }
+.cs-card.is-portrait .cs-thumb { aspect-ratio: 9 / 16; }

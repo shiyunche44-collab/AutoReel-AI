@@ -264,4 +264,5 @@ def test_project_status_counts_concept_beats(fresh_db):
     from app.pipeline import concept_styles
 
     pid = _project_with_beats(fresh_db, State.GATE_A)
-    assert concept_styles.project_status(pid) == {"style": motion.DEFAULT_STYLE, "beats": 2}
+    assert concept_styles.project_status(pid) == {"style": motion.DEFAULT_STYLE, "beats": 2,
+                                                 "portrait": False}

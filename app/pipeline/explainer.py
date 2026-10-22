@@ -1251,6 +1251,21 @@ def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int
     return bg_clip, photo, pieces
 
 
+def portrait_concept_style(scene: str, style: str | None,
+                           size: tuple[int, int]) -> tuple[str | None, str]:
+    """竖屏下这一拍实际用哪套模版:(模版 id 或 None, 降级说明)。
+
+    模版文件头写了 `@portrait yes` 才算有竖屏版式;没适配的模版按竖屏尺寸渲出来
+    还是横屏那套排布,会挤、会出界。顺序:选定模版 → 默认模版(场景专用)→ None(退回数据卡)。
+    横屏原样返回选定模版。"""
+    if not aspect.is_portrait_size(size) or motion.supports_portrait(style, scene):
+        return style, ""
+    chosen = motion.get_style(style).name
+    if motion.supports_portrait(motion.DEFAULT_STYLE, scene):
+        return motion.DEFAULT_STYLE, f"模版「{chosen}」还没有竖屏版,改用默认模版"
+    return None, f"模版「{chosen}」与默认模版都还没有竖屏版,画成数据卡"
+
+
 def concept_style_of(project_id: str) -> str:
     """项目选定的概念动画风格(`concept_style.json`);没选过 = 默认风格。"""
     got = db.read_json(project_id, "concept_style.json", {}) or {}
@@ -1262,12 +1277,14 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 used: dict[str, int], card_bg: Path | None,
                 recent: list[str] | None = None,
                 sting: tuple[int, str] | None = None,
-                style: str | None = None, headline: str = "") -> tuple[Path, list[dict]]:
+                style: str | None = None, headline: str = "",
+                notes: list[str] | None = None) -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
     `sting` = (章号, 章名) 时在开头叠章节标牌(每章第一拍)。
     `headline` 是竖屏标题区常驻的两行大标题(横屏不用)。
+    `notes` 给了就往里记降级说明(竖屏模版没适配 → 换模版 / 退回数据卡),调用方写进项目事件。
 
     竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
     放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
@@ -1299,11 +1316,16 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                             background=card_bg, size=size)
     elif spec.layout == "concept" and spec.overlay:
         scene = spec.overlay.get("scene", "")
-        bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
-                                                used, recent, style)
+        use_style, why = portrait_concept_style(scene, style, size)
+        if why and notes is not None:
+            notes.append(f"第 {spec.idx} 拍概念动画:{why}")
         try:
+            if use_style is None:
+                raise motion.MotionError(why)
+            bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
+                                                    used, recent, use_style)
             base = motion.render(scene, motion.scene_data(spec.overlay, subject), seconds, size,
-                                 work / "concept.mp4", background=bg_clip, photo=photo, style=style)
+                                 work / "concept.mp4", background=bg_clip, photo=photo, style=use_style)
         except motion.MotionError as exc:
             # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败 —— 但要留痕,
             # 否则"概念动画全变成数据卡"看起来像正常产出
@@ -1459,6 +1481,7 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     # 竖屏标题区常驻的大标题:脚本阶段 LLM 起的片名
     headline = str(project.get("title") or "") if aspect.is_portrait(project) else ""
     done, errors = [], []
+    notes: list[str] = []
     for s in todo:
         # 停机信号:在**拍与拍之间**收手。手头这一拍做完就停,剩下的
         # 留到下次 —— 正在渲的 mp4 被砍在中间是坏的。
@@ -1481,7 +1504,7 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        card_bg=bgs[s.idx % len(bgs)] if bgs else None,
                                        recent=recent,
                                        sting=sting_for(specs, where, chapters, s.idx),
-                                       style=style, headline=headline)
+                                       style=style, headline=headline, notes=notes)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])
@@ -1493,6 +1516,9 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
         done.append(s.idx)
     db.write_json(project_id, "beats_used.json", used)
     db.write_json(project_id, "beats_recent.json", recent)
+    for note in notes:
+        # 降级要留痕:不然「概念动画全变成数据卡」看起来像正常产出
+        db.add_event(project_id, "concept:degraded", reason=note)
     rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
     remaining = [s.idx for s in specs if s.duration > 0
                  and rows.get(s.idx, {}).get("status") != "succeeded"]

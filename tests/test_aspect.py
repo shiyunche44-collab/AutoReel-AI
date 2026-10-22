@@ -269,3 +269,25 @@ def test_portrait_cover_keeps_whole_still_and_writes_3x4(tmp_path):
     assert Image.open(dest).size == PORTRAIT
     three_four = narration.cover_3x4_path(dest)
     assert Image.open(three_four).size == (1080, 1440)
+
+
+# --------------------------------------------------------------------------
+# 概念动画:竖屏模版降级
+# --------------------------------------------------------------------------
+def test_portrait_concept_style_falls_back(monkeypatch):
+    from app.pipeline import motion
+
+    ready: set[str] = set()
+    monkeypatch.setattr(motion, "supports_portrait", lambda style, scene=None: (style or "studio") in ready)
+    # 横屏:原样
+    assert explainer.portrait_concept_style("battery", "glass", (1920, 1080)) == ("glass", "")
+    # 竖屏、都没适配:退回数据卡
+    style, why = explainer.portrait_concept_style("battery", "glass", PORTRAIT)
+    assert style is None and "数据卡" in why
+    # 默认模版有竖屏版:改用默认
+    ready.add("studio")
+    style, why = explainer.portrait_concept_style("battery", "glass", PORTRAIT)
+    assert style == "studio" and "默认模版" in why
+    # 选定模版有竖屏版:直接用
+    ready.add("glass")
+    assert explainer.portrait_concept_style("battery", "glass", PORTRAIT) == ("glass", "")

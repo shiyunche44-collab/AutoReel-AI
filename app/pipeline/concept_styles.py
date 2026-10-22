@@ -54,8 +54,28 @@ def gallery() -> dict[str, Any]:
     items = []
     for st in motion.styles():
         p = sample_path(st.id)
-        items.append({**st.summary(), "image": p.name if p.is_file() else None})
+        items.append({**st.summary(), "image": p.name if p.is_file() else None,
+                      "portrait": portrait_ready(st.id),
+                      "image_portrait": _portrait_sample(st.id)})
     return {"styles": items, "default": motion.DEFAULT_STYLE}
+
+
+def portrait_ready(style_id: str) -> bool:
+    """这套模版有没有竖屏版式。默认模版是 7 个场景专用模板,要每个场景都适配过才算。"""
+    st = motion.get_style(style_id)
+    if st.path is not None:
+        return st.portrait
+    return all(motion.supports_portrait(style_id, p.stem)
+               for p in motion.scenes_dir().glob("*.html") if not p.stem.startswith("_"))
+
+
+def portrait_sample_path(style_id: str) -> Path:
+    return samples_dir() / f"{style_id}_v.jpg"
+
+
+def _portrait_sample(style_id: str) -> str | None:
+    p = portrait_sample_path(style_id)
+    return p.name if p.is_file() else None
 
 
 def sample_image(name: str) -> Path | None:
@@ -74,7 +94,10 @@ def concept_beats(project_id: str) -> list[ShotSpec]:
 def project_status(project_id: str) -> dict[str, Any]:
     from .explainer import concept_style_of
 
-    return {"style": concept_style_of(project_id), "beats": len(concept_beats(project_id))}
+    from . import aspect
+
+    return {"style": concept_style_of(project_id), "beats": len(concept_beats(project_id)),
+            "portrait": aspect.is_portrait(db.get_project(project_id))}
 
 
 # --------------------------------------------------------------------------

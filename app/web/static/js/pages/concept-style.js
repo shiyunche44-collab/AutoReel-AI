@@ -20,8 +20,9 @@ export function initConceptStyle(pid, { onRerender } = {}) {
   const grid = $('#cs-grid', card);
   const atGateB = card.dataset.state === 'GATE_B';
 
-  let styles = []; // [{id, name, desc, light, image}]
+  let styles = []; // [{id, name, desc, light, image, portrait, image_portrait}]
   let current = null; // 项目当前模版 id
+  let portrait = false; // 竖屏项目:只有做了竖屏版式的模版能选
   let busy = false;
 
   const nameOf = (id) => (styles.find((s) => s.id === id) || {}).name || id;
@@ -31,16 +32,19 @@ export function initConceptStyle(pid, { onRerender } = {}) {
     grid.replaceChildren(
       ...styles.map((s, n) => {
         const on = s.id === current;
-        const img = s.image
-          ? h('img', { src: `/api/concept-styles/image/${encodeURIComponent(s.image)}`, alt: s.name, loading: 'lazy' })
-          : h('div', { class: 'cs-ph' }, '暂无示例图');
+        const pending = portrait && !s.portrait;
+        const file = portrait ? s.image_portrait : s.image;
+        const img = file
+          ? h('img', { src: `/api/concept-styles/image/${encodeURIComponent(file)}`, alt: s.name, loading: 'lazy' })
+          : h('div', { class: 'cs-ph' }, pending ? '竖屏版制作中' : '暂无示例图');
         return h(
           'button',
           {
-            class: `cs-tile${on ? ' is-on' : ''}`,
+            class: `cs-tile${on ? ' is-on' : ''}${pending ? ' is-pending' : ''}`,
             type: 'button',
             'aria-pressed': String(on),
-            title: s.desc,
+            disabled: pending && !on,
+            title: pending ? '这套模版还没有竖屏版式' : s.desc,
             onclick: () => choose(s.id),
           },
           h('div', { class: 'cs-thumb' }, img, h('span', { class: 'cs-check' }, icon('check', 'i-sm'))),
@@ -89,7 +93,9 @@ export function initConceptStyle(pid, { onRerender } = {}) {
     }
     if (!st.beats) return;
     current = st.style;
+    portrait = !!st.portrait;
     styles = g.styles || [];
+    card.classList.toggle('is-portrait', portrait);
     card.classList.remove('hidden');
     $('#cs-hint', card).textContent = `本片 ${st.beats} 拍概念动画`;
     $('#cs-intro', card).textContent = atGateB

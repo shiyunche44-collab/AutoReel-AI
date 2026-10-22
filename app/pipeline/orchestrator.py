@@ -755,6 +755,8 @@ def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
             raise PipelineError("项目不存在")
         if style not in {s.id for s in motion.styles()}:
             raise PipelineError(f"没有这个模版:{style}")
+        if aspect.is_portrait(project) and not concept_styles.portrait_ready(style):
+            raise PipelineError(f"模版「{motion.get_style(style).name}」还没有竖屏版式,竖屏项目先选别的")
         state = State(project["state"])
         if state not in _STYLE_FREE and state != State.GATE_B:
             raise PipelineError("现在不能换概念动画模版:渲染中请等到审片(门禁 B),成片阶段已经定稿")
