@@ -706,17 +706,67 @@ def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtit
 
     宽图直接裁成 9:16 会把车头车尾裁掉 —— 封面上的车必须是完整的。
     抽帧来的(成片里截的)只取画面带那一截:标题区和数据区上已经有字了。
-    另存一张 3:4 的裁切版给小红书(`cover_3x4_path`)。"""
+    另出一张 3:4 的给小红书(`cover_3x4_path`):按 3:4 画幅**重新排版**,不是从 9:16
+    上截一段 —— 截的话方图白底车会把主论点挤到截线外(实跑见过半行字)。"""
+    from .aspect import portrait_grid
+
+    out_w, out_h = size
+    if from_video:
+        g = portrait_grid(size)
+        fw, fh = image.size
+        scale = fh / out_h
+        image = image.crop((0, int(g.band.top * scale), fw, int(g.band.bottom * scale)))
+    full = _draw_portrait_cover(image, title, subtitle, size, kicker)
+    three_four = _draw_portrait_cover(image, title, subtitle, (out_w, out_w * 4 // 3), kicker)
+    tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
+    tmp34 = cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")
+    try:
+        full.save(tmp, quality=92)
+        os.replace(tmp, dest)
+        three_four.save(tmp34, quality=92)
+        os.replace(tmp34, cover_3x4_path(dest))
+    except BaseException:
+        for t in (tmp, tmp34):
+            try:
+                t.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    return dest
+
+
+#: 竖屏封面标题优先断在这些标点后面(「多花15万买GT,/ 值不值?」而不是「…值不 / 值?」)
+_COVER_BREAK = ",，:：!！?？;；"
+
+
+def _cover_title_lines(title: str, font_path: str | None, max_width: int) -> tuple[list[str], Any]:
+    """标题里有逗号/问号/冒号且两半都放得下一行时就断在那里;否则按像素折行。"""
+    from PIL import ImageFont
+
+    cuts = [k + 1 for k, ch in enumerate(title[:-1]) if ch in _COVER_BREAK]
+    if cuts:
+        k = min(cuts, key=lambda c: abs(c - len(title) / 2))
+        halves = [title[:k].strip(), title[k:].strip()]
+        size = COVER_TITLE_MAX
+        while size >= COVER_TITLE_MIN and font_path:
+            try:
+                font = ImageFont.truetype(font_path, size)
+            except OSError:
+                break
+            if all(font.getlength(x) <= max_width for x in halves):
+                return halves, font
+            size -= 6
+    return _cover_fit(title, font_path, max_width)
+
+
+def _draw_portrait_cover(image: Any, title: str, subtitle: str, size: tuple[int, int],
+                         kicker: str) -> Any:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
     from .aspect import portrait_grid
 
     out_w, out_h = size
     g = portrait_grid(size)
-    if from_video:
-        fw, fh = image.size
-        scale = fh / out_h
-        image = image.crop((0, int(g.band.top * scale), fw, int(g.band.bottom * scale)))
     # 铺底:同图放大铺满,模糊、压暗
     w, h = image.size
     k = max(out_w / w, out_h / h)
@@ -724,11 +774,13 @@ def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtit
     left, top = (bg.width - out_w) // 2, (bg.height - out_h) // 2
     bg = bg.crop((left, top, left + out_w, top + out_h)).filter(ImageFilter.GaussianBlur(32))
     bg = Image.blend(bg, Image.new("RGB", size, (8, 10, 14)), 0.55)
-    # 主图:按宽度放进画面带(比画面带略大一点也行,完整优先)
-    k = out_w / w
-    main = image.resize((out_w, max(1, int(h * k))), Image.LANCZOS)
-    y_main = max(g.title.bottom - 40, g.band.mid - main.height // 2)
-    bg.paste(main, (0, y_main))
+    # 主图:按宽度放进画面带(比画面带略大一点也行,完整优先);
+    # 太高(方图白底车)就整体缩小,下面得给主论点留两行
+    room_top, room_bottom = g.title.bottom - 40, g.data.bottom - 130
+    k = min(out_w / w, (room_bottom - room_top) / h)
+    main = image.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+    y_main = max(room_top, g.band.mid - main.height // 2)
+    bg.paste(main, ((out_w - main.width) // 2, y_main))
 
     draw = ImageDraw.Draw(bg)
     font_path = _font_file(bold=True)
@@ -739,7 +791,7 @@ def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtit
     except OSError:
         kicker_font = sub_font = ImageFont.load_default()
     max_width = out_w - g.left * 2
-    lines, title_font = _cover_fit(title, font_path, max_width)
+    lines, title_font = _cover_title_lines(title, font_path, max_width)
     line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
     y = g.title.top + 10
     if kicker:
@@ -758,23 +810,7 @@ def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtit
         draw.text((g.left, y), line, font=sub_font, fill=COVER_SUB, stroke_width=2,
                   stroke_fill=(0, 0, 0))
         y += int(line_h * 0.8)
-
-    tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
-    try:
-        bg.save(tmp, quality=92)
-        os.replace(tmp, dest)
-        three_four = bg.crop((0, 0, out_w, out_w * 4 // 3))
-        tmp34 = cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")
-        three_four.save(tmp34, quality=92)
-        os.replace(tmp34, cover_3x4_path(dest))
-    except BaseException:
-        for t in (tmp, cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")):
-            try:
-                t.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise
-    return dest
+    return bg
 
 
 def _font_file(bold: bool = True) -> str | None:

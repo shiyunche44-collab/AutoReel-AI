@@ -182,3 +182,21 @@ def test_price_of_ignores_disabled_and_company_scope():
          "enabled": "False"},
     ]
     assert explainer._price_of(facts) == ("", "")
+
+
+def test_portrait_cover_breaks_title_at_comma_and_relays_3x4(tmp_path):
+    """竖屏实跑:「多花15万买GT,值不 / 值?」;3:4 从 9:16 上截,主论点被截掉半行。"""
+    from PIL import Image
+
+    from app.pipeline import narration
+
+    lines, _font = narration._cover_title_lines("多花15万买GT，值不值？", narration._font_file(True), 952)
+    if narration._font_file(True):
+        assert lines == ["多花15万买GT，", "值不值？"]
+    still = tmp_path / "still.jpg"
+    Image.new("RGB", (1000, 1000), (240, 240, 240)).save(still)  # 方图白底:最容易把下面挤出去
+    dest = tmp_path / "cover_vertical.jpg"
+    narration.make_cover(tmp_path / "none.mp4", "多花15万买GT，值不值？", dest,
+                         subtitle="多数人买标准版就够", size=(1080, 1920), still=still, kicker="小米YU7")
+    assert Image.open(dest).size == (1080, 1920)
+    assert Image.open(narration.cover_3x4_path(dest)).size == (1080, 1440)
