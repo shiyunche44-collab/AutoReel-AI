@@ -1,6 +1,7 @@
 <!-- @name 粒子聚合
      @desc 漆黑星空里上千颗光粒从四处飞来拼成数字,停留时微微闪烁,换下一个时炸开重组
-     @order 16 -->
+     @order 16
+     @portrait yes -->
 <style>
     html, body { background: #02030a; }
     #root { color: #fff; font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
@@ -15,31 +16,41 @@
     .b { position: absolute; left: 0; right: 0; top: 820px; text-align: center; font-family: "Montserrat", "Noto Sans SC", sans-serif; font-size: 40px; font-weight: 600; color: #ff9ad5; }
     .idx { position: absolute; left: 0; right: 0; bottom: 70px; text-align: center; font-family: "Inter", sans-serif; font-size: 24px; letter-spacing: 0.4em; color: rgba(160,190,255,0.6); }
     .src { position: absolute; right: 80px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.35); }
+    /* portrait */
+    [data-aspect=portrait] .hd { top: 236px; }
+    [data-aspect=portrait] .hd .t { letter-spacing: 0.16em; }
+    [data-aspect=portrait] .lab { top: 640px; letter-spacing: 0.2em; }
+    [data-aspect=portrait] .b { top: 1090px; }
+    [data-aspect=portrait] .idx { bottom: auto; top: 1430px; }
+    [data-aspect=portrait] .src { right: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
 
-    const cv = add(HF.el("canvas")); cv.width = 1920; cv.height = 1080; const ctx = cv.getContext("2d");
+    const PT = HF.portrait, CW = HF.W, CH = HF.H;
+    const cv = add(HF.el("canvas")); cv.width = CW; cv.height = CH; const ctx = cv.getContext("2d");
     const hd = add(HF.el("div", "hd"));
     hd.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
-    hd.appendChild(HF.el("div", "t", D.title || ""));
+    const ht = hd.appendChild(HF.el("div", "t", D.title || ""));
+    if (PT) ht.style.fontSize = HF.fit(D.title || "", 760, 56) + "px";
     tl.fromTo(hd.children, { opacity: 0, letterSpacing: "1em" }, { opacity: 1, letterSpacing: "0.3em", duration: 1.0, ease: "power3.out", stagger: 0.15 }, 0.1);
 
     // 每行一段:粒子聚成数字 → 停留 → 炸散。真正的文字(一字不差)在聚合完成后叠上来
     const NP = 1600, rng = HF.rng(42);
-    const P = Array.from({ length: NP }, () => ({ sx: rng() * 1920, sy: rng() * 1080, ph: rng() * 6.28, sz: 1.2 + rng() * 2.2, hue: rng() }));
-    const VY = 600;
-    const sizeOf = (txt) => HF.fit(txt, 1500, 300, 1.05);
+    const P = Array.from({ length: NP }, () => ({ sx: rng() * CW, sy: rng() * (PT ? 1500 : CH), ph: rng() * 6.28, sz: 1.2 + rng() * 2.2, hue: rng() }));
+    const VY = PT ? 880 : 600;
+    const sizeOf = (txt) => HF.fit(txt, PT ? 940 : 1500, PT ? 250 : 300, 1.05);
     const targets = {};
     const targetFor = (k) => {
       if (targets[k]) return targets[k];
       const txt = items[k].value, size = sizeOf(txt);
-      const oc = document.createElement("canvas"); oc.width = 1920; oc.height = 1080; const o = oc.getContext("2d");
+      const oc = document.createElement("canvas"); oc.width = CW; oc.height = CH; const o = oc.getContext("2d");
       o.fillStyle = "#fff"; o.textAlign = "center"; o.textBaseline = "middle";
       o.font = `800 ${size}px Montserrat, "Noto Sans SC", sans-serif`;
-      o.fillText(txt, 960, VY);
-      const img = o.getImageData(0, 0, 1920, 1080).data, pts = [];
-      for (let y = 0; y < 1080; y += 6) for (let x = 0; x < 1920; x += 6) if (img[(y * 1920 + x) * 4 + 3] > 128) pts.push([x, y]);
+      o.fillText(txt, CW / 2, VY);
+      const img = o.getImageData(0, 0, CW, CH).data, pts = [];
+      const st = PT ? 5 : 6;
+      for (let y = 0; y < CH; y += st) for (let x = 0; x < CW; x += st) if (img[(y * CW + x) * 4 + 3] > 128) pts.push([x, y]);
       const out = P.map((p, i) => pts.length ? pts[Math.floor(i * pts.length / NP)] : [p.sx, p.sy]);
       if (!document.fonts || document.fonts.status === "loaded") targets[k] = out;
       return out;
@@ -50,7 +61,7 @@
     const ease = gsap.parseEase("expo.inOut");
     const scatter = (p, t) => [p.sx + Math.sin(t * 0.4 + p.ph) * 40, p.sy + Math.cos(t * 0.3 + p.ph) * 30];
     HF.drive(tl, (t) => {
-      ctx.clearRect(0, 0, 1920, 1080);
+      ctx.clearRect(0, 0, CW, CH);
       let k = -1;
       for (let j = 0; j < slotStart.length; j++) if (t >= slotStart[j]) k = j;
       let f = 0, tg = null;

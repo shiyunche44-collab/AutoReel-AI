@@ -1,7 +1,8 @@
 <!-- @name 电影片头
      @desc 宽银幕黑边 + 暗调实车慢推 + 居中衬线字幕,一句一句淡入淡出,带横向镜头光晕
      @order 9
-     @sample 6.4 -->
+     @sample 6.4
+     @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
     html, body { background: #000; }
@@ -25,24 +26,35 @@
              box-shadow: 0 0 30px 8px rgba(80,140,255,0.35); mix-blend-mode: screen; }
     .credit { position: absolute; left: 0; right: 0; bottom: 160px; text-align: center; font-family: "Playfair Display", "STSong", serif;
               font-style: italic; font-size: 24px; color: rgba(243,234,216,0.45); letter-spacing: 0.2em; z-index: 6; }
+    /* portrait: vertical letterbox; captions centred in the picture area */
+    [data-aspect=portrait] .card { top: 300px; bottom: 400px; }
+    [data-aspect=portrait] .k { font-size: 24px; letter-spacing: 0.4em; }
+    [data-aspect=portrait] .t { letter-spacing: 0.1em; }
+    [data-aspect=portrait] .lab { letter-spacing: 0.3em; }
+    [data-aspect=portrait] .b { font-size: 34px; text-align: center; padding: 0 60px; }
+    [data-aspect=portrait] .flare { top: 860px; width: 1000px; }
+    [data-aspect=portrait] .credit { bottom: 430px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
     const P = D.photo;
+    const PT = HF.portrait;
 
     const plate = add(HF.el("div", "plate"));
     tl.fromTo(plate, { opacity: 0 }, { opacity: 1, duration: 1.0 }, 0);
     let ph = null;
     if (P) {
       ph = add(HF.photoImg("photo"));
-      const pw = 1900, hh = pw * P.height / P.width;
-      Object.assign(ph.style, { width: pw + "px", height: hh + "px", left: "10px", top: (980 - P.floor * hh) + "px" });
+      const pw = PT ? 1500 : 1900, hh = pw * P.height / P.width;
+      Object.assign(ph.style, { width: pw + "px", height: hh + "px", left: PT ? "-200px" : "10px",
+                                top: ((PT ? 1260 : 980) - P.floor * hh) + "px" });
       tl.fromTo(ph, { opacity: 0 }, { opacity: 1, duration: 1.4, ease: "power1.inOut" }, 0.1);
       tl.fromTo(ph, { scale: 1.0, x: 40 }, { scale: 1.1, x: -60, duration: S, ease: "none" }, 0);
     }
     add(HF.el("div", "grade"));
     const topBar = add(HF.el("div", "bar")), botBar = add(HF.el("div", "bar"));
     topBar.style.top = "0"; botBar.style.bottom = "0";
+    if (PT) { topBar.style.height = "300px"; botBar.style.height = "400px"; }
     tl.fromTo(topBar, { yPercent: -100 }, { yPercent: 0, duration: 0.9, ease: "expo.out" }, 0);
     tl.fromTo(botBar, { yPercent: 100 }, { yPercent: 0, duration: 0.9, ease: "expo.out" }, 0);
 
@@ -50,13 +62,13 @@
     const cards = [];
     const c0 = add(HF.el("div", "card"));
     c0.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
-    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", 1270, 120) + "px"; c0.appendChild(t);
+    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", PT ? 860 : 1270, 120) + "px"; c0.appendChild(t);
     c0.appendChild(HF.el("div", "rule"));
     cards.push({ el: c0 });
     items.forEach((it) => {
       const c = add(HF.el("div", "card"));
       c.appendChild(HF.el("div", "lab", it.label));
-      const v = HF.el("div", "val"); v.style.fontSize = HF.fit(it.value, 1500, 230, 0.9) + "px"; c.appendChild(v);
+      const v = HF.el("div", "val"); v.style.fontSize = HF.fit(it.value, PT ? 920 : 1500, PT ? 200 : 230, 0.9) + "px"; c.appendChild(v);
       if (it.b) c.appendChild(HF.el("div", "b", HF.cols[0] + "  ·  " + HF.cols[1] + "  " + it.b));
       else if (it.tag) c.appendChild(HF.el("div", "b", it.tag));
       cards.push({ el: c, v, txt: it.value });
@@ -77,7 +89,7 @@
     const flare = add(HF.el("div", "flare"));
     tl.set(flare, { opacity: 0 }, 0);
     starts.forEach((at) => {
-      tl.fromTo(flare, { x: -1400, opacity: 0.9 }, { x: 1920, opacity: 0.9, duration: 1.1, ease: "power1.inOut", immediateRender: false }, at - 0.1);
+      tl.fromTo(flare, { x: PT ? -1000 : -1400, opacity: 0.9 }, { x: HF.W, opacity: 0.9, duration: 1.1, ease: "power1.inOut", immediateRender: false }, at - 0.1);
       tl.set(flare, { opacity: 0 }, at + 1.0);
     });
     const credit = add(HF.el("div", "credit", D.source ? "— " + D.source + " —" : ""));

@@ -1,7 +1,8 @@
 <!-- @name 3D 卡片轮播
      @desc 紫色夜空里一圈立体卡片,转盘式旋转把每张参数卡依次转到正前方
      @order 11
-     @sample 6.2 -->
+     @sample 6.2
+     @portrait yes -->
 <style>
     html, body { background: #0d0620; }
     #root { color: #fff;
@@ -29,16 +30,25 @@
     .floor { position: absolute; left: 360px; top: 880px; width: 1200px; height: 160px; border-radius: 50%;
              background: radial-gradient(ellipse at center, rgba(190,130,255,0.35) 0%, rgba(190,130,255,0) 70%); }
     .src { position: absolute; right: 90px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.4); }
+    /* portrait: ring centred lower in the frame, slightly smaller cards */
+    [data-aspect=portrait] .hd { top: 236px; }
+    [data-aspect=portrait] .scene { width: 1080px; height: 1920px; perspective-origin: 540px 760px; }
+    [data-aspect=portrait] .ring { left: 540px; top: 900px; }
+    [data-aspect=portrait] .card { width: 480px; height: 580px; left: -240px; top: -290px; }
+    [data-aspect=portrait] .floor { left: 90px; top: 1180px; width: 900px; }
+    [data-aspect=portrait] .src { right: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot({ items: 5 });
+    const PT = HF.portrait;
 
     const stars = add(HF.el("div", "stars")); const rng = HF.rng(11); const starEls = [];
-    for (let k = 0; k < 90; k++) { const s = HF.el("i"); s.style.left = (rng() * 1920) + "px"; s.style.top = (rng() * 700) + "px";
+    for (let k = 0; k < 90; k++) { const s = HF.el("i"); s.style.left = (rng() * HF.W) + "px"; s.style.top = (rng() * (PT ? 1500 : 700)) + "px";
       s.style.opacity = String(0.2 + rng() * 0.6); s._ph = rng() * 6; stars.appendChild(s); starEls.push(s); }
     const hd = add(HF.el("div", "hd"));
     hd.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("  ·  ")));
-    hd.appendChild(HF.el("div", "t", D.title || ""));
+    const ht = hd.appendChild(HF.el("div", "t", D.title || ""));
+    if (PT) ht.style.fontSize = HF.fit(D.title || "", 940, 60) + "px";
     tl.fromTo(hd.children, { opacity: 0, y: -20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out", stagger: 0.1 }, 0.1);
     add(HF.el("div", "floor"));
 
@@ -51,7 +61,7 @@
     items.forEach((it, k) => {
       const c = HF.el("div", "card"); c.appendChild(HF.el("div", "no", String(k + 1).padStart(2, "0")));
       c.appendChild(HF.el("div", "lab", it.label));
-      const v = HF.el("div", "val"); v.style.fontSize = HF.fit(it.value, 410, 116, 1.08) + "px"; c.appendChild(v);
+      const v = HF.el("div", "val"); v.style.fontSize = HF.fit(it.value, PT ? 380 : 410, 116, 1.08) + "px"; c.appendChild(v);
       if (it.b) c.appendChild(HF.el("div", "b", HF.cols[1] + "  " + it.b));
       if (it.tag) c.appendChild(HF.el("div", "tag", it.tag));
       cards.push({ el: c, v, txt: it.value });
@@ -59,7 +69,7 @@
     const real = cards.length;
     while (cards.length < 6) { const c = HF.el("div", "card"); c.style.opacity = "0.5"; cards.push({ el: c, blank: true }); }
     cards.forEach((c) => ring.appendChild(c.el));
-    const N = cards.length, step = 360 / N, R = 260 / Math.tan(Math.PI / N) + 120;
+    const N = cards.length, step = 360 / N, R = (PT ? 240 : 260) / Math.tan(Math.PI / N) + (PT ? 60 : 120);
 
     // 转盘角度:每张真卡一段,段首 0.8 秒转到正前方,其余时间停住微微晃
     const t0 = T(0.5), L = (A.outAt - t0) / real;

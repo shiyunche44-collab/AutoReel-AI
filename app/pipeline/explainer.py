@@ -1297,6 +1297,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
 
     pieces: list[library.Piece] = []
     fsize = footage_size(size)
+    #: 竖屏标题区要不要让位:关键词 / 开场大字占它;通用模版的概念动画是整屏设计,也占它
+    clear_title = spec.layout in ("highlight", "hook")
     if spec.layout == "hook" and spec.overlay:
         try:
             base, pieces = hook_background(subject, seconds, fsize, work / "hook", used, recent,
@@ -1326,6 +1328,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                                                     used, recent, use_style)
             base = motion.render(scene, motion.scene_data(spec.overlay, subject), seconds, size,
                                  work / "concept.mp4", background=bg_clip, photo=photo, style=use_style)
+            clear_title = motion.get_style(use_style).path is not None
         except motion.MotionError as exc:
             # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败 —— 但要留痕,
             # 否则"概念动画全变成数据卡"看起来像正常产出
@@ -1336,9 +1339,9 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
         base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg)
         base = _framed(base, size, work)
 
-    # 竖屏标题区:highlight / hook 拍的关键词占这块,大标题让位
+    # 竖屏标题区:大标题让位时只留章节进度
     bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png",
-                               headline="" if spec.layout in ("highlight", "hook") else headline)
+                               headline="" if clear_title else headline)
     layer: Path | None = None
     layer_input: list[str] = []
     flt = spec.layout

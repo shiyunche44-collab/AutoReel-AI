@@ -1,6 +1,7 @@
 <!-- @name 极客终端
      @desc 黑底绿字命令行,敲命令查参数,结果逐行打出,带进度条和闪烁光标
-     @order 6 -->
+     @order 6
+     @portrait yes -->
 <style>
     html, body { background: #020604; }
     #root { color: #39ff7a;
@@ -22,9 +23,15 @@
             background: repeating-linear-gradient(0deg, rgba(0,0,0,0.22) 0px, rgba(0,0,0,0.22) 2px, transparent 2px, transparent 5px); }
     .beam { position: absolute; left: 0; right: 0; height: 200px; pointer-events: none;
             background: linear-gradient(180deg, rgba(57,255,122,0) 0%, rgba(57,255,122,0.05) 50%, rgba(57,255,122,0) 100%); }
+    /* portrait: a tall window; notes after a value go on their own line */
+    [data-aspect=portrait] .win { left: 40px; top: 220px; width: 1000px; height: 1290px; }
+    [data-aspect=portrait] .body { left: 34px; right: 34px; top: 86px; font-size: 30px; }
+    [data-aspect=portrait] .ln { height: 54px; }
+    [data-aspect=portrait] .cur { height: 34px; width: 16px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot({ items: 5 });
+    const PT = HF.portrait;
 
     const win = add(HF.el("div", "win"));
     const bar = HF.el("div", "bar"); [0, 1, 2].forEach(() => bar.appendChild(HF.el("i")));
@@ -62,15 +69,19 @@
       const l = line(); tl.set(l, { opacity: 0 }, 0);
       const at = t + 0.2 + (items.length > 1 ? span * k / (items.length - 1) : 0);
       const labW = Array.from(it.label).reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
-      const dots = " " + ".".repeat(Math.max(3, 22 - labW)) + " ";
+      const dots = " " + ".".repeat(Math.max(3, (PT ? 18 : 22) - labW)) + " ";
       const lab = HF.el("span", "", "> " + it.label); const dd = HF.el("span", "dim", dots);
       const val = HF.el("span", "val"); l.appendChild(lab); l.appendChild(dd); l.appendChild(val);
       tl.set(l, { opacity: 1 }, at);
       moveCur(l, at);
       HF.countText(tl, val, it.value, at + 0.05, 0.6, { ease: "power2.out" });
-      if (it.b) { const vs = HF.el("span", "dim", "  vs  "); const b = HF.el("span", "b", it.b); l.appendChild(vs); l.appendChild(b);
+      // 竖屏一行放不下「数值 vs 对比值 / 注释」:另起一行缩进
+      const host = PT && (it.b || it.tag) ? line() : l;
+      if (host !== l) tl.set(host, { opacity: 0 }, 0);
+      if (it.b) { const vs = HF.el("span", "dim", PT ? "    vs  " : "  vs  "); const b = HF.el("span", "b", it.b); host.appendChild(vs); host.appendChild(b);
         tl.fromTo([vs, b], { opacity: 0 }, { opacity: 1, duration: 0.01 }, at + 0.35); }
-      else if (it.tag) { const tg = HF.el("span", "dim", "   // " + it.tag); l.appendChild(tg); tl.fromTo(tg, { opacity: 0 }, { opacity: 1, duration: 0.01 }, at + 0.4); }
+      else if (it.tag) { const tg = HF.el("span", "dim", (PT ? "    // " : "   // ") + it.tag); host.appendChild(tg); tl.fromTo(tg, { opacity: 0 }, { opacity: 1, duration: 0.01 }, at + 0.4); }
+      if (host !== l) tl.set(host, { opacity: 1 }, at + 0.35);
     });
     if (D.source) { const s = line("dim"); s.textContent = "-- source: " + D.source; tl.set(s, { opacity: 0 }, 0);
       const at = Math.min(A.outAt - 0.4, t + span + 0.6); tl.set(s, { opacity: 1 }, at); moveCur(s, at); }
@@ -78,7 +89,7 @@
     for (let x = 0.5; x < S; x += 0.5) tl.set(cur, { opacity: Math.round(x * 2) % 2 ? 0 : 1 }, x);
     add(HF.el("div", "scan"));
     const beam = add(HF.el("div", "beam"));
-    tl.fromTo(beam, { y: -200 }, { y: 1080, duration: 2.6, ease: "none", repeat: Math.ceil(S / 2.6) }, 0);
+    tl.fromTo(beam, { y: -200 }, { y: HF.H, duration: 2.6, ease: "none", repeat: Math.ceil(S / 2.6) }, 0);
     tl.to(win, { opacity: 0, scaleY: 0.02, duration: A.outDur, ease: "power2.in" }, A.outAt);
     HF.register(tl);
   </script>

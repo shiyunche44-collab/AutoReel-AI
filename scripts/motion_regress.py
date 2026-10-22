@@ -41,16 +41,26 @@ WORKERS = 3
 EXTRA_AT = 1.2
 
 
-def targets() -> list[tuple[str, str, str | None, list[float]]]:
-    """(名字, 渲染用的 scene, style id, 时刻列表)。"""
-    out: list[tuple[str, str, str | None, list[float]]] = []
+#: 竖屏帧在基线里的名字后缀
+PORTRAIT_SUFFIX = ":v"
+
+
+def targets() -> list[tuple[str, str, str | None, list[float], tuple[int, int]]]:
+    """(名字, 渲染用的 scene, style id, 时刻列表, 画幅)。横屏一套,有竖屏版式的再来一套(名字带 :v)。"""
+    out: list[tuple[str, str, str | None, list[float], tuple[int, int]]] = []
     for scene in sorted(motion.available_scenes()):
-        out.append((scene, scene, None, sorted(set([concept_styles.SAMPLE_AT[0], EXTRA_AT]))))
+        at = sorted(set([concept_styles.SAMPLE_AT[0], EXTRA_AT]))
+        out.append((scene, scene, None, at, concept_styles.SIZE))
+        if motion.supports_portrait(None, scene):
+            out.append((scene + PORTRAIT_SUFFIX, scene, None, at, concept_styles.PORTRAIT_SIZE))
     for st in motion.styles():
         if st.id == motion.DEFAULT_STYLE:
             continue
-        at = st.sample_at or concept_styles.SAMPLE_AT[0]
-        out.append((st.id, concept_styles.SAMPLE_SCENE, st.id, sorted(set([at, EXTRA_AT]))))
+        at = sorted(set([st.sample_at or concept_styles.SAMPLE_AT[0], EXTRA_AT]))
+        out.append((st.id, concept_styles.SAMPLE_SCENE, st.id, at, concept_styles.SIZE))
+        if st.portrait:
+            out.append((st.id + PORTRAIT_SUFFIX, concept_styles.SAMPLE_SCENE, st.id, at,
+                        concept_styles.PORTRAIT_SIZE))
     return out
 
 
@@ -62,23 +72,23 @@ def pixel_hash(path: Path) -> str:
 
 def render_all(only: list[str], png_dir: Path | None) -> dict[str, dict[str, str]]:
     """渲染所有模版,返回 {模版名: {时刻: 像素哈希}}。"""
-    todo = [t for t in targets() if not only or t[0] in only]
+    todo = [t for t in targets() if not only or t[0] in only or t[0].removesuffix(PORTRAIT_SUFFIX) in only]
     if png_dir:
         png_dir.mkdir(parents=True, exist_ok=True)
     frames: dict[str, dict[str, str]] = {}
     done: list[str] = []
     failed: list[str] = []
 
-    def one(job: tuple[str, str, str | None, list[float]]) -> None:
-        name, scene, style, at = job
+    def one(job: tuple[str, str, str | None, list[float], tuple[int, int]]) -> None:
+        name, scene, style, at, size = job
         try:
             pngs = motion.snapshot(scene, concept_styles.SAMPLE_DATA, concept_styles.SAMPLE_SECONDS,
-                                   at, concept_styles.SIZE, motion.cache_dir(), style=style)
+                                   at, size, motion.cache_dir(), style=style)
             frames[name] = {}
             for png, t in zip(pngs, at):
                 frames[name][f"{t:g}"] = pixel_hash(png)
                 if png_dir:
-                    shutil.copyfile(png, png_dir / f"{name}__t{t:g}.png")
+                    shutil.copyfile(png, png_dir / f"{name.replace(':', '_')}__t{t:g}.png")
             done.append(name)
             print(f"  {name} ok")
         except Exception as exc:  # noqa: BLE001

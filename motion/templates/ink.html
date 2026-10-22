@@ -1,7 +1,8 @@
 <!-- @name 国潮水墨
      @desc 宣纸底 + 竖排行楷大标题 + 远山淡墨,每个参数是一方朱红印章,"啪"地盖下去
      @order 15
-     @light yes -->
+     @light yes
+     @portrait yes -->
 <style>
     html, body { background: #efe6d2; }
     #root { color: #1d1a16; font-family: "STKaiti", "KaiTi", serif;
@@ -23,9 +24,15 @@
     .item .b { position: absolute; font-size: 32px; color: #6b5e4c; white-space: nowrap; }
     .item .tag { position: absolute; font-size: 26px; color: #8a7c66; white-space: nowrap; }
     .src { position: absolute; left: 110px; bottom: 60px; font-size: 26px; color: #6b5e4c; letter-spacing: 0.2em; }
+    /* portrait: title column on the right; each parameter is a row (vertical label + seal) */
+    [data-aspect=portrait] .hills { bottom: 380px; }
+    [data-aspect=portrait] .ttl { right: 80px; top: 236px; }
+    [data-aspect=portrait] .item { height: auto; }
+    [data-aspect=portrait] .src { left: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
+    const PT = HF.portrait;
 
     add(HF.el("div", "fiber"));
     // 远山:两层淡墨山影,慢慢平移
@@ -41,13 +48,15 @@
     // 竖排标题:逐字晕开
     const ttl = add(HF.el("div", "ttl"));
     const title = D.title || "";
-    const tsz = Math.min(150, 860 / Math.max(1, Array.from(title).length)); ttl.style.fontSize = tsz + "px";
+    const tsz = PT ? Math.min(130, 1000 / Math.max(1, Array.from(title).length)) : Math.min(150, 860 / Math.max(1, Array.from(title).length));
+    ttl.style.fontSize = tsz + "px";
     const tch = HF.chars(ttl, title);
     tl.fromTo(tch, { opacity: 0, filter: "blur(10px)", scale: 1.3 }, { opacity: 1, filter: "blur(0px)", scale: 1, duration: 0.6, ease: "power2.out", stagger: 0.12 }, 0.2);
     const kick = add(HF.el("div", "kick", [D.subject, HF.kicker].filter(Boolean).join("·")));
-    kick.style.right = (150 + tsz * 1.25) + "px"; kick.style.top = "100px";
+    kick.style.right = ((PT ? 80 : 150) + tsz * 1.25) + "px"; kick.style.top = PT ? "246px" : "100px";
     tl.fromTo(kick, { opacity: 0, y: -20 }, { opacity: 1, y: 0, duration: 0.6 }, 0.5);
-    const seal0 = add(HF.el("div", "seal-s")); seal0.style.right = "160px"; seal0.style.top = (120 + Array.from(title).length * tsz * 1.12) + "px";
+    const seal0 = add(HF.el("div", "seal-s")); seal0.style.right = PT ? "90px" : "160px";
+    seal0.style.top = ((PT ? 266 : 120) + Array.from(title).length * tsz * 1.12) + "px";
     Array.from((HF.kicker || "参数").slice(0, 4)).forEach((ch) => seal0.appendChild(HF.el("span", "", ch)));
     tl.fromTo(seal0, { scale: 2, opacity: 0, rotation: -12 }, { scale: 1, opacity: 1, rotation: -4, duration: 0.25, ease: "power4.in" }, 0.3 + tch.length * 0.12);
 
@@ -56,15 +65,27 @@
     const t0 = T(1.0), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.62) - t0);
     const rng = HF.rng(21);
     items.forEach((it, k) => {
-      const x = 1400 - (k + 1) * colW;
-      const item = add(HF.el("div", "item")); item.style.left = x + "px"; item.style.width = colW + "px";
-      const lab = HF.el("div", "lab", it.label); lab.style.left = (colW / 2 - 23) + "px"; lab.style.top = "150px"; item.appendChild(lab);
-      const sw = colW - 50, sealH = Math.min(150, sw * 0.5);
+      const item = add(HF.el("div", "item"));
+      const lab = HF.el("div", "lab", it.label); item.appendChild(lab);
+      // 竖屏:每个参数一行(左边竖写标签,右边一方大印),从上往下排
+      const rowH = PT ? Math.min(300, 960 / n) : 0;
+      const sw = PT ? 540 : colW - 50, sealH = PT ? Math.min(150, rowH * 0.55) : Math.min(150, sw * 0.5);
+      if (PT) {
+        Object.assign(item.style, { left: "64px", top: (500 + k * rowH) + "px", width: "760px", height: rowH + "px" });
+        lab.style.left = "0px"; lab.style.top = "0px"; lab.style.fontSize = Math.min(46, rowH / Math.max(2, Array.from(it.label).length) / 1.25) + "px";
+      } else {
+        const x = 1400 - (k + 1) * colW;
+        item.style.left = x + "px"; item.style.width = colW + "px";
+        lab.style.left = (colW / 2 - 23) + "px"; lab.style.top = "150px";
+      }
       const seal = HF.el("div", "seal", it.value); seal.style.fontSize = HF.fit(it.value, sw - 40, 92, 0.95) + "px";
-      Object.assign(seal.style, { left: "25px", top: "560px", width: sw + "px", height: sealH + "px" }); item.appendChild(seal);
+      Object.assign(seal.style, PT ? { left: "100px", top: ((rowH - sealH) / 2 - 16) + "px", width: sw + "px", height: sealH + "px" }
+                                   : { left: "25px", top: "560px", width: sw + "px", height: sealH + "px" });
+      item.appendChild(seal);
+      const below = PT ? ((rowH - sealH) / 2 - 6 + sealH) : (580 + sealH), bx = PT ? "104px" : "28px";
       const extra = [];
-      if (it.b) { const b = HF.el("div", "b", HF.cols[1] + " " + it.b); b.style.left = "28px"; b.style.top = (580 + sealH) + "px"; item.appendChild(b); extra.push(b); }
-      else if (it.tag) { const tg = HF.el("div", "tag", it.tag); tg.style.left = "28px"; tg.style.top = (580 + sealH) + "px"; item.appendChild(tg); extra.push(tg); }
+      if (it.b) { const b = HF.el("div", "b", HF.cols[1] + " " + it.b); b.style.left = bx; b.style.top = below + "px"; item.appendChild(b); extra.push(b); }
+      else if (it.tag) { const tg = HF.el("div", "tag", it.tag); tg.style.left = bx; tg.style.top = below + "px"; item.appendChild(tg); extra.push(tg); }
       const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
       const rot = (rng() - 0.5) * 8;
       tl.fromTo(lab, { opacity: 0, clipPath: "inset(0 0 100% 0)" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.6, ease: "power2.out" }, at);

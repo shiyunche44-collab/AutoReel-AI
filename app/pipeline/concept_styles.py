@@ -26,6 +26,9 @@ from . import library, motion, motion_assets
 SIZE = (1920, 1080)
 #: 示例图存成这个宽度的 jpg(页面上最多显示到 ~400px 宽,留两倍余量放大看)
 SAMPLE_WIDTH = 960
+#: 竖屏示例图的画幅与宽度(选择面板里竖着显示,宽度一半就够)
+PORTRAIT_SIZE = (1080, 1920)
+PORTRAIT_SAMPLE_WIDTH = 480
 #: 手动重截时并行的浏览器数
 WORKERS = 3
 
@@ -123,31 +126,37 @@ def _sample_photo() -> motion_assets.Cutout | None:
 
 
 def make_samples(everything: bool = False) -> list[str]:
-    """截示例图写进 `motion/templates/samples/`,返回失败的模版。everything=False 只补缺的。"""
+    """截示例图写进 `motion/templates/samples/`(横屏 `<id>.jpg`、竖屏 `<id>_v.jpg`),
+    返回失败的模版。everything=False 只补缺的;竖屏只截有竖屏版式的模版。"""
     ok, why = config.motion_status()
     if not ok:
         raise SystemExit(why)
-    todo = [s.id for s in motion.styles() if everything or not sample_path(s.id).is_file()]
+    jobs = [(s.id, False) for s in motion.styles() if everything or not sample_path(s.id).is_file()]
+    jobs += [(s.id, True) for s in motion.styles()
+             if portrait_ready(s.id) and (everything or not portrait_sample_path(s.id).is_file())]
     samples_dir().mkdir(parents=True, exist_ok=True)
     photo = _sample_photo()
     failed: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
-        def one(sid: str) -> None:
+        def one(job: tuple[str, bool]) -> None:
+            sid, tall = job
+            name = f"{sid}{' 竖屏' if tall else ''}"
             try:
                 at = [motion.get_style(sid).sample_at] if motion.get_style(sid).sample_at else SAMPLE_AT
-                png = motion.snapshot(SAMPLE_SCENE, SAMPLE_DATA, SAMPLE_SECONDS, at, SIZE,
-                                      Path(tmp), photo=photo, style=sid)[0]
+                png = motion.snapshot(SAMPLE_SCENE, SAMPLE_DATA, SAMPLE_SECONDS, at,
+                                      PORTRAIT_SIZE if tall else SIZE, Path(tmp), photo=photo, style=sid)[0]
             except motion.MotionError as exc:
-                print(f"  {sid} 失败:{str(exc)[:200]}")
-                failed.append(sid)
+                print(f"  {name} 失败:{str(exc)[:200]}")
+                failed.append(name)
                 return
+            width = PORTRAIT_SAMPLE_WIDTH if tall else SAMPLE_WIDTH
             im = Image.open(png).convert("RGB")
-            im = im.resize((SAMPLE_WIDTH, round(SAMPLE_WIDTH * im.height / im.width)), Image.LANCZOS)
-            im.save(sample_path(sid), quality=86, optimize=True)
-            print(f"  {sid} ok")
+            im = im.resize((width, round(width * im.height / im.width)), Image.LANCZOS)
+            im.save(portrait_sample_path(sid) if tall else sample_path(sid), quality=86, optimize=True)
+            print(f"  {name} ok")
 
         with ThreadPoolExecutor(WORKERS) as pool:
-            list(pool.map(one, todo))
+            list(pool.map(one, jobs))
     return failed
 
 

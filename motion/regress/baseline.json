@@ -13,101 +13,209 @@
       "1.2": "df8acf82e15336a48b9053aa65769010521bbb5aa5c1e0fb23a4d01ba47972b4",
       "5.5": "d65eb71f5e84e9d6977afdbc3c131772d865b61ec7939bf81f193e8d553f36e9"
     },
+    "accel:v": {
+      "1.2": "e05c22b808e8070f04389b8c1bfb62409c790d1b332c4e53991928e1a8b96c40",
+      "5.5": "80ba05ae6fa752bfad49d178dbfbc990aef4727f4a8ebb5e856f0fc5c173540c"
+    },
     "chip": {
       "1.2": "c1e1678dd5763200d89f5d645e03427a6c68e9073cf2f4d24403f3dfc893c2ba",
       "5.5": "112bfb0ffd9b26f66ba228cb8d6e35c9b420736c97f3eae79393fae6c0320d2d"
     },
-    "dims": {
-      "1.2": "6aae902a2172bed4213170fe4e191af060be5bd7d9fd6e8444ecae070cb5a091",
-      "5.5": "9dc5cf99c30322769ee916d4c72df7e4159b42c176452ab6eb3d06e57a3ab1dd"
+    "battery:v": {
+      "1.2": "c7a10a1ff5a8cff1b4a893d54f4b93abd3ad305a68097b301a1c88b31b9ed42a",
+      "5.5": "49f26de3cc100dbe8dd5002f8d5a9083cbaf0c758165666bace91c5fd7dbcc1d"
     },
     "compare": {
       "1.2": "6e302aae3bcf80c18d247ee21983a953ceb86715c630d48ba79b61db772d01a5",
       "5.5": "dd6f4c9ca37aa648810e1159c636dc2cb2b029fc9e7e052780c88c2f75a04d86"
     },
-    "kinetic": {
-      "1.2": "b781d38cdffe90cefbff8dc74d2dce93ea613a3ccb1476e44f48eda59b5df05f",
-      "5.5": "2c33292c053a8d3b95c530072a33cb10d8e42296d690eafc32a0984fdc152978"
+    "charging:v": {
+      "1.2": "9681330c01e6613fc13661268fc9e2ec90970bb8a2e28f05bc9ad43dd3e4bd09",
+      "5.5": "b1aec7cd2b8fb4ffa7ca93b2ee39cd4e25d96f169ff73f326597df2534a011f3"
     },
-    "film": {
-      "1.2": "4ba14449b9e39068d26a81975744e9e63fb494f8f18f33ba814d0c8d76908158",
-      "2.6": "8d9dea0b8cc7926526ec72637aa37d721a5de10ed5ed30bf2c9ce5fc803668ff"
+    "dims": {
+      "1.2": "6aae902a2172bed4213170fe4e191af060be5bd7d9fd6e8444ecae070cb5a091",
+      "5.5": "9dc5cf99c30322769ee916d4c72df7e4159b42c176452ab6eb3d06e57a3ab1dd"
+    },
+    "chip:v": {
+      "1.2": "871cabaaaa2c3ab34559e09007bff772f4544d362c6ff198b33bb778cf9d20c4",
+      "5.5": "4122ab3f602d152ecaea2e4fce44a225ca0241f1533590d7d36f76d9f1714526"
     },
     "lidar": {
       "1.2": "1b5f36327022484396a7c6e971f7ffa1b38432a0ecc5360a90daa9d7fcbcbd4a",
       "5.5": "9d4fc399d8df765585d7e3612a1a845037d91c63b2360b0e1ddbf29a7fcd8071"
     },
+    "compare:v": {
+      "1.2": "c1e48af40a33028149b2a58a1df55ff8c32f61651c7c4c79db606098c7d3175e",
+      "5.5": "4da69ecd22bbf9398894b44f2552407c30cfd2076ef0fd7b7068bbdfb175ce96"
+    },
+    "film": {
+      "1.2": "4ba14449b9e39068d26a81975744e9e63fb494f8f18f33ba814d0c8d76908158",
+      "2.6": "8d9dea0b8cc7926526ec72637aa37d721a5de10ed5ed30bf2c9ce5fc803668ff"
+    },
+    "dims:v": {
+      "1.2": "58f9a1bdd632f13fe1be94f5805a3e6a8ba8e9c745c9dd6d38eb87b3d7a7e245",
+      "5.5": "40b06043d57d85843d3f768a6b947e3e963493af5dabe4f299860e7781d4e37e"
+    },
+    "kinetic": {
+      "1.2": "b781d38cdffe90cefbff8dc74d2dce93ea613a3ccb1476e44f48eda59b5df05f",
+      "5.5": "2c33292c053a8d3b95c530072a33cb10d8e42296d690eafc32a0984fdc152978"
+    },
+    "kinetic:v": {
+      "1.2": "b5181e5284ba3ca575f50f1a214dfbe95a34a51ff305483d3f46a31b8d632dc5",
+      "5.5": "e8ddcdde1cb70f103d3bbe88dd5366c9122a61e29fc628bb5db1d97e44ad2491"
+    },
     "gauge": {
       "1.2": "0386e109819481309b0bf63af9af4bc844f4669f58afbc658820f9d666100a38",
       "5.5": "090d4cf9e989ddafb893090f33151078432a6171aa888c44f78d9cf955015b66"
+    },
+    "film:v": {
+      "1.2": "1f7e7f0bbe8f64a68f1f96a4b334f21e535c1c257f2f93f6f58d1e56f832ff12",
+      "2.6": "f9554d1d1aeff954147c765cc413ef9b5d445e599a936f177003cd3fa28d15f8"
     },
     "editorial": {
       "1.2": "663068f03de5e6a391e8ff893cc21cc69e02ea515b3247e0c7399c88d7027229",
       "5.5": "80b48c683a0483b6a4106325a05af61c178b5cfc29c8cd4160b4d82c1b853bc8"
     },
+    "lidar:v": {
+      "1.2": "2f3f3085497b2b0bde8c525a5c4dcf035e9dc797df96124a34907e2934fc2ae4",
+      "5.5": "40d1ef5fb44449b0d79c0b992f2b13e1375d9e64720ac69d6067894df596dfec"
+    },
     "split": {
       "1.2": "526fe4db6dfc78c269a8a31faed454cf460ea7153915af3e9851ca25acdc2f11",
       "5.5": "522c97ddf73274bc263f4d4b089b4a044cdc419de628ce9fcdc5fa99bfa692de"
+    },
+    "gauge:v": {
+      "1.2": "895f0f4ecd412aa35c3668ac3db08d296937f7041c3d5fc5f8a78f027d356ecb",
+      "5.5": "f34c4db3658252888eabe00ee37151a68aacdba75d97358b39f8d97822edb5b5"
     },
     "bento": {
       "1.2": "b2265648c588be912461fa2deb46b53ebe9d655752c6341253e49d8e38cb58b4",
       "5.5": "864daa3375f4788437914c1605d0b986f33ce8c132bf3e99d3add4e36385875c"
     },
+    "editorial:v": {
+      "1.2": "6caf8dac6517ed3b26c59de61d47ad09829e45493419ea7b035e1006d74e91b1",
+      "5.5": "0448a7ffd84ce954457d1bfedf6539e99b19815de22605dbcdb27a9b09449d6f"
+    },
     "terminal": {
       "1.2": "9b16ebdafa2c6a9a89230addfd671bc2e5af3a6f8204607d1a939ae80769db33",
       "5.5": "fafde7eb0c1038237c351123be787e75811e23040ff3ef895095268849007d0a"
+    },
+    "split:v": {
+      "1.2": "9faf587c1b94b6bc15f95d8a0cc7ba14b7a6e38be9da9058e8f5a4c164b06e68",
+      "5.5": "062ea57ce9f3097825bc4031944f046df10c29f25f9fbbacd2675ffac517ec2d"
     },
     "blueprint": {
       "1.2": "5fe234d3db0d8a73e1ea72191a5444f6a1f498f9fbd046ba43d0d5188d39a5fa",
       "5.5": "a3daca795bb03edc34bad77c87c9f37f07a2c6af1801d11691ad4e017f49d2fe"
     },
+    "bento:v": {
+      "1.2": "2d8c68c38cbb5f0789022b01e056d2145c47b6029b175cfd69b3eca6448d1241",
+      "5.5": "cdf6ef9588acc8b2f3cf1f9b3752a75d22192175fbac2f3078fb4ab68daaab46"
+    },
     "neon": {
       "1.2": "6ac25b0c8380d6930583342ad2f1d6d76b429ddabbafc9eac0ea4b28f6b6d99d",
       "5.5": "d3bbc69bd160021b4a597a38fc0367c3e87d6b42081f48f4cd475d354fa41bf6"
     },
-    "timeline": {
-      "1.2": "9b992a9c135476e952e5b54b2a6385e31b952091544d2a0a6748469b9db7f772",
-      "6.35": "d6ccfbb437b430769075f86c73fc543a8013f8ca17be27e102373965186f9feb"
+    "terminal:v": {
+      "1.2": "b28176899d6f2c2516343e3a734f2ffbe16432816c287e23c076dc0a82176dea",
+      "5.5": "ca1ab72d82ef9a4271374005ddc6ea2d1f9f1d3f5b6470d149d91a0868d66d5f"
     },
     "cinema": {
       "1.2": "7080c3638c865173cc9e46cf52e16326427332780eefecf96551eb4c7a58d6c1",
       "6.4": "5eb07621d5ed02b930ed573a810d8bb962047ca6fd502796b2b9a50e737ca743"
     },
+    "blueprint:v": {
+      "1.2": "30f31790fd4e04bde9b2d5f94bba500de5421e2f96c0b184c64f9f2d77062ef6",
+      "5.5": "46b3cb328aa6ef8f27be05351d381e91138c1d1f686557bb5537823a014d4e54"
+    },
+    "timeline": {
+      "1.2": "9b992a9c135476e952e5b54b2a6385e31b952091544d2a0a6748469b9db7f772",
+      "6.35": "d6ccfbb437b430769075f86c73fc543a8013f8ca17be27e102373965186f9feb"
+    },
+    "neon:v": {
+      "1.2": "c59cfdbfb761c20155be94af1d06594023b3af3b278824f72e63a3f98659eaa8",
+      "5.5": "99467693a6d3c4459d5ed5a9b4442b10b38b0e7288d5de3079f438c5ef6205dc"
+    },
     "carousel": {
       "1.2": "bb952556d55ec488b88a9aa999414dc98d769a1da8b544f5bba5c81b79452976",
       "6.2": "526501fafb01b6190ad15db87aea5d705c8bf4db0281cfafcab21ba392810bfa"
+    },
+    "timeline:v": {
+      "1.2": "56c1cd32df9f9800f5d8c516bb161ce2048296c7757e5dc573cd4accfd630622",
+      "6.35": "ff371a3ceec32cb61a90d11b5b0d357123a0c80a4c2e8eca845797f47b81750c"
     },
     "swiss": {
       "1.2": "e7cc5c3430952afb1f343da1b19d0e37374137fe1515f7763e9a6962ab6c3f93",
       "5.5": "d454700cecc9f98572135d38962c6486095e1638101b043f40d8db7f211dada3"
     },
+    "cinema:v": {
+      "1.2": "10e7bee374fcd9facceb91d2239170a51d3a40d7a8f62acc4b390c86727cf541",
+      "6.4": "7f8f183be0040a208252784fcac3d271b59c688e6862e09fa049d70bfa3c4e6b"
+    },
     "racing": {
       "1.2": "4129f3c851cda36205a8588838cef62f5171b05384e0d34a97cc7c6c95f6fcd3",
       "5.5": "3dbd9784c0203fd1a3eec141bf6cfa71acd7ef8e0ab626ebae657c97ddefeb89"
+    },
+    "carousel:v": {
+      "1.2": "b57f543ec1d90b1b7ac76cffb1767d25a98e0f460be67d8199a4305bc15e3bac",
+      "6.2": "59d0a0b3efcfb4911cef83e7ff4c5b73120a7117269f67ba8425aee779739230"
     },
     "popart": {
       "1.2": "d88342c08c6ad9d41953441e68f29daff4fe2f88b1261017a36cdd44acc45c9d",
       "5.5": "91d34edd6d4859b1c452048e086a2ee5d12a591eed71e9d96a988c450d81225f"
     },
+    "swiss:v": {
+      "1.2": "d6508a57bce7709cd89e1c7efe83389dff18a3609debce225bdb995473632c0c",
+      "5.5": "8eb9cfafe2b0e670f93c0f3cd71302e5255c68ba2abf7b2d99582baf59d75ea6"
+    },
     "ink": {
       "1.2": "a5915c9f8ba84114638517293a44f2d191684c633387c63ff940f2cfa4e5915c",
       "5.5": "6c5989711decdc0660881148e33569075fc0013ab90a2159d5a44075e387866d"
+    },
+    "racing:v": {
+      "1.2": "dd9d6d27ee442bb80b28d3ac99652a36ec7649b0fdcd7e27bfec43045f9c2605",
+      "5.5": "97bb35a34d32f00078c139b3ffebe89c2f350dd94281ecb8f5f1f2afb5aabe5e"
     },
     "particles": {
       "1.2": "03350ee9d0b0853dbf927f988bde53a28639472897c7b53ebe66e9a3cb31c0bc",
       "5.5": "73f6391a4e1dd140ea33e4c3a4ca41163db4b6d773e3bc16b7bfb16c626802ff"
     },
+    "popart:v": {
+      "1.2": "5f7cae84572d2d2872736158f59122fe1bf433b7ce063248d84d3ece3c5d96ae",
+      "5.5": "1bfc874bb4a61707e89a1ef8bd71f9b0c12f0368339084758ea5259bfe0a4a9a"
+    },
     "radar": {
       "1.2": "379aab34481eb45ca9123a5f8c7e106815843a9edef2bb4824b4f58666c5e734",
       "5.5": "9a7d988d0db501431e21344b558d4c79c7907d6453538ba0abce83840e9bb869"
+    },
+    "ink:v": {
+      "1.2": "7a4439601b0784d6faf33cf87bdfc1c6587893ba13b0ec94affaf2e914b5d2d8",
+      "5.5": "a4c9b9d3f7878607d9b0c690b7a71df45edb84ee7ab8f41b221dc7a5f74600c6"
     },
     "glass": {
       "1.2": "a25ab763ffe96379b399e076c64329f9f5f86f637592aa91a535ca22993c136b",
       "5.5": "f9901dfdb8963bc64be6577a5fea688bc96b252b87fca6170458d780642990e6"
     },
+    "particles:v": {
+      "1.2": "088952f128d9d726a9d0c9d3d7aadd9b16b4a45ff75687e88cf674c0c1615b9c",
+      "5.5": "c21d951d69efbac264f015b749c8c4fb450e3e3dfd41c14db9746088b341bf6d"
+    },
     "newspaper": {
       "1.2": "00b7b6a01fad0819f29202d994b924cf6db570c534e7c91ebf25eb6c3663b920",
       "5.5": "f2061011dfa0ffd66b1b9ab96568284de06c87a853c8887bf99f1d36bd941a73"
+    },
+    "radar:v": {
+      "1.2": "b937549c36f0afdac723b9fb92c8ff2f99ecf9390fe690eccc836cf400475ccd",
+      "5.5": "0a73aa12ed8ff64f614fb02cca7762ad2d7b7fd04f60b1c30fabb27fe1b855b8"
+    },
+    "glass:v": {
+      "1.2": "3c9135df20d0c775cb01ddca6c4e80588bb6c25ca9c1319cb465e24d95d7e44d",
+      "5.5": "ef08247bd3aff4424a3fb84177155b6d09ac18a9e7d8cdb8c66dadefcb34d15e"
+    },
+    "newspaper:v": {
+      "1.2": "c03de6aa9ef681df6f45e82ba0f967bf3265ba0249ee95a1a46564d5bd50ba14",
+      "5.5": "7ce01b69ef823ba51bcf2b462c903ca723103039d89835eb8e67decdc51d1a3b"
     }
   }
 }

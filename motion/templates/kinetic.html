@@ -1,6 +1,7 @@
 <!-- @name 巨字快切
      @desc 黑底满屏巨字,一屏一个数字,逐字弹起、黄色硬切转场,节奏感最强
-     @order 1 -->
+     @order 1
+     @portrait yes -->
 <style>
     html, body { background: #0a0a0a; }
     #root { background: #0a0a0a; color: #fff;
@@ -25,6 +26,16 @@
     .wipe { position: absolute; top: 0; bottom: 0; left: 0; width: 1920px; background: #ffe600; }
     .bar { position: absolute; left: 96px; bottom: 96px; height: 6px; width: 1728px; background: rgba(255,255,255,0.12); }
     .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; background: #ffe600; transform-origin: 0 50%; }
+    /* portrait: same rhythm on a 952px column inside the safe box */
+    [data-aspect=portrait] .top { left: 64px; right: 64px; top: 210px; font-size: 24px; }
+    [data-aspect=portrait] .slot { left: 64px; right: 64px; }
+    [data-aspect=portrait] .lab, [data-aspect=portrait] .lab-mask { top: 640px; }
+    [data-aspect=portrait] .lab-mask { width: 952px; }
+    [data-aspect=portrait] .lab-mask .lab { top: 0; }
+    [data-aspect=portrait] .sub { bottom: auto; top: 1300px; font-size: 32px; }
+    [data-aspect=portrait] .idx { bottom: auto; top: 1380px; right: auto; left: 0; }
+    [data-aspect=portrait] .wipe { width: 1080px; }
+    [data-aspect=portrait] .bar { left: 64px; width: 952px; bottom: auto; top: 1480px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
@@ -40,7 +51,8 @@
     const intro = add(HF.el("div", "intro"));
     const ln = HF.el("div", "ln"); intro.appendChild(ln);
     const tch = HF.chars(ln, D.title || HF.kicker || "");
-    const tSize = HF.fit(D.title || "", 1600, 190);
+    const PT = HF.portrait;
+    const tSize = HF.fit(D.title || "", PT ? 940 : 1600, PT ? 150 : 190);
     tch.forEach((c) => { c.style.fontSize = tSize + "px"; });
     const introEnd = items.length ? T(1.25) : A.outAt;
     tl.fromTo(tch, { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: "expo.out", stagger: 0.035 }, 0.05);
@@ -60,9 +72,10 @@
       const lm = HF.el("div", "lab-mask"); const lab = HF.el("div", "lab", it.label); lm.appendChild(lab); slot.appendChild(lm);
       const val = HF.el("div", "val"); slot.appendChild(val);
       const vch = HF.chars(val, it.value);
-      const vs = HF.fit(it.value, 1700, 380, 1.4);
+      const vs = HF.fit(it.value, PT ? 960 : 1700, PT ? 300 : 380, 1.4);
       vch.forEach((c) => { c.style.fontSize = vs + "px"; });
-      val.style.top = (360 + Math.max(0, (400 - vs) * 0.45)) + "px";
+      val.style.top = PT ? (750 + Math.max(0, (300 - vs) * 0.45)) + "px"
+                         : (360 + Math.max(0, (400 - vs) * 0.45)) + "px";
       const sub = HF.el("div", "sub");
       if (it.b) { sub.textContent = HF.cols[0] + " vs " + HF.cols[1]; const bb = HF.el("b", "", it.b); sub.appendChild(bb); }
       else sub.textContent = it.tag;

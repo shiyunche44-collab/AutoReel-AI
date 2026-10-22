@@ -1,7 +1,8 @@
 <!-- @name 瑞士海报
      @desc 白底红黑三色、严格网格的国际主义海报,横条硬切推入,红色块在条目间跳动
      @order 12
-     @light yes -->
+     @light yes
+     @portrait yes -->
 <style>
     html, body { background: #f4f2ee; }
     #root { background: #f4f2ee; color: #111;
@@ -23,11 +24,24 @@
     .mark { position: absolute; left: 200px; width: 120px; height: 120px; background: #e30613; }
     .src { position: absolute; right: 80px; bottom: 40px; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 22px; font-weight: 600; color: #777; }
     .legend { position: absolute; right: 80px; font-family: "Inter", "Noto Sans SC", sans-serif; font-size: 26px; font-weight: 700; display: flex; gap: 40px; }
+    /* portrait: narrower grid; each row puts the value on its own line under the label */
+    [data-aspect=portrait] .cols { padding: 0 40px; }
+    [data-aspect=portrait] .side { left: 40px; top: 230px; height: 1260px; }
+    [data-aspect=portrait] .circle { width: 420px; height: 420px; right: -150px; top: 120px; }
+    [data-aspect=portrait] .ttl { left: 120px; top: 236px; }
+    [data-aspect=portrait] .sub { left: 124px; }
+    [data-aspect=portrait] .row { left: 120px; right: 64px; }
+    [data-aspect=portrait] .row .val { right: auto; left: 160px; top: 96px; }
+    [data-aspect=portrait] .row .b { top: 110px; }
+    [data-aspect=portrait] .mark { left: 120px; }
+    [data-aspect=portrait] .legend { right: 64px; }
+    [data-aspect=portrait] .src { right: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
+    const PT = HF.portrait;
 
-    const cols = add(HF.el("div", "cols")); for (let k = 0; k < 12; k++) cols.appendChild(HF.el("i"));
+    const cols = add(HF.el("div", "cols")); for (let k = 0; k < (PT ? 7 : 12); k++) cols.appendChild(HF.el("i"));
     const circle = add(HF.el("div", "circle"));
     tl.fromTo(circle, { scale: 0 }, { scale: 1, duration: 0.7, ease: "expo.out" }, 0.05);
     tl.fromTo(circle, { x: 0, y: 0 }, { x: -60, y: 30, duration: S, ease: "none" }, 0);
@@ -35,12 +49,12 @@
     tl.fromTo(sp, { opacity: 0 }, { opacity: 1, duration: 0.01 }, 0.3);
     tl.fromTo(side, { clipPath: "inset(0 0 100% 0)" }, { clipPath: "inset(0 0 0% 0)", duration: 0.6, ease: "steps(8)" }, 0.3);
     const ttl = add(HF.el("div", "ttl", D.title || ""));
-    const ts = HF.fit(D.title || "", 1180, 150); ttl.style.fontSize = ts + "px";
+    const ts = HF.fit(D.title || "", PT ? 880 : 1180, PT ? 130 : 150); ttl.style.fontSize = ts + "px";
     tl.fromTo(ttl, { x: -120, opacity: 0 }, { x: 0, opacity: 1, duration: 0.45, ease: "expo.out" }, 0.15);
-    const sub = add(HF.el("div", "sub", D.source ? "数据来源 / " + D.source : "")); sub.style.top = (110 + ts * 1.1) + "px";
+    const sub = add(HF.el("div", "sub", D.source ? "数据来源 / " + D.source : "")); sub.style.top = ((PT ? 250 : 110) + ts * 1.1) + "px";
     tl.fromTo(sub, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 0.5);
 
-    const rowH = 150, top0 = Math.max(400, 1000 - rowH * items.length);
+    const rowH = PT ? 210 : 150, top0 = PT ? Math.max(560, 1480 - rowH * items.length) : Math.max(400, 1000 - rowH * items.length);
     if (HF.cmp) {
       const lg = add(HF.el("div", "legend")); lg.style.top = (top0 - 50) + "px";
       const a = HF.el("span", "", "■ " + HF.cols[0]); const b = HF.el("span", "", "■ " + HF.cols[1]); b.style.color = "#e30613";
@@ -51,15 +65,18 @@
     const t0 = T(0.75), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.62) - t0);
     items.forEach((it, k) => {
       const row = HF.el("div", "row"); row.style.top = (top0 + k * rowH) + "px";
+      if (PT) row.style.height = rowH + "px";
       const no = HF.el("div", "no", String(k + 1)); row.appendChild(no);
       row.appendChild(HF.el("div", "lab", it.label));
       if (it.tag) row.appendChild(HF.el("div", "tag", it.tag));
-      const val = HF.el("div", "val"); const vs = HF.fit(it.value, it.b ? 520 : 900, 124, 1.4); val.style.fontSize = vs + "px"; row.appendChild(val);
-      if (it.b) { const b = HF.el("div", "b", it.b); b.style.fontSize = Math.round(vs * 0.7) + "px"; val.style.right = "560px"; b.style.top = (4 + vs * 0.2) + "px"; row.appendChild(b); }
+      const val = HF.el("div", "val"); const vs = PT ? HF.fit(it.value, it.b ? 400 : 700, 100, 1.4) : HF.fit(it.value, it.b ? 520 : 900, 124, 1.4);
+      val.style.fontSize = vs + "px"; row.appendChild(val);
+      if (it.b) { const b = HF.el("div", "b", it.b); b.style.fontSize = Math.round(vs * 0.7) + "px";
+        if (!PT) { val.style.right = "560px"; b.style.top = (4 + vs * 0.2) + "px"; } row.appendChild(b); }
       add(row);
       const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
       const dir = k % 2 ? 1 : -1;
-      tl.fromTo(row, { x: dir * 1900 }, { x: 0, duration: 0.42, ease: "expo.out" }, at);
+      tl.fromTo(row, { x: dir * (PT ? 1100 : 1900) }, { x: 0, duration: 0.42, ease: "expo.out" }, at);
       HF.countText(tl, val, it.value, at + 0.1, 0.6, { ease: "power4.out" });
       // 红块跳到这一行,编号反白
       tl.set(mark, { opacity: 1, top: (top0 + k * rowH + 6 + 14) + "px" }, at + 0.25);

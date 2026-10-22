@@ -1,6 +1,7 @@
 <!-- @name 工程蓝图
      @desc 蓝底白线工程图纸:网格铺开、车身线稿逐段描出、编号引线 + 右下角图签表
-     @order 7 -->
+     @order 7
+     @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
     html, body { background: #0c3b8f; }
@@ -30,6 +31,12 @@
     td.b { font-weight: 700; font-size: 30px; text-align: right; color: #ffd84a; }
     tr.h td { font-size: 20px; letter-spacing: 0.18em; color: rgba(234,242,255,0.7); height: 50px; }
     .stamp { position: absolute; right: 110px; top: 100px; text-align: right; font-size: 20px; line-height: 1.7; color: rgba(234,242,255,0.7); letter-spacing: 0.1em; }
+    /* portrait: title, then the drawing with numbered leaders, then the title-block table */
+    [data-aspect=portrait] .hd { left: 90px; top: 236px; }
+    [data-aspect=portrait] .hd .t { font-size: 58px; }
+    [data-aspect=portrait] .stamp { right: auto; left: 90px; top: 370px; text-align: left; display: flex; gap: 28px; }
+    [data-aspect=portrait] table { right: auto; left: 90px; bottom: auto; top: 1040px; }
+    [data-aspect=portrait] td.v { min-width: 220px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
@@ -50,10 +57,11 @@
     tl.fromTo(stamp, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.6);
 
     // 车身线稿(有线稿图用线稿,只有照片就把照片压成白色线描感;都没有就画示意外框)
-    const sv = HF.svg("svg", { id: "ov", width: 1920, height: 1080, viewBox: "0 0 1920 1080" });
+    const PT = HF.portrait;
+    const sv = HF.svg("svg", { id: "ov", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` });
     const carSlot = add(HF.el("div"));
     root.appendChild(sv);
-    const CW = 1060, cx = 640, floorY = 650;
+    const CW = PT ? 880 : 1060, cx = PT ? 540 : 640, floorY = PT ? 860 : 650;
     const geo = P || { width: 100, height: 34, floor: 0.95, roof: 0.05, wheels: [0.239, 0.771], body: [0.02, 0.98] };
     const ch = CW * geo.height / geo.width, box = { l: cx - CW / 2, t: floorY - geo.floor * ch };
     const at = (u, v) => [box.l + u * CW, box.t + v * ch];

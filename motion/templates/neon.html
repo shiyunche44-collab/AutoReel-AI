@@ -1,6 +1,7 @@
 <!-- @name 霓虹灯牌
      @desc 夜色砖墙上的霓虹灯管字,一块块通电闪烁亮起,地面有倒影,持续嗡嗡微颤
-     @order 8 -->
+     @order 8
+     @portrait yes -->
 <style>
     html, body { background: #0a0510; }
     #root { background: #0a0510; color: #fff;
@@ -26,12 +27,19 @@
             -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%); mask-image: linear-gradient(180deg, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 80%); }
     .refl > div { position: absolute; left: 0; top: -800px; width: 1920px; height: 800px; transform: scaleY(-1); transform-origin: 50% 100%; }
     .src { position: absolute; right: 80px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.35); letter-spacing: 0.1em; }
+    /* portrait: taller wall, tubes stacked, floor and reflection lower */
+    [data-aspect=portrait] .wall { height: 1180px; }
+    [data-aspect=portrait] .floor { top: 1180px; }
+    [data-aspect=portrait] .refl { top: 1180px; height: 360px; }
+    [data-aspect=portrait] .refl > div { top: -1180px; width: 1080px; height: 1180px; }
+    [data-aspect=portrait] .src { right: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
+    const PT = HF.portrait, WALL = PT ? 1180 : 800;
 
     add(HF.el("div", "wall")); add(HF.el("div", "floor"));
-    const stage = add(HF.el("div")); stage.style.cssText = "position:absolute;left:0;top:0;width:1920px;height:800px;";
+    const stage = add(HF.el("div")); stage.style.cssText = `position:absolute;left:0;top:0;width:${HF.W}px;height:${WALL}px;`;
     const rng = HF.rng(7);
     const signs = [];
     // 通电:几下不规则闪烁后稳住
@@ -42,20 +50,29 @@
       signs.push(el);
     };
     const kick = HF.el("div", "sign neon cyan kick", [D.subject, HF.kicker].filter(Boolean).join("  ·  "));
-    Object.assign(kick.style, { left: "0", right: "0", top: "90px" }); stage.appendChild(kick);
+    Object.assign(kick.style, { left: "0", right: "0", top: PT ? "240px" : "90px" }); stage.appendChild(kick);
     const ttl = HF.el("div", "sign neon pink ttl", D.title || "");
-    Object.assign(ttl.style, { left: "0", right: "0", top: "150px" }); ttl.style.fontSize = HF.fit(D.title || "", 1500, 96) + "px"; stage.appendChild(ttl);
+    Object.assign(ttl.style, { left: "0", right: "0", top: PT ? "300px" : "150px" });
+    ttl.style.fontSize = HF.fit(D.title || "", PT ? 900 : 1500, 96) + "px"; stage.appendChild(ttl);
     ignite(kick, 0.2); ignite(ttl, 0.45);
 
     const n = Math.max(1, items.length), W = Math.min(520, 1680 / n - 40), gap = (1760 - n * W) / Math.max(1, n + 1);
     const t0 = T(1.0), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
     const colors = ["amber", "pink", "cyan", "amber"];
+    // 竖屏灯牌:一块居中放大;两块上下;三四块排两列(第三块居中)
+    const pbox = (k) => {
+      if (n === 1) return [140, 520, 800, 440];
+      if (n === 2) return [120, 480 + k * 340, 840, 300];
+      const row = Math.floor(k / 2), lone = n === 3 && k === 2;
+      return [lone ? 300 : (k % 2 ? 560 : 80), 480 + row * 340, 440, 300];
+    };
     items.forEach((it, k) => {
-      const x = 80 + gap + k * (W + gap);
-      const tube = HF.el("div", "tube"); Object.assign(tube.style, { left: x + "px", top: "330px", width: W + "px", height: "400px" }); stage.appendChild(tube);
-      const sg = HF.el("div", "sign"); Object.assign(sg.style, { left: x + "px", width: W + "px", top: "370px" });
+      const [px, py, pw, phh] = PT ? pbox(k) : [80 + gap + k * (W + gap), 330, W, 400];
+      const x = px, Wk = pw;
+      const tube = HF.el("div", "tube"); Object.assign(tube.style, { left: x + "px", top: py + "px", width: Wk + "px", height: phh + "px" }); stage.appendChild(tube);
+      const sg = HF.el("div", "sign"); Object.assign(sg.style, { left: x + "px", width: Wk + "px", top: (py + (PT ? 34 : 40)) + "px" });
       const lab = HF.el("div", "neon cyan lab", it.label); sg.appendChild(lab);
-      const val = HF.el("div", "neon val " + colors[k % 4], it.value); val.style.fontSize = HF.fit(it.value, W - 50, 200, 0.6) + "px"; sg.appendChild(val);
+      const val = HF.el("div", "neon val " + colors[k % 4], it.value); val.style.fontSize = HF.fit(it.value, Wk - 50, PT ? (phh - 140) : 200, 0.6) + "px"; sg.appendChild(val);
       if (it.b) sg.appendChild(HF.el("div", "neon cyan b", HF.cols[1] + " " + it.b));
       else if (it.tag) { const tg = HF.el("div", "neon cyan", it.tag); tg.style.cssText = "font-size:26px;margin-top:14px;letter-spacing:0.08em"; sg.appendChild(tg); }
       stage.appendChild(sg);
@@ -65,7 +82,7 @@
     // 地面倒影:复制一份灯牌层
     const refl = add(HF.el("div", "refl")); const mirror = stage.cloneNode(true); mirror.removeAttribute("style");
     refl.appendChild(HF.el("div")).appendChild(mirror);
-    mirror.style.cssText = "position:absolute;left:0;top:0;width:1920px;height:800px;";
+    mirror.style.cssText = `position:absolute;left:0;top:0;width:${HF.W}px;height:${WALL}px;`;
     const mirrorKids = Array.from(mirror.children), stageKids = Array.from(stage.children);
     // 倒影跟着灯牌一起闪:每帧同步透明度
     // 停留:灯管嗡嗡微颤(亮度轻微起伏),偶尔一块闪一下

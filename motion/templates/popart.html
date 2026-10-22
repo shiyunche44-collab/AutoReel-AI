@@ -1,7 +1,8 @@
 <!-- @name 波普漫画
      @desc 黄底网点 + 粗黑描边的漫画格,爆炸星芒托着数字砸进来,画格抖动,星芒慢慢旋转
      @order 14
-     @light yes -->
+     @light yes
+     @portrait yes -->
 <style>
     html, body { background: #ffde00; }
     #root { color: #111; font-family: "STHupo", "HYZhongHeiTi", "Microsoft YaHei", sans-serif;
@@ -20,19 +21,27 @@
     .pnl .b { position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 36px; white-space: nowrap; }
     .pnl .b span { background: #111; color: #ffde00; padding: 2px 16px; }
     .src { position: absolute; right: 70px; bottom: 30px; font-size: 26px; background: #111; color: #ffde00; padding: 4px 16px; }
+    /* portrait */
+    [data-aspect=portrait] .banner { left: 50px; top: 236px; }
+    [data-aspect=portrait] .src { right: 64px; bottom: auto; top: 1494px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
 
     tl.fromTo(root, { backgroundPosition: "0px 0px" }, { backgroundPosition: "44px 22px", duration: S, ease: "none" }, 0);
     const banner = add(HF.el("div", "banner"));
-    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", 1100, 84) + "px"; banner.appendChild(t);
+    const PT = HF.portrait;
+    const t = HF.el("div", "t", D.title || ""); t.style.fontSize = HF.fit(D.title || "", PT ? 820 : 1100, 84) + "px"; banner.appendChild(t);
     if (HF.kicker || D.subject) banner.appendChild(HF.el("div", "k", [D.subject, HF.kicker].filter(Boolean).join("·")));
     tl.fromTo(banner, { scale: 2.2, rotation: -14, opacity: 0 }, { scale: 1, rotation: -2, opacity: 1, duration: 0.45, ease: "back.out(2)" }, 0.05);
 
     // 画格:1~2 个横排大格,3~4 个错落
     const n = Math.max(1, items.length);
-    const boxes = n === 1 ? [[300, 280, 1320, 700]] : n === 2 ? [[90, 290, 840, 700], [990, 270, 840, 720]]
+    // 竖屏画格:一个大格;两个上下;三个一宽两窄;四个 2×2
+    const boxes = PT ? (n === 1 ? [[70, 520, 940, 820]] : n === 2 ? [[60, 470, 960, 480], [60, 1000, 960, 480]]
+      : n === 3 ? [[60, 460, 960, 380], [60, 890, 460, 590], [560, 880, 460, 600]]
+      : [[60, 460, 460, 490], [560, 450, 460, 500], [60, 990, 460, 490], [560, 990, 460, 490]])
+      : n === 1 ? [[300, 280, 1320, 700]] : n === 2 ? [[90, 290, 840, 700], [990, 270, 840, 720]]
       : n === 3 ? [[70, 300, 560, 690], [680, 270, 560, 720], [1290, 300, 560, 690]]
       : [[70, 290, 870, 340], [990, 270, 860, 360], [70, 670, 870, 340], [990, 670, 860, 340]];
     const tilt = [-1.5, 1.2, -0.8, 1.6];

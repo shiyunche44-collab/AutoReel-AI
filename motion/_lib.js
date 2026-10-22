@@ -36,6 +36,14 @@
    * = 一块虚拟的 1920×1080 舞台,整体缩放塞进 16:9 画面带。车、电池包、光束这些画面元素
    * 照横屏坐标画,不用改;文字(标题、标注数字、参数条、出处)改排到下面的数据区,保持原字号。
    */
+  /**
+   * 竖屏通用模版的内容区:成片在顶上叠一行章节进度(到 ~185px),底下是字幕区(1536 起)
+   * 和平台按钮区;右侧 12% 下半屏有点赞评论按钮。模版的字和数字放在这个框里,背景随意铺满。
+   */
+  HF.safe = HF.portrait
+    ? { top: 210, bottom: Math.round(HF.grid.data[1] * HF.H) - 16, left: 64, right: HF.W - 64,
+        rightLow: Math.round(HF.W * (1 - HF.grid.right)) }
+    : { top: 0, bottom: HF.H, left: 0, right: HF.W, rightLow: HF.W };
   HF.CW = HF.W; HF.CH = HF.H;
   HF.virtual = null;
   HF.vs = 1;

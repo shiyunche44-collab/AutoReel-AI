@@ -1,6 +1,7 @@
 <!-- @name 赛道遥测
      @desc 碳纤维黑底 + 黄色斜切面板,车带速度线冲进画面,遥测条目从右侧飞入,换挡灯一格格亮
-     @order 13 -->
+     @order 13
+     @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
     html, body { background: #0d0d0e; }
@@ -29,15 +30,21 @@
     .leds { position: absolute; right: 40px; top: 24px; display: flex; gap: 6px; }
     .leds i { width: 22px; height: 14px; border-radius: 3px; background: #2a2a2e; }
     .src { position: absolute; left: 90px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.4); letter-spacing: 0.1em; }
+    /* portrait: car on top, telemetry panels stacked below */
+    [data-aspect=portrait] .lines { width: 1080px; height: 1920px; }
+    [data-aspect=portrait] .hd { left: 70px; top: 236px; }
+    [data-aspect=portrait] .panel { right: 40px; width: 920px; height: 150px; }
+    [data-aspect=portrait] .src { left: 70px; bottom: auto; top: 1500px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
     const P = D.photo;
+    const PT = HF.portrait;
 
     // 速度线:固定种子,一直往左飞
     const lines = add(HF.el("div", "lines")); const rng = HF.rng(3); const ls = [];
     for (let k = 0; k < 26; k++) { const l = HF.el("i"); const w = 200 + rng() * 500;
-      Object.assign(l.style, { top: (260 + rng() * 620) + "px", width: w + "px" }); l._x = rng() * 2400; l._v = 1400 + rng() * 1600; l._w = w;
+      Object.assign(l.style, { top: ((PT ? 420 : 260) + rng() * (PT ? 480 : 620)) + "px", width: w + "px" }); l._x = rng() * 2400; l._v = 1400 + rng() * 1600; l._w = w;
       lines.appendChild(l); ls.push(l); }
     HF.drive(tl, (t) => { ls.forEach((l) => { const x = ((l._x - t * l._v) % 2600 + 2600) % 2600 - 700; l.style.transform = `translateX(${x.toFixed(0)}px)`; }); }, 0, S);
     const chk = add(HF.el("div", "chk")); const cb = HF.el("div"); chk.appendChild(cb);
@@ -46,8 +53,8 @@
     let car = null;
     if (P) {
       car = add(HF.photoImg("photo"));
-      const pw = 1000, hh = pw * P.height / P.width;
-      Object.assign(car.style, { width: pw + "px", height: hh + "px", left: "40px", top: (900 - P.floor * hh) + "px" });
+      const pw = PT ? 940 : 1000, hh = pw * P.height / P.width;
+      Object.assign(car.style, { width: pw + "px", height: hh + "px", left: PT ? "60px" : "40px", top: ((PT ? 850 : 900) - P.floor * hh) + "px" });
       if (P.facing === "left") car.style.transform = "scaleX(-1)";
       tl.fromTo(car, { x: -1300, filter: "blur(16px)" }, { x: 0, filter: "blur(0px)", duration: 0.75, ease: "expo.out" }, 0.15);
       // 停留:车身微震 + 缓慢前移
@@ -55,17 +62,18 @@
     }
     const hd = add(HF.el("div", "hd"));
     hd.appendChild(HF.el("div", "k", ((D.subject || "") + "  " + (HF.kicker || "")).trim()));
-    const ttl = HF.el("div", "t", D.title || ""); ttl.style.fontSize = HF.fit(D.title || "", 1000, 92) + "px"; hd.appendChild(ttl);
+    const ttl = HF.el("div", "t", D.title || ""); ttl.style.fontSize = HF.fit(D.title || "", PT ? 860 : 1000, PT ? 84 : 92) + "px"; hd.appendChild(ttl);
     tl.fromTo(hd.children, { x: -400, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: "expo.out", stagger: 0.08 }, 0.25);
 
-    const n = Math.max(1, items.length), gap = 22, ph = 170, top0 = Math.max(330, 1000 - n * (ph + gap));
+    const n = Math.max(1, items.length), gap = PT ? 18 : 22, ph = PT ? 150 : 170;
+    const top0 = PT ? Math.max(880, 1490 - n * (ph + gap)) : Math.max(330, 1000 - n * (ph + gap));
     const t0 = T(0.9), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
     const panels = [];
     items.forEach((it, k) => {
       const p = add(HF.el("div", "panel")); p.style.top = (top0 + k * (ph + gap)) + "px";
       const inn = HF.el("div", "in"); p.appendChild(inn);
       inn.appendChild(HF.el("div", "lab", it.label));
-      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 380 : 560, 108, 0.6) + "px"; inn.appendChild(val);
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 380 : 560, PT ? 96 : 108, 0.6) + "px"; inn.appendChild(val);
       if (it.b) { const b = HF.el("div", "b"); b.appendChild(HF.el("em", "", HF.cols[1])); b.appendChild(document.createTextNode(it.b)); inn.appendChild(b); }
       const leds = HF.el("div", "leds"); const cells = [];
       for (let j = 0; j < 10; j++) { const c = HF.el("i"); leds.appendChild(c); cells.push(c); }

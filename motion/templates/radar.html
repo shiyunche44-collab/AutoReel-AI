@@ -1,6 +1,7 @@
 <!-- @name 雷达扫描
      @desc 军用雷达屏:扫描扇面一圈圈转,扫到目标点就"叮"地亮起,右侧目标清单逐条锁定
-     @order 17 -->
+     @order 17
+     @portrait yes -->
 <style>
     html, body { background: #010a05; }
     #root { color: #8dffb0; font-family: "JetBrains Mono", "SimHei", monospace;
@@ -25,15 +26,22 @@
     .it .lock { position: absolute; right: 0; top: 14px; font-size: 20px; padding: 2px 10px; border: 2px solid #8dffb0; letter-spacing: 0.2em; }
     .foot { position: absolute; left: 180px; bottom: 50px; font-size: 22px; color: rgba(141,255,176,0.55); letter-spacing: 0.1em; }
     .scan { position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 2px, transparent 2px 4px); }
+    /* portrait: smaller scope in the upper half, target list below */
+    [data-aspect=portrait] .scope { left: 220px; top: 400px; width: 640px; height: 640px; }
+    [data-aspect=portrait] .hd { left: 64px; top: 230px; }
+    [data-aspect=portrait] .hd .k { width: 952px; }
+    [data-aspect=portrait] .list { left: 64px; top: 1080px; width: 952px; }
+    [data-aspect=portrait] .foot { left: 64px; bottom: auto; top: 1500px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
 
-    const scope = add(HF.el("div", "scope")); const R = 410;
-    const sv = HF.svg("svg", { width: 820, height: 820, viewBox: "0 0 820 820" }, scope);
+    const PT = HF.portrait, SZ = PT ? 640 : 820;
+    const scope = add(HF.el("div", "scope")); const R = SZ / 2;
+    const sv = HF.svg("svg", { width: SZ, height: SZ, viewBox: `0 0 ${SZ} ${SZ}` }, scope);
     [0.25, 0.5, 0.75].forEach((f) => HF.svg("circle", { cx: R, cy: R, r: R * f, fill: "none", stroke: "rgba(141,255,176,0.25)", "stroke-width": 2 }, sv));
-    HF.svg("line", { x1: 0, y1: R, x2: 820, y2: R, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
-    HF.svg("line", { x1: R, y1: 0, x2: R, y2: 820, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
+    HF.svg("line", { x1: 0, y1: R, x2: SZ, y2: R, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
+    HF.svg("line", { x1: R, y1: 0, x2: R, y2: SZ, stroke: "rgba(141,255,176,0.2)", "stroke-width": 2 }, sv);
     for (let a = 0; a < 360; a += 5) { const r1 = R - (a % 30 ? 10 : 24), c = Math.cos(a * Math.PI / 180), s = Math.sin(a * Math.PI / 180);
       HF.svg("line", { x1: R + c * r1, y1: R + s * r1, x2: R + c * R, y2: R + s * R, stroke: "rgba(141,255,176,0.45)", "stroke-width": 2 }, sv); }
     const sweep = HF.el("div", "sweep"); scope.appendChild(sweep);
@@ -41,7 +49,7 @@
 
     const hd = add(HF.el("div", "hd"));
     hd.appendChild(HF.el("div", "k", "TARGET SCAN · " + [D.subject, HF.kicker].filter(Boolean).join(" · ")));
-    const ttl = HF.el("div", "t"); ttl.style.fontSize = HF.fit(D.title || "", 720, 60) + "px"; hd.appendChild(ttl);
+    const ttl = HF.el("div", "t"); ttl.style.fontSize = HF.fit(D.title || "", PT ? 940 : 720, 60) + "px"; hd.appendChild(ttl);
     tl.fromTo(hd.firstChild, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 0.3);
     HF.type(tl, ttl, D.title || "", 0.4, 12);
 
@@ -69,7 +77,8 @@
       const row = HF.el("div", "it"); list.appendChild(row);
       row.appendChild(HF.el("div", "id", "TARGET " + String(k + 1).padStart(2, "0")));
       row.appendChild(HF.el("div", "lab", it.label));
-      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 330 : 400, it.b ? 58 : 72, 1.0) + "px"; row.appendChild(val);
+      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 330 : 400, it.b ? 58 : (PT ? 64 : 72), 1.0) + "px"; row.appendChild(val);
+      if (PT) val.style.right = "140px";
       const lock = HF.el("div", "lock", "LOCKED"); row.appendChild(lock);
       if (it.b) { const b = HF.el("div", "b", HF.cols[1] + "  " + it.b); row.appendChild(b); tl.fromTo(b, { opacity: 0 }, { opacity: 1, duration: 0.2 }, at + 0.5); }
       tl.fromTo(row, { opacity: 0, x: 40 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, at + 0.05);
@@ -77,7 +86,7 @@
       tl.set(lock, { opacity: 0 }, 0);
       [0, 0.08, 0.16, 0.24, 0.32].forEach((d, j) => tl.set(lock, { opacity: j % 2 ? 0 : 1 }, at + 0.5 + d));
       // 列表行高随条目数
-      row.style.height = (items.length > 3 ? 140 : 160) + "px";
+      row.style.height = (PT ? (items.length > 3 ? 104 : 130) : items.length > 3 ? 140 : 160) + "px";
     });
     const foot = add(HF.el("div", "foot", "RANGE 4 RINGS · SWEEP " + PERIOD + "s" + (D.source ? " · SRC " + D.source : "")));
     tl.fromTo(foot, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.8);

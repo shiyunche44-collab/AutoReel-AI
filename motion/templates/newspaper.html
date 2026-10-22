@@ -1,7 +1,8 @@
 <!-- @name 号外报纸
      @desc 老电影式旋转飞入的报纸头版,大字标题 + 黑白车图,红笔逐个圈出关键数字,底部滚动快讯
      @order 19
-     @light yes -->
+     @light yes
+     @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
     html, body { background: #2b2722; }
@@ -30,10 +31,21 @@
     .ticker { position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: #1a1814; color: #ede6d6; overflow: hidden; z-index: 3; }
     .ticker div { position: absolute; top: 12px; left: 0; white-space: nowrap; font-family: "HYZhongHeiTi", sans-serif; font-size: 32px; }
     .ticker b { color: #ffcf3d; font-weight: 400; margin: 0 14px; }
+    /* portrait: a portrait front page; the ticker sits above the subtitles */
+    [data-aspect=portrait] .page { left: 40px; top: 210px; width: 1000px; height: 1210px; }
+    [data-aspect=portrait] .mast { left: 40px; right: 40px; top: 30px; font-size: 88px; }
+    [data-aspect=portrait] .meta { left: 40px; right: 40px; top: 146px; font-size: 20px; }
+    [data-aspect=portrait] .extra { right: 30px; top: 20px; width: 120px; height: 120px; font-size: 50px; }
+    [data-aspect=portrait] .head { left: 40px; right: 40px; top: 200px; }
+    [data-aspect=portrait] .photo-box { left: 40px; top: 400px; width: 920px; height: 300px; }
+    [data-aspect=portrait] .cap { left: 40px; top: 708px; }
+    [data-aspect=portrait] .cols { left: 40px; right: 40px; top: 750px; }
+    [data-aspect=portrait] .ticker { bottom: auto; top: 1440px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
     const P = D.photo;
+    const PT = HF.portrait;
 
     const page = add(HF.el("div", "page"));
     const pin = (el) => { page.appendChild(el); return el; };
@@ -41,10 +53,10 @@
     const meta = pin(HF.el("div", "meta"));
     ["第 07 期", (D.subject || "") + " 特刊", "本期 · " + (HF.kicker || "参数")].forEach((s) => meta.appendChild(HF.el("span", "", s)));
     const ex = pin(HF.el("div", "extra", "号外"));
-    const head = pin(HF.el("div", "head", D.title || "")); head.style.fontSize = HF.fit(D.title || "", 1460, 150) + "px";
+    const head = pin(HF.el("div", "head", D.title || "")); head.style.fontSize = HF.fit(D.title || "", PT ? 900 : 1460, PT ? 130 : 150) + "px";
     const pb = pin(HF.el("div", "photo-box"));
-    if (P) { const im = HF.photoImg(); const pw = 820, hh = pw * P.height / P.width;
-      Object.assign(im.style, { width: pw + "px", height: hh + "px", left: "-30px", top: (430 - P.floor * hh) + "px" }); pb.appendChild(im);
+    if (P) { const im = HF.photoImg(); const pw = PT ? 960 : 820, hh = pw * P.height / P.width;
+      Object.assign(im.style, { width: pw + "px", height: hh + "px", left: PT ? "-20px" : "-30px", top: ((PT ? 290 : 430) - P.floor * hh) + "px" }); pb.appendChild(im);
       tl.fromTo(im, { scale: 1 }, { scale: 1.08, duration: S, ease: "none" }, 0); }
     else { const big = HF.el("div"); big.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'STXingkai',serif;font-size:220px;color:rgba(26,24,20,0.75)";
       big.textContent = HF.kicker || "参数"; pb.appendChild(big); }
@@ -57,7 +69,7 @@
 
     const cols = pin(HF.el("div", "cols"));
     const t0 = T(1.4), span = Math.max(0, Math.min(A.outAt - 1.1, S * 0.62) - t0);
-    const rowH = items.length > 3 ? 112 : 150;
+    const rowH = PT ? Math.min(160, 440 / Math.max(1, items.length)) : items.length > 3 ? 112 : 150;
     items.forEach((it, k) => {
       const art = HF.el("div", "art"); art.style.height = rowH + "px"; cols.appendChild(art);
       art.appendChild(HF.el("div", "lab", it.label));
