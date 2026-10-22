@@ -26,7 +26,7 @@ html, body { background: rgb(var(--bg)); }
 
 /* 底:实拍视频;没有素材时退回暗色径向底 */
 .bgwrap { position: absolute; inset: 0; }
-.bgwrap video { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; object-fit: cover; }
+.bgwrap video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
 .bgwrap.nobg {
   background:
     radial-gradient(ellipse 900px 700px at 1300px 420px, rgba(var(--acc), 0.16) 0%, rgba(var(--acc), 0) 100%),
@@ -108,3 +108,23 @@ html, body { background: rgb(var(--bg)); }
 .chips .it i { position: absolute; left: 0; top: 20px; bottom: 20px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
 .chips .co-lab { margin-bottom: 4px; font-size: 26px; }
 .chips .co-tag { margin-top: 6px; font-size: 22px; color: rgb(var(--acc)); opacity: 0.85; letter-spacing: 0.02em; }
+
+/* ======================================================================
+   Portrait "band" mode (HF.boot({ portrait: "band" })): the scene draws on a
+   virtual 1920x1080 stage scaled into the 16:9 footage band; text goes to the
+   data panel below at full size. Nothing here applies to landscape renders.
+   ====================================================================== */
+.dp { position: absolute; display: flex; flex-direction: column; gap: 18px; }
+.dp .hd { position: relative; left: auto; top: auto; }
+.dp .hd-kick { font-size: 24px; gap: 12px; }
+.dp .hd-kick i { height: 24px; }
+.dp .hd-mask { margin-top: 6px; }
+.dp .hd-ttl { font-size: 50px; }
+.dp-items { display: flex; align-items: flex-start; gap: 34px; transform-origin: 0 0; }
+.dp-head { order: 2; }
+.dp-it { position: relative; flex: 0 0 auto; white-space: nowrap; }
+.dp-it .co-lab { font-size: 26px; margin-bottom: 4px; }
+.dp-it.chip { padding-left: 22px; }
+.dp-it.chip i { position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
+.dp-it .co-tag { margin-top: 4px; font-size: 20px; color: rgb(var(--acc)); opacity: 0.85; }
+.dp .fn { position: absolute; right: 0; bottom: 0; top: auto; font-size: 20px; max-width: 100%; }

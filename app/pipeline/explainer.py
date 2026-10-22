@@ -1242,7 +1242,7 @@ def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int
                 fsize = footage_size(size)
                 bg_clip = (concept_background(take, seconds, fsize, work) if take else
                            background_clip(got, seconds, fsize, work, motion_seed=spec.idx))
-                bg_clip = _framed(bg_clip, size, work)
+                # 竖屏也给 16:9 的画面带片段:概念动画把它放进自己的虚拟舞台(画面带)里
                 pieces = got
             except Exception:
                 bg_clip = None

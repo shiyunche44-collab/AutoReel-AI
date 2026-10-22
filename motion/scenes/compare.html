@@ -1,4 +1,5 @@
-<!-- 对比镜:影棚底,两列从中线向两侧长出的细光条;只摆原文数字,不判输赢 -->
+<!-- 对比镜:影棚底,两列从中线向两侧长出的细光条;只摆原文数字,不判输赢
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <style>
     .colname { position: absolute; top: 262px; font-size: 46px; font-weight: 800; white-space: nowrap; }
@@ -32,17 +33,28 @@
     if (bgw) bgw.classList.add("studio");
     tl.fromTo(bgw, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0);
     const stage = HF.add(HF.el("div")); stage.id = "stage";
-    stage.style.transformOrigin = "960px 600px";
+    // 竖屏:同一套版式缩窄,排在画面带 + 数据区(标题区留给成片的大标题,字幕区不压)
+    const PORT = HF.portrait;
+    const CX = PORT ? HF.W / 2 : 960;
+    const colTop = PORT ? HF.band.top + 150 : 262;
+    stage.style.transformOrigin = CX + "px " + (PORT ? HF.band.top + 500 : 600) + "px";
 
     const rows = HF.rows.slice(0, 4);
     const n = Math.max(1, rows.length);
-    const top0 = 420, pitch = Math.min(160, 560 / n);
-    const MAXW = 680, GAP = 120;              // 光条最长、离中线的空隙
+    const top0 = PORT ? colTop + 190 : 420;
+    const pitch = PORT ? Math.min(190, (HF.dataBox.bottom - 60 - top0) / n) : Math.min(160, 560 / n);
+    const MAXW = PORT ? 380 : 680, GAP = PORT ? 64 : 120;              // 光条最长、离中线的空隙
 
     const ca = HF.el("div", "colname a"); ca.appendChild(HF.el("span", "", cols[0] || D.subject || "")); ca.appendChild(HF.el("i"));
     const cb = HF.el("div", "colname b"); cb.appendChild(HF.el("span", "", cols[1] || "")); cb.appendChild(HF.el("i"));
     const vs = HF.el("div", "vs", "VS");
     const axis = HF.el("div", "axis"); axis.style.top = "350px"; axis.style.height = (top0 + n * pitch - 330) + "px";
+    if (PORT) {
+      ca.style.right = (HF.W - (CX - GAP)) + "px"; cb.style.left = (CX + GAP) + "px";
+      ca.style.top = cb.style.top = colTop + "px";
+      vs.style.left = CX + "px"; vs.style.top = (colTop + 28) + "px";
+      axis.style.left = (CX - 1) + "px"; axis.style.top = (colTop + 88) + "px";
+    }
     [axis, ca, cb, vs].forEach((e) => stage.appendChild(e));
 
     const items = rows.map((r, k) => {
@@ -54,6 +66,7 @@
       const wb = pb ? Math.max(40, MAXW * Math.abs(pb.num) / top) : MAXW * 0.5;
       const y = top0 + k * pitch;
       const lab = HF.el("div", "rlab", r.label); lab.style.top = (y - 6) + "px";
+      if (PORT) { lab.style.left = CX + "px"; lab.style.top = (y - pitch * 0.5) + "px"; }
       const lw = String(r.label).length * 28;
       if (lw > 2 * GAP + 120) lab.style.fontSize = Math.max(18, 28 * (2 * GAP + 120) / lw) + "px";
       const size = Math.min(72, pitch * 0.48);
@@ -62,14 +75,15 @@
       const ba = HF.el("div", "bar a"), bb = HF.el("div", "bar b");
       const barY = y + size * 0.62;
       ba.style.top = bb.style.top = barY + "px";
-      ba.style.left = (960 - GAP - wa) + "px"; ba.style.width = wa + "px";
-      bb.style.left = (960 + GAP) + "px"; bb.style.width = wb + "px";
+      ba.style.left = (CX - GAP - wa) + "px"; ba.style.width = wa + "px";
+      bb.style.left = (CX + GAP) + "px"; bb.style.width = wb + "px";
+      if (PORT) { va.style.right = (HF.W - (CX - GAP)) + "px"; vb.style.left = (CX + GAP) + "px"; }
       if (!pa) ba.style.opacity = 0.35; if (!pb) bb.style.opacity = 0.35;
       const sa = HF.el("i"), sb = HF.el("i"); ba.appendChild(sa); bb.appendChild(sb);
       const ta = HF.el("div", "track"), tb = HF.el("div", "track");
       ta.style.top = tb.style.top = (barY + 3) + "px";
-      ta.style.left = (960 - GAP - MAXW) + "px"; ta.style.width = MAXW + "px";
-      tb.style.left = (960 + GAP) + "px"; tb.style.width = MAXW + "px";
+      ta.style.left = (CX - GAP - MAXW) + "px"; ta.style.width = MAXW + "px";
+      tb.style.left = (CX + GAP) + "px"; tb.style.width = MAXW + "px";
       [ta, tb, ba, bb, va, vb, lab].forEach((e) => stage.appendChild(e));
       const ha = HF.bigNumber(va, vals[0], HF.fitSize(vals[0], MAXW - 40, size), { unitScale: 0.42 });
       const hb = vals[1] ? HF.bigNumber(vb, vals[1], HF.fitSize(vals[1], MAXW - 40, size), { unitScale: 0.42 }) : null;
@@ -79,6 +93,12 @@
     const vig = HF.add(HF.el("div", "vignette"));
     const head = HF.header(tl, T(0.3), { kicker: "对比" });
     const fn = HF.footnote(tl, T(1.0));
+    if (PORT) {
+      // 标题块放在画面带顶上(标题区是成片的大标题);出处贴数据区底边
+      Object.assign(head.style, { left: HF.dataBox.left + "px", top: (HF.band.top + 10) + "px" });
+      head.querySelector(".hd-ttl").style.fontSize = "52px";
+      if (fn) Object.assign(fn.style, { top: (HF.dataBox.bottom - 40) + "px", right: (HF.W - HF.dataBox.right) + "px" });
+    }
 
     // ---- 时间线:列名从两侧进 → VS → 中轴 → 每行光条从中线长出、数字滚动,铺到整拍 60% ----
     tl.fromTo(ca, { opacity: 0, x: -50 }, { opacity: 1, x: 0, duration: 0.6, ease: "expo.out" }, T(0.6));

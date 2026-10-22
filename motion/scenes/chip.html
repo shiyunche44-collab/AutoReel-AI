@@ -1,9 +1,10 @@
-<!-- 产品镜:正侧面实车图转 X 光,座舱里的芯片亮起,走线把信号送到车头、车尾、车顶和车轮;右侧放大镜看芯片核心 -->
+<!-- 产品镜:正侧面实车图转 X 光,座舱里的芯片亮起,走线把信号送到车头、车尾、车顶和车轮;右侧放大镜看芯片核心 
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <meta name="hf-photo" content="exterior_side" />
 <style></style>
 <script>
-    const { tl, D, A, T, S } = HF.boot();
+    const { tl, D, A, T, S } = HF.boot({ portrait: "band", focus: [160, 140, 1840, 1000] });
     const P = D.photo, rows = HF.rows;
     const rig = HF.carRig(tl, { width: 980, cx: 780, floorY: 610, ghost: true });
     const stage = rig.stage, geo = rig.geo;

@@ -1,4 +1,5 @@
-<!-- 产品镜:自带影棚底,用这台车的正侧面白底官图 -->
+<!-- 产品镜:自带影棚底,用这台车的正侧面白底官图
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <meta name="hf-photo" content="exterior_side" />
 <style>
@@ -17,7 +18,7 @@
              box-shadow: 0 0 24px rgba(var(--acc), calc(0.9 * var(--glow))); transform-origin: 50% 50%; }
   </style>
 <script>
-    const { tl, D, A, T, S } = HF.boot();
+    const { tl, D, A, T, S } = HF.boot({ portrait: "band", focus: [300, 170, 1700, 950] });
     const P = D.photo;
     const rows = HF.rows;
     const rig = HF.carRig(tl, { width: 1120, cx: 1000, floorY: P ? 545 : 470 });

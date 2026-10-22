@@ -27,6 +27,21 @@
     safeTop: 0.06, title: [0.06, 0.30], frame: [0.30, 0.616], data: [0.616, 0.80],
     sub: [0.80, 0.90], bottom: 0.90, right: 0.12,
   }, D.grid || {});
+  /** 竖屏三段式里画面带(16:9)与数据区的像素位置 */
+  HF.band = { top: Math.round(HF.grid.frame[0] * HF.H), h: Math.round(HF.W * 9 / 16 / 2) * 2 };
+  HF.dataBox = { top: HF.band.top + HF.band.h, bottom: Math.round(HF.grid.data[1] * HF.H),
+                 left: Math.round(HF.W * 0.06), right: Math.round(HF.W * (1 - HF.grid.right)) };
+  /**
+   * 场景画在哪块画布上:横屏 = 整个画幅;竖屏「画面带」模式(HF.boot({ portrait: "band" }))
+   * = 一块虚拟的 1920×1080 舞台,整体缩放塞进 16:9 画面带。车、电池包、光束这些画面元素
+   * 照横屏坐标画,不用改;文字(标题、标注数字、参数条、出处)改排到下面的数据区,保持原字号。
+   */
+  HF.CW = HF.W; HF.CH = HF.H;
+  HF.virtual = null;
+  HF.vs = 1;
+  /** 虚拟舞台坐标 → 页面真实像素(非竖屏画面带模式时原样返回) */
+  HF.vx = 0; HF.vy = 0;
+  HF.toReal = (x, y) => HF.virtual ? [HF.vx + x * HF.vs, HF.vy + y * HF.vs] : [x, y];
   HF.seconds = Number(D.seconds) || 8;
   HF.rows = Array.isArray(D.rows) ? D.rows : [];
   /** 取原文里的第一个数字:"3.23 秒" → {head:"", num:3.23, dec:2, tail:" 秒"}。没有数字返回 null */
@@ -75,9 +90,11 @@
     opt = opt || {};
     const D = window.__DATA__ || {};
     const root = document.getElementById("root");
+    HF._tl = gsap.timeline({ paused: true });
+    if (HF.portrait && opt.portrait === "band" && !HF.virtual) bandStage(root, opt.focus);
     const A = HF.acts();
     return {
-      tl: gsap.timeline({ paused: true }),
+      tl: HF._tl,
       D, root, A,
       T: A.T, S: A.S,
       add: (el) => root.appendChild(el),
@@ -181,15 +198,91 @@
   HF.overlay = function () {
     let sv = document.getElementById("ov");
     if (sv) return sv;
-    sv = HF.svg("svg", { id: "ov", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` });
+    sv = HF.svg("svg", { id: "ov", width: HF.CW, height: HF.CH, viewBox: `0 0 ${HF.CW} ${HF.CH}` });
+    if (HF.virtual) { HF.virtual.appendChild(sv); return sv; }
     const root = document.getElementById("root");
     const g = document.getElementById("grain");
     if (g) root.insertBefore(sv, g); else root.appendChild(sv);
     return sv;
   };
 
-  /** 在颗粒层之前插一个元素 */
+  /**
+   * 竖屏画面带模式:建虚拟舞台(底也搬进去)和数据区面板。
+   * 面板 = 标题行 + 一排条目(标注 / 参数条)+ 右下角出处。
+   */
+  function bandStage(root, focus) {
+    HF.CW = 1920; HF.CH = 1080;
+    // focus = 虚拟舞台上真正有画面的那块 [x0, y0, x1, y1](横屏的标题、脚注那片空地不要),
+    // 放大到恰好装进画面带并居中;不给就整个舞台装进去
+    const f = focus || [0, 0, HF.CW, HF.CH];
+    HF.vs = Math.min(HF.W / (f[2] - f[0]), HF.band.h / (f[3] - f[1]));
+    HF.vx = (HF.W - (f[2] - f[0]) * HF.vs) / 2 - f[0] * HF.vs;
+    HF.vy = HF.band.top + (HF.band.h - (f[3] - f[1]) * HF.vs) / 2 - f[1] * HF.vs;
+    // 裁在画面带里:实拍底、镜头推近都不溢出到标题区和数据区
+    const clip = HF.el("div"); clip.id = "vclip";
+    Object.assign(clip.style, { position: "absolute", left: "0px", top: HF.band.top + "px",
+      width: HF.W + "px", height: HF.band.h + "px", overflow: "hidden" });
+    const v = HF.el("div"); v.id = "virt";
+    Object.assign(v.style, { position: "absolute", left: "0px", top: "0px",
+      width: HF.CW + "px", height: HF.CH + "px", transformOrigin: "0 0",
+      transform: "translate(" + HF.vx + "px, " + (HF.vy - HF.band.top) + "px) scale(" + HF.vs + ")" });
+    const bgw = document.getElementById("bgwrap");
+    if (bgw) v.appendChild(bgw);
+    clip.appendChild(v);
+    root.insertBefore(clip, root.firstChild);
+    HF.virtual = v;
+    const b = HF.dataBox;
+    const dp = HF.el("div", "dp"); dp.id = "dpanel";
+    Object.assign(dp.style, { left: b.left + "px", top: (b.top + 18) + "px", width: (b.right - b.left) + "px",
+      height: (b.bottom - b.top - 26) + "px" });
+    dp.appendChild(HF.el("div", "dp-head"));
+    dp.appendChild(HF.el("div", "dp-items"));
+    root.appendChild(dp);
+    HF.panel = dp;
+    // 条目多(尺寸镜 4 个数)时整行等比缩到面板宽度内;排版完才量得准,所以每帧量一次
+    const row = dp.querySelector(".dp-items");
+    HF.drive(HF._tl, () => {
+      row.style.transform = "";
+      const k = Math.min(1, (b.right - b.left) / Math.max(1, row.scrollWidth));
+      row.style.transform = k < 1 ? "scale(" + k.toFixed(4) + ")" : "";
+    }, 0, HF.seconds);
+  }
+
+  /** 数据区面板里的条目行(竖屏画面带模式) */
+  function panelItems() { return HF.panel.querySelector(".dp-items"); }
+
+  /**
+   * 竖屏画面带模式:往数据区放一个「标签 + 大数字」条目(第一个大、其余小),返回
+   * { b, lab, val, big }(和场景自己的数值框同形,时间线照旧排)。
+   */
+  HF.panelItem = function (label, value, opt) {
+    opt = opt || {};
+    const host = panelItems();
+    const first = !host.children.length;
+    const it = HF.el("div", "dp-it" + (first ? " main" : ""));
+    const lab = HF.el("div", "co-lab", label || "");
+    const val = HF.el("div", "co-val");
+    it.appendChild(lab); it.appendChild(val);
+    host.appendChild(it);
+    const big = HF.bigNumber(val, value, HF.fitSize(value, first ? 420 : 270, first ? 108 : 70), { unitScale: opt.unitScale || 0.36 });
+    return { b: it, lab, val, big };
+  };
+
+  /** 竖屏画面带模式下的真实坐标 SVG 层(标注引线从画面带拉到数据区) */
+  function realOverlay() {
+    let sv = document.getElementById("ovr");
+    if (sv) return sv;
+    sv = HF.svg("svg", { id: "ovr", width: HF.W, height: HF.H, viewBox: "0 0 " + HF.W + " " + HF.H });
+    sv.style.position = "absolute"; sv.style.left = "0px"; sv.style.top = "0px"; sv.style.overflow = "visible";
+    const root = document.getElementById("root");
+    const g = document.getElementById("grain");
+    if (g) root.insertBefore(sv, g); else root.appendChild(sv);
+    return sv;
+  }
+
+  /** 在颗粒层之前插一个元素(竖屏画面带模式:插进虚拟舞台) */
   HF.add = function (el) {
+    if (HF.virtual) { HF.virtual.appendChild(el); return el; }
     const root = document.getElementById("root");
     const g = document.getElementById("grain");
     if (g) root.insertBefore(el, g); else root.appendChild(el);
@@ -214,7 +307,7 @@
     const ttl = HF.el("div", "hd-ttl", D.title || "");
     mask.appendChild(ttl);
     box.appendChild(kick); box.appendChild(mask);
-    HF.add(box);
+    if (HF.virtual) HF.panel.querySelector(".dp-head").appendChild(box); else HF.add(box);
     tl.fromTo(bar, { scaleY: 0 }, { scaleY: 1, duration: 0.35, ease: "power2.out" }, at);
     tl.fromTo(kick.lastChild, { opacity: 0, x: -14 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, at + 0.1);
     tl.fromTo(ttl, { yPercent: 105 }, { yPercent: 0, duration: 0.6, ease: "expo.out" }, at + 0.18);
@@ -227,7 +320,7 @@
     const f = HF.el("div", "fn");
     f.appendChild(HF.el("i"));
     f.appendChild(HF.el("span", "", D.source));
-    HF.add(f);
+    if (HF.virtual) HF.panel.appendChild(f); else HF.add(f);
     tl.fromTo(f, { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, at);
     return f;
   };
@@ -237,6 +330,7 @@
    * 线:落点 → 斜线到拐点 → 水平到标签。返回 { show(tl, at), els }
    */
   HF.callout = function (opt) {
+    if (HF.virtual) return panelCallout(opt);
     const sv = HF.overlay();
     const [ax, ay] = opt.anchor, [lx, ly] = opt.label;
     const side = opt.side || (lx < ax ? "left" : "right");
@@ -251,7 +345,7 @@
     const dot = HF.svg("circle", { cx: ax, cy: ay, r: 0, fill: HF.c("acc") }, g);
     const box = HF.el("div", "co-box " + side);
     box.style.top = (ly - 4) + "px";
-    if (side === "left") box.style.right = (HF.W - lx + 18) + "px"; else box.style.left = (lx + 18) + "px";
+    if (side === "left") box.style.right = (HF.CW - lx + 18) + "px"; else box.style.left = (lx + 18) + "px";
     const lab = HF.el("div", "co-lab", opt.title || "");
     const val = HF.el("div", "co-val");
     box.appendChild(lab); box.appendChild(val);
@@ -277,6 +371,54 @@
       },
     };
   };
+
+  /**
+   * 竖屏画面带模式的标注:数字排进数据区(第一条大、其余小),引线从画面带里的落点
+   * 竖直落下再拐到条目上。条目位置要等排版(字体加载)后才准,所以引线每帧按条目的
+   * 实际位置重算(HF.drive 的 setter 在任意 seek 下都会跑)。
+   */
+  function panelCallout(opt) {
+    const sv = realOverlay();
+    const pt = HF.toReal(opt.anchor[0], opt.anchor[1]);
+    const ax = pt[0], ay = pt[1];
+    const host = panelItems();
+    const first = !host.children.length;
+    const it = HF.el("div", "dp-it" + (first ? " main" : ""));
+    const lab = HF.el("div", "co-lab", opt.title || "");
+    const val = HF.el("div", "co-val");
+    it.appendChild(lab); it.appendChild(val);
+    host.appendChild(it);
+    const big = HF.bigNumber(val, opt.value, HF.fitSize(opt.value, first ? 420 : 270, first ? 108 : 70), { unitScale: 0.36 });
+    const g = HF.svg("g", { class: "co" }, sv);
+    const line = HF.svg("path", { fill: "none", stroke: HF.c("ink", 0.6), "stroke-width": 2,
+      pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, g);
+    const ring = HF.svg("circle", { cx: ax, cy: ay, r: 10, fill: "none", stroke: HF.c("acc"), "stroke-width": 2, opacity: 0 }, g);
+    const dot = HF.svg("circle", { cx: ax, cy: ay, r: 0, fill: HF.c("acc") }, g);
+    const route = () => {
+      const r = it.getBoundingClientRect(), root = document.getElementById("root").getBoundingClientRect();
+      const ex = r.left - root.left + 14, ey = r.top - root.top - 12;
+      line.setAttribute("d", "M" + ax + " " + ay + " L" + ax + " " + ey + " L" + ex + " " + ey + " L" + ex + " " + (ey + 8));
+    };
+    route();
+    HF.drive(HF._tl, route, 0, HF.seconds);
+    return {
+      els: [g, it], box: it, big,
+      show(tl, at, countDur) {
+        tl.fromTo(dot, { attr: { r: 0 } }, { attr: { r: 5 }, duration: 0.25, ease: "back.out(3)" }, at);
+        tl.fromTo(ring, { attr: { r: 6 }, opacity: 1 }, { attr: { r: 30 }, opacity: 0, duration: 0.8, ease: "power2.out", immediateRender: false }, at);
+        tl.fromTo(line, { attr: { "stroke-dashoffset": 1 } }, { attr: { "stroke-dashoffset": 0 }, duration: 0.5, ease: "power2.inOut" }, at + 0.05);
+        tl.fromTo(lab, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, at + 0.45);
+        tl.fromTo(val, { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out" }, at + 0.5);
+        HF.countHero(tl, big, at + 0.5, countDur || 0.9);
+      },
+      breathe(tl, from, to) {
+        const period = 1.6;
+        for (let t = from; t + 0.1 < to; t += period) {
+          tl.fromTo(ring, { attr: { r: 6 }, opacity: 0.9 }, { attr: { r: 26 }, opacity: 0, duration: Math.min(period, to - t), ease: "power1.out", immediateRender: false }, t);
+        }
+      },
+    };
+  }
 
   /**
    * 影棚 + 车:暗色影棚底、地台光、地平线;有车图时把车放在 (cx, floorY),宽 CW。
@@ -368,7 +510,7 @@
     const mx = (x) => box.left + (0.02 + (x - 50) / 722 * 0.96) * CW;
     const my = (y) => box.top + (0.05 + (y - 102) / 260 * 0.9) * ch;
     const map = (d) => d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (m, x, y) => mx(+x).toFixed(1) + " " + my(+y).toFixed(1));
-    const sv = HF.svg("svg", { class: "ghost", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` }, stage);
+    const sv = HF.svg("svg", { class: "ghost", width: HF.CW, height: HF.CH, viewBox: `0 0 ${HF.CW} ${HF.CH}` }, stage);
     const line = { fill: "none", stroke: HF.c("ink"), "stroke-width": 3, "stroke-linejoin": "round", pathLength: 1,
                    "stroke-dasharray": "1 1", "stroke-dashoffset": 1 };
     const body = HF.svg("path", Object.assign({ d: map("M50 300 L50 250 Q50 228 92 222 L222 196 Q292 110 420 102 L560 102 Q650 116 704 200 L752 218 Q772 226 772 258 L772 300 Z") }, line), sv);
@@ -388,6 +530,7 @@
   HF.chips = function (tl, rows, opt) {
     opt = opt || {};
     if (!rows.length) return [];
+    if (HF.virtual) return panelChips(tl, rows, opt);
     const box = HF.add(HF.el("div", "chips" + (opt.row ? " row" : "")));
     box.style.top = (opt.top || 300) + "px";
     box.style.right = (opt.right == null ? 110 : opt.right) + "px";
@@ -412,6 +555,28 @@
     });
     return out;
   };
+
+  /** 竖屏画面带模式的次要参数:和标注排在同一行数据区里 */
+  function panelChips(tl, rows, opt) {
+    const host = panelItems();
+    const out = [];
+    rows.forEach((r, n) => {
+      const it = HF.el("div", "dp-it chip"); const bar = HF.el("i");
+      const lab = HF.el("div", "co-lab", r.label); const val = HF.el("div");
+      it.appendChild(bar); it.appendChild(lab); it.appendChild(val);
+      const tag = r.tag ? HF.el("div", "co-tag", r.tag) : null;
+      if (tag) it.appendChild(tag);
+      host.appendChild(it);
+      const big = HF.bigNumber(val, r.value, HF.fitSize(r.value, 240, 60), { unitScale: 0.4 });
+      const span = Math.max(0, (opt.to || opt.from) - opt.from);
+      const at = opt.from + (rows.length > 1 ? span * n / (rows.length - 1) : 0);
+      tl.fromTo(bar, { scaleY: 0 }, { scaleY: 1, duration: 0.35, ease: "power2.out" }, at);
+      tl.fromTo([lab, val, tag].filter(Boolean), { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power3.out", stagger: 0.08 }, at + 0.1);
+      HF.countHero(tl, big, at + 0.15, 0.8);
+      out.push(it);
+    });
+    return out;
+  }
 
   /** 镜头:整拍匀速慢推(ease none,保证任意一秒都在动)。layers = [{el, scale:[a,b], x:[a,b], y:[a,b]}] */
   HF.camera = function (tl, layers) {

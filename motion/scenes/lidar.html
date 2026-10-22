@@ -1,9 +1,10 @@
-<!-- 产品镜:正侧面实车图转 X 光,车顶激光雷达向前打出扫描扇面,前方地面和障碍物逐层被点云勾出来 -->
+<!-- 产品镜:正侧面实车图转 X 光,车顶激光雷达向前打出扫描扇面,前方地面和障碍物逐层被点云勾出来 
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <meta name="hf-photo" content="exterior_side" />
 <style></style>
 <script>
-    const { tl, D, A, T, S } = HF.boot();
+    const { tl, D, A, T, S } = HF.boot({ portrait: "band", focus: [100, 220, 1900, 1010] });
     const P = D.photo, rows = HF.rows;
     // 版面按"车头朝右"设计,车头朝左时整体镜像:dir = 前方方向,X() 把设计坐标映射过去
     const dir = P && P.facing === "left" ? -1 : 1;

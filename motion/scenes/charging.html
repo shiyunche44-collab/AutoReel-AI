@@ -1,4 +1,5 @@
-<!-- 产品镜:正侧面实车图转 X 光,能量流从车尾一侧涌进底板电池,电池条从车尾往车头充满(示意,不代表电量数字) -->
+<!-- 产品镜:正侧面实车图转 X 光,能量流从车尾一侧涌进底板电池,电池条从车尾往车头充满(示意,不代表电量数字) 
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <meta name="hf-photo" content="exterior_side" />
 <style>
@@ -13,7 +14,7 @@
              box-shadow: 0 0 20px 6px rgba(var(--acc), calc(0.7 * var(--glow))); }
   </style>
 <script>
-    const { tl, D, A, T, S } = HF.boot();
+    const { tl, D, A, T, S } = HF.boot({ portrait: "band", focus: [200, 170, 1720, 900] });
     const P = D.photo, rows = HF.rows;
     const rig = HF.carRig(tl, { width: 1120, cx: 1000, floorY: 560, ghost: true });
     const stage = rig.stage, geo = rig.geo, floorY = rig.floorY;

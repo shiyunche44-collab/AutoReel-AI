@@ -1,4 +1,5 @@
-<!-- 产品镜:正侧面实车图,长 / 轴距 / 高三条尺寸线从车身本身量出来 -->
+<!-- 产品镜:正侧面实车图,长 / 轴距 / 高三条尺寸线从车身本身量出来
+     @portrait yes -->
 <meta name="hf-bg" content="studio" />
 <meta name="hf-photo" content="exterior_side" />
 <style>
@@ -10,7 +11,7 @@
     .dbox .co-lab { font-size: 26px; margin-bottom: 4px; }
   </style>
 <script>
-    const { tl, D, A, T, S } = HF.boot();
+    const { tl, D, A, T, S } = HF.boot({ portrait: "band", focus: [240, 150, 1800, 900] });
     const P = D.photo, rows = HF.rows;
     // 车头朝哪边,车尾那一侧就留给高度线
     const facingLeft = P && P.facing === "left";
@@ -69,6 +70,8 @@
     }
     /** 数值框:标签 + 大数字 */
     function valBox(row, cls, x, y, size, avail) {
+      // 竖屏:尺寸线留在车上,数字排到下面的数据区
+      if (HF.virtual) return HF.panelItem(row.label, row.value);
       const b = HF.add(HF.el("div", "dbox " + cls));
       b.style.top = y + "px";
       if (cls === "mid") b.style.left = x + "px"; else b.style.right = (1920 - x) + "px";
@@ -90,7 +93,9 @@
       const line = dimLine(hx, roofY, hx, floorY, [[rearX, roofY, hx + (facingLeft ? 14 : -14), roofY]]);
       // 数值放在竖线外侧
       let box;
-      if (facingLeft) {
+      if (HF.virtual) {
+        box = valBox(rH);
+      } else if (facingLeft) {
         box = valBox(rH, "start", hx + 30, (roofY + floorY) / 2, 64, 1920 - hx - 140);
         box.b.className = "dbox"; box.b.style.right = ""; box.b.style.left = (hx + 30) + "px"; box.b.style.transform = "translateY(-50%)";
       } else {
