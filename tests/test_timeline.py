@@ -183,3 +183,19 @@ def test_wrap_subtitle_breaks_at_fullwidth_comma_and_never_inside_numbers():
     assert out.split(r"\N")[0].endswith("，")
     out = wrap_subtitle("续航六百公里十五分钟补能大约405公里折算", 15)
     assert r"4\N05" not in out and r"40\N5" not in out
+
+
+def test_wrap_subtitle_leaves_no_orphan_and_keeps_number_with_unit():
+    """竖屏实跑:15 字一行时「…405公 / 里。」「…省电 / 。」只剩孤字;「0.245C / d」拆开数字。"""
+    from app.pipeline.timeline import wrap_subtitle
+
+    def lines(text):
+        return wrap_subtitle(text, 15).split(r"\N")
+
+    assert lines("752V平台15分钟补405公里。") == ["752V平台15分钟补", "405公里。"]
+    assert lines("风阻0.245Cd，高速更省电。") == ["风阻0.245Cd，", "高速更省电。"]
+    for text in ("多数人买标准版就够，续航补能够用。", "但算力只是上限，实际表现看算法迭代。",
+                 "全系标配700TOPS Thor芯片加激光雷达。"):
+        out = lines(text)
+        assert len(out) == 2 and min(len(x) for x in out) >= 4, out
+        assert out[1][0] not in "，。、；：！？"

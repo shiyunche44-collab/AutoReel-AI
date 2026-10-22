@@ -218,20 +218,42 @@ def wrap_subtitle(text: str, max_chars: int | None = None) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
         return text
-    # 优先在逗号处断(模型写的多是全角标点)
-    mid = limit
-    for i in range(min(limit, len(text) - 1), max(0, limit - 6), -1):
-        if text[i] in ",、;:，；：":
-            mid = i + 1
-            break
-    else:
-        # 硬切不能切进数字或英文串("405 公里"被拆成"4 / 05公里"):退到这串的开头
-        k = mid
-        while k > 0 and text[k - 1].isascii() and text[k - 1].isalnum()                 and text[k].isascii() and text[k].isalnum():
+    # 只超出一点点时从中间断:在上限处切,第二行只剩「里。」「。」这种孤字(竖屏实跑见过)
+    target = limit if len(text) - limit >= 4 else (len(text) + 1) // 2
+    hi = min(limit, len(text) - 1)          # 第一行最多到这里
+    near = sorted(range(max(1, target - 6), hi + 1), key=lambda m: (abs(m - target), -m))
+
+    def fits(m: int) -> bool:
+        # 两行放得下时第二行也不许超长;本来就超过两行的长句只管第一行
+        return len(text) - m <= limit or len(text) > 2 * limit
+
+    # 1. 逗号后面断(模型写的多是全角标点)
+    mid = next((m for m in near if text[m - 1] in ",、;:，；：" and fits(m)), 0)
+    # 2. 数字/英文串开头之前("752V平台15分钟补 / 405公里");不在数字和单位之间断("15 / 分钟")
+    if not mid:
+        mid = next((m for m in near if abs(m - target) <= 4 and _is_word(text[m])
+                    and not _is_word(text[m - 1]) and fits(m)), 0)
+    # 3. 硬切不能切进数字或英文串("405 公里"被拆成"4 / 05公里"):退到这串的开头
+    if not mid:
+        mid = k = target
+        while k > 0 and _is_word(text[k - 1]) and _is_word(text[k]):
             k -= 1
-        if k > limit // 2:
+        if k > target // 2:
             mid = k
-    return f"{text[:mid].strip()}\\N{text[mid:].strip()}"
+    # 第二行不以标点开头:标点留在第一行行尾
+    while mid < len(text) and text[mid] in _NO_LINE_START:
+        mid += 1
+    head, tail = text[:mid].strip(), text[mid:].strip()
+    return f"{head}\\N{tail}" if tail else head
+
+
+def _is_word(ch: str) -> bool:
+    """英文 / 数字串里的字符(小数点算数字的一部分:「0.245Cd」不能拆开)。"""
+    return ch.isascii() and (ch.isalnum() or ch == ".")
+
+
+#: 不许出现在行首的标点
+_NO_LINE_START = "，。、；：！？,.;:!?)）」』”"
 
 
 def format_ass(
