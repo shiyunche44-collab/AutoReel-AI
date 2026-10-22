@@ -153,6 +153,13 @@ MOTION_TIMEOUT = int(os.getenv("MOTION_TIMEOUT", "300"))
 #: 概念动画的浏览器 GPU:auto = 先试 GPU、卡死再退软件渲染;off = 直接软件渲染(锁屏跑批时用)
 MOTION_BROWSER_GPU = os.getenv("MOTION_BROWSER_GPU", "auto").strip().lower()
 
+#: 后台调度器的并发数:同时推进几个项目。
+#:
+#: 每一路都是重活 —— ffmpeg 子进程,加上概念动画的 Chrome(约 256MB/个)。
+#: 峰值 Chrome 进程数 ≈ `PIPELINE_CONCURRENCY` × `MOTION_WORKERS`,内存
+#: 吃紧就保持 1,确认有余量再往上调。
+PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
+
 
 def motion_status() -> tuple[bool, str]:
     """概念动画能不能渲染。不能也不拦流水线:concept 拍退回数据卡。"""

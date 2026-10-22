@@ -12,14 +12,47 @@ Windows 注意事项:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from .. import config
+
+log = logging.getLogger(__name__)
+
+#: 外部能力调用统计:工具名 -> {calls, errors, seconds}
+#:
+#: 此前外部调用**完全没有**可观测性 —— 不知道调了哪些工具、调了多少次、
+#: 慢在哪、错在哪。`/api/health` 把这份统计暴露出来,排查"是不是额度
+#: 烧在某个工具上"时不用再猜。
+_CALL_STATS: dict[str, dict[str, float]] = {}
+_CALL_STATS_LOCK = threading.Lock()
+
+
+def call_stats() -> dict[str, dict[str, float]]:
+    """外部能力调用统计的快照。"""
+    with _CALL_STATS_LOCK:
+        return {tool: dict(row) for tool, row in _CALL_STATS.items()}
+
+
+def _record_call(tool: str, seconds: float, ok: bool) -> None:
+    with _CALL_STATS_LOCK:
+        row = _CALL_STATS.setdefault(tool, {"calls": 0.0, "errors": 0.0, "seconds": 0.0})
+        row["calls"] += 1
+        row["seconds"] += seconds
+        if not ok:
+            row["errors"] += 1
+
+
+def reset_call_stats() -> None:
+    """清空统计(自检脚本用)。"""
+    with _CALL_STATS_LOCK:
+        _CALL_STATS.clear()
 
 
 class ConnectorError(RuntimeError):
@@ -151,11 +184,19 @@ def call(
     if is_direct():
         from . import direct  # 延迟导入:direct 依赖本模块的异常类
 
-        return direct.call(tool, payload, timeout=timeout)
+        started = time.monotonic()
+        try:
+            out = direct.call(tool, payload, timeout=timeout)
+        except Exception:
+            _record_call(tool, time.monotonic() - started, ok=False)
+            raise
+        _record_call(tool, time.monotonic() - started, ok=True)
+        return out
     last_error: ConnectorError | None = None
 
     for attempt in range(retries + 1):
         tmp_path: str | None = None
+        started = time.monotonic()
         try:
             fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="aimovice_args_")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -165,9 +206,11 @@ def call(
                 ["connector", "call", tool, "--args-file", tmp_path], timeout=timeout
             )
             result = _extract_json(raw)
+            _record_call(tool, time.monotonic() - started, ok=True)
             return _unwrap(tool, result)
         except ConnectorError as exc:
             last_error = exc
+            _record_call(tool, time.monotonic() - started, ok=False)
             # 连接级/超时类错误值得重试;参数错误重试无意义
             if isinstance(exc, (ConnectorUnavailable,)) or "非法参数" in exc.message:
                 raise

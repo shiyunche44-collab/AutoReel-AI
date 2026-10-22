@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import mimetypes
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -24,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from . import config, costs, db
+from . import config, costs, db, logging_setup
 from .categories import available_categories, default_category, load_profile
 from .llm.deepseek import DeepSeekProvider
 from .llm.minimax import MiniMaxProvider
@@ -44,6 +46,7 @@ from .models import (
 from .pipeline import concept_styles, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
+from .pipeline.locks import busy_project_ids as locks_busy_ids
 from .pipeline import vertical
 from .providers import cli
 from .publish import accounts as publish_accounts
@@ -54,6 +57,8 @@ from .publish.registry import PLATFORMS, platforms_info
 from .metrics import store as metrics_store
 from .metrics import worker as metrics_worker
 from .state import State
+
+log = logging.getLogger(__name__)
 
 # Windows 注册表可能把 .js 登记成 text/plain,浏览器会拒绝按 ES Module 加载前端脚本
 mimetypes.add_type("text/javascript", ".js")
@@ -111,19 +116,59 @@ AUTO_ADVANCE_STATES = frozenset({
 # --------------------------------------------------------------------------
 # 后台调度
 # --------------------------------------------------------------------------
+#: 同一个项目连续失败多少次才判定为"彻底失败"。
+#:
+#: 之前是"一失败就 FAILED",但网络抖动、ffmpeg 偶发退出都是**瞬时**的,
+#: 一次失败就把项目判死等于白白重跑一次昂贵的前置阶段(事实采集、
+#: 脚本生成都是要花钱的)。现在瞬时失败留在原状态退避重试,连着失败
+#: 若干次才判死。
+MAX_CONSECUTIVE_FAILURES = 5
+
+#: 退避:第 n 次失败后等多久再试(秒),按 2 的幂增长,封顶 5 分钟。
+BACKOFF_BASE = 5.0
+BACKOFF_MAX = 300.0
+
+
 class Scheduler:
-    """扫描处于生成态的项目并推进一次。"""
+    """扫描处于生成态的项目并推进一次。
+
+    ⚠️ **推进是同步的重活**:ffmpeg 子进程、TTS 与 LLM 的 HTTP 调用。
+    之前直接写在 `async def sweep()` 里,整段跑在事件循环线程上 ——
+    渲染期间(一次 tick 约 50 秒,合成可能几分钟)**整个 Web 服务冻结**:
+    健康检查、状态轮询、页面加载全部无响应。前端每 5 秒轮询一次状态,
+    用户看到的就是转圈卡死。
+
+    现在丢进**专用线程池**,事件循环只负责调度。HTTP 请求由 anyio
+    自己的线程池处理,两边互不干扰。
+    """
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        #: 专用线程池。**惰性创建**:`stop()` 会把它关掉(关掉之后不能
+        #: 再提交任务),所以每次用之前都要确保它还在 —— 否则服务重启
+        #: 或测试里再跑一轮时会撞上 "cannot schedule new futures
+        #: after shutdown"。
+        self._pool: ThreadPoolExecutor | None = None
+        #: project_id -> 连续失败次数
+        self._failures: dict[str, int] = {}
+        #: project_id -> 下次可重试的时刻(monotonic)
+        self._retry_after: dict[str, float] = {}
+
+    def _executor(self) -> ThreadPoolExecutor:
+        """取(必要时重建)推进用的线程池。"""
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(
+                max_workers=max(1, config.PIPELINE_CONCURRENCY),
+                thread_name_prefix="pipeline")
+        return self._pool
 
     async def _run(self) -> None:
         while not self._stop.is_set():
             try:
                 await self.sweep()
             except Exception:  # noqa: BLE001 - 调度循环不能因单项目异常而退出
-                pass
+                log.exception("调度循环异常")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=SCHEDULER_INTERVAL)
             except asyncio.TimeoutError:
@@ -132,20 +177,50 @@ class Scheduler:
     async def sweep(self) -> None:
         """推进所有处于自动推进态的项目一次。"""
         rows = db.list_projects(limit=50)
+        loop = asyncio.get_running_loop()
         for row in rows:
+            pid = row["id"]
             if row["state"] not in AUTO_ADVANCE_STATES:
                 continue
+            if time.monotonic() < self._retry_after.get(pid, 0.0):
+                continue  # 还在退避窗口里,这一轮跳过
             try:
-                orchestrator.advance(row["id"])
-            except orchestrator.PipelineError:
-                db.update_project(row["id"], state=str(State.FAILED),
-                                  state_reason="后台推进失败")
-            except Exception as exc:  # noqa: BLE001
-                db.update_project(row["id"], state=str(State.FAILED), state_reason=str(exc))
+                # 关键:推进放到线程池,事件循环不被占住
+                out = await loop.run_in_executor(self._executor(), orchestrator.advance, pid)
+            except orchestrator.PipelineError as exc:
+                # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
+                self._failures[pid] = MAX_CONSECUTIVE_FAILURES
+                log.error("推进 %s 失败(不可恢复):%s", pid, exc)
+                db.update_project(pid, state=str(State.FAILED),
+                                  state_reason=f"后台推进失败:{exc}")
+                db.add_event(pid, str(State.FAILED), src=row["state"],
+                             reason=f"后台推进失败:{exc}")
+                continue
+            except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
+                n = self._failures.get(pid, 0) + 1
+                self._failures[pid] = n
+                wait = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** (n - 1)))
+                self._retry_after[pid] = time.monotonic() + wait
+                log.exception("推进 %s 失败(第 %d 次,%.0fs 后重试)", pid, n, wait)
+                db.add_event(pid, row["state"], src=row["state"],
+                             reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
+                                    f"{type(exc).__name__}: {exc}")
+                if n >= MAX_CONSECUTIVE_FAILURES:
+                    db.update_project(pid, state=str(State.FAILED),
+                                      state_reason=f"连续 {n} 次推进失败:{exc}")
+                    db.add_event(pid, str(State.FAILED), src=row["state"],
+                                 reason=f"连续 {n} 次推进失败")
+                continue
+            # 成功(或被别的执行流占着)→ 清掉失败计数
+            self._failures.pop(pid, None)
+            self._retry_after.pop(pid, None)
+            if isinstance(out, dict) and out.get("busy"):
+                log.debug("项目 %s 正被别的执行流推进,本轮让出", pid)
 
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._stop.clear()
+            self._executor()  # 池在启动时就建好
             self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
@@ -156,6 +231,10 @@ class Scheduler:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+        # 不 wait:正在跑的那一拍让它跑完(它写的是自己那一拍的文件)
+        pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 scheduler = Scheduler()
@@ -170,6 +249,9 @@ templates.env.globals.update(health=HEALTH, plan_expires_on=config.PLAN_EXPIRES_
 async def lifespan(app: FastAPI):
     config.ensure_dirs()
     db.init_db()
+    # 日志:控制台 + data/logs/aimovice.log(按天轮转)。此前整个项目
+    # 一次也没用过 logging,排障只能看 serve.ps1 重定向的 stdout 文本。
+    logging_setup.setup()
 
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()
@@ -496,7 +578,17 @@ def library_frame(slug: str, item_id: str):
 # --------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return HEALTH
+    out = dict(HEALTH)
+    # 外部能力调用统计:之前完全不可见,只能靠猜额度烧在哪
+    out["provider_calls"] = cli.call_stats()
+    # 调度器当前盯着的项目与失败次数
+    out["scheduler"] = {
+        "concurrency": config.PIPELINE_CONCURRENCY,
+        "interval": SCHEDULER_INTERVAL,
+        "failures": dict(scheduler._failures),
+        "busy_projects": locks_busy_ids(),
+    }
+    return out
 
 
 @app.get("/api/categories")
