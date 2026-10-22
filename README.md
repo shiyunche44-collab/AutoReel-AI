@@ -620,6 +620,16 @@ app/
   categories/        品类 Profile:方向库、段落权重铺展、校验
   main.py            FastAPI 应用与后台调度器
   web/               Jinja2 模板 + 原生 JS(零构建链)
+motion/              概念动画子工程(HyperFrames:HTML + GSAP → mp4)
+  _shell.html          所有模版共用的 HTML 骨架(画幅、复位、根容器、脚本挂载)
+  _lib.js             共用的小工具,起手 HF.boot()
+  scenes/*.html       7 个场景专用模板(实车标注 + X 光扫描 + 引线)
+  templates/*.html    20 套通用模版(版式、动效、字体、配色各不相同,不是换皮)
+  scenes/_base.css    场景家族样式
+  templates/_base.css 通用模版家族样式
+  regress/baseline.json  渲染回归基线(原始像素哈希,5KB)
+  registry/           `hyperframes add` 拉下来的官方组件,只作参照,不在生产链路上
+  bakeoff/ + vendor/  第一阶段的三套风格小样及其依赖,已被 templates/ 取代
 ```
 
 ---
@@ -681,6 +691,23 @@ npm run format             # prettier 统一格式
 
 > 并行跑两个 pytest 会互相污染真实的 `data/` 目录,预算那类用共享状态的测试会假失败。
 > 要并行请给每个进程单独的 `DATA_DIR`。
+
+### 概念动画的渲染回归
+
+改完模版或骨架后跑一下,画面变了会报出来:
+
+```bash
+python scripts/motion_regress.py                  # 渲染 27 个模版 × 2 个时刻,和基线逐像素比
+python scripts/motion_regress.py --save-png out/  # 顺便把 PNG 存下来供肉眼比对
+python scripts/motion_regress.py --update         # 确认是想要的改动后重建基线
+```
+
+基线在 `motion/regress/baseline.json`,存的是**原始像素的哈希**(不是 PNG 文件 ——
+容器元数据会变,像素不会)。实测精度:改一个被完全遮住的底色、或者改一个被 JS 内联
+样式覆盖的 CSS 字号,它都判"画面没变";改真正生效的字号,它立刻报出哪一帧变了。
+
+**只能在装了 HyperFrames + Chrome + 中文字体的机器上跑**,别塞进 CI:HyperFrames 按
+页面上出现的字符裁内嵌字体子集,字体集合不一样,同样的模版渲出来的像素也不一样。
 
 ---
 
