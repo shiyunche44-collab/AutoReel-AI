@@ -6,7 +6,7 @@
 #   duration_grid 只用来估节拍数(平均每拍 8 秒,约 46 字)。
 # - 16:9 横屏,1920×1080。
 name: auto_long
-label: 汽车(横屏解说)
+label: 汽车解说
 aspect_ratio: "16:9"
 track: explainer
 duration_grid: 8

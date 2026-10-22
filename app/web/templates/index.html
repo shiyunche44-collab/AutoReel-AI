@@ -101,6 +101,15 @@
             {% endfor %}
           </select>
         </div>
+        <div class="field opt-aspect">
+          <span class="field-label">画幅</span>
+          <div class="segmented" role="radiogroup" aria-label="画幅" id="aspect-group">
+            <input type="radio" name="aspect" id="aspect-landscape" value="16:9" checked>
+            <label for="aspect-landscape">横版 16:9</label>
+            <input type="radio" name="aspect" id="aspect-portrait" value="9:16">
+            <label for="aspect-portrait">竖版 9:16</label>
+          </div>
+        </div>
         <div class="field opt-duration">
           <span class="field-label">时长</span>
           <div class="segmented" role="radiogroup" aria-label="时长" id="duration-group">

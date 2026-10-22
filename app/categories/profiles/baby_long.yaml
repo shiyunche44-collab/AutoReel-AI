@@ -3,7 +3,7 @@
 # 版式和汽车轨一样:官方宣传片 / 测评实拍 / 品牌官网与电商图只当背景,信息靠叠加层。
 # 婴儿配方奶粉不要拿来做:广告法第二十条禁止婴儿乳制品广告,合规没做之前别碰。
 name: baby_long
-label: 母婴(横屏解说)
+label: 母婴解说
 aspect_ratio: "16:9"
 track: explainer
 duration_grid: 8

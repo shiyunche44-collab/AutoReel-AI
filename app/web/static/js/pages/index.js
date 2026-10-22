@@ -156,11 +156,25 @@ function syncSubjectField() {
   help.textContent = subjectHelp();
 }
 
-// 时长档位跟着品类走(auto_long 是 2–8 分钟)
+// 画幅:建项目时定,之后不能改。默认取品类的画幅
+function selectedAspect() {
+  const r = form.querySelector('input[name="aspect"]:checked');
+  return r ? r.value : '16:9';
+}
+
+function syncAspectDefault() {
+  const want = catInfo($('#category-select').value).aspect_ratio || '16:9';
+  const r = form.querySelector(`input[name="aspect"][value="${want}"]`);
+  if (r) r.checked = true;
+}
+
+// 时长档位跟着品类和画幅走(横屏 2–8 分钟,竖屏 60 秒–3 分钟)
 function syncDurations() {
   const group = $('#duration-group');
   const cat = catInfo($('#category-select').value);
-  const options = cat.durations && cat.durations.length ? cat.durations : DATA.durations;
+  const byAspect = (cat.durations_by_aspect || {})[selectedAspect()];
+  const options =
+    byAspect && byAspect.length ? byAspect : cat.durations && cat.durations.length ? cat.durations : DATA.durations;
   const keep = Number(selectedDuration());
   const pick = options.includes(keep) ? keep : options[0];
   const label = (d) => (d >= 120 && d % 60 === 0 ? `${d / 60} 分钟` : `${d} 秒`);
@@ -171,6 +185,14 @@ function syncDurations() {
     ]),
   );
   $$('input[name="duration"]', group).forEach((r) => r.addEventListener('change', refreshEstimate));
+}
+
+// 横评:这个时长最多放得下几台车(竖屏 60 秒只放得下最少台数)
+function rosterCapacity() {
+  const theme = currentTheme();
+  if (!theme || !theme.roundup) return null;
+  const cap = (theme.max_subjects || {})[String(selectedDuration())];
+  return typeof cap === 'number' ? cap : null;
 }
 
 function selectedDuration() {
@@ -193,7 +215,11 @@ async function refreshEstimate() {
     $('#est-cost').textContent = c.with_retry.toFixed(2);
     // 没有生成排队:实拍铺底 + 叠加层,几分钟就能渲完
     $('#est-time').replaceChildren(`${wc.render_minutes}`, h('small', {}, '分钟'));
-    $('#est-time-sub').textContent = `约 ${data.shot_count} 拍 · 横屏 16:9 · 时长跟着旁白走`;
+    const a = selectedAspect();
+    const cap = rosterCapacity();
+    $('#est-time-sub').textContent =
+      `约 ${data.shot_count} 拍 · ${a === '9:16' ? '竖屏 9:16' : '横屏 16:9'} · 时长跟着旁白走` +
+      (cap ? ` · 最多 ${cap} 台车` : '');
     $('#est-save').textContent = `$${c.tts.toFixed(2)}`;
     $('#est-save-sub').textContent = `BGM $${c.bgm.toFixed(2)} · LLM $${c.llm.toFixed(2)}`;
   } catch {
@@ -206,17 +232,28 @@ if (form) {
   $('#category-select').addEventListener('change', () => {
     syncSubjectField();
     syncThemeField();
+    syncAspectDefault();
     syncDurations();
     refreshEstimate();
     syncTopicsSource();
   });
-  $('#theme-select').addEventListener('change', syncThemeIntent);
+  $$('input[name="aspect"]', form).forEach((r) =>
+    r.addEventListener('change', () => {
+      syncDurations();
+      refreshEstimate();
+    }),
+  );
+  $('#theme-select').addEventListener('change', () => {
+    syncThemeIntent();
+    refreshEstimate();
+  });
   $('#roster-add').addEventListener('click', () => {
     $('#roster').append(rosterRow());
     renumberRoster();
     $$('.roster-name', $('#roster')).at(-1).focus();
   });
   syncSubjectField();
+  syncAspectDefault();
   syncDurations();
   syncThemeField();
   refreshEstimate();
@@ -252,6 +289,14 @@ if (form) {
         toast(`车单需要 ${lo}–${hi} 台不同的车,现在是 ${unique.size} 台`, { type: 'danger', title: '车单不完整' });
         return;
       }
+      const cap = rosterCapacity();
+      if (cap && unique.size > cap) {
+        toast(`${selectedDuration()} 秒最多放得下 ${cap} 台车,请加长时长或减少车数`, {
+          type: 'danger',
+          title: '时长不够',
+        });
+        return;
+      }
     }
     const btn = $('#create-btn');
     await withLoading(btn, async () => {
@@ -261,6 +306,7 @@ if (form) {
           category: String(fd.get('category') || ''),
           theme: $('#theme-field').classList.contains('hidden') ? null : fd.get('theme') || null,
           duration: parseInt(String(fd.get('duration')), 10),
+          aspect: selectedAspect(),
           angle: String(fd.get('angle') || '').trim() || null,
           ...(roundup ? { subjects: roster } : {}),
           // 选题附带的检索词和热点依据只在车型没被改掉时才有效
