@@ -125,6 +125,13 @@
       <div class="composer-foot">
         <details class="disclosure composer-adv">
           <summary>{{ m.icon("sliders", "i-sm") }}高级设置</summary>
+          <div class="field advanced" id="variety-field">
+            <span class="field-label">开头 / 结尾写法 <span class="subtle">默认自动,避开最近几条用过的</span></span>
+            <div class="variety-row">
+              <select class="select" name="opening" id="opening-select" aria-label="开头写法"></select>
+              <select class="select" name="ending" id="ending-select" aria-label="结尾写法"></select>
+            </div>
+          </div>
           <div class="field advanced">
             <label class="field-label" for="quota_budget">配额节流上限 <span class="subtle">等效美元</span></label>
             <input class="input" id="quota_budget" name="quota_budget" type="number" step="0.01" min="0" placeholder="留空则按时长自动设定">

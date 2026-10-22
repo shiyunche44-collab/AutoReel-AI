@@ -20,11 +20,12 @@ Profile 声明了什么:
 """
 from __future__ import annotations
 
+import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
@@ -118,11 +119,22 @@ class ThemeSpec:
     requires_angle: bool = False
     #: 这个片型最长做多少秒(0 = 不限)。只讲一个点的片子拉到 8 分钟就是注水
     max_duration: int = 0
+    #: 允许的开头 / 结尾写法(id 见 pipeline.variety),第一个是默认。空 = 只有默认那一种
+    openings: tuple[str, ...] = ()
+    endings: tuple[str, ...] = ()
+    #: 只在某几种开头 / 结尾下才进提示词的规则:(规则原文, "opening"|"ending", (id, ...))
+    rule_when: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
     @property
     def multi(self) -> bool:
         """有车单的片型(横评 / 对决):建项目要填车单,事实与素材按车分开采。"""
         return self.roundup or self.versus
+
+    def rules_for(self, opening: str, ending: str) -> tuple[str, ...]:
+        """这个变体下进提示词的方向规则(去掉条件不符的那几条,顺序不变)。"""
+        want = {"opening": opening, "ending": ending}
+        skip = {text for text, kind, ids in self.rule_when if want.get(kind) not in ids}
+        return tuple(r for r in self.script_rules if r not in skip)
 
     @property
     def uses_blocks(self) -> bool:
@@ -571,7 +583,8 @@ class CategoryProfile:
     # 段落计划
     # ------------------------------------------------------------------
     def plan_for(self, duration: int, name: str | None = None,
-                 portrait: bool = False) -> tuple[str, ...]:
+                 portrait: bool = False,
+                 variant: Mapping[str, Any] | None = None) -> tuple[str, ...]:
         """返回该方向在该时长下的段落序列。
 
         两条路径:
@@ -580,9 +593,10 @@ class CategoryProfile:
         """
         theme = self.theme_spec(name)
         if theme.roundup:
-            return tuple(s.section for s in self.slots_for(duration, name, portrait=portrait))
+            return tuple(s.section for s in self.slots_for(duration, name, portrait=portrait,
+                                                            variant=variant))
         if theme.uses_blocks:
-            return self._expand_blocks(theme, duration, portrait)
+            return self._expand_blocks(theme, duration, portrait, variant)
         plan = theme.plan or self.section_plan
         if duration in plan:
             return plan[duration]
@@ -598,7 +612,8 @@ class CategoryProfile:
 
     def slots_for(self, duration: int, name: str | None = None,
                   subjects: Sequence[str] | None = None,
-                  portrait: bool = False) -> tuple[Slot, ...]:
+                  portrait: bool = False,
+                  variant: Mapping[str, Any] | None = None) -> tuple[Slot, ...]:
         """段落序列 + 每段讲哪台车。
 
         - 单车方向:等价于 `plan_for`,subject 全为空。
@@ -606,11 +621,13 @@ class CategoryProfile:
           走同一套最大余数铺展 —— 每台车的段落连在一起,车与车按车单顺序排。
           不给车单时用占位车名(按最少台数),只用于估节拍数和配置自检。
         - `portrait`:竖屏按 `section_capacity` 精简段落,见那里的说明。
+        - `variant`:项目变体(开头写法、中段顺序),见 `variant_blocks`。
         """
         theme = self.theme_spec(name)
         if not theme.roundup:
-            return tuple(Slot(s) for s in self.plan_for(duration, name, portrait))
+            return tuple(Slot(s) for s in self.plan_for(duration, name, portrait, variant))
         names = [str(x).strip() for x in (subjects or theme.placeholder_subjects()) if str(x).strip()]
+        theme = replace(theme, blocks=tuple(self.variant_blocks(theme, variant)))
         flat = self.roundup_blocks(theme, names, shots=self.section_capacity(duration, portrait))
         counts = self._allocate(flat, duration)
         out: list[Slot] = []
@@ -681,9 +698,41 @@ class CategoryProfile:
         shots = self.shots_for(duration)
         return max(1, shots // PORTRAIT_SHOTS_PER_SECTION) if portrait else shots
 
+    @staticmethod
+    def variant_blocks(theme: ThemeSpec,
+                       variant: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+        """按项目变体调整段落块:
+
+        - 去掉 `only_opening` 不含本项目开头写法的块(问题开场不需要「亮出出处」);
+        - 相邻的 `movable` 块按 `order_seed` 重排(外观 / 内饰 / 三电 / 智能谁先讲都行),
+          不相邻的、没标 movable 的块位置不动。
+
+        不给 variant(老项目)= 片型默认开头 + 声明顺序,结果与以前相同。"""
+        variant = variant or {}
+        opening = str(variant.get("opening") or (theme.openings[0] if theme.openings else "conflict"))
+        out = [b for b in theme.blocks
+               if not b.get("only_opening") or opening in b["only_opening"]]
+        seed = variant.get("order_seed")
+        if not seed:
+            return out
+        rng = random.Random(int(seed))
+        i = 0
+        while i < len(out):
+            j = i
+            while j < len(out) and out[j].get("movable"):
+                j += 1
+            if j - i > 1:
+                run = out[i:j]
+                rng.shuffle(run)
+                out[i:j] = run
+            i = max(j, i + 1)
+        return out
+
     def _expand_blocks(self, theme: ThemeSpec, duration: int,
-                       portrait: bool = False) -> tuple[str, ...]:
-        blocks = self.shed_blocks(theme.blocks, self.section_capacity(duration, portrait))
+                       portrait: bool = False,
+                       variant: Mapping[str, Any] | None = None) -> tuple[str, ...]:
+        blocks = self.shed_blocks(self.variant_blocks(theme, variant),
+                                  self.section_capacity(duration, portrait))
         counts = self._allocate(blocks, duration)
         out: list[str] = []
         for block, count in zip(blocks, counts):
@@ -830,6 +879,10 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
             "remainder": bool(item.get("remainder", True)),
             # 横评每车段落的精简顺序:拍数不够时先砍 drop 小的(1 先砍),0 = 必留
             "drop": int(item.get("drop", 0) or 0),
+            # 只在这些开头写法下才有的段落(冲突三段式的「兑现承诺」「亮出出处」)
+            "only_opening": tuple(str(x) for x in (item.get("only_opening") or ())),
+            # 相邻的 movable 段落之间没有先后依赖,每个项目按 order_seed 重排
+            "movable": bool(item.get("movable", False)),
         }
 
     blocks: list[dict[str, Any]] = []
@@ -857,7 +910,11 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         name=str(raw.get("name", name)),
         label=str(raw.get("label", name)),
         intent=str(raw.get("intent", "")),
-        script_rules=tuple(str(r) for r in (raw.get("script_rules") or ())),
+        script_rules=tuple(_rule_text(r) for r in (raw.get("script_rules") or ())),
+        rule_when=tuple(_rule_when(r) for r in (raw.get("script_rules") or ())
+                        if isinstance(r, dict) and ("opening" in r or "ending" in r)),
+        openings=tuple(str(x) for x in (raw.get("openings") or ())),
+        endings=tuple(str(x) for x in (raw.get("endings") or ())),
         fact_sources=tuple(str(s) for s in (raw.get("fact_sources") or ())),
         required_scopes=tuple(str(s) for s in (raw.get("required_scopes") or ("product",))),
         allow_subject_critique=bool(raw.get("allow_subject_critique", False)),
@@ -871,6 +928,17 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         requires_angle=bool(raw.get("requires_angle", False)),
         max_duration=int(raw.get("max_duration", 0) or 0),
     )
+
+
+def _rule_text(raw: Any) -> str:
+    """script_rules 的一项:字符串,或 {rule: ..., opening|ending: id}(只在那种开头 / 结尾下生效)。"""
+    return str(raw.get("rule", "")) if isinstance(raw, dict) else str(raw)
+
+
+def _rule_when(raw: dict[str, Any]) -> tuple[str, str, tuple[str, ...]]:
+    kind = "opening" if "opening" in raw else "ending"
+    ids = raw[kind]
+    return _rule_text(raw), kind, tuple(str(x) for x in (ids if isinstance(ids, list) else [ids]))
 
 
 def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
@@ -996,7 +1064,15 @@ def _validate(profile: CategoryProfile) -> None:
 
     # 2. 方向库
     min_shots = _min_supported_shots(profile)
+    from ..pipeline import variety as _variety
+
     for tname, theme in profile.themes.items():
+        bad = [o for o in theme.openings if o not in _variety.OPENINGS]
+        bad += [e for e in theme.endings if e not in _variety.ENDINGS]
+        bad += [v for _, kind, ids in theme.rule_when for v in ids
+                if v not in (_variety.OPENINGS if kind == "opening" else _variety.ENDINGS)]
+        if bad:
+            raise ProfileError(f"品类 {profile.name} 方向 {tname}: 未知的开头 / 结尾写法 {bad}")
         if theme.roundup:
             lo, hi = theme.subject_count
             if not 1 <= lo <= hi:
@@ -1173,6 +1249,8 @@ def available_categories() -> list[dict[str, Any]]:
                  # 前端的 roundup = "要填车单"(横评与对决都要)
                  "roundup": t.multi, "versus": t.versus, "subject_count": list(t.subject_count),
                  "requires_angle": t.requires_angle, "max_duration": t.max_duration,
+                 # 开头 / 结尾写法下拉(第一项 = 自动)
+                 **_variety_options(t),
                  # 横评:每档时长最多放得下几台车(竖屏短档位放不下最多台数)
                  "max_subjects": ({str(d): profile.max_subjects(t, d) for d in profile.all_durations()}
                                   if t.multi else {})}
@@ -1180,6 +1258,25 @@ def available_categories() -> list[dict[str, Any]]:
             ],
         })
     return out
+
+
+def _variety_options(theme: ThemeSpec) -> dict[str, Any]:
+    from ..pipeline import variety
+
+    return variety.options(theme)
+
+
+def suggest_theme(profile: CategoryProfile, recent: Sequence[str]) -> str:
+    """建项目页默认选哪个片型:和最近几条不一样的那个。
+
+    只在不用额外填东西的片型里挑(不要车单、不要必填角度),免得默认值一选上就要先补表单;
+    都用过就回到品类默认。"""
+    simple = [t.name for t in profile.themes.values() if not t.multi and not t.requires_angle]
+    if profile.default_theme in simple:
+        simple.remove(profile.default_theme)
+        simple.insert(0, profile.default_theme)
+    fresh = [n for n in simple if n not in recent]
+    return fresh[0] if fresh else profile.default_theme
 
 
 def _config_aspects() -> tuple[str, ...]:

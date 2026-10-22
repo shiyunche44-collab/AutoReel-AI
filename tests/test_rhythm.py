@@ -371,7 +371,9 @@ def test_each_beat_sees_its_own_facts():
 
 
 def test_script_prompt_has_the_three_part_opening_and_the_ending():
-    text = script_gen.SYSTEM
+    from app.pipeline import variety
+
+    text = variety.rule10(None)
     assert "开头三段式" in text
     assert "先给冲突" in text
     assert "结尾要给**行动**" in text

@@ -29,7 +29,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from . import config, costs, db, logging_setup, maintenance
-from .categories import available_categories, default_category, load_profile
+from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
 from .llm.minimax import MiniMaxProvider
 from .models import (
@@ -418,6 +418,11 @@ def index(request: Request):
     # 自己去列表里翻。参见 views.NEEDS_ATTENTION。
     attention = needs_attention(rows)
     cats = available_categories()
+    # 片型默认值避开最近两条:连着建项目时不会总停在同一个片型上
+    for cat in cats:
+        if cat.get("themes"):
+            cat["suggested_theme"] = suggest_theme(load_profile(cat["name"]),
+                                                   db.recent_themes(cat["name"]))
     # 方向下拉按当前品类联动:默认展示第一个品类的方向
     active = cats[0] if cats else {"themes": [], "default_theme": ""}
     # ⚠️ 新版 Starlette 的签名为 TemplateResponse(request, name, context),

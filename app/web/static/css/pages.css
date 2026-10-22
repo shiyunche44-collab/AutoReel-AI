@@ -81,6 +81,8 @@
 .composer-adv > summary { height: 32px; }
 .composer-adv[open] { flex-basis: 100%; }
 .advanced { margin-top: 10px; max-width: 320px; }
+.variety-row { display: flex; gap: 8px; }
+.variety-row .select { flex: 1; min-width: 0; }
 .composer-submit { display: flex; align-items: center; gap: 14px; margin-left: auto; }
 
 /* 预估 + 流程:创作区下沿的一条信息带 */

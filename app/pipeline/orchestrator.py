@@ -21,7 +21,8 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
-from . import aspect, concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen
+from . import (aspect, concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen,
+               variety)
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,11 @@ def _set_state(project_id: str, src: State | str, dst: State | str,
                 f"状态已被并发推进(期望 {src},实际不是),本轮放弃"
             )
         db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost, conn=conn)
+
+
+def _variant(project: dict | None) -> dict:
+    """项目的变体(开头 / 结尾写法、中段顺序)。老项目没有 = {}(片型默认)。"""
+    return variety.parse((project or {}).get("variant"))
 
 
 def _facts(project_id: str) -> list:
@@ -161,12 +167,19 @@ def create_project(payload: ProjectCreate) -> str:
     if theme.requires_angle and not (payload.angle or "").strip():
         raise PipelineError(f"「{theme.label}」要先填选题角度:这期只讲的那一个点")
     subjects = roundup_subjects(payload, theme) if theme.multi else []
+    # 开头 / 结尾写法与中段顺序:用户指定的优先,否则避开同品类最近几条用过的
+    project_id = new_id("p_")
+    try:
+        variant = variety.pick(theme, project_id, db.recent_variants(payload.category),
+                               opening=payload.opening or None, ending=payload.ending or None)
+    except ValueError as exc:
+        raise PipelineError(str(exc)) from exc
 
     # 时长能否铺展出正确长度的段落序列,在这里就验掉,
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
     names = [s["name"] for s in subjects]
     plan = profile.slots_for(payload.duration, theme_name, names or None,
-                             portrait=payload.aspect == config.PORTRAIT)
+                             portrait=payload.aspect == config.PORTRAIT, variant=variant)
     expected_shots = profile.shots_for(payload.duration)
     # 车多时长短会自动精简每车段落(见 roundup_blocks);配置自检保证车单上限精简后
     # 放得进最短时长,这里只是兜底,不让结论段被截掉
@@ -182,7 +195,6 @@ def create_project(payload: ProjectCreate) -> str:
             f"应为 {expected_shots} 个。请检查 Profile 的 blocks 权重配置。"
         )
 
-    project_id = new_id("p_")
     shot_count = expected_shots
     budget = payload.quota_budget or costs.default_budget_for(payload.duration)
     # 横屏解说轨不调视频生成,只有 TTS、BGM 与几次 LLM
@@ -198,6 +210,7 @@ def create_project(payload: ProjectCreate) -> str:
             "category": payload.category,
             "theme": theme_name,
             "angle": (payload.angle or "").strip(),
+            "variant": variant,
             "subjects": subjects,
             "duration": payload.duration,
             "shot_count": shot_count,
@@ -385,7 +398,8 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         portrait = aspect.is_portrait(project)
         facts = _facts(project_id)
         slots = profile.drop_unbacked_slots(
-            profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait),
+            profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait,
+                              variant=_variant(project)),
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
         topic = db.read_json(project_id, "topic.json", {}) or {}
@@ -394,7 +408,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             segments, title, thesis = script_gen.generate(
                 subject=subject, profile=profile, facts=facts, plan=plan,
                 duration=project["duration"], llm=llm, theme=theme, angle=angle,
-                portrait=portrait, hook=str(topic.get("hook") or ""),
+                portrait=portrait, hook=str(topic.get("hook") or ""), variant=_variant(project),
                 **({"slots": slots, "subjects": subjects} if theme.multi else {}),
             )
         segments = script_gen.normalize_segments(segments, slots)
@@ -403,7 +417,8 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         segments = script_gen.split_segments(
             segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
         segments = script_gen.ensure_disclaimers(segments, profile)
-        issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
+        issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
+                                            variant=_variant(project))
         blocking = [i for i in issues if i.is_error]
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
         _save_script(project_id, segments)
@@ -710,7 +725,8 @@ def update_script(project_id: str, segments: list[ScriptSegment],
             db.update_project(project_id, **fields)
         profile, theme = _theme_of(project)
         issues = script_gen.compliance_lint(segments, profile, _facts(project_id), theme=theme,
-                                           thesis=fields.get("thesis", project.get("thesis") or ""))
+                                           thesis=fields.get("thesis", project.get("thesis") or ""),
+                                           variant=_variant(project))
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
         return [i.to_dict() for i in issues]
 

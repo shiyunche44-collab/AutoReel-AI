@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS projects (
     category        TEXT NOT NULL DEFAULT 'auto_long',
     theme           TEXT NOT NULL DEFAULT '',
     angle           TEXT NOT NULL DEFAULT '',
+    -- 项目变体(开头 / 结尾写法、中段顺序种子),JSON。见 pipeline/variety.py
+    variant         TEXT NOT NULL DEFAULT '{}',
     thesis          TEXT NOT NULL DEFAULT '',
     subjects        TEXT NOT NULL DEFAULT '[]',
     duration        INTEGER NOT NULL,
@@ -232,6 +234,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
     if "angle" not in _column_names(conn, "projects"):
         conn.execute("ALTER TABLE projects ADD COLUMN angle TEXT NOT NULL DEFAULT ''")
+    if "variant" not in _column_names(conn, "projects"):
+        conn.execute("ALTER TABLE projects ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
     if "thesis" not in _column_names(conn, "projects"):
         # 主论点:全片那句判断,脊椎。生成脚本时定下,可在门禁 A 改。
         conn.execute("ALTER TABLE projects ADD COLUMN thesis TEXT NOT NULL DEFAULT ''")
@@ -363,14 +367,16 @@ def create_project(row: dict[str, Any], conn: sqlite3.Connection | None = None) 
     这样"插项目 + 记事件"可以是一个原子单元。
     """
     init_db()
-    row = {"angle": "", "aspect": "16:9", **row}
+    row = {"angle": "", "aspect": "16:9", "variant": {}, **row}
     subjects = row.get("subjects") or []
     row["subjects"] = subjects if isinstance(subjects, str) else json.dumps(subjects, ensure_ascii=False)
+    if not isinstance(row["variant"], str):
+        row["variant"] = json.dumps(row["variant"], ensure_ascii=False)
     sql = (
         """INSERT INTO projects
-           (id, title, subject, category, theme, angle, subjects, duration, shot_count, narration_mode,
+           (id, title, subject, category, theme, angle, variant, subjects, duration, shot_count, narration_mode,
             aspect, state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
-           VALUES (:id, :title, :subject, :category, :theme, :angle, :subjects, :duration, :shot_count, :narration_mode,
+           VALUES (:id, :title, :subject, :category, :theme, :angle, :variant, :subjects, :duration, :shot_count, :narration_mode,
                    :aspect, :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
                    :created_at, :updated_at)"""
     )
@@ -396,6 +402,34 @@ def list_projects(limit: int = 100) -> list[dict[str, Any]]:
             "SELECT * FROM projects ORDER BY updated_at DESC LIMIT ?", (limit,)
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def recent_variants(category: str, limit: int = 4) -> list[dict[str, Any]]:
+    """同品类最近建的几个项目的变体(新的在前),建项目挑变体时用来避开重复。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "SELECT variant FROM projects WHERE category = ? ORDER BY created_at DESC LIMIT ?",
+            (category, limit))
+        rows = [r[0] for r in cur.fetchall()]
+    out = []
+    for raw in rows:
+        try:
+            value = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            value = {}
+        out.append(value if isinstance(value, dict) else {})
+    return out
+
+
+def recent_themes(category: str, limit: int = 2) -> list[str]:
+    """同品类最近建的几个项目的片型(新的在前)。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "SELECT theme FROM projects WHERE category = ? ORDER BY created_at DESC LIMIT ?",
+            (category, limit))
+        return [str(r[0] or "") for r in cur.fetchall()]
 
 
 def project_subjects(row: dict[str, Any] | None) -> list[dict[str, str]]:

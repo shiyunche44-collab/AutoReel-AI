@@ -54,12 +54,14 @@ themes:
       - 每段开头一句就亮观点,再用一两个参数或事实支撑,不要先堆参数。
       - 每个数字后面接一句"所以呢":15 分钟补 405 公里 → 吃顿饭的工夫够跑一趟上海到南京;
         车宽快 2 米 → 老小区窄车位、地库拐弯得先量一量;没有"对谁意味着什么",数字就别单独摆。
-      - 开场要是立场不是选题:「别急着订车,先搞清楚买哪版」是选题;
-        「多花 3 万买的不是续航,是快充」是立场 —— 有取舍,有人会反对。
+      - opening: [conflict, myth, number]
+        rule: >-
+          开场要是立场不是选题:「别急着订车,先搞清楚买哪版」是选题;
+          「多花 3 万买的不是续航,是快充」是立场 —— 有取舍,有人会反对。
       - 结论段必须说清楚适合哪类人、不适合哪类人。
-      - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
-      - 开头三段分开写:先抛冲突,立刻兑现刚才抛出的那个数字,再用一句话亮出"每个数字都能查到出处"。
-      - 结尾要给行动:最后一句要么提问(你在纠结哪款?评论区说),要么预告下期做什么。
+      - {opening: [conflict, myth, number], rule: '开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。'}
+      - {opening: conflict, rule: '开头三段分开写:先抛冲突,立刻兑现刚才抛出的那个数字,再用一句话亮出"每个数字都能查到出处"。'}
+      - {ending: action, rule: '结尾要给行动:最后一句要么提问(你在纠结哪款?评论区说),要么预告下期做什么。'}
       - 讲技术按"是什么 → 为什么(原理)→ 对你意味着什么 → 代价或边界"走。三电性能、智能配置两段,
         每段至少一句引用原理清单(k_ 开头)讲清为什么,并至少一句讲代价或适用边界。
       - 代价和缺点只能用原理条目里写明的"代价/边界",或事实清单里明确写到的问题;
@@ -72,16 +74,21 @@ themes:
         不许写"配置给得足""门槛压得低"这种没有数字的比较。
       - 用车成本段讲落地价之后还要花的钱:电费、保险、保养、保值率。
         有事实就写数字并说明口径;算不出年成本就只讲定性,不许编。
+    # 开头 / 结尾写法(pipeline/variety.py),第一个是老项目的默认;建项目时避开最近几条用过的
+    openings: [conflict, question, scene, myth, number]
+    endings: [action, pick_side, next_episode, verdict, decision_card]
     # 竖屏短时长(60s ≈ 8 拍)放不下全部块时按 drop 整档精简(1 先砍,0 = 必留);横屏档位块数放得下,不受影响
+    # only_opening:只有冲突三段式开头才有「兑现承诺」「亮出出处」;
+    # movable:外观 / 内饰 / 三电 / 智能之间没有先后依赖,每个项目换一个顺序讲
     blocks:
       - {section: 开场, weight: 1, remainder: false}
-      - {section: 兑现承诺, weight: 1, remainder: false, drop: 1}
-      - {section: 亮出出处, weight: 1, remainder: false, drop: 1}
+      - {section: 兑现承诺, weight: 1, remainder: false, drop: 1, only_opening: [conflict]}
+      - {section: 亮出出处, weight: 1, remainder: false, drop: 1, only_opening: [conflict]}
       - {section: 定位与价格, weight: 2}
-      - {section: 外观设计, weight: 2}
-      - {section: 内饰空间, weight: 2, drop: 3}
-      - {section: 三电性能, weight: 3}
-      - {section: 智能配置, weight: 2}
+      - {section: 外观设计, weight: 2, movable: true}
+      - {section: 内饰空间, weight: 2, drop: 3, movable: true}
+      - {section: 三电性能, weight: 3, movable: true}
+      - {section: 智能配置, weight: 2, movable: true}
       - {section: 版本选择, weight: 2, drop: 2}
       - {section: 竞品对比, weight: 2, drop: 3}
       - {section: 用车成本, weight: 2, drop: 2}
@@ -112,6 +119,8 @@ themes:
       - 续航、电耗、加速这类数字必须带口径或版本(如"CLTC 标称""长续航版"),口径取自事实的"口径"一栏。
       - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据。
       - 段落序列里某台车没有「参数价格」段时,把它的售价放进「车型亮相」;没有「适合谁」段时,在它最后一段末尾用一句话说清适合谁。
+    openings: [conflict, question, scene, number]
+    endings: [action, pick_side, next_episode, decision_card]
     # 车多时长短(如 5 台车 2 分钟)按 drop 精简每车段落:先砍「适合谁」(1),再砍「参数价格」(2)
     blocks:
       - {section: 横评开场, weight: 1, remainder: false}
@@ -143,10 +152,12 @@ themes:
       - 全片只讲选题角度里的那一个点;跟它无关的参数、配置、价格一概不提,哪怕事实清单里有。
       - 「为什么」段必须引用原理清单(k_ 开头)讲清机理,并把原理条目里的代价/边界讲出来。
       - 每个数字后面接一句"所以呢":换算成日常场景、跟同级比,或点出对谁有用。
-      - 开场第一句不超过 18 字,直接抛这个点上最反常识的判断;不说"大家好""今天来聊聊"。
+      - 开场第一句不超过 18 字,直接切进这个点;不说"大家好""今天来聊聊"。
       - 代价和缺点只能用原理条目里写明的"代价/边界",或事实清单里明确写到的问题;不许自己推测。
       - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
       - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据。
+    openings: [number, question, myth, scene]
+    endings: [verdict, next_episode, action]
     # 竖屏 60s 只放得下 4 段:先砍「对谁有用」,再砍「是什么」,再砍「代价边界」
     blocks:
       - {section: 深挖开场, weight: 1, remainder: false}
@@ -183,6 +194,8 @@ themes:
       - 开场第一句不超过 18 字,直接抛最尖锐的那个问题或答案;不说"大家好""今天来聊聊"。
       - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
       - 不许自己推测这台车的缺点;代价只能来自原理条目的"代价/边界"或事实里写明的问题。
+    openings: [question, scene, number]
+    endings: [action, next_episode, verdict]
     blocks:
       - {section: 问答开场, weight: 1, remainder: false}
       - {section: 问题一, weight: 2}
@@ -217,13 +230,15 @@ themes:
       - 开场第一句不超过 18 字,直接抛出这场对决最大的悬念;不说"大家好""今天来聊聊"。
       - 不许贬低任何一台车,也不许自己推测缺点;差距只用数字和事实里写明的问题说。
       - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
-    # 竖屏 60s 只放得下 4 段:先砍「智能」,再砍「空间」
+    openings: [conflict, question, number]
+    endings: [pick_side, verdict, next_episode]
+    # 竖屏 60s 只放得下 4 段:先砍「智能」,再砍「空间」;价格之后的三个维度谁先比都行
     blocks:
       - {section: 对决开场, weight: 1, remainder: false}
       - {section: 对决价格, weight: 2}
-      - {section: 对决空间, weight: 2, drop: 2}
-      - {section: 对决三电, weight: 3}
-      - {section: 对决智能, weight: 2, drop: 1}
+      - {section: 对决空间, weight: 2, drop: 2, movable: true}
+      - {section: 对决三电, weight: 3, movable: true}
+      - {section: 对决智能, weight: 2, drop: 1, movable: true}
       - {section: 对决结论, weight: 2, remainder: false}
 
   # 槽点 / 争议:先摆网上对这台车的争议,逐条拿事实核对,给出"说对了 / 说过头了 / 说反了"。
@@ -251,6 +266,8 @@ themes:
       - 本车的缺点可以直说,但要有出处;不许贬低竞品,不许用"智商税""劝退""垃圾"这类词。
       - 开场第一句不超过 18 字,直接抛最大的那个争议;不说"大家好""今天来聊聊"。
       - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+    openings: [myth, question, conflict]
+    endings: [verdict, pick_side, action]
     blocks:
       - {section: 争议开场, weight: 1, remainder: false}
       - {section: 争议一, weight: 3}

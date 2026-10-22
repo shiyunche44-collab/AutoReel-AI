@@ -20,12 +20,13 @@ function catInfo(name) {
 
 // 方向下拉必须跟着品类走:不同品类的方向词表不同。不联动的话,
 // 选了母婴再带上汽车的方向名,建项目时会被 400 拒绝。
-function syncThemeField() {
+// fresh = 刚打开页面 / 换了品类:默认选和最近两条不一样的片型(suggested_theme)
+function syncThemeField(fresh = false) {
   const field = $('#theme-field');
   const sel = $('#theme-select');
   const cat = catInfo($('#category-select').value);
   const themes = cat.themes || [];
-  const keep = sel.value;
+  const keep = fresh ? cat.suggested_theme : sel.value;
   sel.replaceChildren(...themes.map((t) => h('option', { value: t.name, title: t.intent || '' }, t.label)));
   // 只有一个隐式默认方向时,单独展示一个下拉框没有意义
   field.classList.toggle('hidden', themes.length <= 1);
@@ -41,6 +42,20 @@ function syncThemeIntent() {
   hint.textContent = !$('#theme-field').classList.contains('hidden') && opt && opt.title ? opt.title : '';
   syncRoster();
   syncAngleField();
+  syncVariety();
+}
+
+// 开头 / 结尾写法:片型各自允许的那几种,第一项「自动」
+function syncVariety() {
+  const t = currentTheme();
+  $('#variety-field').classList.toggle('hidden', !t);
+  const fill = (sel, items, auto) => {
+    const keep = sel.value;
+    sel.replaceChildren(h('option', { value: '' }, auto), ...(items || []).map((x) => h('option', { value: x.id }, x.label)));
+    if ((items || []).some((x) => x.id === keep)) sel.value = keep;
+  };
+  fill($('#opening-select'), t && t.openings, '开头:自动');
+  fill($('#ending-select'), t && t.endings, '结尾:自动');
 }
 
 // 单点深挖:角度就是"这期只讲的那一个点",必填
@@ -251,7 +266,7 @@ async function refreshEstimate() {
 if (form) {
   $('#category-select').addEventListener('change', () => {
     syncSubjectField();
-    syncThemeField();
+    syncThemeField(true);
     syncAspectDefault();
     syncDurations();
     refreshEstimate();
@@ -275,7 +290,7 @@ if (form) {
   });
   syncSubjectField();
   syncAspectDefault();
-  syncThemeField();
+  syncThemeField(true);
   syncDurations();
   refreshEstimate();
 
@@ -336,6 +351,8 @@ if (form) {
           duration: parseInt(String(fd.get('duration')), 10),
           aspect: selectedAspect(),
           angle: String(fd.get('angle') || '').trim() || null,
+          opening: theme ? String(fd.get('opening') || '') || null : null,
+          ending: theme ? String(fd.get('ending') || '') || null : null,
           ...(roundup ? { subjects: roster } : {}),
           // 选题附带的检索词和热点依据只在车型没被改掉时才有效
           ...(pickedTopic && pickedTopic.subject === subj && String(fd.get('angle') || '').trim()

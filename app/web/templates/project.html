@@ -555,6 +555,7 @@
       <dt>选题</dt><dd>{{ p.subject }}</dd>
       <dt>品类</dt><dd>{{ p.category }}</dd>
       {% if p.theme_label or p.theme %}<dt>方向</dt><dd>{{ p.theme_label or p.theme }}</dd>{% endif %}
+      {% if p.variety %}<dt>写法</dt><dd>{{ p.variety }}</dd>{% endif %}
       <dt>时长</dt><dd class="num">{{ p.duration }} 秒 · {{ p.shot_count }} {{ unit }}</dd>
       <dt>编号</dt><dd><span class="mono-id subtle">{{ p.id }}</span></dd>
     </dl>

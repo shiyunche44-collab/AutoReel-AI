@@ -11,11 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
 from .grounding import YEAR_RE, arabicize, differing_measures, numbers_in
+from . import variety
 from .timeline import narration_budget_chars
 
 log = logging.getLogger(__name__)
@@ -115,13 +116,7 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
    - 不超过 30 字,是一个**判断**而不是话题(「{subject}适合既要又要的人」而不是「{subject}的配置」);
    - 全片每一段都要为它服务:每段开头能接住它,最后一段必须**原样包含这句话**;
    - 不要写成广告语(「闭眼入」「太香了」这类),要写成有取舍的判断。
-10. **开头三段式,结尾给行动**:
-   - 开头三段分开写,各司其职:① **先给冲突** —— 一句带判断的反常识话
-     (「看起来更贵的那台,反而更划算」这种),不是「XX 值不值得买」这种平的问题;
-     ② **立刻兑现** —— 把上一段抛出的那个数字或判断摆出来,不许绕;
-     ③ **建立可信度** —— 一句话说明每个数字都能查到出处,全片只说这一次。
-   - 结尾要给**行动**,不只给总结:最后一段必须有一句提问(「你在纠结哪款?评论区说」)
-     或一句下期预告(「下期做同价位横评」),让人知道下一步做什么。
+{rule10}
 11. **每个数字后面跟一句"所以呢"**:参数 → 对观众意味着什么 → 对谁有用。
    - 「宽 1996 毫米」不够;要接一句它对谁意味着什么(老小区窄车位、地库拐弯要先量一量)。
    - 含义只能来自三种:换算成日常场景(多久、多远、够几次)、跟同级或另一个版本比、
@@ -221,8 +216,10 @@ def _hook_rule(hook: str) -> str:
             "但它里面的数字同样要有事实支撑,找不到就改成不含数字的说法。")
 
 
-def _theme_rules(theme, facts: Sequence[Fact], extra: Sequence[str] = ()) -> str:
-    rules = list(theme.script_rules) if theme is not None else []
+def _theme_rules(theme, facts: Sequence[Fact], extra: Sequence[str] = (),
+                 variant: Mapping[str, Any] | None = None) -> str:
+    rules = list(theme.rules_for(variety.opening(variant, theme).id,
+                                 variety.ending(variant, theme).id)) if theme is not None else []
     if any(f.topic == QUALITY_TOPIC and f.enabled for f in facts):
         rules.append(_QUALITY_RULE)
     rules.extend(r for r in extra if r)
@@ -320,12 +317,14 @@ def generate(
     subjects: Sequence[dict[str, str]] | None = None,
     portrait: bool = False,
     hook: str = "",
+    variant: Mapping[str, Any] | None = None,
 ) -> tuple[list[ScriptSegment], str, str]:
     """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
     `angle`:选题角度(热点选题)。为空时 prompt 与无角度版本逐字一致。
     `slots` / `subjects`:多车横评的段落位(段落 + 车名)与车单。不传时 prompt 与单车版逐字一致。
     `portrait`:竖屏项目多一组短视频规则;横屏时 prompt 与旧版逐字一致。
+    `variant`:开头 / 结尾写法(见 variety)。不传 = 片型默认变体,提示词与以前逐字一致。
     """
     roundup = bool(subjects)
     angle = (angle or "").strip()
@@ -397,7 +396,9 @@ def generate(
             keywords=", ".join(profile.visual_keywords[:4]),
             theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
             else "   按品类惯例组织叙事。",
-            theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan), _hook_rule(hook)]),
+            theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan), _hook_rule(hook)],
+                                     variant=variant),
+            rule10=variety.rule10(variant, theme),
             scope_policy=_scope_policy(theme, vocab),
             title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
             angle_policy=_angle_policy(angle) + _portrait_policy(portrait),
@@ -638,13 +639,17 @@ _STANCE_WORDS = ("但", "却", "反而", "其实", "不是", "只有", "才", "�
                  "与其", "错", "坑", "真正", "偏偏", "凭什么")
 
 
-def stance_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+def stance_lint(segments: Sequence[ScriptSegment],
+                opening: variety.Opening | None = None) -> list[LintIssue]:
     """开场是不是一个立场(warning)。
 
     车评的钩子是立场 + 悬念 + 能被反驳:「别急着订车,先搞清楚买哪版」是选题说明,
     观众知道了讲什么,但没有理由留下。这里只看有没有取舍 / 转折 / 对比的痕迹,判据粗,只报 warning。
     """
     if not segments or not _is_hook_section(segments[0].section):
+        return []
+    if opening is not None and not opening.stance:
+        # 问题开场 / 场景冷开:第一句本来就不是判断句
         return []
     text = segments[0].text or ""
     if any(w in text for w in _STANCE_WORDS):
@@ -945,12 +950,8 @@ def thesis_lint(segments: Sequence[ScriptSegment], thesis: str) -> list[LintIssu
                      f"(原样写进结论即可):{ends[-1].text[:40]}")]
 
 
-#: 结尾要给行动:一句提问,或一句下期预告 / 互动引导
-_ENDING_ACTION = ("?", "？", "评论区", "留言", "私信", "下期", "下一期", "下一集",
-                  "想看", "关注", "扣1", "打在评论区")
-
-
-def ending_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+def ending_lint(segments: Sequence[ScriptSegment],
+                ending: variety.Ending | None = None) -> list[LintIssue]:
     """结尾要给行动,不只给总结。
 
     复盘原话:「现在结尾停在『标准版闭眼入』,没有下一步。补一句提问
@@ -958,16 +959,17 @@ def ending_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
     都靠这一句。」
 
     只报 warning:结尾怎么写是风格问题,不该拦住出片。
+    按项目变体的结尾写法查(二选一要有「还是」和问号,下期预告要有「下期」……),
+    判决式结尾不查这条(由 thesis_lint 查有没有回扣主论点)。
     """
-    if not segments:
+    ending = ending or variety.ENDINGS[variety.DEFAULT_ENDING]
+    if not segments or not ending.markers:
         return []
     last = segments[-1]
     text = last.text or ""
-    if any(w in text for w in _ENDING_ACTION):
+    if all(any(w in text for w in group) for group in ending.markers):
         return []
-    return [LintIssue(last.idx, "warning",
-                     "结尾只有总结,没有下一步:补一句提问(你在纠结哪款?评论区说)"
-                     "或下期预告(下期做同价位横评)—— 评论区互动和连看都靠它")]
+    return [LintIssue(last.idx, "warning", ending.hint)]
 
 
 def duplicate_lint(
@@ -1021,8 +1023,11 @@ def compliance_lint(
     facts: Sequence[Fact],
     theme=None,
     thesis: str = "",
+    variant: Mapping[str, Any] | None = None,
 ) -> list[LintIssue]:
-    """机械校验脚本。error 级问题必须修复后才能进入分镜阶段。"""
+    """机械校验脚本。error 级问题必须修复后才能进入分镜阶段。
+
+    `variant`:项目的开头 / 结尾写法,开场立场与结尾行动这两条按它查。"""
     issues: list[LintIssue] = []
     known_ids = {f.id for f in facts}
     by_id = {f.id: f for f in facts}
@@ -1157,7 +1162,7 @@ def compliance_lint(
                     break
 
     issues.extend(hook_lint(segments))
-    issues.extend(stance_lint(segments))
+    issues.extend(stance_lint(segments, variety.opening(variant, theme)))
     issues.extend(meaning_lint(segments))
     issues.extend(depth_lint(segments, profile, facts))
     issues.extend(term_lint(segments, profile))
@@ -1168,7 +1173,7 @@ def compliance_lint(
     issues.extend(rival_lint(segments, facts))
     issues.extend(duplicate_lint(segments, facts))
     issues.extend(thesis_lint(segments, thesis))
-    issues.extend(ending_lint(segments))
+    issues.extend(ending_lint(segments, variety.ending(variant, theme)))
     return issues
 
 

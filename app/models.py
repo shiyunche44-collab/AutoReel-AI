@@ -193,6 +193,9 @@ class ProjectCreate(BaseModel):
     angle_evidence: list[str] | None = Field(default=None, max_length=12)
     #: 热点选题给的开场钩子(18 字内):写脚本时作为第一句的参考
     hook: str | None = Field(default=None, max_length=40)
+    #: 开头 / 结尾写法(pipeline/variety.py 的 id)。为空 = 自动挑,避开最近几条用过的
+    opening: str | None = Field(default=None, max_length=20)
+    ending: str | None = Field(default=None, max_length=20)
     #: 多车横评的车单(方向为 roundup 时必填);此时 subject 是选题名
     subjects: list[SubjectEntry] | None = Field(default=None, max_length=8)
 
@@ -230,6 +233,8 @@ class ProjectSummary(BaseModel):
     theme: str = ""
     #: 方向的中文标签,仅用于展示
     theme_label: str = ""
+    #: 开头 / 结尾写法的一句话说明(「开头:场景冷开 · 结尾:决策卡」)
+    variety: str = ""
     #: 选题角度;空串 = 无
     angle: str = ""
     #: 多车横评车单;单车项目为空

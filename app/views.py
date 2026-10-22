@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import config, db
-from .pipeline import aspect
+from .pipeline import aspect, variety
 from .categories import load_profile
 from .models import (
     Fact,
@@ -82,6 +82,18 @@ def theme_label(category: str, theme: str) -> str:
     return spec.label or theme
 
 
+def variety_label(row: dict[str, Any]) -> str:
+    """项目的开头 / 结尾写法。老项目(没有 variant)不显示。"""
+    raw = variety.parse(row.get("variant"))
+    if not raw:
+        return ""
+    try:
+        spec = load_profile(row["category"]).theme_spec(row.get("theme") or None)
+    except Exception:  # noqa: BLE001
+        spec = None
+    return variety.describe(raw, spec)
+
+
 def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
     """项目详情视图模型。找不到项目抛 `ProjectNotFound`。"""
     row = db.get_project(project_id)
@@ -96,6 +108,7 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         subject=row["subject"],
         category=row["category"],
         angle=row.get("angle") or "",
+        variety=variety_label(row),
         subjects=db.project_subjects(row),
         duration=row["duration"],
         aspect=aspect.of(row),
@@ -127,6 +140,7 @@ def build_summary(row: dict[str, Any]) -> ProjectSummary:
         theme=row.get("theme") or "",
         theme_label=theme_label(row["category"], row.get("theme") or ""),
         angle=row.get("angle") or "",
+        variety=variety_label(row),
         subjects=db.project_subjects(row),
         duration=row["duration"],
         aspect=aspect.of(row),
