@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aimovice"
+version = "0.1.0"
+description = "本地运行的产品解说视频工厂:输入一个车型/产品型号,产出 16:9 横屏的信息型解说长视频"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+# 全部运行时依赖。此前 requirements.txt 只列了 3 个包,其余靠"已在系统
+# Python 预装" —— 新机器上装不起来,CI 上也是一台干净机器,必须显式列出。
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "jinja2>=3.1",
+    "Pillow>=10.0",
+    "numpy>=1.26",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    # 素材池从 B站 / YouTube / TikTok 拉素材;[default] 带 YouTube 的解题脚本
+    "yt-dlp[default]>=2026.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+# --------------------------------------------------------------------------
+# pytest
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+# `tests/` 下混着四种性质的文件:pytest 用例(test_*.py)、会烧真实额度的
+# 自检脚本(verify_*.py)、网络探针(probe_*.py)、小工具(show_*.py)。
+# pytest 默认只收 test_*.py,后三种要手动跑 —— 用 marker 标出来,让
+# "哪些会花钱"写在明面上。
+markers = [
+    "network: 需要联网的测试",
+    "quota: 会消耗真实 API 额度的测试",
+    "motion: 需要装了 HyperFrames + Chrome 才会真渲染的测试",
+    "slow: 慢的测试",
+]
+
+# --------------------------------------------------------------------------
+# ruff
+# --------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["motion", "data", "node_modules", ".git"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = [
+    "E501",   # 行长交给 formatter
+    "B008",   # FastAPI 的 Depends()/Query() 在默认值里调用是惯例
+    "UP038",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里大量使用中文断言消息与长行
+"tests/*" = ["E501"]
+
+# --------------------------------------------------------------------------
+# mypy
+# --------------------------------------------------------------------------
+# 先只覆盖规格最严的那几个文件:领域模型、状态机、持久化。这三处的类型
+# 错误会顺着流水线一路传下去,别的地方靠 pytest 兜着。
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+files = ["app/models.py", "app/state.py", "app/db.py"]
+
+[[tool.mypy.overrides]]
+module = "app.db"
+# db 里有一批"列名 → kwargs"的动态写法,类型检查器看不出来
+disallow_untyped_calls = false

@@ -1,8 +1,14 @@
 # aimovice 依赖
-# 已在系统 Python 3.12.10 中预装,无需重复安装:
-#   fastapi, uvicorn, pydantic, httpx, Pillow, PyYAML, python-dotenv
-# 以下为按需补装的轻量包:
-jinja2>=3.1          # 服务端模板渲染
-pytest>=8.0          # 单元测试
-yt-dlp[default]>=2026.1  # B站 / YouTube / 抖音 视频搜索与分段下载;[default] 带 YouTube 解题脚本 yt-dlp-ejs
-playwright>=1.40     # 小红书 / 视频号 / 抖音网页版兜底:浏览器自动化。浏览器复用本机 Chrome / Edge,不需 playwright install
+#
+# 依赖清单的**单一来源**是 pyproject.toml(见那里的 [project].dependencies)。
+# 这里保留一个入口,免得文档与脚本里到处都要改。
+#
+# 运行时依赖:
+#   pip install -r requirements.txt
+#
+# 带开发工具(测试 / ruff / mypy):
+#   pip install -e ".[dev]"
+#
+# 清单本身见 pyproject.toml。之前的版本只列了 3 个包,其余靠"已在系统
+# Python 预装" —— 新机器上装不起来,CI 上也是一台干净机器。
+-e .

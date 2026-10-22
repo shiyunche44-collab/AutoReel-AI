@@ -23,12 +23,12 @@
 | 组件 | 状态 | 说明 |
 |---|---|---|
 | Python 3.12 | 必需 | |
+| Python 依赖 | 装一次 | 清单在 `pyproject.toml`(单一来源):`pip install -r requirements.txt` 装运行时依赖,`pip install -e ".[dev]"` 连测试工具(pytest / ruff / mypy)一起装 |
 | ffmpeg | **必需** | 已安装于 `C:\ffmpeg\bin`,不在系统 PATH,在 `.env` 里指定 |
 | M Plan 订阅 Key **或** `mcode-tools` CLI | 二选一 | 语音、音乐、图片理解、网络搜索的通道。订阅 Key 填 `.env` 的 `MINIMAX_PLAN_KEY`,任何终端可跑;`mcode-tools` 只能在 MiniMax Code 里跑 |
-| fastapi / uvicorn / pydantic / httpx / Pillow / PyYAML / python-dotenv | 已预装 | |
 | node 22+ + HyperFrames | 可选 | 概念动画(`concept` 版式)。在 `motion/` 下 `npm install`(版本锁在 `motion/package.json`);渲染用本机 Chrome / Edge,找不到时在 `.env` 配 `HYPERFRAMES_BROWSER_PATH`。没装就退回数据卡 |
-| jinja2 / pytest / yt-dlp | 需补装 | `pip install -r requirements.txt`。yt-dlp 给素材池从 B站 / YouTube / TikTok 拉素材,YouTube 还需要 PATH 上有 node 或 deno |
-| playwright | 发布/监控用 | `pip install -r requirements.txt`。只给小红书 / 视频号 / 抖音网页版兜底的浏览器自动化用;**浏览器复用本机 Chrome / Edge,不必 `playwright install`** |
+| yt-dlp | 必需 | 素材池从 B站 / YouTube / TikTok 拉素材,YouTube 还需要 PATH 上有 node 或 deno |
+| playwright | 发布/监控用 | `pip install playwright`。只给小红书 / 视频号 / 抖音网页版兜底的浏览器自动化用;**浏览器复用本机 Chrome / Edge,不必 `playwright install`** |
 
 ### 2. 配置
 
@@ -628,12 +628,26 @@ app/
 
 ```bash
 python -m pytest tests/ -q                  # 单元测试,无需网络与额度(装了 HyperFrames 会真渲染一个模板)
+python -m pytest tests/test_full_pipeline.py -q   # 端到端:建项目 → … → 成片,走真的状态机与 lint
 AIMOVICE_MOTION_TESTS=1 python -m pytest tests/test_motion_visuals.py -q   # 7 个概念动画模板全部真渲染(约 2 分钟)
 python -m tests.verify_templates            # 模板语法 + 样例渲染(抓未定义字段)
 python -m tests.verify_llm                  # 真实 LLM 调用自检(消耗 API 额度)
 python -m tests.verify_direct               # direct 后端真实调用自检(消耗少量额度)
 python -m tests.verify_number_grounding     # 核对脚本数字是否真在它引用的那条事实里
 ```
+
+静态检查(依赖清单在 `pyproject.toml`):
+
+```bash
+pip install -e ".[dev]"
+ruff check app tests          # 未用导入、错误比较、可疑写法
+mypy                          # 先只覆盖领域模型 / 状态机 / 持久化
+```
+
+`tests/` 下混着四种性质的文件:`test_*.py`(pytest 用例)、
+`verify_*.py`(会烧真实额度的自检脚本)、`probe_*.py`(网络探针)、
+`show_*.py` / `replay_*.py`(小工具)。pytest 默认只收 `test_*.py`,
+后三种要手动跑 —— 哪些会花钱写在上面那份清单里。
 
 分发域的测试(`test_publish_db` / `test_publish_metadata` / `test_publish_service` /
 `test_metrics_parse` / `test_vertical`)**一律不发真稿**:发布路径走 fake adapter,
