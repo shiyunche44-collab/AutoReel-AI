@@ -4,7 +4,9 @@
 画法与数据卡(`cards.py`)同源 —— 同一套字体与取字号逻辑,数字同样只来自
 核对过事实的行,这里只负责"画",不做任何核对。
 
-版式对标「三驱兄弟」:宣传片铺底,信息压在上面,底部常驻章节条告诉观众
+外观对标 `motion/bakeoff/C.html`(风格 C · 极简科技 HUD):浅色工程图纸 + 发丝网格
++ 等宽数字 + 橙色强调 + 取景框角标。设计细节见 `hud.py`。
+版式仍对标「三驱兄弟」的信息型长视频:信息压在上面,底部常驻章节条告诉观众
 "现在讲到哪了、后面还有什么"。
 """
 from __future__ import annotations
@@ -14,16 +16,16 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageDraw
 
+from . import hud
 from .cards import _fit, _font
 
-_PANEL_BG = (10, 16, 30, 205)
-_PANEL_EDGE = (255, 205, 60, 255)
+#: 强调色统一到 HUD 的橙(和面板的纸面、角标是同一套视觉语言)
+_ACCENT = hud.rgba(hud.ACCENT)
 _TEXT = (255, 255, 255, 255)
 _MUTED = (180, 190, 205, 255)
-_ACCENT = (255, 205, 60, 255)
 _RULE = (255, 255, 255, 46)
 _BAR_BG = (0, 0, 0, 175)
-_BAR_ON = (255, 205, 60, 235)
+_BAR_ON = hud.rgba(hud.ACCENT, 235)
 _BAR_ON_TEXT = (20, 20, 20, 255)
 
 #: 章节条高度(占画面高度)。
@@ -41,39 +43,81 @@ def _canvas(size: tuple[int, int]) -> tuple[Image.Image, ImageDraw.ImageDraw]:
 
 
 def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path) -> Path:
-    """左侧参数面板:车名 / 标题 / 3–5 行参数。`overlay` 形状同 spec 卡片。"""
+    """左侧参数面板 —— HUD 规格页:车名 / 标题 / 3–5 行参数 / 来源行。
+
+    版式照搬 bakeoff C:浅色纸面、发丝网格、橙色取景框角标、等宽大数字,
+    参数名右边压一行口径小标签。`overlay` 形状同 spec 卡片。
+    """
     w, h = size
     img, d = _canvas(size)
     x0, x1 = int(w * 0.035), int(w * 0.335)
     y0, y1 = int(h * 0.14), int(h * 0.78)
-    d.rounded_rectangle((x0, y0, x1, y1), radius=22, fill=_PANEL_BG)
-    d.rectangle((x0, y0 + 26, x0 + 8, y0 + 96), fill=_PANEL_EDGE)
+    box = (x0, y0, x1, y1)
+
+    # 纸面浮在画面上:先铺一层投影,再画纸
+    img = Image.alpha_composite(img, hud.shadow(size, box, alpha=90, blur=int(w * 0.008),
+                                                offset=int(h * 0.009)))
+    d = ImageDraw.Draw(img)
+    hud.plate(d, box, grid_step=int(w * 0.031))
+    hud.brackets(d, box, length=int(w * 0.024), width=max(4, int(w * 0.0026)))
+
     pad = int(w * 0.018)
-    inner = x1 - x0 - pad * 2
-    y = y0 + 24
-    tag, tf = _fit(d, subject, 30, inner)
-    d.text((x0 + pad, y), tag, font=tf, fill=_ACCENT)
-    y += 46
-    title, ttf = _fit(d, overlay.get("title") or "核心参数", 48, inner, bold=True)
-    d.text((x0 + pad, y), title, font=ttf, fill=_TEXT)
-    y += 84
+    cx0, cx1 = x0 + pad, x1 - pad
+    inner = cx1 - cx0
+
+    # 顶部标签行:左边「车名 · SPEC/SHEET」,右边「可查出处」——
+    # 本片唯一抄不走的本事,摆在这行最显眼的位置
+    tag_size = max(16, int(h * 0.022))
+    track = tag_size * 0.16
+    tag = f"{subject} · SPEC/SHEET" if subject else "SPEC/SHEET"
+    hud.draw_tracked(d, cx0, y0 + pad, tag, tag_size, tag_size,
+                     hud.MUTED, tracking=track)
+    note = "可查出处"
+    hud.draw_tracked(d, cx1 - hud.tracked_width(d, note, tag_size, tag_size, track),
+                     y0 + pad, note, tag_size, tag_size, hud.ACCENT_DARK, tracking=track)
+
+    y = y0 + pad + tag_size + 10
+    title = str(overlay.get("title") or "核心参数")
+    title_size = max(28, int(h * 0.048))
+    title, tf = _fit(d, title, title_size, inner, bold=True)
+    d.text((cx0, y), title, font=tf, fill=hud.INK)
+    y += int(getattr(tf, "size", title_size)) + 16
+    hud.rule(d, cx0, cx1, y, hud.INK, 3)
+    y += 26
+
     rows = overlay.get("rows") or []
-    area = (y1 - 56) - y
-    rh = min(118, area // max(1, len(rows)))
+    src = str(overlay.get("source") or "")
+    bottom = y1 - int(h * 0.014)
+    src_size = max(14, int(h * 0.019))
+    if src:
+        s, ms, cs = hud.fit_mixed(d, src, src_size, src_size, inner)
+        hud.draw_tracked(d, cx0, bottom - src_size, s, ms, cs, hud.MUTED, tracking=1.2)
+    # 刻度尺压在来源行上方:纯装饰,像仪表的刻度,不表示任何数值
+    ruler_y = (bottom - src_size - 14) if src else (bottom - 10)
+    hud.ruler(d, cx0, cx1, ruler_y)
+    area = max(60, ruler_y - 20 - y)
+    n = max(1, len(rows))
+    rh = min(int(h * 0.125), area // n)
+    key_size = max(18, min(28, int(rh * 0.24)))
+    num_size = max(30, min(66, int(rh * 0.56)))
+    unit_size = max(16, int(num_size * 0.5))
     for r in rows:
-        label, lf = _fit(d, r["label"], 28, inner)
-        d.text((x0 + pad, y + 4), label, font=lf, fill=_MUTED)
+        label = str(r.get("label") or "")
+        k, kf = _fit(d, label, key_size, inner)
+        d.text((cx0, y), k, font=kf, fill=hud.KEY)
         if r.get("tag"):
-            # 口径 / 来源小标签贴在参数名右边,和数字一起被看到
-            gap = int(d.textlength(label + "  ", font=lf))
-            tag_txt, tgf = _fit(d, str(r["tag"]), 24, max(40, inner - gap))
-            d.text((x0 + pad + gap, y + 8), tag_txt, font=tgf, fill=_ACCENT)
-        value, vf = _fit(d, r["values"][0], 42, inner, bold=True)
-        d.text((x0 + pad, y + 4 + int(rh * 0.36)), value, font=vf, fill=_TEXT)
-        d.line((x0 + pad, y + rh - 6, x1 - pad, y + rh - 6), fill=_RULE, width=2)
+            # 口径 / 来源小标签贴在参数名右边(和数字一起被看到)
+            gap = int(d.textlength(k + "  ", font=kf))
+            t2, ms, cs = hud.fit_mixed(d, str(r["tag"]), int(key_size * 0.76),
+                                       int(key_size * 0.76), max(40, inner - gap))
+            hud.draw_tracked(d, cx0 + gap, y + 3, t2, ms, cs, hud.MUTED, tracking=1.5)
+        value = str((r.get("values") or [""])[0])
+        size = num_size
+        while size > 24 and hud.value_width(d, value, size, unit_size) > inner:
+            size -= 2
+        hud.draw_value(d, cx0, y + key_size + 4, value, size, unit_size)
         y += rh
-    src, sf = _fit(d, overlay.get("source", ""), 20, inner)
-    d.text((x0 + pad, y1 - 40), src, font=sf, fill=_MUTED)
+        hud.rule(d, cx0, cx1, y - 10, hud.RULE_COLOR, 2)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest)

@@ -204,6 +204,35 @@ def test_demote_without_profile_still_falls_back_to_broll():
 
 
 # --------------------------------------------------------------------------
+# 每个数字标注口径与来源
+# --------------------------------------------------------------------------
+def _card(tag: str) -> dict:
+    return {"kind": "spec", "title": "核心参数", "columns": [], "source": "数据来源:官方 1",
+            "rows": [{"label": "CLTC续航", "values": ["643公里"], "fact_id": "f_1", "tag": tag}]}
+
+
+def _accent_pixels(path) -> int:
+    from PIL import Image
+
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        colors = im.getcolors(maxcolors=1 << 24) or []
+        return sum(n for n, (r, g, b) in colors
+                   if abs(r - 77) < 30 and abs(g - 163) < 30 and abs(b - 255) < 30)
+
+
+def test_card_draws_the_basis_tag_next_to_the_parameter(tmp_path):
+    """整屏数据卡以前只画底部来源行,行上的口径没画 —— 补上。"""
+    from app.pipeline import cards
+
+    plain = cards.render_frames(_card(""), "示例", tmp_path / "plain")[-1]
+    tagged = cards.render_frames(_card("CLTC · 标准版 | 官方"), "示例", tmp_path / "tagged")[-1]
+    assert plain.is_file() and tagged.is_file()
+    # 标签用强调色画,带标签的那张强调色像素更多
+    assert _accent_pixels(tagged) > _accent_pixels(plain)
+
+
+# --------------------------------------------------------------------------
 # 结尾要给行动
 # --------------------------------------------------------------------------
 def test_ending_without_action_is_flagged():

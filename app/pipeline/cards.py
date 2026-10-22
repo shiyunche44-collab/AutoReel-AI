@@ -359,6 +359,12 @@ def _draw_spec(d, card, rows, y, area, g: Geo = _GEO) -> None:
     for r in rows:
         label, lf = _fit(d, r["label"], 40, half - 20)
         d.text((g.left, y + rh // 2), label, font=lf, fill=_MUTED, anchor="lm")
+        # 口径 / 来源小字跟在参数名后面(「CLTC · 标准版 | 官方」):
+        # 懂车的观众判断这个数字靠不靠谱,看的就是这一行
+        if r.get("tag"):
+            gap = int(d.textlength(label + "  ", font=lf))
+            tag_txt, tgf = _fit(d, str(r["tag"]), 24, max(40, half - gap))
+            d.text((g.left + gap, y + rh // 2 + 2), tag_txt, font=tgf, fill=_ACCENT, anchor="lm")
         value, vf = _fit(d, r["values"][0], 64, half + 20, bold=True)
         d.text((g.right, y + rh // 2), value, font=vf, fill=_TEXT, anchor="rm")
         d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
@@ -375,9 +381,14 @@ def _draw_compare(d, card, rows, y, area, g: Geo = _GEO, half: bool = False) -> 
     d.text((g.right - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
     y += 80
     rh = _row_h(card, area - 80)
+    cx = (g.left + g.right) // 2
     for n, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 32, g.right - g.left)
-        d.text(((g.left + g.right) // 2, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
+        d.text((cx, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
+        if r.get("tag"):
+            gap = int(d.textlength(label + "  ", font=lf))
+            tag_txt, tgf = _fit(d, str(r["tag"]), 22, 280)
+            d.text((cx + gap // 2, y + 26), tag_txt, font=tgf, fill=_ACCENT, anchor="lm")
         va, vaf = _fit(d, r["values"][0], 54, col_w - 30, bold=True)
         vb, vbf = _fit(d, r["values"][1], 54, col_w - 30, bold=True)
         d.text((g.left + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
@@ -412,6 +423,10 @@ def _draw_bars(d, card, rows, y, area, g: Geo = _GEO, progress: float = 1.0) -> 
     for i, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 36, bar_w)
         d.text((g.left, y + 8), label, font=lf, fill=_MUTED)
+        if r.get("tag"):
+            gap = int(d.textlength(label + "  ", font=lf))
+            tag_txt, tgf = _fit(d, str(r["tag"]), 22, max(40, bar_w - gap))
+            d.text((g.left + gap, y + 14), tag_txt, font=tgf, fill=_ACCENT)
         v = max(0.0, _bar_value(r["values"][0]) or 0)
         top, bottom = y + 60, y + min(rh - 20, 60 + 54)
         length = max(12, int((bar_w - 220) * v / peak * progress))
