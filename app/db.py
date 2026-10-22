@@ -56,16 +56,20 @@ CREATE TABLE IF NOT EXISTS shots (
     stage            TEXT NOT NULL DEFAULT 'final',
     status           TEXT NOT NULL DEFAULT 'pending',
     model            TEXT DEFAULT '',
+    -- ↓↓↓ 历史列:已删除的竖屏生成链路留下的。解说轨的画面是本地渲染的,
+    -- 没有"提交给生成服务再轮询"这一步,这几列永远是空/0。
+    -- **保留**是为了不重建表(本地数据有风险);Python 侧已不再有它们的语义。
     provider_task_id TEXT,
     submitted_at     REAL,
     last_polled_at   REAL,
+    chain_id         INTEGER NOT NULL DEFAULT 0,
+    chain_pos        INTEGER NOT NULL DEFAULT 0,
+    -- ↑↑↑ 历史列
     draft_path       TEXT,
     final_path       TEXT,
     attempts         INTEGER NOT NULL DEFAULT 0,
     error            TEXT,
     consistency      TEXT NOT NULL DEFAULT 'ok',
-    chain_id         INTEGER NOT NULL DEFAULT 0,
-    chain_pos        INTEGER NOT NULL DEFAULT 0,
     est_cost         REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (project_id, idx, stage),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
@@ -601,7 +605,13 @@ def delete_shots(project_id: str, stage: str) -> None:
 
 
 def find_shot_by_task_id(task_id: str) -> dict[str, Any] | None:
-    """按 provider task_id 反查镜头 —— 轮询器定位任务用。"""
+    """按 provider task_id 反查镜头。
+
+    ⚠️ **历史遗留**:解说轨的画面是本地渲染的,没有"提交给生成服务再轮询"
+    这一步,`provider_task_id` 永远是空的。全项目无调用。
+    `shots` 表的列保留(删列要重建表,对本地数据有风险),但这个函数已经
+    没有意义了 —— 留着只会让人以为还有轮询器。
+    """
     init_db()
     with connect() as conn:
         cur = conn.execute(
@@ -614,7 +624,9 @@ def find_shot_by_task_id(task_id: str) -> dict[str, Any] | None:
 def claim_pending_shots(project_id: str, stage: str, limit: int) -> list[dict[str, Any]]:
     """取出处于 pending 且未达重试上限的镜头,供调度器提交。
 
-    这是"幂等"的关键:已提交(provider_task_id 非空)或已成功的镜头不会被重复领取。
+    ⚠️ **历史遗留**:同 `find_shot_by_task_id` —— 解说轨没有"提交"这一步。
+    渲染的幂等现在由**项目锁**保证(同一项目同一时刻只有一个写入者),
+    不再靠"provider_task_id 非空"这种标记。
     """
     init_db()
     with connect() as conn:

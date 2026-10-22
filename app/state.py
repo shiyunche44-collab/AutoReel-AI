@@ -16,10 +16,14 @@ class State(str, Enum):
     STORYBOARD_READY = "STORYBOARD_READY"
     GATE_A = "GATE_A"
     ASSETS_READY = "ASSETS_READY"
+    #: **历史态**:解说轨不编译生成提示词,这一段是空转,保留只是为了
+    #: 不动转移表(牵一发动全身)。新代码不必往里加逻辑。
     PROMPTS_READY = "PROMPTS_READY"
     DRAFT_RENDERING = "DRAFT_RENDERING"
     GATE_B = "GATE_B"
     FINAL_RENDERING = "FINAL_RENDERING"
+    #: **历史态**:解说轨的画面来自已审的各拍,不做独立视觉质检,这一段
+    #: 是空转。
     QA_PASSED = "QA_PASSED"
     COMPOSING = "COMPOSING"
     DONE = "DONE"

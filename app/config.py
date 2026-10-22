@@ -30,9 +30,29 @@ SHOT_GRID_SECONDS = 6
 #: 品类没声明 durations 时的可选成片时长(秒)
 SUPPORTED_DURATIONS: tuple[int, ...] = (120, 240, 360, 480)
 
-#: 归一化片段的缺省画幅(品类自己的 frame_size 优先)
-OUTPUT_WIDTH = 1080
-OUTPUT_HEIGHT = 1920
+#: 归一化片段的缺省画幅。
+#:
+#: ⚠️ 这里曾经是 **1080×1920(竖屏 9:16)** —— 那是已删除的竖屏链路留下的
+#: 残留。它是 `cards.geo_for` / `render._size` / `timeline` / `narration.make_cover`
+#: / `providers.clips` 的**兜底**画幅:解说轨正常路径都显式传
+#: `profile.frame_size`(16:9),所以大多数时候是对的;但任何一处漏传 size,
+#: 就会**静默产出竖屏**画面 —— 竖屏的画幅常量在横屏项目里是活的雷。
+#:
+#: 现在改成 16:9,让它与解说轨的实际画幅一致;漏传 size 最多得到一张
+#: 16:9 的图,而不是一张竖的。
+OUTPUT_WIDTH = 1920
+OUTPUT_HEIGHT = 1080
+
+#: 横屏解说轨的标准画幅比例
+FRAME_ASPECT = 16 / 9
+
+
+def frame_is_landscape(size: tuple[int, int]) -> bool:
+    """这个画幅是不是横屏 16:9(允许一点点误差)。"""
+    w, h = size
+    if not w or not h:
+        return True
+    return abs(w / h - FRAME_ASPECT) <= 0.02
 
 #: 按关键词搜索视频的平台,按优先级排列。可选 bilibili / youtube / douyin / tiktok。
 #: douyin(含西瓜)没有关键词搜索接口,只能靠 Bing 站内检索拿链接 —— 而 cn.bing

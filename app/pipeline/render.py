@@ -1,7 +1,7 @@
 """⑩ 合成渲染:镜头拼接 → 字幕烧录 → 旁白混音 → 响度归一化 → 封面。
 
 渲染层采用**两段式拼接**:
-1. 先把每个镜头单独归一化到 1080×1920 / 24fps;
+1. 先把每个镜头单独归一化到 16:9 横屏(1920×1080)/ 24fps;
 2. 再用 concat demuxer 以 `-c copy` 无损拼接。
 比直接 concat 更稳 —— 生成片段的分辨率/帧率/时间戳可能不一致,
 直接拼会得到花屏或音画漂移。
@@ -12,6 +12,7 @@ ffprobe 用于时长探测。所有子进程都用 list 形式传参(不过 shel
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,8 @@ from typing import Any, Sequence
 from .. import config
 from ..models import SubtitleCue
 from . import timeline as timeline_mod
+
+log = logging.getLogger(__name__)
 
 FPS = 24
 TARGET_LOUDNESS = f"I={config.TARGET_LUFS}:TP=-1.5:LRA=11"
@@ -80,7 +83,11 @@ def _fontsdir_arg() -> str | None:
 # 第一段:镜头归一化
 # --------------------------------------------------------------------------
 def _size(size: tuple[int, int] | None) -> tuple[int, int]:
-    return size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+    """目标画幅。缺省是 16:9 横屏(解说轨的画幅)。"""
+    out = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+    if not config.frame_is_landscape(out):
+        log.warning("渲染画幅不是 16:9:%sx%s", *out)
+    return out
 
 
 def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] | None = None,

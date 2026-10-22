@@ -421,14 +421,11 @@ def _shots_to_models(rows: list[dict[str, Any]]) -> list[Shot]:
                 status=row["status"],
                 stage=row["stage"],
                 model=row.get("model") or "",
-                provider_task_id=row.get("provider_task_id"),
                 draft_path=row.get("draft_path"),
                 final_path=row.get("final_path"),
                 attempts=row.get("attempts") or 0,
                 error=row.get("error"),
                 consistency=row.get("consistency") or "ok",
-                chain_id=row.get("chain_id") or 0,
-                chain_pos=row.get("chain_pos") or 0,
                 est_cost=row.get("est_cost") or 0.0,
             )
         )

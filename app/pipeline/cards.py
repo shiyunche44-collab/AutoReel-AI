@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import tempfile
@@ -26,6 +27,8 @@ from .. import categories, config
 from ..models import Fact
 from . import render as render_mod
 from .grounding import numbers_in
+
+log = logging.getLogger(__name__)
 
 #: 卡片版式(定义在 categories,Profile 加载期据此校验)。段落用 `card:` 声明自己用哪一种。
 CARD_KINDS = categories.CARD_KINDS
@@ -60,6 +63,10 @@ class Geo:
 
 def geo_for(size: tuple[int, int] | None = None) -> Geo:
     w, h = size or (W, H)
+    if not config.frame_is_landscape((w, h)):
+        # 竖屏残留过一次(缺省画幅是 1080×1920),这里留一道告警:
+        # 画幅不对时数据卡会按竖屏的几何排版,内容被裁在不该裁的地方。
+        log.warning("数据卡画幅不是 16:9:%sx%s", w, h)
     if w > h:
         return Geo(w, h, top=int(h * 0.13), bottom=int(h * 0.78),
                    left=int(w * 0.20), right=int(w * 0.80))

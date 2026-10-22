@@ -122,17 +122,19 @@ class ShotSpec(BaseModel):
 
 
 class Shot(BaseModel):
-    """镜头规格 + 运行态。"""
+    """镜头规格 + 运行态。
+
+    解说轨的画面是**本地渲染**的(ffmpeg / PIL),没有"提交给生成服务再轮询"
+    这一步,所以没有 task_id、没有提交时间、没有链序号 —— 那些是已删除的
+    竖屏生成链路留下的。`shots` 表里对应的列**保留**(删列要重建表,对本地
+    数据有风险),但 Python 侧不再有它们的语义。
+    """
 
     spec: ShotSpec
     status: ShotStatus = "pending"
     #: 生成档位: draft / final
     stage: Literal["draft", "final"] = "final"
     model: str = ""
-    #: provider 返回的 task_id —— 提交即持久化,是断点续跑的关键
-    provider_task_id: str | None = None
-    submitted_at: float | None = None
-    last_polled_at: float | None = None
     draft_path: str | None = None
     final_path: str | None = None
     #: 重试次数(已达上限则不再自动重试)
@@ -140,9 +142,6 @@ class Shot(BaseModel):
     error: str | None = None
     #: 画面来源:real = 素材池实拍背景;card = 数据卡片,由代码直接渲染;ok = 还没渲染
     consistency: Consistency = "ok"
-    #: 旧竖屏链路的链序号,数据库仍有这两列
-    chain_id: int = 0
-    chain_pos: int = 0
     #: 估算等效用量(美元,仅估算)
     est_cost: float = 0.0
 
