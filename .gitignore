@@ -36,6 +36,7 @@ node_modules/
 /yu7_landscape_demo.mp4
 /concept_samples_v3.mp4
 /concept_v3_all.mp4
+/concept_v4_*.mp4
 # 风格小样:素材是素材库的拷贝,字体从 C:\Windows\Fonts 拷来(17MB),出片可重渲
 motion/bakeoff/assets/
 motion/bakeoff/fonts/

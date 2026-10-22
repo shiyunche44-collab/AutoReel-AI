@@ -280,17 +280,17 @@ def test_portrait_concept_style_falls_back(monkeypatch):
     ready: set[str] = set()
     monkeypatch.setattr(motion, "supports_portrait", lambda style, scene=None: (style or "studio") in ready)
     # 横屏:原样
-    assert explainer.portrait_concept_style("battery", "glass", (1920, 1080)) == ("glass", "")
+    assert explainer.portrait_concept_style("battery", "racing", (1920, 1080)) == ("racing", "")
     # 竖屏、都没适配:退回数据卡
-    style, why = explainer.portrait_concept_style("battery", "glass", PORTRAIT)
+    style, why = explainer.portrait_concept_style("battery", "racing", PORTRAIT)
     assert style is None and "数据卡" in why
     # 默认模版有竖屏版:改用默认
     ready.add("studio")
-    style, why = explainer.portrait_concept_style("battery", "glass", PORTRAIT)
+    style, why = explainer.portrait_concept_style("battery", "racing", PORTRAIT)
     assert style == "studio" and "默认模版" in why
     # 选定模版有竖屏版:直接用
-    ready.add("glass")
-    assert explainer.portrait_concept_style("battery", "glass", PORTRAIT) == ("glass", "")
+    ready.add("racing")
+    assert explainer.portrait_concept_style("battery", "racing", PORTRAIT) == ("racing", "")
 
 
 def test_estimate_api_takes_aspect():

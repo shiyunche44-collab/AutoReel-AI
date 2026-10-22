@@ -24,6 +24,8 @@ dependencies = [
     "python-dotenv>=1.0",
     # 素材池从 B站 / YouTube / TikTok 拉素材;[default] 带 YouTube 的解题脚本
     "yt-dlp[default]>=2026.1",
+    # 发布(小红书 / 视频号)和抓取兜底都驱动本机 Chrome / Edge,不需要 `playwright install`
+    "playwright>=1.45",
 ]
 
 [project.optional-dependencies]

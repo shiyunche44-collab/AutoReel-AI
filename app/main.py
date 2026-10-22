@@ -1150,6 +1150,38 @@ def publish_login(platform: str):
     return {"ok": True, "message": "浏览器已打开,扫码登录后关掉窗口即可"}
 
 
+class UnblockPayload(BaseModel):
+    url: str
+
+
+@app.get("/api/browser/blocked")
+def browser_blocked():
+    """抓取兜底撞上验证码 / 登录墙、等人工处理的站点。"""
+    from .providers import browser_fetch
+
+    return {"items": browser_fetch.blocked_list()}
+
+
+@app.post("/api/browser/unblock")
+def browser_unblock(payload: UnblockPayload):
+    """打开有头浏览器让人手动过验证码;关窗后登录态保存,拦截记录清掉。"""
+    from .providers import browser_fetch
+
+    if not payload.url.startswith(("http://", "https://")):
+        raise HTTPException(400, "url 要以 http:// 或 https:// 开头")
+
+    def _run() -> None:
+        try:
+            browser_fetch.unblock(payload.url)
+        except Exception:  # noqa: BLE001 - 失败由用户看浏览器
+            pass
+
+    import threading
+
+    threading.Thread(target=_run, name="browser-unblock", daemon=True).start()
+    return {"ok": True, "message": "浏览器已打开,手动过完验证后关掉窗口即可"}
+
+
 @app.get("/api/projects/{project_id}/publish")
 def project_publish_records(project_id: str):
     if not db.get_project(project_id):

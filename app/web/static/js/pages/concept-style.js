@@ -97,7 +97,7 @@ export function initConceptStyle(pid, { onRerender } = {}) {
     styles = g.styles || [];
     card.classList.toggle('is-portrait', portrait);
     card.classList.remove('hidden');
-    $('#cs-hint', card).textContent = `本片 ${st.beats} 拍概念动画`;
+    $('#cs-hint', card).textContent = `本片 ${st.beats} 拍概念动画` + (st.note ? ` · ${st.note}` : '');
     $('#cs-intro', card).textContent = atGateB
       ? '示例图是同一份示例数据的效果示意。换模版只重渲概念动画那几拍,其他拍不动。'
       : '20 套模版版式和动效各不相同,示例图是同一份示例数据的效果示意。点一下就选定,确认渲染时按选定的模版出动画;不选就用「实车标注」。';

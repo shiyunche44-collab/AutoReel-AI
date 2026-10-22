@@ -106,8 +106,9 @@
     tl.fromTo(vs, { opacity: 0, scale: 1.6 }, { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(2)" }, T(0.8));
     tl.fromTo(axis, { scaleY: 0 }, { scaleY: 1, duration: 0.8, ease: "power2.inOut" }, T(0.9));
     const r0 = T(1.2), rLast = Math.max(r0, Math.min(A.outAt - 1.4, S * 0.6));
+    const rTimes = HF.coTimes(HF.rows, items.length, r0, rLast, A.outAt - 1.4);
     items.forEach((it, k) => {
-      const at = items.length > 1 ? r0 + (rLast - r0) * k / (items.length - 1) : r0;
+      const at = rTimes[k];
       tl.fromTo([it.ta, it.tb], { opacity: 0 }, { opacity: 1, duration: 0.3 }, at);
       tl.fromTo(it.lab, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, at);
       tl.fromTo([it.ba, it.bb], { scaleX: 0 }, { scaleX: 1, duration: Math.max(0.6, T(0.9)), ease: "expo.out" }, at + 0.1);

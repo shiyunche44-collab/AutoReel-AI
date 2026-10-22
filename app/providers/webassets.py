@@ -27,6 +27,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from . import browser_fetch
 from .images import ImageRef
 
 #: Wikimedia 要求请求方标明身份,匿名 UA 会被 403
@@ -364,6 +365,12 @@ def _http_bytes(url: str, *, timeout: int = _TIMEOUT, referer: str | None = None
     except Exception as exc:  # noqa: BLE001
         raise WebAssetError(f"{type(exc).__name__}: {exc}") from exc
     if resp.status_code >= 400:
+        if browser_fetch.should_fallback(url, resp.status_code):
+            # 403 / 412 / 429 这类是认出了脚本:换真浏览器再抓一次
+            try:
+                return browser_fetch.fetch(url, referer=referer, as_text=as_text)
+            except browser_fetch.BrowserFetchError as exc:
+                raise WebAssetError(f"HTTP {resp.status_code};浏览器兜底:{exc}") from exc
         raise WebAssetError(f"HTTP {resp.status_code}")
     return resp.text if as_text else resp.content
 

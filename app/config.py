@@ -343,6 +343,15 @@ YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip()
 BROWSER_PATH = os.getenv("BROWSER_PATH", "").strip() or MOTION_BROWSER
 BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "1") not in ("0", "false", "False")
 
+#: 抓取兜底:直连被拒(403 / 412 / 429…)时改用真浏览器再抓一次(`providers/browser_fetch.py`)。
+#: 没装 Playwright 时自动退回现状。遇到验证码只记下来等人工过,不自动破解。
+BROWSER_FETCH = os.getenv("BROWSER_FETCH", "1") not in ("0", "false", "False")
+#: 只对这些 host 兜底(逗号分隔,按后缀匹配);留空 = 全部
+BROWSER_FETCH_HOSTS = [h.strip().lower() for h in os.getenv("BROWSER_FETCH_HOSTS", "").split(",")
+                       if h.strip()]
+BROWSER_FETCH_HEADLESS = os.getenv(
+    "BROWSER_FETCH_HEADLESS", "1" if BROWSER_HEADLESS else "0") not in ("0", "false", "False")
+
 
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)

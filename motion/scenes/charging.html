@@ -109,8 +109,10 @@
     });
     const coAt = flowAt + 0.2;
     const lastCo = Math.max(coAt, Math.min(A.outAt - 1.6, S * 0.6));
+    // 有旁白时刻就跟着旁白走,没有就铺到整拍 60%
+    const coTimes = HF.coTimes(rows, callouts.length, coAt, lastCo, A.outAt - 1.4);
     callouts.forEach((c, k) => {
-      const at = callouts.length > 1 ? coAt + (lastCo - coAt) * k / (callouts.length - 1) : coAt;
+      const at = coTimes[k];
       c.show(tl, at, k === 0 ? Math.max(0.9, T(1.4)) : 0.8);
       c.breathe(tl, at + 1.0, A.outAt);
     });

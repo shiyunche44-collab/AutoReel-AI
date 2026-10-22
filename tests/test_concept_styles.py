@@ -92,11 +92,11 @@ def test_templates_default_first():
     """默认模版排第一,其余模版各有自己的文件。
 
     数量只做**下限**断言:每加一套模版就要改测试里的数字,是"没有 CI"
-    时期的典型维护负担 —— 实测已经因为加到第 21 套而红过一次。
+    时期的典型维护负担 —— 实测已经因为加到第 21 套而红过一次(后来精简成 5 套精品)。
     真正的约束是"每套模版有独立文件、id 与名字互不重复",与总数无关。
     """
     all_ = motion.styles()
-    assert len(all_) >= 20
+    assert len(all_) >= 5
     assert all_[0].id == motion.DEFAULT_STYLE and all_[0].path is None
     assert len({s.id for s in all_}) == len(all_)
     assert len({s.name for s in all_}) == len(all_)
@@ -151,32 +151,31 @@ def test_default_template_is_the_scene_template():
 
 
 def test_generic_template_replaces_scene_and_knows_the_scene():
-    html = motion.compose_html("battery", DATA, 6.0, style="kinetic")
-    assert "@name 巨字快切" in html
+    html = motion.compose_html("battery", DATA, 6.0, style="cinema")
+    assert "@name 发布会暗场" in html
     assert '"scene": "battery"' in html and '"kicker": "电池"' in html
     assert "96.3kWh" in html            # 数据原样不动
     with pytest.raises(motion.MotionError):
-        motion.compose_html("no-such-scene", DATA, 6.0, style="kinetic")
+        motion.compose_html("no-such-scene", DATA, 6.0, style="cinema")
 
 
 def test_generic_templates_bring_their_own_background_and_photo_choice():
     assert motion.scene_background("accel") == "footage"
-    assert motion.scene_background("accel", "kinetic") == "own"     # 通用模版不铺实拍
-    assert motion.scene_photo_views("battery", "kinetic") == []     # 不要车图的模版
+    assert motion.scene_background("accel", "cinema") == "own"      # 通用模版不铺实拍
     assert motion.scene_photo_views("battery", "editorial") == motion.scene_photo_views("battery")
     assert motion.scene_photo_views("compare", "editorial") == []   # 场景本身不要车图
 
 
 def test_cache_key_differs_by_style():
     a = motion.cache_key("battery", DATA, 6.0, (1920, 1080), style="studio")
-    b = motion.cache_key("battery", DATA, 6.0, (1920, 1080), style="neon")
+    b = motion.cache_key("battery", DATA, 6.0, (1920, 1080), style="racing")
     assert a != b
 
 
 def test_snapshot_names_are_content_addressed(tmp_path):
-    a = motion.snapshot_names("battery", DATA, 6.0, [3, 5], (1920, 1080), tmp_path, style="kinetic")
-    b = motion.snapshot_names("battery", DATA, 6.0, [3, 5], (1920, 1080), tmp_path, style="neon")
-    assert len(a) == 2 and a[0] != b[0] and "_kinetic_" in a[0].name
+    a = motion.snapshot_names("battery", DATA, 6.0, [3, 5], (1920, 1080), tmp_path, style="cinema")
+    b = motion.snapshot_names("battery", DATA, 6.0, [3, 5], (1920, 1080), tmp_path, style="racing")
+    assert len(a) == 2 and a[0] != b[0] and "_cinema_" in a[0].name
 
 
 @pytest.fixture
@@ -225,7 +224,7 @@ def test_set_style_at_gate_b_rerenders_only_concept_beats(fresh_db):
     from app.pipeline import orchestrator
 
     pid = _project_with_beats(fresh_db, State.GATE_B)
-    res = orchestrator.set_concept_style(pid, "neon")
+    res = orchestrator.set_concept_style(pid, "racing")
     assert res["rerender"] == [1, 2]
     rows = {r["idx"]: r["status"] for r in fresh_db.get_shots(pid, "draft")}
     assert rows == {0: "succeeded", 1: "pending", 2: "pending"}
@@ -245,7 +244,7 @@ def test_set_style_refused_while_rendering_or_unknown(fresh_db):
 
     pid = _project_with_beats(fresh_db, State.DRAFT_RENDERING)
     with pytest.raises(orchestrator.PipelineError):
-        orchestrator.set_concept_style(pid, "neon")
+        orchestrator.set_concept_style(pid, "racing")
     pid2 = _project_with_beats(fresh_db, State.GATE_A)
     with pytest.raises(orchestrator.PipelineError):
         orchestrator.set_concept_style(pid2, "no-such-style")
@@ -255,7 +254,9 @@ def test_every_style_has_fixed_sample():
     from app.pipeline import concept_styles
 
     g = concept_styles.gallery()
-    assert len(g["styles"]) >= 20
+    # 精简成少量精品:默认 + 四套通用模版,每套都有横竖屏示例
+    assert {"studio", "cinema", "blueprint", "racing", "editorial"} <= {s["id"] for s in g["styles"]}
+    assert all(s["portrait"] and s["image_portrait"] for s in g["styles"])
     assert all(s["image"] for s in g["styles"]), [s["id"] for s in g["styles"] if not s["image"]]
     assert concept_styles.sample_image("../x.jpg") is None
 
@@ -266,3 +267,16 @@ def test_project_status_counts_concept_beats(fresh_db):
     pid = _project_with_beats(fresh_db, State.GATE_A)
     assert concept_styles.project_status(pid) == {"style": motion.DEFAULT_STYLE, "beats": 2,
                                                  "portrait": False}
+
+
+def test_retired_style_falls_back_with_note(fresh_db):
+    """项目选过的模版下架了:照常用默认模版出片,状态里带一句提示。"""
+    from app.pipeline import concept_styles, explainer
+
+    pid = _project_with_beats(fresh_db, State.GATE_A)
+    assert "note" not in concept_styles.project_status(pid)
+    fresh_db.write_json(pid, "concept_style.json", {"style": "neon"})
+    assert explainer.concept_style_of(pid) == motion.DEFAULT_STYLE
+    st = concept_styles.project_status(pid)
+    assert st["style"] == motion.DEFAULT_STYLE and "下架" in st["note"]
+    assert motion.compose_html("battery", DATA, 6.0, style="neon") == motion.compose_html("battery", DATA, 6.0)

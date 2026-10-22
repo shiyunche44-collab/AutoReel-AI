@@ -292,6 +292,10 @@ class Vocab:
     #: 用途:概念动画用得少,需要**兜底**把它补上去时,靠这些词判断这一拍该配哪张图 ——
     #: 讲电池的拍配电池包模板,讲补能的配补能模板,配错图等于把画面讲错了。
     concept_scene_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: 概念动画的量程:参数在同类里大概落在什么范围,动画里的表盘、长短条才按真实数值画。
+    #: 键 = 单位,或「参数名关键词|单位」(更具体,优先);值 = "下限-上限",下限比上限大表示越小越好
+    #: (零百秒数)。没配上量程的参数只做排版强调,不画表示数量的图形
+    concept_ranges: dict[str, str] = field(default_factory=dict)
 
     # ---- 前端 ----
     ui_subject_label: str = "产品"

@@ -36,12 +36,22 @@ WORKERS = 3
 SAMPLE_SCENE = "battery"
 SAMPLE_SECONDS = 7.0
 SAMPLE_AT = [5.5]
-SAMPLE_DATA: dict[str, Any] = {
-    "subject": "示例车型", "title": "电池与续航", "columns": [], "source": "示例数据",
-    "rows": [{"label": "电池容量", "value": "96.3kWh", "values": ["96.3kWh"], "tag": "示例 | 官方"},
-             {"label": "CLTC续航", "value": "835km", "values": ["835km"], "tag": "CLTC | 官方"},
-             {"label": "电压平台", "value": "871V", "values": ["871V"], "tag": ""}],
-}
+def _sample_ranges() -> dict[str, str]:
+    """示例按车品类的量程量化(和真实出片一样走 `scene_data`,模组才会按电量点亮)。"""
+    try:
+        from ..categories import load_profile
+
+        return load_profile("auto_long").vocab.concept_ranges
+    except Exception:  # noqa: BLE001 - 品类配置坏了也照常截示例,只是不画数量图形
+        return {}
+
+
+SAMPLE_DATA: dict[str, Any] = motion.scene_data({
+    "title": "电池与续航", "columns": [], "source": "示例数据",
+    "rows": [{"label": "电池容量", "values": ["96.3kWh"], "tag": "示例 | 官方"},
+             {"label": "CLTC续航", "values": ["835km"], "tag": "CLTC | 官方"},
+             {"label": "电压平台", "values": ["871V"], "tag": ""}],
+}, "示例车型", _sample_ranges())
 
 
 def samples_dir() -> Path:
@@ -99,8 +109,14 @@ def project_status(project_id: str) -> dict[str, Any]:
 
     from . import aspect
 
-    return {"style": concept_style_of(project_id), "beats": len(concept_beats(project_id)),
-            "portrait": aspect.is_portrait(db.get_project(project_id))}
+    chosen = (db.read_json(project_id, "concept_style.json", {}) or {}).get("style")
+    style = concept_style_of(project_id)
+    out = {"style": style, "beats": len(concept_beats(project_id)),
+           "portrait": aspect.is_portrait(db.get_project(project_id))}
+    if chosen and chosen != style:
+        # 选过的模版已经下架(模版库精简过):照常出片,用的是默认模版
+        out["note"] = "原来选的模版已下架,概念动画改用默认模版「实车标注」"
+    return out
 
 
 # --------------------------------------------------------------------------

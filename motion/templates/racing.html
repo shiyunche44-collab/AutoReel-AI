@@ -1,92 +1,157 @@
 <!-- @name 赛道遥测
-     @desc 碳纤维黑底 + 黄色斜切面板,车带速度线冲进画面,遥测条目从右侧飞入,换挡灯一格格亮
-     @order 13
+     @desc 碳纤维黑底 + 黄色斜切面板:场景画面(电池包 / 充电曲线 / 零百表…)在左,镜头快甩到正在讲的部位;右侧遥测面板滚出数字,转速灯按真实数值亮几格,讲过的收进计时塔
+     @order 4
+     @sample 5.6
      @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
+    :root { --acc: 255, 212, 0; --hi: 255, 255, 255; --acc2: 255, 72, 48; --hi2: 255, 190, 170;
+            --ink: 255, 255, 255; --bg: 13, 13, 14; --glow: 0.6; }
     html, body { background: #0d0d0e; }
-    #root { color: #fff;
-            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-            background:
-              repeating-linear-gradient(45deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 6px, transparent 6px, transparent 12px),
-              repeating-linear-gradient(-45deg, rgba(0,0,0,0.35) 0px, rgba(0,0,0,0.35) 6px, transparent 6px, transparent 12px),
-              radial-gradient(ellipse 1200px 700px at 600px 600px, #26272b 0%, #0d0d0e 75%); }
-    .chk { position: absolute; left: 0; right: 0; top: 0; height: 36px; overflow: hidden; }
-    .chk div { position: absolute; left: 0; top: 0; width: 4000px; height: 36px;
-               background: conic-gradient(#fff 0 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 36px 36px; }
-    .lines { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; }
-    .lines i { position: absolute; height: 3px; border-radius: 2px; background: linear-gradient(90deg, rgba(255,212,0,0), rgba(255,212,0,0.7)); }
-    .photo { position: absolute; display: block; }
-    .hd { position: absolute; left: 90px; top: 90px; transform: skewX(-12deg); }
-    .hd .k { display: inline-block; background: #ffd400; color: #111; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 40px; padding: 2px 22px; letter-spacing: 0.08em; }
-    .hd .t { margin-top: 10px; font-size: 92px; font-weight: 900; font-style: italic; white-space: nowrap; letter-spacing: 0.02em; text-shadow: 6px 6px 0 rgba(0,0,0,0.6); }
-    .panel { position: absolute; right: 70px; width: 760px; height: 170px; transform: skewX(-12deg); background: rgba(16,16,18,0.92);
-             border-left: 14px solid #ffd400; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-    .panel .in { position: absolute; inset: 0; transform: skewX(12deg); padding: 18px 34px; }
-    .panel .lab { font-size: 30px; font-weight: 900; color: #ffd400; letter-spacing: 0.06em; }
-    .panel .val { position: absolute; left: 34px; bottom: 8px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; line-height: 1; letter-spacing: 0.02em; white-space: nowrap; font-style: italic; }
-    .panel .b { position: absolute; right: 40px; bottom: 22px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 54px; color: #8a8a90; font-style: italic; white-space: nowrap; }
-    .panel .b em { font-style: normal; font-size: 24px; margin-right: 10px; font-family: "HYZhongHeiTi", sans-serif; }
-    .leds { position: absolute; right: 40px; top: 24px; display: flex; gap: 6px; }
-    .leds i { width: 22px; height: 14px; border-radius: 3px; background: #2a2a2e; }
-    .src { position: absolute; left: 90px; bottom: 50px; font-size: 22px; color: rgba(255,255,255,0.4); letter-spacing: 0.1em; }
-    /* portrait: car on top, telemetry panels stacked below */
-    [data-aspect=portrait] .lines { width: 1080px; height: 1920px; }
+    #root { color: #fff; background: #0d0d0e;
+            font-family: "HYZhongHeiTi", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    .carbon { position: absolute; inset: 0;
+              background:
+                repeating-linear-gradient(45deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 6px, transparent 6px, transparent 12px),
+                repeating-linear-gradient(-45deg, rgba(0,0,0,0.35) 0px, rgba(0,0,0,0.35) 6px, transparent 6px, transparent 12px),
+                radial-gradient(ellipse 1200px 760px at 34% 55%, #26272b 0%, #0d0d0e 75%); }
+    .chk { position: absolute; left: 0; right: 0; top: 0; height: 30px; overflow: hidden; }
+    .chk div { position: absolute; left: 0; top: 0; width: 4000px; height: 30px;
+               background: conic-gradient(#fff 0 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 30px 30px; }
+    .lines { position: absolute; inset: 0; overflow: hidden; }
+    .lines i { position: absolute; height: 3px; border-radius: 2px; background: linear-gradient(90deg, rgba(255,212,0,0), rgba(255,212,0,0.55)); }
+    .cam { position: absolute; inset: 0; }
+    .hd { position: absolute; left: 90px; top: 74px; transform: skewX(-12deg); transform-origin: 0 100%; }
+    .hd .k { display: inline-block; background: #ffd400; color: #111; font-family: "League Gothic", "HYZhongHeiTi", sans-serif;
+             font-size: 34px; padding: 2px 20px; letter-spacing: 0.08em; white-space: nowrap; }
+    .hd .t { margin-top: 8px; font-weight: 900; font-style: italic; white-space: nowrap; letter-spacing: 0.02em; text-shadow: 6px 6px 0 rgba(0,0,0,0.6); }
+    .panel { position: absolute; right: 80px; top: 270px; width: 720px; height: 262px; transform: skewX(-12deg);
+             background: rgba(16,16,18,0.94); border-left: 14px solid #ffd400; box-shadow: 0 14px 40px rgba(0,0,0,0.55); }
+    .panel .in { position: absolute; inset: 0; transform: skewX(12deg); padding: 20px 34px 0 40px; }
+    .panel .lab { font-size: 30px; font-weight: 900; color: #ffd400; letter-spacing: 0.06em; white-space: nowrap; }
+    .panel .val { position: absolute; left: 40px; bottom: 16px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-style: italic;
+                  line-height: 1; letter-spacing: 0.01em; white-space: nowrap; display: flex; align-items: baseline; }
+    .panel .roll-unit { font-size: 0.36em; margin-left: 12px; color: #c8c8cc; }
+    .panel .roll-head { font-size: 0.36em; margin-right: 8px; color: #c8c8cc; }
+    .panel .roll-tag { font-family: "HYZhongHeiTi", sans-serif; font-style: normal; font-size: 0.16em; margin-left: 14px; color: #8a8a90; }
+    .panel .b { position: absolute; right: 40px; bottom: 26px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 58px; color: #8a8a90; font-style: italic; white-space: nowrap; }
+    .panel .b em { font-style: normal; font-size: 22px; margin-right: 10px; font-family: "HYZhongHeiTi", sans-serif; }
+    .panel .tg { position: absolute; right: 40px; top: 26px; font-size: 20px; color: rgba(255,255,255,0.5); letter-spacing: 0.06em; white-space: nowrap; }
+    .leds { position: absolute; right: 40px; top: 62px; display: flex; gap: 6px; }
+    .leds i { width: 20px; height: 12px; border-radius: 3px; background: #2a2a2e; }
+    .tower { position: absolute; right: 120px; top: 580px; width: 620px; display: flex; flex-direction: column; gap: 8px; }
+    .tower .r { display: flex; align-items: center; height: 58px; background: rgba(20,20,22,0.9); transform: skewX(-12deg); white-space: nowrap; }
+    .tower .r > * { transform: skewX(12deg); }
+    .tower .p { width: 64px; height: 100%; display: flex; align-items: center; justify-content: center; background: #2a2a2e;
+                font-family: "League Gothic", sans-serif; font-size: 34px; color: #fff; }
+    .tower .l { flex: 1; padding-left: 20px; font-size: 24px; color: rgba(255,255,255,0.72); overflow: hidden; text-overflow: ellipsis; }
+    .tower .v { padding-right: 26px; font-family: "League Gothic", "HYZhongHeiTi", sans-serif; font-size: 40px; font-style: italic; color: #fff; }
+    .tower .v em { font-style: italic; color: #8a8a90; margin-left: 14px; font-size: 32px; }
+    .src { position: absolute; left: 90px; bottom: 50px; font-size: 20px; color: rgba(255,255,255,0.4); letter-spacing: 0.1em; white-space: nowrap; }
     [data-aspect=portrait] .hd { left: 70px; top: 236px; }
-    [data-aspect=portrait] .panel { right: 40px; width: 920px; height: 150px; }
+    [data-aspect=portrait] .panel { right: 50px; top: 1010px; width: 920px; height: 236px; }
+    [data-aspect=portrait] .tower { right: 70px; top: 1272px; width: 880px; gap: 6px; }
+    [data-aspect=portrait] .tower .r { height: 52px; }
     [data-aspect=portrait] .src { left: 70px; bottom: auto; top: 1500px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
-    const P = D.photo;
-    const PT = HF.portrait;
+    const PT = HF.portrait, scene = D.scene || "";
 
-    // 速度线:固定种子,一直往左飞
+    // ---- 赛道:碳纤维底 + 方格旗条 + 一直往左飞的速度线 ----
+    add(HF.el("div", "carbon"));
     const lines = add(HF.el("div", "lines")); const rng = HF.rng(3); const ls = [];
-    for (let k = 0; k < 26; k++) { const l = HF.el("i"); const w = 200 + rng() * 500;
-      Object.assign(l.style, { top: ((PT ? 420 : 260) + rng() * (PT ? 480 : 620)) + "px", width: w + "px" }); l._x = rng() * 2400; l._v = 1400 + rng() * 1600; l._w = w;
+    for (let k = 0; k < 22; k++) { const l = HF.el("i"); const w = 200 + rng() * 500;
+      Object.assign(l.style, { top: ((PT ? 440 : 240) + rng() * (PT ? 560 : 700)) + "px", width: w + "px" }); l._x = rng() * 2400; l._v = 1400 + rng() * 1600;
       lines.appendChild(l); ls.push(l); }
     HF.drive(tl, (t) => { ls.forEach((l) => { const x = ((l._x - t * l._v) % 2600 + 2600) % 2600 - 700; l.style.transform = `translateX(${x.toFixed(0)}px)`; }); }, 0, S);
+    tl.fromTo(lines, { opacity: 0 }, { opacity: 0.8, duration: 0.6 }, 0);
     const chk = add(HF.el("div", "chk")); const cb = HF.el("div"); chk.appendChild(cb);
-    tl.fromTo(cb, { x: 0 }, { x: -72 * Math.ceil(S * 4), duration: S, ease: "none" }, 0);
+    tl.fromTo(cb, { x: 0 }, { x: -60 * Math.ceil(S * 4), duration: S, ease: "none" }, 0);
 
-    let car = null;
-    if (P) {
-      car = add(HF.photoImg("photo"));
-      const pw = PT ? 940 : 1000, hh = pw * P.height / P.width;
-      Object.assign(car.style, { width: pw + "px", height: hh + "px", left: PT ? "60px" : "40px", top: ((PT ? 850 : 900) - P.floor * hh) + "px" });
-      if (P.facing === "left") car.style.transform = "scaleX(-1)";
-      tl.fromTo(car, { x: -1300, filter: "blur(16px)" }, { x: 0, filter: "blur(0px)", duration: 0.75, ease: "expo.out" }, 0.15);
-      // 停留:车身微震 + 缓慢前移
-      HF.drive(tl, (t) => { car.style.translate = `${(t * 8).toFixed(1)}px ${(Math.sin(t * 47) * 1.6).toFixed(1)}px`; }, 0.9, Math.max(0.1, S - 0.9));
-    }
+    // ---- 镜头层:场景画面 ----
+    const cam = add(HF.el("div", "cam"));
+    const vb = PT ? { x: 90, y: 420, w: 900, h: 560 } : { x: 80, y: 260, w: 900, h: 640 };
+    cam.style.transformOrigin = `${vb.x + vb.w / 2}px ${vb.y + vb.h / 2}px`;
+    const viz = HF.viz.make(scene, vb, items, { glow: 0.6, font: "League Gothic, HYZhongHeiTi, Noto Sans SC, sans-serif" });
+    if (viz) cam.appendChild(viz.host);
+
+    // ---- 标题:黄色斜切标签 + 斜体大字,从左侧冲进来 ----
     const hd = add(HF.el("div", "hd"));
-    hd.appendChild(HF.el("div", "k", ((D.subject || "") + "  " + (HF.kicker || "")).trim()));
-    const ttl = HF.el("div", "t", D.title || ""); ttl.style.fontSize = HF.fit(D.title || "", PT ? 860 : 1000, PT ? 84 : 92) + "px"; hd.appendChild(ttl);
-    tl.fromTo(hd.children, { x: -400, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: "expo.out", stagger: 0.08 }, 0.25);
+    hd.appendChild(HF.el("div", "k", ((D.subject || "") + "  ·  " + (HF.kicker || scene.toUpperCase())).trim()));
+    const ttl = HF.el("div", "t", D.title || ""); hd.appendChild(ttl);
+    ttl.style.fontSize = HF.fit(D.title || "", PT ? 900 : 1000, PT ? 88 : 84) + "px";
+    tl.fromTo(hd.firstChild, { x: -500, opacity: 0 }, { x: 0, opacity: 1, duration: 0.5, ease: "expo.out" }, 0.2);
+    tl.fromTo(ttl, { x: -700, opacity: 0, filter: "blur(12px)" }, { x: 0, opacity: 1, filter: "blur(0px)", duration: 0.6, ease: "expo.out" }, 0.3);
 
-    const n = Math.max(1, items.length), gap = PT ? 18 : 22, ph = PT ? 150 : 170;
-    const top0 = PT ? Math.max(880, 1490 - n * (ph + gap)) : Math.max(330, 1000 - n * (ph + gap));
-    const t0 = T(0.9), span = Math.max(0, Math.min(A.outAt - 1.0, S * 0.6) - t0);
+    // ---- 遥测面板:当前这一条;转速灯按 ratio 亮几格(没有 ratio 不亮灯) ----
+    const t0 = T(1.3), t1 = Math.max(t0, A.outAt - 1.3);
+    const at = HF.beats(items, t0, t1, Math.min(1.3, Math.max(0.9, (t1 - t0) / Math.max(1, items.length))));
+    const order = items.map((_, k) => k).sort((a, b) => at[a] - at[b]);
+    const tower = add(HF.el("div", "tower"));
     const panels = [];
-    items.forEach((it, k) => {
-      const p = add(HF.el("div", "panel")); p.style.top = (top0 + k * (ph + gap)) + "px";
-      const inn = HF.el("div", "in"); p.appendChild(inn);
+    const N = 15;
+    order.forEach((k, n) => {
+      const it = items[k], when = at[k];
+      const pn = add(HF.el("div", "panel")); const inn = HF.el("div", "in"); pn.appendChild(inn);
       inn.appendChild(HF.el("div", "lab", it.label));
-      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, it.b ? 380 : 560, PT ? 96 : 108, 0.6) + "px"; inn.appendChild(val);
-      if (it.b) { const b = HF.el("div", "b"); b.appendChild(HF.el("em", "", HF.cols[1])); b.appendChild(document.createTextNode(it.b)); inn.appendChild(b); }
-      const leds = HF.el("div", "leds"); const cells = [];
-      for (let j = 0; j < 10; j++) { const c = HF.el("i"); leds.appendChild(c); cells.push(c); }
-      inn.appendChild(leds);
-      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
-      tl.fromTo(p, { x: 900 }, { x: 0, duration: 0.45, ease: "expo.out" }, at);
-      HF.countText(tl, val, it.value, at + 0.1, 0.7, { ease: "power3.out" });
-      cells.forEach((c, j) => tl.to(c, { backgroundColor: j < 6 ? "#2bd96b" : j < 9 ? "#ffd400" : "#ff2d2d", duration: 0.05 }, at + 0.15 + j * 0.05));
-      panels.push(p);
+      const val = HF.el("div", "val"); inn.appendChild(val);
+      val.style.fontSize = HF.fitSize(it.value, PT ? (it.b ? 520 : 760) : (it.b ? 400 : 560), PT ? 150 : 196) + "px";
+      if (it.b) { const b = HF.el("div", "b"); b.appendChild(HF.el("em", "", HF.cols[1] || "")); b.appendChild(document.createTextNode(it.b)); inn.appendChild(b); }
+      if (it.tag && it.ratio == null) inn.appendChild(HF.el("div", "tg", it.tag));
+      tl.set(pn, { opacity: 0 }, 0);
+      tl.fromTo(pn, { opacity: 0, x: 600 }, { opacity: 1, x: 0, duration: 0.45, ease: "expo.out" }, when);
+      HF.roll(tl, val, it.value, when + 0.12, 0.8, { ease: "power4.out" });
+      if (it.ratio != null) {
+        const leds = HF.el("div", "leds"); inn.appendChild(leds);
+        const lit = Math.max(1, Math.round(it.ratio * N));
+        for (let j = 0; j < N; j++) {
+          const d = HF.el("i"); leds.appendChild(d);
+          const col = j < N * 0.6 ? "#2bd96b" : j < N * 0.87 ? "#ffd400" : "#ff3b30";
+          if (j < lit) tl.to(d, { backgroundColor: col, boxShadow: `0 0 10px ${col}`, duration: 0.05 }, when + 0.25 + j * 0.045);
+        }
+        // 满格附近整排闪一下,像到了换挡点
+        if (it.ratio > 0.85) tl.to(leds, { opacity: 0.25, duration: 0.07, yoyo: true, repeat: 3 }, when + 0.25 + lit * 0.045);
+      }
+      // 下一条进来时:面板甩出,这一条进计时塔
+      const next = order[n + 1];
+      // 旧面板在新面板进来前甩干净,两块数字不叠在一起
+      if (next != null) tl.to(pn, { x: -260, opacity: 0, filter: "blur(10px)", duration: 0.22, ease: "power3.in" }, at[next] - 0.24);
+      if (next != null && scene !== "compare") {
+        const r = HF.el("div", "r");
+        r.appendChild(HF.el("div", "p", String(n + 1)));
+        r.appendChild(HF.el("div", "l", it.label));
+        const v = HF.el("div", "v", it.value); if (it.b) v.appendChild(HF.el("em", "", it.b)); r.appendChild(v);
+        tower.appendChild(r);
+        tl.set(r, { opacity: 0 }, 0);
+        tl.fromTo(r, { opacity: 0, x: 120 }, { opacity: 1, x: 0, duration: 0.4, ease: "expo.out" }, at[next] + 0.1);
+      }
+      panels.push(pn);
     });
+
+    // ---- 画面与镜头:每条参数快甩过去,落定时一下小震 ----
+    if (viz) {
+      viz.show(tl, 0.45);
+      const keys = [{ at: 0, scale: 1.12, x: -60, y: 0 }, { at: 0.35, scale: 1, x: 0, y: 0 }];
+      order.forEach((k) => {
+        const p = viz.hit(tl, items[k], at[k] + 0.15) || [vb.w / 2, vb.h / 2];
+        const still = scene === "compare", pan = !PT && !still;   // 竖屏画面贴边,只推不移
+        keys.push({ at: Math.max(0.5, at[k] - 0.15), scale: still ? 1 : PT ? 1.03 : 1.06,
+                    x: pan ? (vb.w / 2 - p[0]) * 0.2 : 0, y: pan ? (vb.h / 2 - p[1]) * 0.2 : 0 });
+      });
+      if (keys.length > 2) keys.push({ at: Math.max(keys[keys.length - 1].at + 0.9, A.outAt - 0.9), scale: 1.0, x: 0, y: 0 });
+      HF.shots(tl, cam, keys, { move: 0.5, ease: "power4.inOut" });
+      // 落定小震:只动内层,不和镜头关键帧抢同一个属性
+      order.forEach((k) => tl.fromTo(viz.host, { x: 0, y: 0 }, { keyframes: [{ x: 7, y: -3, duration: 0.04 }, { x: -6, y: 3, duration: 0.05 }, { x: 3, y: -1, duration: 0.05 }, { x: 0, y: 0, duration: 0.06 }] }, at[k] + 0.3));
+      viz.idle(tl, 1.0, A.outAt);
+    }
+
     const src = add(HF.el("div", "src", D.source || ""));
-    tl.fromTo(src, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 1.0);
-    tl.to(panels, { x: 900, duration: A.outDur, ease: "power3.in", stagger: 0.03 }, A.outAt);
-    tl.to([hd, src, car, lines].filter(Boolean), { opacity: 0, duration: A.outDur }, A.outAt);
+    HF.reveal(tl, src, "fade", 1.2, 0.5);
+
+    // ---- 退场:整体向左甩出 ----
+    const outs = [hd, tower, src, ...panels];
+    outs.forEach((e, n) => tl.to(e, { x: "-=300", opacity: 0, filter: "blur(10px)", duration: Math.max(0.25, A.outDur - n * 0.03), ease: "power3.in" }, A.outAt + n * 0.03));
+    tl.to(cam, { opacity: 0, x: -200, duration: A.outDur, ease: "power3.in" }, A.outAt);
     HF.register(tl);
   </script>

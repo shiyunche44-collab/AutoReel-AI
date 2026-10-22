@@ -38,7 +38,7 @@ from .. import config
 from .motion_assets import Cutout
 
 #: 渲染时要拷进工作目录的公用文件(模版片段之外、页面要单独引的)
-SHARED_FILES = ("_lib.js",)
+SHARED_FILES = ("_lib.js", "_viz.js")
 #: 模版片段里的占位符:时长写进根节点 data-duration,数据写进 window.__DATA__
 SECONDS_TOKEN = "__SECONDS__"
 DATA_TOKEN = "/*__DATA__*/{}"
@@ -528,15 +528,118 @@ def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
         shutil.rmtree(work, ignore_errors=True)
 
 
-def scene_data(overlay: dict[str, Any], subject: str) -> dict[str, Any]:
-    """concept 拍的叠加数据 → 模板数据。rows 只取第一列(对比模板取两列)。"""
+# --------------------------------------------------------------------------
+# 数据:量程(图形按真实数值画)
+# --------------------------------------------------------------------------
+#: 原文里的第一个数字 + 紧跟的单位。"4D 毫米波""5G"里的一位数是名字,不算(和 _lib.js 同一条规则)
+_NUM_UNIT = re.compile(r"(?<![\d.])(-?(?!\d[DGK](?![A-Za-z]))\d+(?:\.\d+)?)\s*"
+                       r"(kWh|kW|km/h|km|mm|TOPS|V|s|秒|公里|千米|分钟|min|毫米|米|m(?![A-Za-z]))?")
+#: 单位的别名 → 量程表里用的写法
+_UNIT_ALIAS = {"公里": "km", "千米": "km", "毫米": "mm", "s": "秒", "min": "分钟", "m": "米"}
+
+
+def parse_value(text: str) -> tuple[float, str] | None:
+    """"96.3kWh" → (96.3, "kWh");"3.23 秒" → (3.23, "秒")。没有数字返回 None。"""
+    m = _NUM_UNIT.search(str(text or "").replace(",", ""))
+    if not m:
+        return None
+    unit = m.group(2) or ""
+    return float(m.group(1)), _UNIT_ALIAS.get(unit, unit)
+
+
+def _range_for(label: str, unit: str, ranges: dict[str, str]) -> tuple[float, float] | None:
+    """按「参数名关键词|单位」(优先)或单位找量程 → (下限, 上限);下限 > 上限 = 越小越好。"""
+    if not unit:
+        return None
+    best: tuple[int, str] | None = None
+    for key, spec in ranges.items():
+        word, _, u = key.rpartition("|")
+        if _UNIT_ALIAS.get(u, u) != unit or (word and word not in label):
+            continue
+        rank = 1 if word else 0
+        if best is None or rank > best[0]:
+            best = (rank, spec)
+    if best is None:
+        return None
+    m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*", best[1])
+    if not m or float(m.group(1)) == float(m.group(2)):
+        return None
+    return float(m.group(1)), float(m.group(2))
+
+
+def scale_row(label: str, value: str, ranges: dict[str, str]) -> dict[str, Any]:
+    """一行参数的量化信息:{num, unit, ratio}。ratio 是这个数在同类量程里的位置(0–1,
+    越大越好);配不上量程就没有 ratio —— 模版据此决定画不画表示数量的图形。"""
+    got = parse_value(value)
+    if got is None:
+        return {}
+    num, unit = got
+    out: dict[str, Any] = {"num": num, "unit": unit}
+    rng = _range_for(label, unit, ranges or {})
+    if rng is not None:
+        lo, hi = rng
+        out["ratio"] = round(max(0.0, min(1.0, (num - lo) / (hi - lo))), 4)
+    return out
+
+
+def scene_data(overlay: dict[str, Any], subject: str,
+               ranges: dict[str, str] | None = None) -> dict[str, Any]:
+    """concept 拍的叠加数据 → 模板数据。rows 只取第一列(对比模板取两列)。
+
+    每行附带量化信息(`scale_row`)和旁白说到它的时刻 `at`(`row_reveal_times` 写进分镜的);
+    对比行还有 `share`:两个值各占较大者的比例(同单位才给),对比条按它画长短。"""
     rows = []
     for r in overlay.get("rows") or []:
         values = list(r.get("values") or [])
         if not values:
             continue
-        rows.append({"label": r.get("label", ""), "value": values[0], "values": values[:2],
-                     "tag": r.get("tag", "")})
+        label = str(r.get("label", ""))
+        row: dict[str, Any] = {"label": label, "value": values[0], "values": values[:2],
+                               "tag": r.get("tag", ""), **scale_row(label, str(values[0]), ranges or {})}
+        if isinstance(r.get("at"), (int, float)):
+            row["at"] = float(r["at"])
+        if len(values) >= 2:
+            a, b = parse_value(str(values[0])), parse_value(str(values[1]))
+            if a and b and a[1] == b[1] and max(a[0], b[0]) > 0:
+                top = max(a[0], b[0])
+                row["share"] = [round(a[0] / top, 4), round(b[0] / top, 4)]
+        rows.append(row)
     return {"subject": subject, "title": overlay.get("title") or "",
             "columns": list(overlay.get("columns") or [])[:2], "rows": rows,
             "source": overlay.get("source", "")}
+
+
+def row_reveal_times(rows: list[dict[str, Any]], cues: list[Any], beat_start: float,
+                     duration: float) -> list[float | None]:
+    """每行参数在这一拍里被旁白说到的时刻(秒,相对拍头)。
+
+    先找这一行的数字(原文里的第一个数),找不到再找参数名;在那条字幕里按字符位置
+    线性插值。都找不到给 None,模版按均匀节奏排。时刻夹在 [0.3, 时长 - 1.2] 里,
+    留出入场和退场。"""
+    out: list[float | None] = []
+    hi = max(0.3, duration - 1.2)
+    for r in rows:
+        values = list(r.get("values") or [r.get("value", "")])
+        got = parse_value(str(values[0] if values else ""))
+        keys: list[tuple[str, bool]] = []  # (要找的字串, 是不是数字)
+        if got is not None:
+            n = got[0]
+            keys.append((str(int(n)) if n == int(n) else f"{n:g}", True))
+        if r.get("label"):
+            # 一位数太容易撞上别的数字("1颗"撞"11个"),先找参数名
+            keys.insert(0 if keys and len(keys[0][0]) < 2 else len(keys), (str(r["label"]), False))
+        at = None
+        for key, numeric in keys:
+            for c in cues:
+                text = c.text or ""
+                pat = rf"(?<![\d.]){re.escape(key)}(?![\d])" if numeric else re.escape(key)
+                m = re.search(pat, text)
+                pos = m.start() if m else -1
+                if pos >= 0:
+                    frac = pos / max(1, len(c.text))
+                    at = c.start + frac * (c.end - c.start) - beat_start
+                    break
+            if at is not None:
+                break
+        out.append(None if at is None else round(max(0.3, min(hi, at)), 3))
+    return out

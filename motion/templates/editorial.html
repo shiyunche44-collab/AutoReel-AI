@@ -1,104 +1,153 @@
 <!-- @name 杂志内页
-     @desc 米白纸张 + 宋体大标题 + 衬线数字,实车图压在红色色块上,像汽车杂志的跨页
-     @order 3
+     @desc 米白纸张 + 宋体大标题:场景画面(电池包 / 充电曲线 / 零百表…)印成右侧的信息图版,镜头缓推到正在讲的部位;左侧红色衬线大字是当前参数,讲过的落进编号列表
+     @order 5
+     @sample 5.6
      @light yes
      @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
+    :root { --acc: 200, 16, 46; --hi: 27, 26, 23; --acc2: 109, 103, 92; --hi2: 60, 56, 50;
+            --ink: 27, 26, 23; --bg: 242, 237, 227; --glow: 0; }
     html, body { background: #f2ede3; }
-    #root { color: #1b1a17; background: #f2ede3;
-            font-family: "STSong", "SimSun", serif; }
+    #root { color: #1b1a17; background: #f2ede3; font-family: "STSong", "Noto Serif SC", "SimSun", serif; }
+    .grain { position: absolute; inset: 0; opacity: 0.5;
+             background: radial-gradient(ellipse 1400px 900px at 30% 30%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 70%); }
     .folio { position: absolute; left: 110px; right: 110px; top: 60px; display: flex; justify-content: space-between;
-             font-family: "Playfair Display", serif; font-style: italic; font-size: 24px; color: #6d675c; }
+             font-family: "Playfair Display", serif; font-style: italic; font-size: 24px; color: #6d675c; white-space: nowrap; }
     .folio-rule { position: absolute; left: 110px; right: 110px; top: 104px; height: 1px; background: #1b1a17; transform-origin: 0 50%; }
-    .kick { position: absolute; left: 110px; top: 170px; font-family: "Playfair Display", "STSong", serif; font-size: 26px; letter-spacing: 0.3em; color: #c8102e; }
-    .ttl-mask { position: absolute; left: 104px; top: 214px; overflow: hidden; padding: 0 6px 12px; }
-    .ttl { font-size: 104px; font-weight: 700; line-height: 1.12; white-space: nowrap; letter-spacing: 0.02em; }
-    .list { position: absolute; left: 110px; width: 760px; }
-    .row { position: relative; padding: 22px 0 18px; display: flex; align-items: baseline; }
-    .row .rule { position: absolute; left: 0; right: 0; top: 0; height: 1px; background: rgba(27,26,23,0.35); transform-origin: 0 50%; }
-    .row .no { width: 76px; font-family: "Playfair Display", serif; font-style: italic; font-size: 38px; color: #c8102e; }
-    .row .lab { flex: 1; font-size: 34px; letter-spacing: 0.06em; }
-    .row .val { font-family: "Playfair Display", serif; font-weight: 700; white-space: nowrap; letter-spacing: -0.01em; }
-    .row .b { position: absolute; right: 0; top: 100%; margin-top: -10px; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 26px; color: #6d675c; white-space: nowrap; }
-    .block { position: absolute; left: 1060px; top: 150px; width: 800px; height: 640px; background: #c8102e; transform-origin: 0 50%; }
-    .photo { position: absolute; display: block; }
-    .cap { position: absolute; left: 1060px; top: 812px; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 24px; color: #6d675c; }
-    .bignum { position: absolute; left: 1060px; top: 250px; width: 700px; text-align: center; font-family: "Playfair Display", serif;
-              font-weight: 700; font-style: italic; color: #f2ede3; white-space: nowrap; }
-    .drop { position: absolute; left: 1084px; top: 170px; font-family: "Playfair Display", serif; font-size: 30px; font-style: italic; color: #f2ede3; letter-spacing: 0.1em; }
-    /* portrait: title on top, red block with the car in the middle, numbered list below */
+    .kick { position: absolute; left: 110px; top: 150px; font-family: "Playfair Display", "STSong", serif; font-size: 24px; letter-spacing: 0.3em; color: #c8102e; white-space: nowrap; }
+    .ttl-m { position: absolute; left: 104px; top: 190px; overflow: hidden; padding: 0 6px 12px; }
+    .ttl { font-weight: 700; line-height: 1.12; white-space: nowrap; letter-spacing: 0.02em; }
+    .cam { position: absolute; inset: 0; }
+    .block { position: absolute; background: #c8102e; transform-origin: 0 50%; }
+    .plate { position: absolute; background: #f7f3eb; box-shadow: 0 1px 0 rgba(27,26,23,0.25); }
+    .cap { position: absolute; font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 22px; color: #6d675c; white-space: nowrap; }
+    .now { position: absolute; left: 110px; width: 780px; }
+    .now .lab { font-size: 32px; letter-spacing: 0.12em; white-space: nowrap; }
+    .now .lab i { font-family: "Playfair Display", serif; color: #c8102e; margin-right: 18px; }
+    .now .num { margin-top: 4px; font-family: "Playfair Display", serif; font-weight: 700; font-style: italic; color: #c8102e; line-height: 1.05;
+                white-space: nowrap; display: flex; align-items: baseline; letter-spacing: -0.01em; }
+    .now .roll-unit { font-size: 0.3em; margin-left: 12px; color: #1b1a17; font-style: italic; }
+    .now .roll-head { font-size: 0.3em; margin-right: 10px; color: #1b1a17; }
+    .now .roll-tag { font-family: "STSong", serif; font-style: normal; font-size: 0.16em; margin-left: 16px; color: #6d675c; }
+    .now .b { font-family: "Playfair Display", "STSong", serif; font-style: italic; font-size: 30px; color: #6d675c; white-space: nowrap; }
+    .now .tag { margin-top: 6px; font-size: 22px; color: #6d675c; letter-spacing: 0.06em; white-space: nowrap; }
+    .list { position: absolute; left: 110px; width: 780px; }
+    .list .row { position: relative; display: flex; align-items: baseline; padding: 14px 0 12px; white-space: nowrap; }
+    .list .rule { position: absolute; left: 0; right: 0; top: 0; height: 1px; background: rgba(27,26,23,0.35); transform-origin: 0 50%; }
+    .list .no { width: 64px; font-family: "Playfair Display", serif; font-style: italic; font-size: 28px; color: #c8102e; }
+    .list .lb { flex: 1; font-size: 26px; letter-spacing: 0.06em; overflow: hidden; text-overflow: ellipsis; }
+    .list .v { font-family: "Playfair Display", "STSong", serif; font-weight: 700; font-size: 34px; }
+    .list .v em { font-weight: 400; font-style: italic; color: #6d675c; margin-left: 14px; font-size: 26px; }
     [data-aspect=portrait] .folio { left: 64px; right: 64px; top: 214px; font-size: 22px; }
     [data-aspect=portrait] .folio-rule { left: 64px; right: 64px; top: 254px; }
-    [data-aspect=portrait] .kick { left: 64px; top: 290px; }
-    [data-aspect=portrait] .ttl-mask { left: 58px; top: 330px; }
-    [data-aspect=portrait] .block { left: 64px; top: 490px; width: 952px; height: 400px; }
-    [data-aspect=portrait] .drop { left: 92px; top: 510px; }
-    [data-aspect=portrait] .cap { left: 64px; top: 904px; }
-    [data-aspect=portrait] .bignum { left: 64px; top: 560px; width: 952px; }
+    [data-aspect=portrait] .kick { left: 64px; top: 284px; }
+    [data-aspect=portrait] .ttl-m { left: 58px; top: 322px; }
+    [data-aspect=portrait] .now { left: 64px; width: 952px; }
     [data-aspect=portrait] .list { left: 64px; width: 952px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
-    const P = D.photo;
-    const PT = HF.portrait;
+    const PT = HF.portrait, scene = D.scene || "";
+    add(HF.el("div", "grain"));
 
+    // ---- 书眉 ----
     const folio = add(HF.el("div", "folio"));
     folio.appendChild(HF.el("span", "", "Vol. 07 — " + (D.subject || "")));
     folio.appendChild(HF.el("span", "", D.source ? "Source · " + D.source : "Spec Sheet"));
     const frule = add(HF.el("div", "folio-rule"));
     tl.fromTo(frule, { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: "expo.inOut" }, 0.05);
-    tl.fromTo(folio, { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.3);
+    HF.reveal(tl, folio, "fade", 0.3, 0.6);
 
-    // 右:红色色块 + 车图(没有车图就是首个数字的巨型斜体)
-    const block = add(HF.el("div", "block"));
+    // ---- 眉标 + 大标题 ----
+    const kick = add(HF.el("div", "kick", (HF.kicker || "Feature") + "  /  专题"));
+    const tm = add(HF.el("div", "ttl-m")); const ttl = HF.el("div", "ttl", D.title || ""); tm.appendChild(ttl);
+    ttl.style.fontSize = HF.fit(D.title || "", PT ? 940 : 800, PT ? 92 : 96) + "px";
+    HF.reveal(tl, kick, "wipe", 0.35, 0.6);
+    HF.reveal(tl, ttl, "rise", 0.45, 0.9);
+
+    // ---- 信息图版:红色色块错位垫底 + 米色图版 + 场景画面 ----
+    const cam = add(HF.el("div", "cam"));
+    const pl = PT ? { x: 64, y: 460, w: 930, h: 520 } : { x: 960, y: 170, w: 860, h: 690 };
+    const block = HF.el("div", "block"); cam.appendChild(block);
+    Object.assign(block.style, { left: (pl.x + 24) + "px", top: (pl.y + 24) + "px", width: pl.w + "px", height: pl.h + "px" });
+    const plate = HF.el("div", "plate"); cam.appendChild(plate);
+    Object.assign(plate.style, { left: pl.x + "px", top: pl.y + "px", width: pl.w + "px", height: pl.h + "px" });
     tl.fromTo(block, { scaleX: 0 }, { scaleX: 1, duration: 0.8, ease: "expo.inOut" }, 0.2);
-    const drop = add(HF.el("div", "drop", (HF.kicker || "Feature").toUpperCase()));
-    tl.fromTo(drop, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.5 }, 0.8);
-    const exitEls = [folio, frule, drop];
-    let photoEl = null;
-    if (P) {
-      photoEl = add(HF.photoImg("photo"));
-      const pw = PT ? 900 : 960, ph = pw * P.height / P.width;
-      Object.assign(photoEl.style, { width: pw + "px", height: ph + "px", left: PT ? "120px" : "955px",
-                                     top: ((PT ? 870 : 780) - P.floor * ph) + "px" });
-      tl.fromTo(photoEl, { x: 260, opacity: 0 }, { x: 0, opacity: 1, duration: 1.0, ease: "expo.out" }, 0.55);
-      tl.fromTo(photoEl, { scale: 1 }, { scale: 1.04, duration: S, ease: "none" }, 0);
-    } else if (items[0]) {
-      const big = add(HF.el("div", "bignum"));
-      big.style.fontSize = HF.fit(items[0].value, PT ? 880 : 680, 240, 0.9) + "px";
-      HF.countText(tl, big, items[0].value, 0.7, 1.2);
-      tl.fromTo(big, { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.8, ease: "expo.out" }, 0.6);
-      exitEls.push(big);
-    }
-    const cap = add(HF.el("div", "cap", "图 / " + (D.subject || "") + (P ? " · 实车" : "") + (HF.kicker ? " · " + HF.kicker : "")));
-    tl.fromTo(cap, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 1.0);
+    tl.fromTo(plate, { clipPath: "inset(0 0 100% 0)" }, { clipPath: "inset(0 0 0% 0)", duration: 0.8, ease: "expo.inOut" }, 0.35);
+    const pad = PT ? 40 : 50;
+    const vb = { x: pl.x + pad, y: pl.y + pad, w: pl.w - pad * 2, h: pl.h - pad * 2 };
+    cam.style.transformOrigin = `${vb.x + vb.w / 2}px ${vb.y + vb.h / 2}px`;
+    const viz = HF.viz.make(scene, vb, items, { glow: 0, font: "Playfair Display, STSong, serif" });
+    if (viz) cam.appendChild(viz.host);
+    const cap = HF.el("div", "cap", "图 / " + (D.subject || "") + (HF.kicker ? " · " + HF.kicker : "") + (D.source ? " · 数据来源 " + D.source : ""));
+    cam.appendChild(cap);
+    Object.assign(cap.style, { left: pl.x + "px", top: (pl.y + pl.h + 40) + "px" });
+    HF.reveal(tl, cap, "fade", 1.0, 0.6);
 
-    // 左:眉标 + 大标题 + 编号列表
-    const kick = add(HF.el("div", "kick", (HF.kicker || "") + "  /  专题"));
-    const tm = add(HF.el("div", "ttl-mask")); const ttl = HF.el("div", "ttl", D.title || ""); tm.appendChild(ttl);
-    ttl.style.fontSize = HF.fit(D.title || "", PT ? 940 : 860, PT ? 96 : 104) + "px";
-    tl.fromTo(kick, { opacity: 0, x: -20 }, { opacity: 1, x: 0, duration: 0.5 }, 0.35);
-    tl.fromTo(ttl, { yPercent: 110 }, { yPercent: 0, duration: 0.8, ease: "expo.out" }, 0.45);
-    const list = add(HF.el("div", "list"));
-    list.style.top = (PT ? 970 : items.length > 3 ? 400 : 430) + "px";
-    const rowH = PT ? (items.length > 3 ? 128 : 150) : items.length > 3 ? 132 : 150;
-    const t0 = T(1.2), span = Math.max(0, Math.min(A.outAt - 1.4, S * 0.55) - t0);
-    items.forEach((it, k) => {
-      const row = HF.el("div", "row"); row.style.height = rowH + "px";
-      const rule = HF.el("div", "rule"); row.appendChild(rule);
-      row.appendChild(HF.el("div", "no", String(k + 1).padStart(2, "0")));
-      row.appendChild(HF.el("div", "lab", it.label));
-      const val = HF.el("div", "val"); val.style.fontSize = HF.fit(it.value, 380, 80, 0.9) + "px"; row.appendChild(val);
-      if (it.b) row.appendChild(HF.el("div", "b", HF.cols[1] + "  " + it.b));
-      list.appendChild(row);
-      const at = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
-      tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "expo.inOut" }, at);
-      tl.fromTo(Array.from(row.children).slice(1), { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.07 }, at + 0.15);
-      HF.countText(tl, val, it.value, at + 0.25, 1.0);
+    // ---- 左栏:当前参数大字,讲过的落进编号列表 ----
+    const nowTop = PT ? 1100 : 380;
+    const listTop = PT ? 1350 : 680;
+    const list = add(HF.el("div", "list")); list.style.top = listTop + "px";
+    const t0 = T(1.3), t1 = Math.max(t0, A.outAt - 1.4);
+    const at = HF.beats(items, t0, t1, Math.min(1.4, Math.max(0.9, (t1 - t0) / Math.max(1, items.length))));
+    const order = items.map((_, k) => k).sort((a, b) => at[a] - at[b]);
+    const blocks = [];
+    // 竖屏列表放不下太多行:只留最近讲过的几条
+    const keepRows = PT ? 2 : 4;
+    order.forEach((k, n) => {
+      const it = items[k], when = at[k];
+      const blk = add(HF.el("div", "now")); blk.style.top = nowTop + "px";
+      const lab = HF.el("div", "lab"); lab.appendChild(HF.el("i", "", String(n + 1).padStart(2, "0"))); lab.appendChild(document.createTextNode(it.label));
+      blk.appendChild(lab);
+      const m = HF.el("div"); m.style.overflow = "hidden"; const num = HF.el("div", "num"); m.appendChild(num); blk.appendChild(m);
+      num.style.fontSize = HF.fitSize(it.value, PT ? 900 : 760, PT ? 150 : 170) + "px";
+      if (it.b) blk.appendChild(HF.el("div", "b", (HF.cols[1] || "") + "  " + it.b));
+      if (it.tag) blk.appendChild(HF.el("div", "tag", it.tag));
+      tl.set(blk, { opacity: 0 }, 0);
+      tl.set(blk, { opacity: 1 }, when);
+      HF.reveal(tl, lab, "wipe", when, 0.6);
+      HF.reveal(tl, num, "rise", when + 0.1, 0.8);
+      HF.roll(tl, num, it.value, when + 0.15, 1.0, { ease: "power3.out" });
+      Array.from(blk.children).slice(2).forEach((e, j) => HF.reveal(tl, e, "fade", when + 0.6 + j * 0.1, 0.5));
+      const next = order[n + 1];
+      if (next != null) tl.to(blk, { opacity: 0, y: -20, duration: 0.4, ease: "power2.in" }, at[next] - 0.05);
+      if (next != null && scene !== "compare") {
+        const row = HF.el("div", "row");
+        const rule = HF.el("div", "rule"); row.appendChild(rule);
+        row.appendChild(HF.el("div", "no", String(n + 1).padStart(2, "0")));
+        row.appendChild(HF.el("div", "lb", it.label));
+        const v = HF.el("div", "v", it.value); if (it.b) v.appendChild(HF.el("em", "", it.b)); row.appendChild(v);
+        list.appendChild(row);
+        const leave = at[next] + 0.1;
+        tl.set(row, { opacity: 0 }, 0);
+        tl.set(row, { opacity: 1 }, leave);
+        tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.7, ease: "expo.inOut" }, leave);
+        tl.fromTo(Array.from(row.children).slice(1), { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out", stagger: 0.06 }, leave + 0.1);
+        // 超出容量的旧行收起
+        const old = n - keepRows;
+        if (old >= 0) tl.to(list.children[old], { opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, duration: 0.4, ease: "power2.inOut" }, leave);
+      }
+      blocks.push(blk);
     });
-    exitEls.push(kick, tm, list, block, cap);
-    if (photoEl) exitEls.push(photoEl);
-    tl.to(exitEls, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+
+    // ---- 画面与镜头:缓推到正在讲的部位 ----
+    if (viz) {
+      viz.show(tl, 0.7);
+      const keys = [{ at: 0, scale: 1.0, x: 0, y: 0 }];
+      order.forEach((k) => {
+        const p = viz.hit(tl, items[k], at[k] + 0.15) || [vb.w / 2, vb.h / 2];
+        const still = scene === "compare" || PT;
+        keys.push({ at: Math.max(0.8, at[k] - 0.3), scale: scene === "compare" ? 1 : 1.03,
+                    x: still ? 0 : (vb.w / 2 - p[0]) * 0.12, y: still ? 0 : (vb.h / 2 - p[1]) * 0.12 });
+      });
+      if (keys.length > 1) keys.push({ at: Math.max(keys[keys.length - 1].at + 1.2, A.outAt - 1.2), scale: 1.0, x: 0, y: 0 });
+      HF.shots(tl, cam, keys, { move: 1.3, ease: "power2.inOut" });
+      viz.idle(tl, 1.3, A.outAt);
+    }
+
+    // ---- 退场:淡出 ----
+    HF.exit(tl, [folio, frule, kick, tm, list, ...blocks], A.outAt, A.outDur);
+    tl.to(cam, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
     HF.register(tl);
   </script>

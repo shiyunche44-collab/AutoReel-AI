@@ -166,7 +166,7 @@
     return { S, K, T: (x) => x * K, outAt: S - outDur, outDur };
   };
 
-  const UNIT_RE = /^\s*(kWh|kW|km\/h|km|mm|cm|TOPS|Hz|kg|N·m|Nm|V|A|L|s|秒|公里|千米|分钟|小时|度|万元|元|英寸|%|个|颗|线|匹|座|C(?![A-Za-z一-龥]))/i;
+  const UNIT_RE = /^\s*(kWh|kW|km\/h|km|mm|cm|TOPS|Hz|kg|N·m|Nm|V|A|L|s|秒|公里|千米|毫米|米|m(?![A-Za-z])|分钟|小时|度|万元|元|英寸|%|个|颗|线|匹|座|C(?![A-Za-z一-龥]))/i;
 
   /** 原文拆成 头 + 数字 + 单位 + 余下的说明("752V碳化硅" → 752 / V / 碳化硅)。没有数字返回 null */
   HF.parts = function (text) {
@@ -358,7 +358,13 @@
     const val = HF.el("div", "co-val");
     box.appendChild(lab); box.appendChild(val);
     HF.add(box);
-    const big = HF.bigNumber(val, opt.value, opt.size || 64, { unitScale: 0.36 });
+    // 纯文字值(如"全系标配磷酸铁锂刀片电池")按标签到画面边的空间缩字,仍放不下就折行,不出画
+    const avail = (side === "left" ? lx - 18 : HF.CW - lx - 18) - 40;
+    let size = opt.size || 64;
+    const isText = !HF.parts(opt.value);
+    if (isText) size = Math.max(30, Math.min(size, avail / (textW(String(opt.value || "")) * 1.02)));
+    const big = HF.bigNumber(val, opt.value, size, { unitScale: 0.36 });
+    if (isText && big.count) Object.assign(big.count.style, { maxWidth: Math.max(160, avail) + "px", whiteSpace: "normal" });
     box.style.transform = "translateY(-50%)";
     return {
       els: [g, box], box, big,
@@ -615,13 +621,7 @@
   HF.cols = Array.isArray(D.columns) ? D.columns : [];
   /** 对比数据:有两列名、至少一行有两个值 */
   HF.cmp = HF.cols.length >= 2 && HF.rows.some((r) => Array.isArray(r.values) && r.values.length >= 2 && r.values[1]);
-  /** 前 max 行,统一成 {label, value, b(对比的第二个值), tag} */
-  HF.items = function (max) {
-    return HF.rows.slice(0, max || 4).map((r) => ({
-      label: String(r.label || ""), value: String(r.value == null ? "" : r.value),
-      b: HF.cmp && Array.isArray(r.values) && r.values[1] ? String(r.values[1]) : "", tag: String(r.tag || ""),
-    }));
-  };
+  // HF.items(前 max 行,带 at / ratio / share)在 _viz.js 里
   HF.textW = textW;
   /** 一行文字装进 avail 像素的字号。英文按 0.6em × k 估宽(k 修正这款西文字体的宽窄),汉字按 1em */
   HF.fit = function (text, avail, max, k) {

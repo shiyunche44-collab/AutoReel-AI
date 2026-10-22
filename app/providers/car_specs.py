@@ -14,7 +14,7 @@ import re
 import time
 from typing import Any
 
-from . import webassets
+from . import browser_fetch, webassets
 from .facts import RawDoc
 
 TOOL = "autohome.specs"
@@ -46,13 +46,21 @@ def _get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     import httpx
 
     resp = httpx.get(url, params=params, headers=_HEADERS, timeout=15)
+    raw = resp.content
     if resp.status_code >= 400:
-        raise SpecsError(f"汽车之家 HTTP {resp.status_code}")
+        full = str(resp.request.url)
+        if not browser_fetch.should_fallback(full, resp.status_code):
+            raise SpecsError(f"汽车之家 HTTP {resp.status_code}")
+        # 被认出是脚本:换真浏览器再取一次
+        try:
+            raw = browser_fetch.fetch(full, referer=_HEADERS["Referer"])  # type: ignore[assignment]
+        except browser_fetch.BrowserFetchError as exc:
+            raise SpecsError(f"汽车之家 HTTP {resp.status_code};浏览器兜底:{exc}") from exc
     # 找车接口是 UTF-8;参数接口声明 gb2312、实际有超出 gb2312 的字(「·」),按 gb18030 解
     try:
-        text = resp.content.decode("utf-8")
+        text = raw.decode("utf-8")
     except UnicodeDecodeError:
-        text = resp.content.decode("gb18030")
+        text = raw.decode("gb18030")
     data = json.loads(text)
     if data.get("returncode") not in (0, None):
         raise SpecsError(f"汽车之家返回 {data.get('message')}")

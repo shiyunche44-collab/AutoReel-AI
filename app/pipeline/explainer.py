@@ -890,7 +890,29 @@ def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
     durations = beat_durations(nar.cues, len(specs))
     for s, d in zip(specs, durations):
         s.duration = d
+    mark_reveal_times(specs, nar.cues)
     return specs, nar
+
+
+def mark_reveal_times(specs: Sequence[ShotSpec], cues: Sequence[Any]) -> None:
+    """concept 拍的每行参数记下旁白说到它的时刻(`rows[k].at`,相对拍头的秒数),
+    动画里这一行就在那一刻出现 —— 参数跟着嘴说的走,而不是按固定间隔一条条排出来。"""
+    by_shot: dict[int, list[Any]] = {}
+    for c in cues:
+        by_shot.setdefault(c.shot_idx, []).append(c)
+    for s in specs:
+        if s.layout != "concept" or not s.overlay or not by_shot.get(s.idx):
+            continue
+        mine = sorted(by_shot[s.idx], key=lambda c: c.start)
+        rows = list(s.overlay.get("rows") or [])
+        times = motion.row_reveal_times(rows, mine, mine[0].start, s.duration)
+        new_rows = []
+        for r, at in zip(rows, times):
+            r = {k: v for k, v in r.items() if k != "at"}
+            if at is not None:
+                r["at"] = at
+            new_rows.append(r)
+        s.overlay = {**s.overlay, "rows": new_rows}
 
 
 # --------------------------------------------------------------------------
@@ -1324,13 +1346,15 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 recent: list[str] | None = None,
                 sting: tuple[int, str] | None = None,
                 style: str | None = None, headline: str = "",
-                notes: list[str] | None = None) -> tuple[Path, list[dict]]:
+                notes: list[str] | None = None,
+                ranges: dict[str, str] | None = None) -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
     `sting` = (章号, 章名) 时在开头叠章节标牌(每章第一拍)。
     `headline` 是竖屏标题区常驻的两行大标题(横屏不用)。
     `notes` 给了就往里记降级说明(竖屏模版没适配 → 换模版 / 退回数据卡),调用方写进项目事件。
+    `ranges` 是品类的概念动画量程(`vocab.concept_ranges`),动画里表示数量的图形按它画。
 
     竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
     放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
@@ -1358,7 +1382,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
                                chapters=chapters, chapter_idx=chapter_idx, used=used,
                                card_bg=card_bg, recent=recent, sting=sting, style=style,
-                               headline=headline)
+                               headline=headline, ranges=ranges)
     elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
@@ -1372,7 +1396,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 raise motion.MotionError(why)
             bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
                                                     used, recent, use_style)
-            base = motion.render(scene, motion.scene_data(spec.overlay, subject), seconds, size,
+            base = motion.render(scene, motion.scene_data(spec.overlay, subject, ranges), seconds, size,
                                  work / "concept.mp4", background=bg_clip, photo=photo, style=use_style)
             clear_title = motion.get_style(use_style).path is not None
         except motion.MotionError as exc:
@@ -1553,7 +1577,8 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        card_bg=bgs[s.idx % len(bgs)] if bgs else None,
                                        recent=recent,
                                        sting=sting_for(specs, where, chapters, s.idx),
-                                       style=style, headline=headline, notes=notes)
+                                       style=style, headline=headline, notes=notes,
+                                       ranges=profile.vocab.concept_ranges)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])

@@ -111,7 +111,13 @@ class BrowserSession:
                 f"启动浏览器失败:{exc}。在 .env 里用 BROWSER_PATH 指定 Chrome / Edge 的路径。"
             ) from exc
         state = self.storage or str(state_path(self.key))
-        ctx_kwargs: dict[str, Any] = {"viewport": {"width": 1440, "height": 900}}
+        ctx_kwargs: dict[str, Any] = {"viewport": {"width": 1440, "height": 900},
+                                      "locale": "zh-CN"}
+        if self.headless:
+            # 无头模式的 UA 里写着 HeadlessChrome,懂车帝这类站直接回空页;换成普通 Chrome 的
+            ctx_kwargs["user_agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{self._browser.version} Safari/537.36")
         if Path(state).is_file():
             ctx_kwargs["storage_state"] = state
         self._context = self._browser.new_context(**ctx_kwargs)

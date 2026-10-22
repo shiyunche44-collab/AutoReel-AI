@@ -1,125 +1,190 @@
 <!-- @name 工程蓝图
-     @desc 蓝底白线工程图纸:网格铺开、车身线稿逐段描出、编号引线 + 右下角图签表
-     @order 7
+     @desc 蓝底白线工程图纸:场景画面(电池包 / 充电曲线 / 零百表…)以线稿描出,十字游标跟着旁白移到正在讲的部位落编号,右侧图签表逐行填写
+     @order 3
+     @sample 5.6
      @portrait yes -->
 <meta name="hf-photo" content="scene" />
 <style>
+    :root { --acc: 255, 255, 255; --hi: 255, 255, 255; --acc2: 255, 216, 74; --hi2: 255, 236, 160;
+            --ink: 234, 242, 255; --bg: 12, 59, 143; --glow: 0; }
     html, body { background: #0c3b8f; }
     #root { color: #eaf2ff; background: #0c3b8f;
-            font-family: "JetBrains Mono", "STXihei", "Microsoft YaHei", monospace; }
+            font-family: "JetBrains Mono", "Noto Sans SC", "Microsoft YaHei", monospace; }
+    .paper { position: absolute; inset: 0;
+             background: radial-gradient(ellipse 1400px 900px at 40% 45%, #1048a6 0%, #0c3b8f 60%, #0a3176 100%); }
     .grid { position: absolute; inset: 0;
             background-image:
-              linear-gradient(rgba(255,255,255,0.16) 1.5px, transparent 1.5px), linear-gradient(90deg, rgba(255,255,255,0.16) 1.5px, transparent 1.5px),
-              linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px);
+              linear-gradient(rgba(255,255,255,0.14) 1.5px, transparent 1.5px), linear-gradient(90deg, rgba(255,255,255,0.14) 1.5px, transparent 1.5px),
+              linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
             background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px; }
     .frame { position: absolute; left: 40px; top: 40px; right: 40px; bottom: 40px; border: 3px solid rgba(255,255,255,0.85); }
-    .frame2 { position: absolute; left: 54px; top: 54px; right: 54px; bottom: 54px; border: 1px solid rgba(255,255,255,0.5); }
-    .hd { position: absolute; left: 110px; top: 100px; }
-    .hd .k { font-size: 22px; letter-spacing: 0.25em; color: rgba(234,242,255,0.7); }
-    .hd .t { margin-top: 10px; font-size: 64px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
-    .car { position: absolute; }
-    .car .ln { position: absolute; inset: 0; background-color: #fff;
-               -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
-    .car img { position: absolute; inset: 0; width: 100%; height: 100%; filter: grayscale(1) brightness(1.5) contrast(1.4); mix-blend-mode: screen; opacity: 0.5; }
-    #ov { position: absolute; left: 0; top: 0; overflow: visible; }
-    .bub { position: absolute; width: 50px; height: 50px; margin: -25px 0 0 -25px; border: 2px solid #fff; border-radius: 50%;
-           display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; background: #0c3b8f; }
-    table { position: absolute; right: 110px; bottom: 110px; border-collapse: collapse; font-size: 26px; }
-    td { border: 2px solid rgba(255,255,255,0.85); padding: 12px 22px; white-space: nowrap; height: 66px; }
-    td.no { width: 70px; text-align: center; color: rgba(234,242,255,0.7); }
-    td.v { font-weight: 700; font-size: 34px; text-align: right; min-width: 260px; }
-    td.b { font-weight: 700; font-size: 30px; text-align: right; color: #ffd84a; }
-    tr.h td { font-size: 20px; letter-spacing: 0.18em; color: rgba(234,242,255,0.7); height: 50px; }
-    .stamp { position: absolute; right: 110px; top: 100px; text-align: right; font-size: 20px; line-height: 1.7; color: rgba(234,242,255,0.7); letter-spacing: 0.1em; }
-    /* portrait: title, then the drawing with numbered leaders, then the title-block table */
+    .frame2 { position: absolute; left: 54px; top: 54px; right: 54px; bottom: 54px; border: 1px solid rgba(255,255,255,0.45); }
+    .hd { position: absolute; left: 110px; top: 92px; }
+    .hd .k { font-size: 20px; letter-spacing: 0.28em; color: rgba(234,242,255,0.66); white-space: nowrap; }
+    .hd .t { margin-top: 8px; font-family: "Noto Sans SC", sans-serif; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; min-height: 1.2em; }
+    .stamp { position: absolute; right: 110px; top: 96px; text-align: right; font-size: 18px; line-height: 1.75;
+             color: rgba(234,242,255,0.62); letter-spacing: 0.12em; white-space: nowrap; }
+    .cam { position: absolute; inset: 0; }
+    .vbox { position: absolute; border: 1px dashed rgba(255,255,255,0.28); }
+    .cx { position: absolute; left: 0; top: 0; overflow: visible; }
+    .tb { position: absolute; right: 110px; top: 250px; width: 600px; border: 2px solid rgba(255,255,255,0.85); background: #0c3b8f; }
+    /* 图纸上的车:去色压成白色线描感 */
+    .viz-car { filter: grayscale(1) invert(1) contrast(1.35) brightness(0.95); mix-blend-mode: screen; }
+    .tb .r { display: flex; align-items: stretch; border-top: 1.5px solid rgba(255,255,255,0.55); position: relative; }
+    .tb .r:first-child { border-top: none; }
+    .tb .r > div { padding: 14px 18px; white-space: nowrap; }
+    .tb .no { width: 64px; text-align: center; border-right: 1.5px solid rgba(255,255,255,0.55); color: rgba(234,242,255,0.66); font-size: 22px; }
+    .tb .lb { flex: 1; font-family: "Noto Sans SC", sans-serif; font-size: 26px; overflow: hidden; text-overflow: ellipsis; }
+    .tb .v { font-weight: 700; font-size: 38px; text-align: right; min-width: 200px; letter-spacing: -0.01em; }
+    .tb .b { font-weight: 700; font-size: 30px; text-align: right; min-width: 160px; color: #ffd84a; border-left: 1.5px solid rgba(255,255,255,0.4); }
+    .tb .h > div { font-size: 17px; letter-spacing: 0.22em; color: rgba(234,242,255,0.62); padding: 10px 18px; }
+    .tb .mark { position: absolute; left: -16px; top: -1px; bottom: -1px; width: 8px; background: #ffd84a; transform-origin: 50% 0; }
+    .tb .tg { position: absolute; right: 18px; bottom: 4px; font-size: 15px; color: rgba(234,242,255,0.5); letter-spacing: 0.06em; }
+    .note { position: absolute; left: 110px; bottom: 92px; font-size: 18px; letter-spacing: 0.14em; color: rgba(234,242,255,0.6); white-space: nowrap; }
     [data-aspect=portrait] .hd { left: 90px; top: 236px; }
-    [data-aspect=portrait] .hd .t { font-size: 58px; }
-    [data-aspect=portrait] .stamp { right: auto; left: 90px; top: 370px; text-align: left; display: flex; gap: 28px; }
-    [data-aspect=portrait] table { right: auto; left: 90px; bottom: auto; top: 1040px; }
-    [data-aspect=portrait] td.v { min-width: 220px; }
+    [data-aspect=portrait] .stamp { right: 90px; top: 240px; }
+    [data-aspect=portrait] .tb { right: auto; left: 90px; top: 1160px; width: 900px; }
+    [data-aspect=portrait] .note { left: 90px; bottom: auto; top: 1116px; }
   </style>
 <script>
     const { tl, D, add, items, A, T, S } = HF.boot();
-    const P = D.photo;
+    const PT = HF.portrait, scene = D.scene || "";
 
+    // ---- 图纸:网格 → 双线图框 ----
+    const paper = add(HF.el("div", "paper"));
     const grid = add(HF.el("div", "grid"));
-    tl.fromTo(grid, { opacity: 0, scale: 1.08 }, { opacity: 1, scale: 1, duration: 1.0, ease: "expo.out" }, 0);
+    tl.fromTo([paper, grid], { opacity: 0 }, { opacity: 1, duration: 0.6, ease: "power1.out" }, 0);
+    tl.fromTo(grid, { scale: 1.06 }, { scale: 1, duration: 1.2, ease: "expo.out" }, 0);
     const fr = add(HF.el("div", "frame")), fr2 = add(HF.el("div", "frame2"));
     tl.fromTo([fr, fr2], { clipPath: "inset(0 100% 100% 0)" }, { clipPath: "inset(0 0% 0% 0)", duration: 0.9, ease: "power2.inOut", stagger: 0.1 }, 0.1);
+
+    // ---- 图头 + 图签 ----
+    const NO = { battery: "01", charging: "02", accel: "03", dims: "04", lidar: "05", chip: "06", compare: "07" }[scene] || "00";
     const hd = add(HF.el("div", "hd"));
-    hd.appendChild(HF.el("div", "k", "DWG · " + (D.scene || "SPEC").toUpperCase() + " · " + (D.subject || "")));
+    hd.appendChild(HF.el("div", "k", `DWG-${NO} · ${scene.toUpperCase() || "SPEC"} · ${D.subject || ""}`));
     const ttl = HF.el("div", "t"); hd.appendChild(ttl);
-    tl.fromTo(hd.firstChild, { opacity: 0 }, { opacity: 1, duration: 0.4 }, 0.3);
-    HF.type(tl, ttl, D.title || "", 0.45, 14);
+    ttl.style.fontSize = HF.fit(D.title || "", PT ? 900 : 760, PT ? 64 : 60) + "px";
+    HF.reveal(tl, hd.firstChild, "wipe", 0.3, 0.6);
+    HF.type(tl, ttl, D.title || "", 0.45, 16);
     const stamp = add(HF.el("div", "stamp"));
-    stamp.innerHTML = "";
-    ["SCALE 1 : 25", "SHEET 01 / 01", D.source ? "REF · " + D.source : "REV · A"].forEach((s) => stamp.appendChild(HF.el("div", "", s)));
-    tl.fromTo(stamp, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.6);
+    ["SCALE 1 : 25", `SHEET ${NO} / 07`, "REV · A"].forEach((s) => stamp.appendChild(HF.el("div", "", s)));
+    HF.reveal(tl, stamp, "fade", 0.6, 0.5);
 
-    // 车身线稿(有线稿图用线稿,只有照片就把照片压成白色线描感;都没有就画示意外框)
-    const PT = HF.portrait;
-    const sv = HF.svg("svg", { id: "ov", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` });
-    const carSlot = add(HF.el("div"));
-    root.appendChild(sv);
-    const CW = PT ? 880 : 1060, cx = PT ? 540 : 640, floorY = PT ? 860 : 650;
-    const geo = P || { width: 100, height: 34, floor: 0.95, roof: 0.05, wheels: [0.239, 0.771], body: [0.02, 0.98] };
-    const ch = CW * geo.height / geo.width, box = { l: cx - CW / 2, t: floorY - geo.floor * ch };
-    const at = (u, v) => [box.l + u * CW, box.t + v * ch];
-    if (P) {
-      const car = HF.el("div", "car"); root.insertBefore(car, carSlot);
-      Object.assign(car.style, { left: box.l + "px", top: box.t + "px", width: CW + "px", height: ch + "px" });
-      if (P.edges) { const l = HF.el("div", "ln"); l.style.webkitMaskImage = l.style.maskImage = `url("${P.edges}")`; car.appendChild(l); }
-      else car.appendChild(HF.photoImg());
-      tl.fromTo(car, { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: Math.max(0.8, T(1.4)), ease: "power1.inOut" }, 0.5);
-    } else {
-      const d = `M${at(0.02, 0.9)} L${at(0.02, 0.7)} Q${at(0.06, 0.55)} ${at(0.2, 0.5)} L${at(0.33, 0.12)} Q${at(0.5, 0.0)} ${at(0.68, 0.1)} L${at(0.82, 0.42)} Q${at(0.98, 0.5)} ${at(0.98, 0.7)} L${at(0.98, 0.9)} Z`;
-      const body = HF.svg("path", { d, fill: "none", stroke: "#fff", "stroke-width": 3, pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
-      tl.to(body, { attr: { "stroke-dashoffset": 0 }, duration: 1.4, ease: "power2.inOut" }, 0.5);
-      geo.wheels.forEach((u) => { const [x, y] = at(u, 0.9); const c = HF.svg("circle", { cx: x, cy: y, r: ch * 0.16, fill: "#0c3b8f", stroke: "#fff", "stroke-width": 3, opacity: 0 }, sv);
-        tl.to(c, { opacity: 1, duration: 0.4 }, 1.2); });
-    }
-    // 中心线、地线
-    const ground = HF.svg("line", { x1: box.l - 60, y1: floorY, x2: box.l + CW + 60, y2: floorY, stroke: "rgba(255,255,255,0.6)", "stroke-width": 2, "stroke-dasharray": "18 8 4 8" }, sv);
-    tl.fromTo(ground, { opacity: 0 }, { opacity: 1, duration: 0.5 }, 0.4);
-    // 整车长度标注线(只画线,不写数)
-    const [lx1] = at(geo.body[0], 0), [lx2] = at(geo.body[1], 0), dy = floorY + 44;
-    const dim = HF.svg("g", {}, sv);
-    [[lx1, dy - 18, lx1, dy + 18], [lx2, dy - 18, lx2, dy + 18], [lx1, dy, lx2, dy]].forEach(([a, b, c, d]) =>
-      HF.svg("line", { x1: a, y1: b, x2: c, y2: d, stroke: "rgba(255,255,255,0.7)", "stroke-width": 2 }, dim));
-    tl.fromTo(dim, { opacity: 0, scaleX: 0, transformOrigin: `${(lx1 + lx2) / 2}px ${dy}px` }, { opacity: 1, scaleX: 1, duration: 0.7, ease: "expo.out" }, 1.3);
+    // ---- 镜头层:场景线稿 + 十字游标 ----
+    const cam = add(HF.el("div", "cam"));
+    const vb = PT ? { x: 110, y: 460, w: 860, h: 640 } : { x: 110, y: 260, w: 1000, h: 620 };
+    cam.style.transformOrigin = `${vb.x + vb.w / 2}px ${vb.y + vb.h / 2}px`;
+    const vbox = HF.el("div", "vbox"); cam.appendChild(vbox);
+    Object.assign(vbox.style, { left: (vb.x - 16) + "px", top: (vb.y - 16) + "px", width: (vb.w + 32) + "px", height: (vb.h + 32) + "px" });
+    tl.fromTo(vbox, { opacity: 0 }, { opacity: 1, duration: 0.6 }, 0.5);
+    const viz = HF.viz.make(scene, vb, items, { glow: 0, font: "JetBrains Mono, Noto Sans SC, monospace" });
+    if (viz) cam.appendChild(viz.host);
 
-    // 图签表 + 编号引线
-    const table = add(HF.el("table"));
-    const hr = HF.el("tr", "h");
-    ["NO.", "项目", HF.cmp ? HF.cols[0] : "数值"].concat(HF.cmp ? [HF.cols[1]] : []).forEach((s) => hr.appendChild(HF.el("td", "", s)));
-    table.appendChild(hr);
-    tl.fromTo(hr, { opacity: 0 }, { opacity: 1, duration: 0.3 }, 1.0);
-    const anchors = [[0.3, 0.55], [0.55, 0.3], [0.78, 0.6], [0.45, 0.75]];
-    const t0 = T(1.5), span = Math.max(0, Math.min(A.outAt - 1.2, S * 0.62) - t0);
-    items.forEach((it, k) => {
-      const tr = HF.el("tr");
-      tr.appendChild(HF.el("td", "no", String(k + 1)));
-      tr.appendChild(HF.el("td", "", it.label));
-      const v = HF.el("td", "v"); tr.appendChild(v);
-      if (HF.cmp) tr.appendChild(HF.el("td", "b", it.b));
-      table.appendChild(tr);
-      const tAt = t0 + (items.length > 1 ? span * k / (items.length - 1) : 0);
-      tl.fromTo(tr, { opacity: 0 }, { opacity: 1, duration: 0.25 }, tAt);
-      HF.countText(tl, v, it.value, tAt + 0.1, 0.7, { ease: "power2.out" });
-      // 引线:车身上的点 → 往上折 → 编号圈
-      const [ax, ay] = at(anchors[k][0], anchors[k][1]);
-      const bx = ax + 70, by = box.t - 30 - (k % 2) * 56;
-      const ld = HF.svg("path", { d: `M${ax} ${ay} L${ax} ${by} L${bx} ${by}`, fill: "none", stroke: "#fff", "stroke-width": 2,
-        pathLength: 1, "stroke-dasharray": "1 1", "stroke-dashoffset": 1 }, sv);
-      const dot = HF.svg("circle", { cx: ax, cy: ay, r: 6, fill: "#fff", opacity: 0 }, sv);
-      const bub = add(HF.el("div", "bub", String(k + 1))); bub.style.left = (bx + 25) + "px"; bub.style.top = by + "px";
-      tl.to(dot, { opacity: 1, duration: 0.15 }, tAt);
-      tl.to(ld, { attr: { "stroke-dashoffset": 0 }, duration: 0.5, ease: "power2.inOut" }, tAt);
-      tl.fromTo(bub, { scale: 0 }, { scale: 1, duration: 0.35, ease: "back.out(2.5)" }, tAt + 0.4);
+    // 十字游标(画在 viz 坐标里,跟镜头一起动)
+    const cx = HF.svg("svg", { class: "cx", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` });
+    cam.appendChild(cx);
+    const W = "rgba(255,255,255,", Y = "#ffd84a";
+    const hx = HF.svg("line", { x1: vb.x - 16, x2: vb.x + vb.w + 16, y1: 0, y2: 0, stroke: W + "0.5)", "stroke-width": 1, "stroke-dasharray": "6 6" }, cx);
+    const vx = HF.svg("line", { y1: vb.y - 16, y2: vb.y + vb.h + 16, x1: 0, x2: 0, stroke: W + "0.5)", "stroke-width": 1, "stroke-dasharray": "6 6" }, cx);
+    const ring = HF.svg("circle", { r: 22, cx: 0, cy: 0, fill: "none", stroke: Y, "stroke-width": 2.5 }, cx);
+    const coord = HF.svg("text", { x: 0, y: 0, fill: W + "0.75)", "font-size": 16, "font-family": "JetBrains Mono, monospace", "letter-spacing": "0.08em" }, cx);
+    const cur = { x: vb.x + vb.w / 2, y: vb.y + vb.h / 2 };
+    const place = () => {
+      hx.setAttribute("y1", cur.y); hx.setAttribute("y2", cur.y);
+      vx.setAttribute("x1", cur.x); vx.setAttribute("x2", cur.x);
+      ring.setAttribute("cx", cur.x); ring.setAttribute("cy", cur.y);
+      const flip = cur.x > vb.x + vb.w * 0.6;   // 靠右时读数写到左边,不出图框
+      coord.setAttribute("x", cur.x + (flip ? -30 : 30)); coord.setAttribute("y", cur.y + (flip ? 44 : -30));
+      coord.setAttribute("text-anchor", flip ? "end" : "start");
+      coord.textContent = `X ${((cur.x - vb.x) / vb.w).toFixed(3)}  Y ${((cur.y - vb.y) / vb.h).toFixed(3)}`;
+    };
+    place();
+    tl.set([hx, vx, ring, coord], { opacity: 0 }, 0);
+
+    // ---- 图签表:表头 + 每讲一条填一行 ----
+    const tb = add(HF.el("div", "tb"));
+    const head = HF.el("div", "r h");
+    ["NO.", "项目", HF.cmp ? (HF.cols[0] || "") : "数值"].concat(HF.cmp ? [HF.cols[1] || ""] : []).forEach((s, j) => {
+      const c = HF.el("div", j === 0 ? "no" : j === 1 ? "lb" : j === 2 ? "v" : "b", s); head.appendChild(c); });
+    tb.appendChild(head);
+    tl.fromTo(tb, { clipPath: "inset(0 0 100% 0)" }, { clipPath: "inset(0 0 0% 0)", duration: 0.6, ease: "power2.inOut" }, 0.9);
+
+    const t0 = T(1.4), t1 = Math.max(t0, A.outAt - 1.3);
+    const at = HF.beats(items, t0, t1, Math.min(1.3, Math.max(0.9, (t1 - t0) / Math.max(1, items.length))));
+    const order = items.map((_, k) => k).sort((a, b) => at[a] - at[b]);
+    const vFont = HF.cmp ? 32 : 38;
+    const marks = [], bubs = [];
+    order.forEach((k, n) => {
+      const it = items[k], when = at[k];
+      const r = HF.el("div", "r");
+      r.appendChild(HF.el("div", "no", String(n + 1).padStart(2, "0")));
+      r.appendChild(HF.el("div", "lb", it.label));
+      const v = HF.el("div", "v"); v.style.fontSize = Math.min(vFont, HF.fitSize(it.value, HF.cmp ? 220 : 260, vFont)) + "px"; r.appendChild(v);
+      if (HF.cmp) { const b = HF.el("div", "b"); r.appendChild(b); HF.type(tl, b, it.b || "", when + 0.45, 18); }
+      if (it.tag) r.appendChild(HF.el("div", "tg", it.tag));
+      const mk = HF.el("div", "mark"); r.appendChild(mk); marks.push(mk);
+      tb.appendChild(r);
+      tl.set(r, { opacity: 0 }, 0);
+      tl.fromTo(r, { opacity: 0, clipPath: "inset(0 0 100% 0)" }, { opacity: 1, clipPath: "inset(0 0 0% 0)", duration: 0.35, ease: "power2.out" }, when);
+      HF.type(tl, v, it.value, when + 0.2, 16);
+      // 正在讲的这一行左侧亮黄条,下一条进来就熄
+      tl.fromTo(mk, { scaleY: 0 }, { scaleY: 1, duration: 0.3, ease: "power2.out" }, when);
+      const next = order[n + 1];
+      if (next != null) tl.to(mk, { opacity: 0, duration: 0.3 }, at[next]);
     });
+
+    // ---- 画面与镜头:游标移到每条参数对应部位,落编号圈 ----
+    if (viz) {
+      viz.show(tl, 0.6);
+      const keys = [{ at: 0, scale: 0.96, x: 0, y: 12 }, { at: 0.6, scale: 1, x: 0, y: 0 }];
+      let last = { x: cur.x, y: cur.y };
+      const placed = [];
+      order.forEach((k, n) => {
+        const p = viz.hit(tl, items[k], at[k] + 0.15) || [vb.w / 2, vb.h / 2];
+        const to = { x: vb.x + p[0], y: vb.y + p[1] };
+        const when = at[k];
+        if (n === 0) tl.to([hx, vx, ring, coord], { opacity: 1, duration: 0.3 }, when - 0.3);
+        const from = Object.assign({}, last);
+        HF.drive(tl, (t) => {
+          const e = gsap.parseEase("power3.inOut")(Math.min(1, t / 0.6));
+          cur.x = from.x + (to.x - from.x) * e; cur.y = from.y + (to.y - from.y) * e; place();
+        }, when - 0.2, 0.6);
+        last = to;
+        // 编号圈:落在部位旁,留在图上
+        const g = HF.svg("g", { opacity: 0 }, cx);
+        // 编号圈互相让开:和已有的圈撞上就沿引线方向再挪一格
+        const sx = to.x > vb.x + vb.w * 0.7 ? -1 : 1;
+        let bx = to.x + sx * 46, by = to.y - 46;
+        for (let g = 0; g < 6 && placed.some((q) => Math.hypot(q[0] - bx, q[1] - by) < 52); g++) { bx += sx * 40; by -= 30; }
+        placed.push([bx, by]);
+        HF.svg("line", { x1: to.x, y1: to.y, x2: bx, y2: by, stroke: W + "0.85)", "stroke-width": 2 }, g);
+        HF.svg("circle", { cx: to.x, cy: to.y, r: 5, fill: "#fff" }, g);
+        HF.svg("circle", { cx: bx, cy: by, r: 22, fill: "#0c3b8f", stroke: "#fff", "stroke-width": 2 }, g);
+        const tx = HF.svg("text", { x: bx, y: by + 7, fill: "#fff", "font-size": 20, "font-weight": 700, "text-anchor": "middle", "font-family": "JetBrains Mono, monospace" }, g);
+        tx.textContent = String(n + 1).padStart(2, "0");
+        tl.fromTo(g, { opacity: 0, scale: 0.6, transformOrigin: `${bx}px ${by}px` }, { opacity: 1, scale: 1, duration: 0.35, ease: "back.out(2)" }, when + 0.4);
+        bubs.push(g);
+        tl.fromTo(ring, { attr: { r: 40 } }, { attr: { r: 22 }, duration: 0.45, ease: "expo.out" }, when + 0.35);
+        // 图纸只轻推:对比条本身贴着图框上沿,不上下移
+        const still = scene === "compare" || PT;
+        keys.push({ at: Math.max(0.7, when - 0.2), scale: still ? 1 : PT ? 1.03 : 1.04, x: still ? 0 : (vb.w / 2 - p[0]) * 0.2, y: still ? 0 : (vb.h / 2 - p[1]) * 0.2 });
+      });
+      if (keys.length > 2) keys.push({ at: Math.max(keys[keys.length - 1].at + 1.0, A.outAt - 1.0), scale: 1.0, x: 0, y: 0 });
+      HF.shots(tl, cam, keys, { move: 0.9 });
+      viz.idle(tl, 1.2, A.outAt);
+      // 游标停住时轻轻呼吸
+      HF.drive(tl, (t) => { ring.setAttribute("stroke-opacity", (0.65 + 0.35 * Math.cos(t * 4)).toFixed(2)); }, 0, S);
+    }
+
+    const note = add(HF.el("div", "note", D.source ? "REF · " + D.source : "NOTE · 数值为官方公布"));
+    HF.reveal(tl, note, "fade", 1.4, 0.6);
     // 停留:网格缓慢平移
     tl.fromTo(grid, { backgroundPosition: "0px 0px, 0px 0px, 0px 0px, 0px 0px" },
                     { backgroundPosition: "-120px 0px, -120px 0px, -120px 0px, -120px 0px", duration: S, ease: "none" }, 0);
-    tl.to(root.children, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+
+    // ---- 退场:图纸元素收回 ----
+    HF.exit(tl, [hd, stamp, tb, note], A.outAt, A.outDur);
+    tl.to(cam, { opacity: 0, duration: A.outDur, ease: "power1.in" }, A.outAt);
+    tl.to([fr, fr2], { opacity: 0, duration: A.outDur }, A.outAt);
     HF.register(tl);
   </script>
