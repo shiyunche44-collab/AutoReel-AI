@@ -15,6 +15,18 @@
     const v = (CS && CS.getPropertyValue("--" + tok).trim()) || "255, 255, 255";
     return a == null ? `rgb(${v})` : `rgba(${v}, ${a})`;
   };
+  /** 画幅:根节点的 data-width / data-height(骨架按项目画幅填)。横屏 1920×1080,竖屏 1080×1920 */
+  const R0 = typeof document.getElementById === "function" ? document.getElementById("root") : null;
+  HF.W = (R0 && Number(R0.dataset.width)) || 1920;
+  HF.H = (R0 && Number(R0.dataset.height)) || 1080;
+  HF.portrait = HF.H > HF.W;
+  /** 竖屏三段式分区(占画高的比例,右侧按钮区占画宽的比例)。可由 __DATA__.grid 覆盖。
+   *  safeTop 顶部安全区 / title 标题区 / frame 16:9 画面带 / data 数据区 / sub 字幕区 /
+   *  bottom 起是平台按钮区;right 是右侧按钮区宽度 */
+  HF.grid = Object.assign({
+    safeTop: 0.06, title: [0.06, 0.30], frame: [0.30, 0.616], data: [0.616, 0.80],
+    sub: [0.80, 0.90], bottom: 0.90, right: 0.12,
+  }, D.grid || {});
   HF.seconds = Number(D.seconds) || 8;
   HF.rows = Array.isArray(D.rows) ? D.rows : [];
   /** 取原文里的第一个数字:"3.23 秒" → {head:"", num:3.23, dec:2, tail:" 秒"}。没有数字返回 null */
@@ -169,7 +181,7 @@
   HF.overlay = function () {
     let sv = document.getElementById("ov");
     if (sv) return sv;
-    sv = HF.svg("svg", { id: "ov", width: 1920, height: 1080, viewBox: "0 0 1920 1080" });
+    sv = HF.svg("svg", { id: "ov", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` });
     const root = document.getElementById("root");
     const g = document.getElementById("grain");
     if (g) root.insertBefore(sv, g); else root.appendChild(sv);
@@ -239,7 +251,7 @@
     const dot = HF.svg("circle", { cx: ax, cy: ay, r: 0, fill: HF.c("acc") }, g);
     const box = HF.el("div", "co-box " + side);
     box.style.top = (ly - 4) + "px";
-    if (side === "left") box.style.right = (1920 - lx + 18) + "px"; else box.style.left = (lx + 18) + "px";
+    if (side === "left") box.style.right = (HF.W - lx + 18) + "px"; else box.style.left = (lx + 18) + "px";
     const lab = HF.el("div", "co-lab", opt.title || "");
     const val = HF.el("div", "co-val");
     box.appendChild(lab); box.appendChild(val);
@@ -356,7 +368,7 @@
     const mx = (x) => box.left + (0.02 + (x - 50) / 722 * 0.96) * CW;
     const my = (y) => box.top + (0.05 + (y - 102) / 260 * 0.9) * ch;
     const map = (d) => d.replace(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g, (m, x, y) => mx(+x).toFixed(1) + " " + my(+y).toFixed(1));
-    const sv = HF.svg("svg", { class: "ghost", width: 1920, height: 1080, viewBox: "0 0 1920 1080" }, stage);
+    const sv = HF.svg("svg", { class: "ghost", width: HF.W, height: HF.H, viewBox: `0 0 ${HF.W} ${HF.H}` }, stage);
     const line = { fill: "none", stroke: HF.c("ink"), "stroke-width": 3, "stroke-linejoin": "round", pathLength: 1,
                    "stroke-dasharray": "1 1", "stroke-dashoffset": 1 };
     const body = HF.svg("path", Object.assign({ d: map("M50 300 L50 250 Q50 228 92 222 L222 196 Q292 110 420 102 L560 102 Q650 116 704 200 L752 218 Q772 226 772 258 L772 300 Z") }, line), sv);
@@ -530,7 +542,7 @@
   };
 
   /**
-   * three.js 舞台:画布铺满 1920×1080 插在 root 最底层。返回 {THREE, renderer, scene, camera, canvas, render(), project(v)}。
+   * three.js 舞台:画布铺满整个画幅(HF.W×HF.H)插在 root 最底层。返回 {THREE, renderer, scene, camera, canvas, render(), project(v)}。
    * 所有动画都在 HF.drive 回调里按时间算好再 render(),seek 到任意时刻画面一致。
    */
   HF.stage3d = function (opt) {
@@ -538,24 +550,24 @@
     const T3 = window.THREE;
     const renderer = new T3.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: !!opt.alpha });
     renderer.setPixelRatio(1);
-    renderer.setSize(1920, 1080, false);
+    renderer.setSize(HF.W, HF.H, false);
     renderer.outputColorSpace = T3.SRGBColorSpace;
     renderer.toneMapping = T3.ACESFilmicToneMapping;
     renderer.toneMappingExposure = opt.exposure || 1.0;
     const cv = renderer.domElement;
-    cv.style.cssText = "position:absolute;left:0;top:0;width:1920px;height:1080px;";
+    cv.style.cssText = `position:absolute;left:0;top:0;width:${HF.W}px;height:${HF.H}px;`;
     const root = document.getElementById("root");
     root.insertBefore(cv, root.firstChild ? root.firstChild.nextSibling : null);
     const scene = new T3.Scene();
     if (opt.bg != null) scene.background = new T3.Color(opt.bg);
     if (opt.fog) scene.fog = new T3.FogExp2(opt.fog[0], opt.fog[1]);
-    const camera = new T3.PerspectiveCamera(opt.fov || 35, 1920 / 1080, 0.1, opt.far || 400);
+    const camera = new T3.PerspectiveCamera(opt.fov || 35, HF.W / HF.H, 0.1, opt.far || 400);
     const v = new T3.Vector3();
     const st = {
       THREE: T3, renderer, scene, camera, canvas: cv,
       render() { renderer.render(scene, camera); },
       /** 世界坐标 → 页面像素 [x, y, 在镜头前] */
-      project(p) { v.copy(p).project(camera); return [(v.x + 1) * 960, (1 - v.y) * 540, v.z < 1]; },
+      project(p) { v.copy(p).project(camera); return [(v.x + 1) * HF.W / 2, (1 - v.y) * HF.H / 2, v.z < 1]; },
     };
     return st;
   };
