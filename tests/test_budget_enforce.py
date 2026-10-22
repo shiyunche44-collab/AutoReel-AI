@@ -112,10 +112,13 @@ def test_advance_pauses_on_budget_and_does_not_spend(store, monkeypatch):
     assert store.get_project("p_budget")["state"] == "PAUSED_BUDGET"
 
 
-def test_paused_budget_is_actually_reachable(store):
+def test_paused_budget_is_actually_reachable(store, monkeypatch):
     """PAUSED_BUDGET 之前是**不可达**的 —— 转移表里有,代码里没路径能进。"""
     from app.state import State
     store.create_project(_project(state="FACTS_RESOLVED", budget=0.0001))
+    # 替身 LLM:不然没配 DEEPSEEK_API_KEY 的机器(CI)会先停在"缺 Key",走不到预算检查
+    monkeypatch.setattr(orchestrator, "_llm", lambda: object())
+    monkeypatch.setattr(script_gen, "generate", lambda *a, **k: [])
     orchestrator.advance("p_budget")
     assert store.get_project("p_budget")["state"] == str(State.PAUSED_BUDGET)
 
