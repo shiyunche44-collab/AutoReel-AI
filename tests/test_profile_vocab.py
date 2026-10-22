@@ -227,12 +227,17 @@ def test_category_listing_has_ui_text():
     assert cats["auto_long"]["ui"]["placeholder"].startswith("例:比亚迪")
 
 
-def test_portrait_script_prompt_adds_short_video_rules():
-    """竖屏项目多一组短视频规则;横屏 prompt 不含这段(golden 快照逐字不变)。"""
+def test_portrait_script_prompt_adds_short_video_rules(monkeypatch):
+    """竖屏项目多一组短视频规则、按实测语速算字数;横屏 prompt 不含这些(golden 快照逐字不变)。"""
     profile = load_profile("auto_long")
     theme = profile.theme_spec()
     plan = list(profile.plan_for(60))
     llm = _Capture()
+    script_gen.generate(subject="小米YU7", profile=profile, facts=_facts(), plan=plan,
+                        duration=60, llm=llm, theme=theme, portrait=True)
+    assert f"全片约 {int(60 * script_gen.PORTRAIT_CHARS_PER_SECOND)} 字" in llm.calls[-1][0]
+    # 语速对齐后,两边只差竖屏规则这一段
+    monkeypatch.setattr(script_gen, "PORTRAIT_CHARS_PER_SECOND", 5.8)
     script_gen.generate(subject="小米YU7", profile=profile, facts=_facts(), plan=plan,
                         duration=60, llm=llm, theme=theme, portrait=True)
     portrait_system = llm.calls[-1][0]

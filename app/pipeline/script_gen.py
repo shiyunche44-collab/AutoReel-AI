@@ -292,7 +292,8 @@ def generate(
     roundup = bool(subjects)
     angle = (angle or "").strip()
     vocab = profile.vocab
-    budget = narration_budget_chars(duration)
+    budget = (narration_budget_chars(duration, PORTRAIT_CHARS_PER_SECOND) if portrait
+              else narration_budget_chars(duration))
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)
@@ -395,10 +396,15 @@ def generate(
     return segments, title, thesis
 
 
+#: 竖屏按实测 TTS 语速算字数预算。默认的 5.8 字/秒比实际快:四个成片实测
+#: 4.58–4.82 字/秒(YU7 90 秒竖屏 479 字念了 104.5 秒)。竖屏 60/90 秒是平台档位,
+#: 必须按真实语速算;横屏仍用 5.8(改它会改横屏提示词,另议)
+PORTRAIT_CHARS_PER_SECOND = 4.7
+
 #: 竖屏脚本念出来超过目标字数这么多倍,就让 LLM 压一遍。实测 90 秒竖屏目标 522 字,
 #: 提示词里写明「硬上限」、段落砍到 6 段后仍写到 870 字 —— 光靠提示词压不住。
 #: 竖屏的时长是平台规则(60/90 秒档)而不是估算,超了就不是选的那个时长
-PORTRAIT_LENGTH_TOLERANCE = 1.2
+PORTRAIT_LENGTH_TOLERANCE = 1.1
 
 SHORTEN_SYSTEM = """你是短视频解说的剪辑编导。下面这份脚本念出来太长,把它压到 {chars} 字以内(空白不算字)。
 

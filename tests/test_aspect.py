@@ -350,9 +350,9 @@ def test_fit_length_shortens_only_when_far_over_budget():
     out = script_gen.fit_length(long, 100, llm)
     assert llm.calls == 1 and script_gen.spoken_chars(out) == 70
     assert [s.idx for s in out] == [0, 1, 2] and out[1].fact_refs == ["f_1"]
-    # 没超 20%:不调 LLM
+    # 没超出容差(140 字 / 目标 130):不调 LLM
     llm = _ShortenLLM(short_reply)
-    assert script_gen.fit_length(long, 120, llm) is long and llm.calls == 0
+    assert script_gen.fit_length(long, 130, llm) is long and llm.calls == 0
 
 
 def test_fit_length_keeps_original_when_result_is_bad():
