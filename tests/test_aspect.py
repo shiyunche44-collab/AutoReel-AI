@@ -305,3 +305,19 @@ def test_estimate_api_takes_aspect():
     assert tall["aspect"] == "9:16" and junk["aspect"] == "16:9"
     assert tall["shot_count"] == land["shot_count"]
     assert tall["wall_clock"]["render_minutes"] >= 1
+
+
+def test_portrait_plan_gives_each_section_two_beats():
+    """竖屏每段至少约两拍:90 秒不再铺 10 段一拍一段(LLM 会照样每段写满,总字数超七成)。"""
+    from app.categories import PORTRAIT_SHOTS_PER_SECTION, load_profile
+
+    p = load_profile("auto_long")
+    for d in p.supported_durations("9:16"):
+        sl = p.slots_for(d, "buyguide", portrait=True)
+        sections = list(dict.fromkeys(s.section for s in sl))
+        assert len(sl) == p.shots_for(d)
+        assert sections[0] == "开场" and sections[-1] == "结论建议"
+        core = p.core_blocks(p.theme_spec("buyguide").blocks)
+        assert len(sections) <= max(core, p.shots_for(d) // PORTRAIT_SHOTS_PER_SECTION)
+    # 横屏不受影响
+    assert p.slots_for(240, "buyguide") == p.slots_for(240, "buyguide", portrait=False)

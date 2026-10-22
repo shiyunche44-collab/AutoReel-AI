@@ -30,6 +30,9 @@ import yaml
 
 PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
 
+#: 竖屏每个段落至少占几拍(见 `CategoryProfile.section_capacity`)
+PORTRAIT_SHOTS_PER_SECTION = 2
+
 #: 数据卡片版式,渲染实现在 pipeline/cards.py
 CARD_KINDS: tuple[str, ...] = ("spec", "compare", "timeline", "bars")
 
@@ -538,7 +541,8 @@ class CategoryProfile:
     # ------------------------------------------------------------------
     # 段落计划
     # ------------------------------------------------------------------
-    def plan_for(self, duration: int, name: str | None = None) -> tuple[str, ...]:
+    def plan_for(self, duration: int, name: str | None = None,
+                 portrait: bool = False) -> tuple[str, ...]:
         """返回该方向在该时长下的段落序列。
 
         两条路径:
@@ -547,9 +551,9 @@ class CategoryProfile:
         """
         theme = self.theme_spec(name)
         if theme.roundup:
-            return tuple(s.section for s in self.slots_for(duration, name))
+            return tuple(s.section for s in self.slots_for(duration, name, portrait=portrait))
         if theme.uses_blocks:
-            return self._expand_blocks(theme, duration)
+            return self._expand_blocks(theme, duration, portrait)
         plan = theme.plan or self.section_plan
         if duration in plan:
             return plan[duration]
@@ -564,19 +568,21 @@ class CategoryProfile:
         return tuple(base[:target_shots])
 
     def slots_for(self, duration: int, name: str | None = None,
-                  subjects: Sequence[str] | None = None) -> tuple[Slot, ...]:
+                  subjects: Sequence[str] | None = None,
+                  portrait: bool = False) -> tuple[Slot, ...]:
         """段落序列 + 每段讲哪台车。
 
         - 单车方向:等价于 `plan_for`,subject 全为空。
         - 横评方向:per_subject 块按车单展开成 N 份(每份带车名),和其它块一起
           走同一套最大余数铺展 —— 每台车的段落连在一起,车与车按车单顺序排。
           不给车单时用占位车名(按最少台数),只用于估节拍数和配置自检。
+        - `portrait`:竖屏按 `section_capacity` 精简段落,见那里的说明。
         """
         theme = self.theme_spec(name)
         if not theme.roundup:
-            return tuple(Slot(s) for s in self.plan_for(duration, name))
+            return tuple(Slot(s) for s in self.plan_for(duration, name, portrait))
         names = [str(x).strip() for x in (subjects or theme.placeholder_subjects()) if str(x).strip()]
-        flat = self.roundup_blocks(theme, names, shots=self.shots_for(duration))
+        flat = self.roundup_blocks(theme, names, shots=self.section_capacity(duration, portrait))
         counts = self._allocate(flat, duration)
         out: list[Slot] = []
         for block, count in zip(flat, counts):
@@ -637,8 +643,18 @@ class CategoryProfile:
         """精简到底(只留 drop=0)时的块数。"""
         return sum(1 for b in blocks if not b.get("drop"))
 
-    def _expand_blocks(self, theme: ThemeSpec, duration: int) -> tuple[str, ...]:
-        blocks = self.shed_blocks(theme.blocks, self.shots_for(duration))
+    def section_capacity(self, duration: int, portrait: bool = False) -> int:
+        """这个时长最多放几个段落。
+
+        横屏 = 拍数(一个段落至少一拍)。竖屏要求每段至少约两拍:实测 90 秒竖屏
+        铺 10 段、每段一拍,LLM 每段照样写 60–100 字,全片写到 886 字(目标 522),
+        成片会比选的时长长七成。段落少了,每段才有篇幅讲透、总字数才压得住。"""
+        shots = self.shots_for(duration)
+        return max(1, shots // PORTRAIT_SHOTS_PER_SECTION) if portrait else shots
+
+    def _expand_blocks(self, theme: ThemeSpec, duration: int,
+                       portrait: bool = False) -> tuple[str, ...]:
+        blocks = self.shed_blocks(theme.blocks, self.section_capacity(duration, portrait))
         counts = self._allocate(blocks, duration)
         out: list[str] = []
         for block, count in zip(blocks, counts):

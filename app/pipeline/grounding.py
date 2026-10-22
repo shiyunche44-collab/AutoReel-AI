@@ -161,6 +161,9 @@ def arabicize(text: str) -> str:
         # 单个汉字("一台""三电""两档""十足")不是要核对的数据,不动
         if len(s) < 2:
             return s
+        # 数量不会以「零」开头(「零点五」除外);「零百」是 0-100km/h 加速的说法,不是 100
+        if s[0] in "零〇" and not s[1:].startswith("点"):
+            return s
         v = cn_number(s)
         if v is None:
             return s

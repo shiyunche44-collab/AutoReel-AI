@@ -159,7 +159,8 @@ def create_project(payload: ProjectCreate) -> str:
     # 时长能否铺展出正确长度的段落序列,在这里就验掉,
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
     names = [s["name"] for s in subjects]
-    plan = profile.slots_for(payload.duration, theme_name, names or None)
+    plan = profile.slots_for(payload.duration, theme_name, names or None,
+                             portrait=payload.aspect == config.PORTRAIT)
     expected_shots = profile.shots_for(payload.duration)
     # 车多时长短会自动精简每车段落(见 roundup_blocks);配置自检保证车单上限精简后
     # 放得进最短时长,这里只是兜底,不让结论段被截掉
@@ -376,7 +377,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         portrait = aspect.is_portrait(project)
         facts = _facts(project_id)
         slots = profile.drop_unbacked_slots(
-            profile.slots_for(project["duration"], theme.name, names or None),
+            profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait),
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
         # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度

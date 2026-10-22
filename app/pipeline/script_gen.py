@@ -258,6 +258,8 @@ def _portrait_policy(portrait: bool) -> str:
         "\n- **竖屏短视频**:观众是在手机上刷到的,划走只要一秒。\n"
         "   - 第 1 段第一句就抛出冲突或结论(价格、反差、一个最硬的数字),不铺垫、不寒暄。\n"
         "   - 每段只讲一件事,句子更短;能用一个数字说清的不用一句形容词。\n"
+        "   - 全片字数(Target total characters)是**硬上限**:选了 90 秒就是 90 秒,"
+        "宁可少讲一个参数也不要超;每段只挑最硬的一两个数字。\n"
         "   - 不讲「下面我们来看」「接下来聊聊」这类过渡句,直接进内容。\n"
         "   - title 要能在手机上一眼看完:18 字以内,可以用冒号分成两半(画面上会拆成两行)。"
     )
@@ -924,10 +926,8 @@ def _split_text(text: str, max_chars: int) -> list[str]:
             # 连逗号都没有(纯数字长串):只能硬切,宁可切坏也不能留一个 30 秒的拍
             for k in range(0, len(clause), max_chars):
                 parts.append(clause[k:k + max_chars])
-    # 切在逗号上的块,句尾那个逗号换成句号:字幕末尾挂半个标点不像话,
-    # TTS 也需要一个明确的断句。
-    parts = [(p[:-1] + "。" if p and p[-1] in _TRAILING_MARKS else p) for p in parts]
-    # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话
+    # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话。
+    # 先并再换标点 —— 并回去的逗号仍是逗号,不会冒出「我的判断是。YU7……」
     merged: list[str] = []
     for p in parts:
         if merged and (len(p) < MIN_PART_CHARS or len(merged[-1]) < MIN_PART_CHARS) \
@@ -939,7 +939,9 @@ def _split_text(text: str, max_chars: int) -> list[str]:
             len(merged[-2]) + len(merged[-1]) <= max_chars:
         merged[-2] += merged[-1]
         merged.pop()
-    return merged
+    # 切在逗号上的块,句尾那个逗号换成句号:字幕末尾挂半个标点不像话,
+    # TTS 也需要一个明确的断句。
+    return [(p[:-1] + "。" if p and p[-1] in _TRAILING_MARKS else p) for p in merged]
 
 
 def split_segments(segments: Sequence[ScriptSegment],
