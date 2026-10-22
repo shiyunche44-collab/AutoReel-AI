@@ -977,11 +977,14 @@ _running: set[str] = set()
 _running_lock = threading.Lock()
 
 
-def build_async(subject: str, **kwargs: Any) -> bool:
+def build_async(subject: str, *, on_done: Any = None, **kwargs: Any) -> bool:
     """后台线程里构建。同一车型已经在建就不重复起。返回是否起了新线程。
 
     分镜阶段调用:用户审脚本、分镜的这几分钟正好拿来攒素材,
     门禁 A 确认时取材直接用池子里已有的,不在确认请求里等下载。
+
+    `on_done`:构建结束后回调一次,参数是这次构建的统计(用于把
+    视觉调用的开销记到项目账上)。回调出错不影响构建结果。
     """
     key = slug(subject)
     with _running_lock:
@@ -991,7 +994,12 @@ def build_async(subject: str, **kwargs: Any) -> bool:
 
     def _run() -> None:
         try:
-            build(subject, **kwargs)
+            stats = build(subject, **kwargs)
+            if on_done is not None:
+                try:
+                    on_done(stats)
+                except Exception:  # noqa: BLE001 - 记账失败不该影响建池
+                    pass
         finally:
             with _running_lock:
                 _running.discard(key)

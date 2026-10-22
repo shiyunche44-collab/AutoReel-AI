@@ -290,6 +290,10 @@
 .action-progress .progress { flex: 1; max-width: 420px; }
 .action-btns { display: flex; gap: 8px; align-items: center; flex: none; }
 
+/* 额度暂停时的"提额并继续":普通表单,零 JS */
+.budget-form { display: flex; gap: 6px; align-items: center; }
+.budget-form .input { width: 96px; text-align: right; }
+
 /* 内容卡 */
 .content-card { overflow: clip; }
 .tab .alert-dot.is-ok { background: var(--success); }

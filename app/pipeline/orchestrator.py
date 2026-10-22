@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -18,8 +19,10 @@ from ..categories import ProfileError, load_profile
 from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
-from ..state import State, assert_transition
+from ..state import State, assert_transition, can_transition
 from . import concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen
+
+log = logging.getLogger(__name__)
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
@@ -249,7 +252,55 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False) ->
             row = db.get_project(project_id) or {}
             return {"state": row.get("state") or "", "action": "项目正在推进中",
                     "busy": True, "waiting": False}
-        return _advance(project_id, confirmed=confirmed, force=force)
+        try:
+            return _advance(project_id, confirmed=confirmed, force=force)
+        except costs.BudgetExceeded as exc:
+            # 额度用尽:不是错误,是"该停"。进 PAUSED_BUDGET,提额后可恢复。
+            return _pause_for_budget(project_id, exc)
+
+
+def _pause_for_budget(project_id: str, exc: Exception) -> dict[str, Any]:
+    """因配额暂停项目。
+
+    `State.PAUSED_BUDGET` 之前是**不可达**的 —— 转移表里有它,代码里
+    没有任何路径能进去。也就是说 README 宣称的"项目级节流阈值"从来没
+    生效过:一次失控的 TTS/LLM 循环可以把整个套餐烧穿,毫无拦截。
+
+    现在:超限时进 PAUSED_BUDGET,并把暂停前的状态记在 `resume_state`,
+    提额后从那里继续。
+    """
+    row = db.get_project(project_id) or {}
+    cur = str(row.get("state") or "")
+    try:
+        db.update_project(project_id, resume_state=cur)
+        _set_state(project_id, cur, State.PAUSED_BUDGET, reason=str(exc))
+    except Exception:  # noqa: BLE001 - 暂停失败也不能让调用方炸掉
+        log.exception("把项目 %s 转入 PAUSED_BUDGET 失败", project_id)
+    return {"state": str(State.PAUSED_BUDGET), "action": "已暂停(配额)",
+            "waiting": True, "detail": str(exc)}
+
+
+def set_budget(project_id: str, budget: float) -> dict[str, Any]:
+    """改项目的额度上限;若项目正因配额暂停,顺带恢复到暂停前的状态。"""
+    row = db.get_project(project_id)
+    if not row:
+        raise PipelineError("项目不存在")
+    budget = max(0.0, float(budget))
+    with locks.require_project_lock(project_id):
+        db.update_project(project_id, quota_budget=budget)
+        out: dict[str, Any] = {"budget": budget, "state": row["state"]}
+        if State(row["state"]) == State.PAUSED_BUDGET:
+            resume = str(row.get("resume_state") or "")
+            try:
+                target = State(resume)
+            except ValueError:
+                target = State.GATE_A
+            if can_transition(State.PAUSED_BUDGET, target):
+                _set_state(project_id, State.PAUSED_BUDGET, target,
+                           reason=f"额度提到 {budget:.2f},继续")
+                out["state"] = str(target)
+                out["resumed"] = True
+        return out
 
 
 def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
@@ -276,15 +327,17 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
 
     if state == State.DRAFT_INTENT:
         topic = db.read_json(project_id, "topic.json", {}) or {}
-        if theme.roundup:
-            facts, report = intake.run_roundup(project_id, profile, subjects,
-                                               theme=theme.name, angle=angle,
-                                               angle_search=topic.get("search", ""),
-                                               evidence=topic.get("evidence") or (), llm=llm)
-        else:
-            facts, report = intake.run(project_id, profile, subject, theme=theme.name,
-                                       angle=angle, angle_search=topic.get("search", ""),
-                                       evidence=topic.get("evidence") or (), llm=llm)
+        # 配额:事实抽取要调 LLM 与检索接口,调用前先预留额度
+        with costs.project_spend(project_id, costs.stage_reserve("facts")):
+            if theme.roundup:
+                facts, report = intake.run_roundup(project_id, profile, subjects,
+                                                   theme=theme.name, angle=angle,
+                                                   angle_search=topic.get("search", ""),
+                                                   evidence=topic.get("evidence") or (), llm=llm)
+            else:
+                facts, report = intake.run(project_id, profile, subject, theme=theme.name,
+                                           angle=angle, angle_search=topic.get("search", ""),
+                                           evidence=topic.get("evidence") or (), llm=llm)
         if not report.get("sources_ok") and report.get("sources_failed"):
             # 一个来源都没通是环境问题(CLI 缺失、登录失效),不是"这款车没数据"。
             # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
@@ -306,11 +359,13 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
             profile.slots_for(project["duration"], theme.name, names or None),
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
-        segments, title, thesis = script_gen.generate(
-            subject=subject, profile=profile, facts=facts, plan=plan,
-            duration=project["duration"], llm=llm, theme=theme, angle=angle,
-            **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
-        )
+        # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
+        with costs.project_spend(project_id, costs.stage_reserve("script")):
+            segments, title, thesis = script_gen.generate(
+                subject=subject, profile=profile, facts=facts, plan=plan,
+                duration=project["duration"], llm=llm, theme=theme, angle=angle,
+                **({"slots": slots, "subjects": subjects} if theme.roundup else {}),
+            )
         segments = script_gen.normalize_segments(segments, slots)
         # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次)。
         # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
@@ -338,8 +393,10 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
             specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments,
                                              subjects=names)
         else:
-            specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
-                                          facts=facts, llm=llm, card_log=log, subjects=subjects)
+            # 配额:逐拍版式是一次 LLM 调用
+            with costs.project_spend(project_id, costs.stage_reserve("beats")):
+                specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
+                                              facts=facts, llm=llm, card_log=log, subjects=subjects)
         problems = explainer.validate_beats(specs)
         if problems:
             raise PipelineError("分镜自检未通过:" + "; ".join(problems))
@@ -373,19 +430,22 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
                 " —— 改完再确认,或显式选择「仍然继续」。"
             )
         specs = _sync_storyboard(project_id, _script(project_id))
-        try:
-            specs, nar = explainer.time_beats(project_id, specs, profile)
-        except RuntimeError as exc:
-            raise PipelineError(str(exc)) from exc
+        # 配额:合成旁白(TTS)是本项目最贵的一步,调用之前先按字数预留额度。
+        # 额度不够就**不调用**,直接抛 BudgetExceeded → 进 PAUSED_BUDGET。
+        chars = sum(len(s.narration_zh or "") for s in specs)
+        with costs.project_spend(project_id,
+                                  costs.stage_reserve("tts", chars=chars)) as spend:
+            try:
+                specs, nar = explainer.time_beats(project_id, specs, profile)
+            except RuntimeError as exc:
+                raise PipelineError(str(exc)) from exc
+            # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
+            spend.actual(costs.explainer_spent(nar.to_dict()))
         _save_specs(project_id, specs)
         # 节奏体检:画面变化间隔 + broll 占比。写进 rhythm.json,门禁和前端都能看
         report = rhythm.report(specs)
         db.write_json(project_id, "rhythm.json", report)
         total = sum(s.duration for s in specs)
-        # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
-        spent = float((db.get_project(project_id) or {}).get("spent_cost") or 0.0)
-        db.update_project(project_id,
-                          spent_cost=round(spent + costs.explainer_spent(nar.to_dict()), 4))
         explainer.init_beats(project_id, specs)
         cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
             (",BGM 复用曲库" if nar.bgm_reused else "")
@@ -455,13 +515,35 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
 def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
     """后台增量构建这个主体的素材池(见 `library.py`)。所有品类都建:平台搜片 +
     profile 声明的静图来源,官方渠道配置只是额外补充。已经在建就什么都不做。
-    失败只记事件,不影响主流程。"""
+    失败只记事件,不影响主流程。
+
+    **打标签是要花钱的**(每张图一次视觉调用),所以先按项目预留额度,
+    建完再按实际调用数结算。额度不够就**不建池** —— 池子只是背景素材,
+    没有它片子照样出(画面重复一些),不值得为它把整条片子停掉。
+    """
     if not config.USE_LIBRARY:
         return
     try:
-        if library.build_async(subject, profile=profile, llm=llm):
-            db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
+        before = library.Library.load(subject).vlm_calls
+        reserved = costs.reserve_project(project_id, costs.stage_reserve("library"))
+    except costs.BudgetExceeded as exc:
+        db.add_event(project_id, "assets", reason=f"素材池构建因配额不足未启动:{exc}")
+        return
     except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
+        return
+
+    def _done(stats: dict) -> None:
+        delta = max(0, int(stats.get("vlm_calls") or 0) - before)
+        costs.commit_project(project_id, reserved, costs.estimate_library(delta))
+
+    try:
+        if library.build_async(subject, profile=profile, llm=llm, on_done=_done):
+            db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
+        else:
+            costs.release_project(project_id, reserved)
+    except Exception as exc:  # noqa: BLE001
+        costs.release_project(project_id, reserved)
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
 

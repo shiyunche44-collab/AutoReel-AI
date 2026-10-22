@@ -44,11 +44,14 @@ GATE_STATES = {State.GATE_A, State.GATE_B}
 
 #: 允许的状态转移。任何未列出的转移都会被 state.can_transition() 拒绝。
 TRANSITIONS: dict[State, set[State]] = {
-    State.DRAFT_INTENT: {State.FACTS_RESOLVED, State.FAILED, State.CANCELLED},
-    State.FACTS_RESOLVED: {State.SCRIPT_READY, State.FAILED, State.CANCELLED},
-    State.SCRIPT_READY: {State.STORYBOARD_READY, State.FAILED, State.CANCELLED},
+    # 下列状态会花钱(事实采集/脚本/版式的 LLM 调用、门禁 A 的 TTS 合成),
+    # 额度不够时都可以就地转入 PAUSED_BUDGET。
+    State.DRAFT_INTENT: {State.FACTS_RESOLVED, State.PAUSED_BUDGET, State.FAILED, State.CANCELLED},
+    State.FACTS_RESOLVED: {State.SCRIPT_READY, State.PAUSED_BUDGET, State.FAILED, State.CANCELLED},
+    State.SCRIPT_READY: {State.STORYBOARD_READY, State.PAUSED_BUDGET, State.FAILED, State.CANCELLED},
     State.STORYBOARD_READY: {State.GATE_A, State.FAILED, State.CANCELLED},
-    State.GATE_A: {State.ASSETS_READY, State.SCRIPT_READY, State.STORYBOARD_READY, State.FAILED, State.CANCELLED},
+    State.GATE_A: {State.ASSETS_READY, State.SCRIPT_READY, State.STORYBOARD_READY,
+                   State.PAUSED_BUDGET, State.FAILED, State.CANCELLED},
     State.ASSETS_READY: {State.PROMPTS_READY, State.FAILED, State.CANCELLED},
     State.PROMPTS_READY: {State.DRAFT_RENDERING, State.FAILED, State.CANCELLED},
     State.DRAFT_RENDERING: {State.GATE_B, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
@@ -56,9 +59,12 @@ TRANSITIONS: dict[State, set[State]] = {
     State.FINAL_RENDERING: {State.QA_PASSED, State.GATE_B, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
     State.QA_PASSED: {State.COMPOSING, State.FAILED, State.CANCELLED},
     State.COMPOSING: {State.DONE, State.FAILED, State.CANCELLED},
-    # 以下状态可被用户从任意阶段重置或恢复
+    # 配额暂停后要能回到**暂停前的那个状态**:暂停前在事实采集,提额后
+    # 接着采事实,而不是跳到渲染。(暂停前的状态记在 projects.resume_state)
     State.PAUSED_BUDGET: {
-        State.DRAFT_RENDERING, State.GATE_B, State.FINAL_RENDERING, State.CANCELLED,
+        State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.GATE_A,
+        State.DRAFT_RENDERING, State.GATE_B, State.FINAL_RENDERING,
+        State.CANCELLED,
     },
     State.FAILED: {
         State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY, State.GATE_A,

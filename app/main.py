@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -785,6 +786,40 @@ def concept_style_set(project_id: str, payload: ConceptStyleRequest):
         return orchestrator.set_concept_style(project_id, payload.style)
     except orchestrator.PipelineError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+class BudgetRequest(BaseModel):
+    budget: float
+
+
+@app.patch("/api/projects/{project_id}/budget")
+def set_project_budget(project_id: str, payload: BudgetRequest):
+    """改项目的等效用量上限;项目若正因配额暂停,顺带恢复到暂停前的状态。"""
+    try:
+        return orchestrator.set_budget(project_id, payload.budget)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/project/{project_id}/budget")
+async def project_budget_form(project_id: str, request: Request):
+    """项目页上的"提额并继续"表单。
+
+    用 urlencoded 表单提交(普通 HTML form),所以**零 JS**。表单自己
+    解析,不用 Starlette 的 `request.form()` —— 那个硬依赖
+    python-multipart,而本项目不需要为了一个数字输入框多装一个包。
+    """
+    body = (await request.body()).decode("utf-8", "replace")
+    values = dict(parse_qsl(body))
+    try:
+        budget = float(values.get("budget") or 0)
+    except (TypeError, ValueError):
+        budget = 0.0
+    try:
+        orchestrator.set_budget(project_id, budget)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return RedirectResponse(f"/project/{project_id}", status_code=303)
 
 
 @app.get("/api/projects/{project_id}/events")

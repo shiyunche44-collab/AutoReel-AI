@@ -272,6 +272,11 @@ def _patch_gate(monkeypatch, blockers):
                         lambda pid: [_seg(0, "开场", "23.35万起,这价格不像电车。")])
     monkeypatch.setattr(orchestrator, "_sync_storyboard",
                         lambda pid, segments: [_spec(0, segments[0].text)])
+    # 门禁 A 放行时要合成旁白,那一步会先**预留配额额度**。这里测的是
+    # 门禁本身的放行逻辑,不是账本 —— 把额度这一层放行掉。
+    monkeypatch.setattr(orchestrator.db, "reserve_spend", lambda *a, **k: True)
+    monkeypatch.setattr(orchestrator.db, "commit_spend", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator.db, "release_spend", lambda *a, **k: None)
     return orchestrator
 
 

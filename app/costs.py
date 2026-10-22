@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Any, Iterator
 
 from . import config
 
@@ -115,3 +117,100 @@ def default_budget_for(duration: int) -> float:
     """按时长给出一个宽松的默认节流阈值。"""
     est = estimate_explainer(duration)
     return round(max(config.DEFAULT_QUOTA_BUDGET, est["with_retry"] * 1.5), 2)
+
+
+# --------------------------------------------------------------------------
+# 项目级配额账本
+# --------------------------------------------------------------------------
+#: 各阶段在**调用之前**要预留的额度(等效美元)。
+#:
+#: 预留值宁可取高:估高了顶多提前触发暂停,估低了就拦不住。
+STAGE_RESERVE: dict[str, float] = {
+    # 事实抽取:结构化 LLM 一次,外加可能的二次整理
+    "facts": round(LLM_CALL_PRICE * 2, 4),
+    # 脚本生成:一次长输入长输出的结构化调用
+    "script": LLM_CALL_PRICE,
+    # 逐拍版式:一次
+    "beats": LLM_CALL_PRICE,
+}
+
+#: 素材池打标签的预留视觉调用数(每台车一次性)
+LIBRARY_RESERVE_VLM_CALLS = 60
+
+
+def stage_reserve(stage: str, *, chars: int = 0) -> float:
+    """某个阶段开始前要预留的额度。"""
+    if stage == "tts":
+        return round(estimate_tts(int(chars)) + MUSIC_PRICE, 4)
+    if stage == "library":
+        return round(estimate_library(LIBRARY_RESERVE_VLM_CALLS), 4)
+    return round(STAGE_RESERVE.get(stage, 0.0), 4)
+
+
+def reserve_project(project_id: str, amount: float) -> float:
+    """为项目预留额度。超限抛 `BudgetExceeded`。返回预留的额度。"""
+    from . import db  # 延迟导入:db 不依赖 costs,避免循环
+
+    amount = max(0.0, float(amount))
+    if amount <= 0:
+        return 0.0
+    row = db.get_project(project_id) or {}
+    if not db.reserve_spend(project_id, amount):
+        raise BudgetExceeded(
+            float(row.get("spent_cost") or 0.0) + amount,
+            float(row.get("quota_budget") or 0.0),
+        )
+    return amount
+
+
+def commit_project(project_id: str, reserved: float, actual: float) -> None:
+    """结算:释放预留,加上实际花费。"""
+    from . import db
+
+    db.commit_spend(project_id, reserved, actual)
+
+
+def release_project(project_id: str, reserved: float) -> None:
+    """调用失败:释放预留,不记账。"""
+    from . import db
+
+    db.release_spend(project_id, reserved)
+
+
+class _Reservation:
+    """在途调用的预留额度。"""
+
+    def __init__(self, project_id: str, reserved: float) -> None:
+        self.project_id = project_id
+        self.reserved = reserved
+        self._settled = False
+
+    def actual(self, amount: float) -> None:
+        """修正实际花费(比预留多或少都可能)。"""
+        self._settled = True
+        commit_project(self.project_id, self.reserved, amount)
+
+
+@contextmanager
+def project_spend(project_id: str, estimated: float) -> Iterator[_Reservation]:
+    """预留 → 调用 → 结算。
+
+    用法::
+
+        with costs.project_spend(pid, costs.stage_reserve("tts", chars=n)) as spend:
+            result = synthesize()
+            spend.actual(costs.explainer_spent(result))
+
+    调用抛异常 → 释放预留、不记账;正常返回 → 按预留值结算
+    (没调 `actual()` 的话)。超限 → 抛 `BudgetExceeded`,**调用不会发生**。
+    """
+    reserved = reserve_project(project_id, estimated)
+    spend = _Reservation(project_id, reserved)
+    try:
+        yield spend
+    except BaseException:
+        release_project(project_id, reserved)
+        raise
+    else:
+        if not spend._settled:
+            commit_project(project_id, reserved, reserved)

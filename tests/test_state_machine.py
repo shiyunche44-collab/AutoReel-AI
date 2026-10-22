@@ -135,11 +135,34 @@ def test_failed_can_resume_from_checkpoint():
     assert can_transition(State.FAILED, State.SCRIPT_READY)
 
 
-def test_paused_budget_resumes_generation_only():
+def test_paused_budget_resumes_the_state_it_came_from():
+    """配额暂停后要能回到**暂停前的那个状态**。
+
+    之前 PAUSED_BUDGET 只能回 DRAFT_RENDERING / FINAL_RENDERING,
+    "不能从配额暂停直接跳到别的阶段"。现在暂停前在哪个阶段,提额后
+    就从哪个阶段继续 —— 暂停前在事实采集,接着采事实,而不是跳到渲染。
+    暂停前在哪个状态记在 `projects.resume_state`。
+    """
     assert can_transition(State.PAUSED_BUDGET, State.DRAFT_RENDERING)
     assert can_transition(State.PAUSED_BUDGET, State.FINAL_RENDERING)
-    # 不能从配额暂停直接跳到别的阶段
-    assert not can_transition(State.PAUSED_BUDGET, State.SCRIPT_READY)
+    assert can_transition(State.PAUSED_BUDGET, State.GATE_A)
+    assert can_transition(State.PAUSED_BUDGET, State.FACTS_RESOLVED)
+    assert can_transition(State.PAUSED_BUDGET, State.SCRIPT_READY)
+    assert can_transition(State.PAUSED_BUDGET, State.DRAFT_INTENT)
+    # 合成与完成是终点,不该从配额暂停跳过去
+    assert not can_transition(State.PAUSED_BUDGET, State.COMPOSING)
+    assert not can_transition(State.PAUSED_BUDGET, State.DONE)
+
+
+def test_budget_can_pause_every_spending_stage():
+    """会花钱的阶段都必须能就地转入 PAUSED_BUDGET。
+
+    花钱的阶段:事实采集(DRAFT_INTENT)、脚本生成(FACTS_RESOLVED)、
+    逐拍版式(SCRIPT_READY)、门禁 A 的 TTS 合成(GATE_A)。
+    漏掉任何一个,那个阶段的超支就拦不住。
+    """
+    for st in (State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.GATE_A):
+        assert can_transition(st, State.PAUSED_BUDGET), f"{st} 该能转入配额暂停"
 
 
 def test_cancel_available_from_working_states():

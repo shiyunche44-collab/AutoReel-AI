@@ -100,6 +100,15 @@
       <button class="btn btn-ghost" type="button" data-goto="output">{{ m.icon("play", "i-sm") }}预览</button>
       <button class="btn btn-ghost" type="button" id="btn-publish">{{ m.icon("external", "i-sm") }}一键发布</button>
       <a class="btn btn-primary btn-lg" href="/api/projects/{{ p.id }}/download">{{ m.icon("download") }}下载 MP4</a>
+    {% elif p.state == 'PAUSED_BUDGET' %}
+      {# 额度用尽:给一个"提额并继续"的入口。零 JS —— 普通表单提交。 #}
+      <a class="btn btn-ghost" href="/project/{{ p.id }}/logs">{{ m.icon("file-text", "i-sm") }}查看日志</a>
+      <form class="budget-form" method="post" action="/project/{{ p.id }}/budget">
+        <span class="subtle small">等效用量上限</span>
+        <input class="input" type="number" name="budget" step="0.5" min="0"
+               value="{{ '%.2f' % p.quota_budget }}" aria-label="等效用量上限">
+        <button class="btn btn-primary" type="submit">{{ m.icon("refresh", "i-sm") }}提额并继续</button>
+      </form>
     {% elif meta.group == 'error' %}
       <a class="btn btn-ghost" href="/project/{{ p.id }}/logs">{{ m.icon("file-text", "i-sm") }}查看日志</a>
       <button class="btn btn-primary" id="btn-advance" type="button">{{ m.icon("refresh", "i-sm") }}重试推进</button>

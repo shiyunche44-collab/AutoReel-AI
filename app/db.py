@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS projects (
     state_reason    TEXT,
     quota_budget    REAL NOT NULL DEFAULT 40,
     spent_cost      REAL NOT NULL DEFAULT 0,
+    reserved_cost   REAL NOT NULL DEFAULT 0,
+    resume_state    TEXT NOT NULL DEFAULT '',
     est_cost        REAL NOT NULL DEFAULT 0,
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL
@@ -229,6 +231,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN thesis TEXT NOT NULL DEFAULT ''")
     if "subjects" not in _column_names(conn, "projects"):
         conn.execute("ALTER TABLE projects ADD COLUMN subjects TEXT NOT NULL DEFAULT '[]'")
+    if "reserved_cost" not in _column_names(conn, "projects"):
+        # 在途调用的预留额度。真实花费只有调用完才知道,所以先把预估
+        # 额度挂上,调用完再按实际结算 —— "预留 → 结算"能真正卡住超支的
+        # 前提(单看已花费,一个并发调用就可能把额度冲破)。
+        conn.execute("ALTER TABLE projects ADD COLUMN reserved_cost REAL NOT NULL DEFAULT 0")
+    if "resume_state" not in _column_names(conn, "projects"):
+        # 因配额暂停时,从哪个状态暂停的 —— 提额后要回到那里。
+        conn.execute("ALTER TABLE projects ADD COLUMN resume_state TEXT NOT NULL DEFAULT ''")
 
 
 def init_db() -> None:
@@ -401,7 +411,8 @@ def project_subjects(row: dict[str, Any] | None) -> list[dict[str, str]]:
 _PROJECT_COLUMNS = frozenset({
     "title", "subject", "category", "theme", "angle", "thesis", "subjects",
     "duration", "shot_count", "narration_mode", "state", "state_reason",
-    "quota_budget", "spent_cost", "est_cost", "created_at", "updated_at",
+    "quota_budget", "spent_cost", "reserved_cost", "resume_state", "est_cost",
+    "created_at", "updated_at",
 })
 
 
@@ -454,6 +465,57 @@ def cas_state(project_id: str, expected: str, new: str, *,
     with connect() as own:
         cur = own.execute(sql, args)
         return cur.rowcount > 0
+
+
+# --------------------------------------------------------------------------
+# 配额账本:预留 → 结算
+# --------------------------------------------------------------------------
+def reserve_spend(project_id: str, amount: float) -> bool:
+    """预留额度。只有"已花费 + 在途预留 + 本次预留"不超过上限时才成功。
+
+    真实花费只有调用完才知道,所以调用**之前**先把预估额度挂上:
+
+    - 不挂就直接看已花费 —— 一次调用就能把额度冲破;
+    - 挂了才知道"这个项目已经花到哪、还能不能再花",多个在途调用也
+      不会各自都觉得"我还够"。
+
+    返回 False 表示超限(调用方据此中止,不该真的去调)。
+    """
+    init_db()
+    now = time.time()
+    sql = (
+        "UPDATE projects SET reserved_cost = reserved_cost + :amount, updated_at = :now "
+        "WHERE id = :id AND (spent_cost + reserved_cost + :amount) <= quota_budget"
+    )
+    with connect() as conn:
+        cur = conn.execute(sql, {"id": project_id, "amount": max(0.0, float(amount)),
+                                  "now": now})
+        return cur.rowcount > 0
+
+
+def commit_spend(project_id: str, reserved: float, actual: float) -> None:
+    """结算:释放预留,加上实际花费。"""
+    init_db()
+    now = time.time()
+    sql = (
+        "UPDATE projects SET spent_cost = spent_cost + :actual, "
+        "reserved_cost = MAX(0, reserved_cost - :reserved), updated_at = :now "
+        "WHERE id = :id"
+    )
+    with connect() as conn:
+        conn.execute(sql, {"id": project_id, "reserved": max(0.0, float(reserved)),
+                           "actual": max(0.0, float(actual)), "now": now})
+
+
+def release_spend(project_id: str, reserved: float) -> None:
+    """调用失败:释放预留,不记账。"""
+    init_db()
+    now = time.time()
+    sql = ("UPDATE projects SET reserved_cost = MAX(0, reserved_cost - :reserved), "
+           "updated_at = :now WHERE id = :id")
+    with connect() as conn:
+        conn.execute(sql, {"id": project_id, "reserved": max(0.0, float(reserved)),
+                           "now": now})
 
 
 # --------------------------------------------------------------------------
