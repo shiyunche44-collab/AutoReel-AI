@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -233,7 +234,8 @@ def roundup_subjects(payload: ProjectCreate, theme) -> list[dict[str, str]]:
 EXPLAINER_BEATS_PER_TICK = 4
 
 
-def advance(project_id: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
+def advance(project_id: str, *, confirmed: bool = False, force: bool = False,
+            stop_event: threading.Event | None = None) -> dict[str, Any]:
     """推进一个步骤。返回本次动作的描述。
 
     `confirmed=True` 表示"人工门禁已通过",允许越过 GATE_A/GATE_B。
@@ -241,6 +243,10 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False) ->
     advance(),若它能自行放行门禁,两道人工审核就形同虚设。
 
     `force=True` 表示门禁 A 的 lint error 明知故犯仍然放行(只给显式确认用)。
+
+    `stop_event`:停机信号(跨线程可见)。渲染时在**每拍之间**检查它 ——
+    手头这一拍做完就收手,剩下的拍留到下次。服务被收走时就不会留下
+    半截 mp4,重启后从断点接着跑。
 
     **本函数自己是加锁的那一层**:所有会写项目的入口都从这里过一遍,
     保证同一时刻只有一个执行流在推进这个项目(见 `pipeline/locks.py`)。
@@ -253,7 +259,8 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False) ->
             return {"state": row.get("state") or "", "action": "项目正在推进中",
                     "busy": True, "waiting": False}
         try:
-            return _advance(project_id, confirmed=confirmed, force=force)
+            return _advance(project_id, confirmed=confirmed, force=force,
+                            stop_event=stop_event)
         except costs.BudgetExceeded as exc:
             # 额度用尽:不是错误,是"该停"。进 PAUSED_BUDGET,提额后可恢复。
             return _pause_for_budget(project_id, exc)
@@ -303,7 +310,8 @@ def set_budget(project_id: str, budget: float) -> dict[str, Any]:
         return out
 
 
-def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -> dict[str, Any]:
+def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
+             stop_event: threading.Event | None = None) -> dict[str, Any]:
     """`advance` 的临界区部分。调用方必须已持有项目锁。"""
     project = db.get_project(project_id)
     if not project:
@@ -467,7 +475,8 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False) -
     if state == State.DRAFT_RENDERING:
         specs = _specs(project_id)
         result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
-                                          limit=EXPLAINER_BEATS_PER_TICK, subjects=names)
+                                          limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
+                                          should_stop=(stop_event.is_set if stop_event else None))
         if result["stage_complete"]:
             _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
             return {"state": str(State.GATE_B), "waiting": True, **result}

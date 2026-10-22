@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import mimetypes
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -131,7 +132,7 @@ BACKOFF_MAX = 300.0
 
 
 class Scheduler:
-    """扫描处于生成态的项目并推进一次。
+    """扫描处于生成态的项目并推进。
 
     ⚠️ **推进是同步的重活**:ffmpeg 子进程、TTS 与 LLM 的 HTTP 调用。
     之前直接写在 `async def sweep()` 里,整段跑在事件循环线程上 ——
@@ -139,8 +140,20 @@ class Scheduler:
     健康检查、状态轮询、页面加载全部无响应。前端每 5 秒轮询一次状态,
     用户看到的就是转圈卡死。
 
-    现在丢进**专用线程池**,事件循环只负责调度。HTTP 请求由 anyio
-    自己的线程池处理,两边互不干扰。
+    **并发模型:扫描与推进分开。**
+
+    - **扫描**(每 `SCHEDULER_INTERVAL` 一轮):把处于自动态的项目**入队**,
+      按 id 去重 —— 同一个项目不会在队列里出现两次。
+    - **worker**(`PIPELINE_CONCURRENCY` 个):从队列取项目 → try-lock →
+      在专用线程池里跑 `advance()`。
+
+    于是:同一时刻**不同项目**可以并行渲染,而**同一项目**永远只有一个
+    写入者(项目锁保证)。队列化天然是轮转的 —— 一个项目渲 4 拍要 50 秒,
+    这段时间别的项目照跑,不会出现"长项目把其它项目全饿死"。
+
+    **优雅停机**:`stop()` 先给一个 `threading.Event`(跨线程可见),
+    `advance()` 在**每拍之间**检查它 —— 手头这一拍做完就收手,剩下的拍
+    留到下次。于是重启后从断点接着跑,而不是留下半截 mp4。
     """
 
     def __init__(self) -> None:
@@ -155,6 +168,16 @@ class Scheduler:
         self._failures: dict[str, int] = {}
         #: project_id -> 下次可重试的时刻(monotonic)
         self._retry_after: dict[str, float] = {}
+        #: 待推进的项目队列
+        self._queue: asyncio.Queue[str] | None = None
+        #: 已入队(含正在处理的)—— 去重靠它
+        self._queued: set[str] = set()
+        #: 正在推进的项目
+        self._running: set[str] = set()
+        #: worker 任务
+        self._workers: list[asyncio.Task] = []
+        #: 跨线程的停机信号:渲染中的拍做完就收手
+        self._drain = threading.Event()
 
     def _executor(self) -> ThreadPoolExecutor:
         """取(必要时重建)推进用的线程池。"""
@@ -164,75 +187,147 @@ class Scheduler:
                 thread_name_prefix="pipeline")
         return self._pool
 
+    # ---- 扫描 ----
     async def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                await self.sweep()
-            except Exception:  # noqa: BLE001 - 调度循环不能因单项目异常而退出
-                log.exception("调度循环异常")
+                self._scan()
+            except Exception:  # noqa: BLE001 - 扫描不能因单个项目出错而停
+                log.exception("扫描项目状态失败")
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=SCHEDULER_INTERVAL)
             except asyncio.TimeoutError:
                 continue
 
-    async def sweep(self) -> None:
-        """推进所有处于自动推进态的项目一次。"""
-        rows = db.list_projects(limit=50)
-        loop = asyncio.get_running_loop()
-        for row in rows:
+    def _scan(self) -> None:
+        """把处于自动推进态、且不在退避窗口里的项目入队。"""
+        if self._queue is None:
+            return
+        for row in db.list_projects(limit=100):
             pid = row["id"]
             if row["state"] not in AUTO_ADVANCE_STATES:
                 continue
+            if pid in self._queued or pid in self._running:
+                continue
             if time.monotonic() < self._retry_after.get(pid, 0.0):
                 continue  # 还在退避窗口里,这一轮跳过
+            self._enqueue(pid)
+
+    def _enqueue(self, pid: str) -> None:
+        """入队(去重)。"""
+        if self._queue is None or pid in self._queued:
+            return
+        self._queued.add(pid)
+        self._queue.put_nowait(pid)
+
+    # ---- worker ----
+    async def _worker(self) -> None:
+        """worker:取项目 → 推进 → 还在自动态就重新入队。"""
+        assert self._queue is not None
+        while not self._stop.is_set():
             try:
-                # 关键:推进放到线程池,事件循环不被占住
-                out = await loop.run_in_executor(self._executor(), orchestrator.advance, pid)
-            except orchestrator.PipelineError as exc:
-                # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
-                self._failures[pid] = MAX_CONSECUTIVE_FAILURES
-                log.error("推进 %s 失败(不可恢复):%s", pid, exc)
+                pid = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            self._running.add(pid)
+            requeue = False
+            try:
+                requeue = await self._advance_one(pid)
+            finally:
+                self._running.discard(pid)
+                self._queued.discard(pid)
+                try:
+                    self._queue.task_done()
+                except ValueError:
+                    pass
+            # 重新入队要等 `_queued` 里的自己被摘掉,否则去重会把它挡回去
+            if requeue:
+                self._enqueue(pid)
+
+    def _advance_call(self, pid: str) -> dict:
+        """在线程池里跑的那一下。"""
+        return orchestrator.advance(pid, stop_event=self._drain)
+
+    async def _advance_one(self, pid: str) -> bool:
+        """推进一个项目,并按失败类型分别处理。
+
+        返回 True 表示"这个项目还在自动态,应该重新入队"。
+        """
+        loop = asyncio.get_running_loop()
+        row = db.get_project(pid) or {}
+        state = str(row.get("state") or "")
+        try:
+            # 关键:推进放到线程池,事件循环不被占住
+            out = await loop.run_in_executor(self._executor(), self._advance_call, pid)
+        except orchestrator.PipelineError as exc:
+            # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
+            self._failures[pid] = MAX_CONSECUTIVE_FAILURES
+            log.error("推进 %s 失败(不可恢复):%s", pid, exc)
+            db.update_project(pid, state=str(State.FAILED),
+                              state_reason=f"后台推进失败:{exc}")
+            db.add_event(pid, str(State.FAILED), src=state,
+                         reason=f"后台推进失败:{exc}")
+            return False
+        except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
+            n = self._failures.get(pid, 0) + 1
+            self._failures[pid] = n
+            wait = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** (n - 1)))
+            self._retry_after[pid] = time.monotonic() + wait
+            log.exception("推进 %s 失败(第 %d 次,%.0fs 后重试)", pid, n, wait)
+            db.add_event(pid, state, src=state,
+                         reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
+                                f"{type(exc).__name__}: {exc}")
+            if n >= MAX_CONSECUTIVE_FAILURES:
                 db.update_project(pid, state=str(State.FAILED),
-                                  state_reason=f"后台推进失败:{exc}")
-                db.add_event(pid, str(State.FAILED), src=row["state"],
-                             reason=f"后台推进失败:{exc}")
-                continue
-            except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
-                n = self._failures.get(pid, 0) + 1
-                self._failures[pid] = n
-                wait = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** (n - 1)))
-                self._retry_after[pid] = time.monotonic() + wait
-                log.exception("推进 %s 失败(第 %d 次,%.0fs 后重试)", pid, n, wait)
-                db.add_event(pid, row["state"], src=row["state"],
-                             reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
-                                    f"{type(exc).__name__}: {exc}")
-                if n >= MAX_CONSECUTIVE_FAILURES:
-                    db.update_project(pid, state=str(State.FAILED),
-                                      state_reason=f"连续 {n} 次推进失败:{exc}")
-                    db.add_event(pid, str(State.FAILED), src=row["state"],
-                                 reason=f"连续 {n} 次推进失败")
-                continue
-            # 成功(或被别的执行流占着)→ 清掉失败计数
-            self._failures.pop(pid, None)
-            self._retry_after.pop(pid, None)
-            if isinstance(out, dict) and out.get("busy"):
-                log.debug("项目 %s 正被别的执行流推进,本轮让出", pid)
+                                  state_reason=f"连续 {n} 次推进失败:{exc}")
+                db.add_event(pid, str(State.FAILED), src=state,
+                             reason=f"连续 {n} 次推进失败")
+            return False
+        # 成功 → 清掉失败计数
+        self._failures.pop(pid, None)
+        self._retry_after.pop(pid, None)
+        if isinstance(out, dict) and out.get("busy"):
+            log.debug("项目 %s 正被别的执行流推进,本轮让出", pid)
+            return False
+        # 还在自动态 → 该重新入队(排到队尾,给别的项目让出位置)
+        now = db.get_project(pid) or {}
+        return str(now.get("state") or "") in AUTO_ADVANCE_STATES
+
+    # ---- 兼容旧调用 ----
+    async def sweep(self) -> None:
+        """扫描一轮(历史上是"直接推进一轮",现在是"入队,交给 worker")。"""
+        self._scan()
 
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._stop.clear()
+            self._drain.clear()
             self._executor()  # 池在启动时就建好
+            self._queue = asyncio.Queue()
+            self._queued.clear()
+            self._running.clear()
             self._task = asyncio.create_task(self._run())
+            self._workers = [
+                asyncio.create_task(self._worker())
+                for _ in range(max(1, config.PIPELINE_CONCURRENCY))
+            ]
 
     async def stop(self) -> None:
-        self._stop.set()
+        self._stop.set()   # 停止扫描与 worker
+        self._drain.set()  # 让在途的渲染在**拍之间**收手
+        for w in self._workers:
+            try:
+                await asyncio.wait_for(asyncio.shield(w), timeout=60)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        self._workers.clear()
         if self._task:
             self._task.cancel()
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
-        # 不 wait:正在跑的那一拍让它跑完(它写的是自己那一拍的文件)
+        # 不 wait:在途的那一拍让它跑完(它写的是自己那一拍的文件)
         pool, self._pool = self._pool, None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
@@ -609,6 +704,8 @@ def health():
         "interval": SCHEDULER_INTERVAL,
         "failures": dict(scheduler._failures),
         "busy_projects": locks_busy_ids(),
+        "queued": sorted(scheduler._queued - scheduler._running),
+        "running": sorted(scheduler._running),
     }
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size()
@@ -900,6 +997,9 @@ def status(project_id: str):
         "stage": stage,
         "counts": counts,
         "total": len(shots),
+        # 并行渲染:这个项目现在是在排队还是在跑
+        "queued": project_id in scheduler._queued and project_id not in scheduler._running,
+        "running": project_id in scheduler._running,
     }
 
 

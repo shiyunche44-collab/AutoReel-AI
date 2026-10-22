@@ -1317,11 +1317,15 @@ def _shot_status(project_id: str, idx: int) -> str:
 
 def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                    profile: CategoryProfile, limit: int = 3,
-                   subjects: Sequence[str] | None = None) -> dict[str, Any]:
+                   subjects: Sequence[str] | None = None,
+                   should_stop: Any = None) -> dict[str, Any]:
     """渲染还没出片的拍(每次最多 `limit` 拍,后台循环反复调用)。
 
     产物写成 draft 档 succeeded —— 门禁 B 的审片页按草稿档展示。
     `subjects`:多车横评车单 —— 每拍按 `beat_subject` 取自己那台车的素材,绝不借别的车的。
+    `should_stop`:可选的回调,返回 True 就**在拍与拍之间收手**。服务停机
+    时用它把手头这一拍做完就停下 —— 剩下的拍留到下次,而不是被砍在
+    半截(渲染到一半的 mp4 是坏的)。
     """
     subjects = list(subjects or [])
     rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
@@ -1337,6 +1341,10 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     style = concept_style_of(project_id)
     done, errors = [], []
     for s in todo:
+        # 停机信号:在**拍与拍之间**收手。手头这一拍做完就停,剩下的
+        # 留到下次 —— 正在渲的 mp4 被砍在中间是坏的。
+        if should_stop is not None and should_stop():
+            break
         # 逐拍重读一次状态。todo 是开头那份快照 —— 若这一拍在快照之后
         # 已经被渲好了(succeeded),再渲一遍会与它抢同一个输出文件,
         # 产出半截 mp4。重拍(置回 pending)不受影响:那样本来就该重渲。

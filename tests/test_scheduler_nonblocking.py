@@ -60,7 +60,9 @@ def test_event_loop_stays_responsive_during_render(store, monkeypatch):
     monkeypatch.setattr(main.orchestrator, "advance", slow_advance)
 
     async def scenario() -> float:
-        task = asyncio.create_task(main.scheduler.sweep())
+        # 直接驱动"推进一个项目"这一步(扫描与 worker 分离之后,
+        # 真正跑 advance 的是 worker,这里测的就是它那一段)。
+        task = asyncio.create_task(main.scheduler._advance_one("p_sched"))
         # 等 advance 真的进去了
         for _ in range(100):
             if entered.is_set():
@@ -97,7 +99,7 @@ def test_health_endpoint_answers_while_rendering(store, monkeypatch):
 
     client = TestClient(main.app)
     async def scenario() -> float:
-        task = asyncio.create_task(main.scheduler.sweep())
+        task = asyncio.create_task(main.scheduler._advance_one("p_sched"))
         for _ in range(100):
             if entered.is_set():
                 break

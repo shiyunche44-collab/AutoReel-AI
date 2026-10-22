@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -43,7 +44,8 @@ def _project(pid: str = "p_fail", state: str = "DRAFT_RENDERING") -> dict:
 
 
 def _sweep() -> None:
-    asyncio.run(main.scheduler.sweep())
+    """推进一次(扫描与 worker 分离之后,真正跑 advance 的是 worker)。"""
+    asyncio.run(main.scheduler._advance_one("p_fail"))
 
 
 def test_transient_failure_keeps_state_and_records_event(store, monkeypatch):
@@ -96,8 +98,8 @@ def test_repeated_transient_failures_eventually_mark_failed(store, monkeypatch):
     assert "连续" in (row["state_reason"] or "")
 
 
-def test_backoff_window_skips_the_project(store, monkeypatch):
-    """退避窗口内不再重试这个项目。"""
+def test_backoff_window_blocks_requeue(store, monkeypatch):
+    """退避窗口内不该把这个项目排进队列。"""
     store.create_project(_project())
     calls = {"n": 0}
 
@@ -106,10 +108,20 @@ def test_backoff_window_skips_the_project(store, monkeypatch):
         raise RuntimeError("抖")
 
     monkeypatch.setattr(main.orchestrator, "advance", boom)
-    _sweep()
+    _sweep()  # 推进一次 → 失败,进退避窗口
     assert calls["n"] == 1
-    _sweep()  # 还在退避窗口里,不该再调
-    assert calls["n"] == 1, "退避窗口内不该重复调用"
+    assert main.scheduler._retry_after.get("p_fail", 0) > time.monotonic()
+
+    # 扫描:还在退避窗口里,不该排进队列
+    main.scheduler._queue = asyncio.Queue()
+    main.scheduler._queued.clear()
+    main.scheduler._scan()
+    assert "p_fail" not in main.scheduler._queued
+
+    # 退避过去之后就该排进队列
+    main.scheduler._retry_after.pop("p_fail", None)
+    main.scheduler._scan()
+    assert "p_fail" in main.scheduler._queued
 
 
 def test_success_clears_failure_counters(store, monkeypatch):

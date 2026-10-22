@@ -469,7 +469,35 @@ pending ──► uploading ──► submitted ──► published
 
 ---
 
+## 并行渲染
+
+后台调度器把处于自动态(逐拍渲染 / 转成片 / 合成)的项目排进队列,
+由 `PIPELINE_CONCURRENCY` 个 worker 推进:
+
+- **同一项目**同一时刻只有一个写入者 —— 门禁确认、重拍、保存脚本这些
+  人工操作与后台推进撞上时,人工操作会收到"该项目正在推进中"(HTTP 409),
+  不会两边一起改同一个文件;
+- **不同项目**可以并行渲染。渲完一批拍若仍在渲染态,会重新入队(排到
+  队尾),所以一个长项目不会把其它项目饿死。
+
+```bash
+# .env
+PIPELINE_CONCURRENCY=1   # 同时推进几个项目
+```
+
+**内存是硬约束**:峰值 Chrome 进程数 ≈ `PIPELINE_CONCURRENCY` ×
+`MOTION_WORKERS`(每个约 256MB),磁盘也会被成倍放大(每渲一拍拍就多几十
+MB)。机器内存吃紧就保持 1,确认有余量再往上调。`data/` 的体积可以在
+`/api/health` 的 `disk` 字段看到,超阈值会在首页提示。
+
+服务被收走时(托管后台任务有 1 小时上限),渲染会在**拍与拍之间**收手:
+手头这一拍做完就停,剩下的拍留到下次,重启后从断点接着跑 —— 不会留下
+半截 mp4。
+
+---
+
 ## 品类与内容方向
+
 
 品类配置在 `app/categories/profiles/`,一个品类一份 YAML(都是 `track: explainer` 横屏解说):
 
@@ -610,6 +638,32 @@ python -m tests.verify_number_grounding     # 核对脚本数字是否真在它�
 分发域的测试(`test_publish_db` / `test_publish_metadata` / `test_publish_service` /
 `test_metrics_parse` / `test_vertical`)**一律不发真稿**:发布路径走 fake adapter,
 指标解析走样例 JSON。
+
+### 前端工程化工具链
+
+前端代码本身是**零依赖、零构建**的原生 ES Module(浏览器直接跑,不打包不转译)。
+根目录的 npm 工具链只用来检查,不会进产物:
+
+```bash
+npm install                # 装 vitest / eslint / prettier / typescript
+npm run check              # 一条命令跑完:lint + 类型检查 + 单测
+npm run lint               # eslint(app/web/static/js)
+npm run typecheck          # tsc --noEmit(app/web/jsconfig.json,checkJs)
+npm test                   # vitest:60 条前端单测(tests/web/)
+npm run format             # prettier 统一格式
+```
+
+- **单测**用 vitest + jsdom,测的是容易悄悄坏掉的地方:`h()` 造元素、
+  `withLoading()` 的防重复提交、`relTime()` 的时间档位、`api` 的错误处理
+  (422 的 `detail` 是数组时拼成一句话)、toast 的堆叠上限、弹窗的确认/取消。
+- **类型检查**用 JSDoc + `checkJs`,不加 TS 也不加构建步骤。它已经抓出过真 bug:
+  `project.js` 的 `act()` 忘了 `return`,导致"门禁 A 被 lint 拦下 → 仍然继续"
+  的二次确认永远不触发,用户被卡死 —— 现在类型检查会直接报出来。
+- **CI**(.github/workflows/ci.yml)跑两件事:后端 `pytest`、前端 `npm run check`。
+  Python 侧用 `requirements-ci.txt`(本机预装的包在 CI 上要显式列出来)。
+
+> 并行跑两个 pytest 会互相污染真实的 `data/` 目录,预算那类用共享状态的测试会假失败。
+> 要并行请给每个进程单独的 `DATA_DIR`。
 
 ---
 
