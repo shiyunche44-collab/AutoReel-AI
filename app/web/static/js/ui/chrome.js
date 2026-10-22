@@ -15,16 +15,20 @@ function initTheme() {
   btn.addEventListener('click', () => {
     const next = currentTheme() === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = next;
-    try { localStorage.setItem(THEME_KEY, next); } catch { /* 隐私模式下写不了,忽略 */ }
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* 隐私模式下写不了,忽略 */
+    }
   });
 }
 
 function initPlanPill() {
   const pill = $('#plan-pill');
   if (!pill) return;
-  const exp = new Date(pill.dataset.expires + 'T23:59:59');
+  const exp = new Date(`${pill.dataset.expires || ''}T23:59:59`);
   if (Number.isNaN(exp.getTime())) return;
-  const days = Math.ceil((exp - Date.now()) / 86400000);
+  const days = Math.ceil((exp.getTime() - Date.now()) / 86400000);
   const label = pill.querySelector('span');
   pill.classList.remove('tone-neutral');
   if (days < 0) {
@@ -57,5 +61,8 @@ export function paintBadge(el, state) {
 export function initChrome() {
   initTheme();
   initPlanPill();
-  if (isMac) $$('.kbd').forEach((k) => { k.textContent = k.textContent.replace('Ctrl ', '⌘'); });
+  if (isMac)
+    $$('.kbd').forEach((k) => {
+      k.textContent = k.textContent.replace('Ctrl ', '⌘');
+    });
 }

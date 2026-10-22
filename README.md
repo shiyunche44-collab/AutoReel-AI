@@ -663,13 +663,16 @@ npm install                # 装 vitest / eslint / prettier / typescript
 npm run check              # 一条命令跑完:lint + 类型检查 + 单测
 npm run lint               # eslint(app/web/static/js)
 npm run typecheck          # tsc --noEmit(app/web/jsconfig.json,checkJs)
-npm test                   # vitest:60 条前端单测(tests/web/)
+npm test                   # vitest:75 条前端单测(tests/web/)
 npm run format             # prettier 统一格式
 ```
 
 - **单测**用 vitest + jsdom,测的是容易悄悄坏掉的地方:`h()` 造元素、
   `withLoading()` 的防重复提交、`relTime()` 的时间档位、`api` 的错误处理
-  (422 的 `detail` 是数组时拼成一句话)、toast 的堆叠上限、弹窗的确认/取消。
+  (422 的 `detail` 是数组时拼成一句话)、toast 的堆叠上限、弹窗的确认/取消、
+  脚本"有没有未保存的修改"(判断错会静默丢用户的编辑)、
+  视频单拍 404 时退回草稿(成片合成后单拍会被清掉)、三类筛选判断。
+  为了能测,这些判断从页面脚本里抽到了 `app/web/static/js/ui/{filters,dirty,media}.js`。
 - **类型检查**用 JSDoc + `checkJs`,不加 TS 也不加构建步骤。它已经抓出过真 bug:
   `project.js` 的 `act()` 忘了 `return`,导致"门禁 A 被 lint 拦下 → 仍然继续"
   的二次确认永远不触发,用户被卡死 —— 现在类型检查会直接报出来。

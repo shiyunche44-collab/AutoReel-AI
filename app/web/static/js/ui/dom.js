@@ -7,7 +7,11 @@ export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel
 export function readJSON(id, fallback = {}) {
   const el = document.getElementById(id);
   if (!el) return fallback;
-  try { return JSON.parse(el.textContent); } catch { return fallback; }
+  try {
+    return JSON.parse(el.textContent);
+  } catch {
+    return fallback;
+  }
 }
 
 /** 引用 _sprite.html 里的图标。 */
@@ -66,7 +70,10 @@ export function relTime(ts) {
 
 export function debounce(fn, ms = 150) {
   let t;
-  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
 }
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

@@ -1,5 +1,5 @@
 /* 数据看板:汇总、平台对比、作品明细、趋势折线(手写内联 SVG,零构建链)。 */
-import { $, $$, readJSON, h } from '../ui/dom.js';
+import { $, readJSON, h } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { initChrome } from '../ui/chrome.js';
 import { api } from '../api.js';
@@ -12,7 +12,9 @@ let byPlatform = DATA.by_platform || [];
 
 const NS = 'http://www.w3.org/2000/svg';
 
-function say(message, type = 'success') { toast(message, { type }); }
+function say(message, type = 'success') {
+  toast(message, { type });
+}
 
 function num(value) {
   if (value === null || value === undefined) return '—';
@@ -21,11 +23,6 @@ function num(value) {
   if (n >= 100000) return `${(n / 10000).toFixed(1)} 万`;
   if (n >= 10000) return `${(n / 10000).toFixed(2)} 万`;
   return String(n);
-}
-
-function rawNum(value) {
-  if (value === null || value === undefined) return '—';
-  return Number(value).toLocaleString('zh-CN');
 }
 
 /* ---------------------------------------------------------------------------
@@ -53,7 +50,7 @@ function lineChart(points, { width = 720, height = 200, field = 'views' } = {}) 
   }
   const min = Math.min(...vals);
   const max = Math.max(...vals);
-  const span = (max - min) || 1;
+  const span = max - min || 1;
   const x = (i) => pad.l + (i * (width - pad.l - pad.r)) / Math.max(1, points.length - 1);
   const y = (v) => height - pad.b - ((v - min) / span) * (height - pad.t - pad.b);
 
@@ -78,7 +75,10 @@ function lineChart(points, { width = 720, height = 200, field = 'views' } = {}) 
   };
   points.forEach((p, i) => {
     const v = p[field];
-    if (v === null || v === undefined) { flush(); return; }
+    if (v === null || v === undefined) {
+      flush();
+      return;
+    }
     segment.push([x(i), y(v)]);
     svg.appendChild(svgEl('circle', { cx: x(i), cy: y(v), r: 2.5, class: 'chart-dot' }));
   });
@@ -127,15 +127,20 @@ function renderPlatforms() {
     return;
   }
   for (const p of byPlatform) {
-    tbody.appendChild(h('tr', {},
-      h('td', {}, h('span', { class: 'badge tone-brand' }, p.label || p.platform)),
-      h('td', { class: 'num' }, String(p.count || 0)),
-      h('td', { class: 'num' }, String(p.published || 0)),
-      h('td', { class: 'num' }, num(p.views)),
-      h('td', { class: 'num' }, num(p.likes)),
-      h('td', { class: 'num' }, num(p.comments)),
-      h('td', { class: 'num' }, num(p.favorites)),
-      h('td', { class: 'num' }, num(p.shares))));
+    tbody.appendChild(
+      h(
+        'tr',
+        {},
+        h('td', {}, h('span', { class: 'badge tone-brand' }, p.label || p.platform)),
+        h('td', { class: 'num' }, String(p.count || 0)),
+        h('td', { class: 'num' }, String(p.published || 0)),
+        h('td', { class: 'num' }, num(p.views)),
+        h('td', { class: 'num' }, num(p.likes)),
+        h('td', { class: 'num' }, num(p.comments)),
+        h('td', { class: 'num' }, num(p.favorites)),
+        h('td', { class: 'num' }, num(p.shares)),
+      ),
+    );
   }
 }
 
@@ -149,9 +154,10 @@ function renderWorks() {
   const maxViews = Math.max(1, ...items.map((i) => Number(i.metrics?.views) || 0));
   for (const item of items) {
     const views = Number(item.metrics?.views) || 0;
-    const bar = h('div', { class: 'spark' },
-      h('span', { style: `width:${Math.max(2, (views / maxViews) * 100)}%` }));
-    const tr = h('tr', { 'data-pub': item.id, class: 'is-clickable' },
+    const bar = h('div', { class: 'spark' }, h('span', { style: `width:${Math.max(2, (views / maxViews) * 100)}%` }));
+    const tr = h(
+      'tr',
+      { 'data-pub': item.id, class: 'is-clickable' },
       h('td', {}, h('span', { class: 'badge tone-brand' }, item.platform_label)),
       h('td', { class: 'pub-title', title: item.title }, item.title),
       h('td', { class: 'num' }, num(item.metrics?.views)),
@@ -160,10 +166,15 @@ function renderWorks() {
       h('td', { class: 'num' }, num(item.metrics?.favorites)),
       h('td', { class: 'num' }, num(item.metrics?.shares)),
       h('td', { class: 'num' }, num(item.metrics?.followers)),
-      h('td', { class: 'num' },
+      h(
+        'td',
+        { class: 'num' },
         item.engagement_rate === null || item.engagement_rate === undefined
-          ? '—' : `${(item.engagement_rate * 100).toFixed(2)}%`),
-      h('td', {}, bar));
+          ? '—'
+          : `${(item.engagement_rate * 100).toFixed(2)}%`,
+      ),
+      h('td', {}, bar),
+    );
     tbody.appendChild(tr);
   }
 }
@@ -191,7 +202,9 @@ $('#work-table')?.addEventListener('click', (e) => {
   const tr = e.target.closest('tr[data-pub]');
   if (tr) openTrend(tr.dataset.pub);
 });
-$('#trend-close')?.addEventListener('click', () => { $('#trend-card').hidden = true; });
+$('#trend-close')?.addEventListener('click', () => {
+  $('#trend-card').hidden = true;
+});
 
 async function reload() {
   try {

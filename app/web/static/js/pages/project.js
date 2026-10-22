@@ -3,6 +3,9 @@ import { $, $$, readJSON, withLoading, debounce, h, icon } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog, openModal } from '../ui/modal.js';
 import { initChrome, paintBadge, stateMeta } from '../ui/chrome.js';
+import { matchShot, matchFact } from '../ui/filters.js';
+import { countDirty, isDirty } from '../ui/dirty.js';
+import { loadVideo, withFallback } from '../ui/media.js';
 import { api } from '../api.js';
 import { initConceptStyle } from './concept-style.js';
 
@@ -56,7 +59,12 @@ window.addEventListener('hashchange', () => showTab(location.hash.slice(1), { pu
 // 刷新后恢复滚动位置与 Tab(状态跃迁触发的自动刷新)
 function restoreView() {
   let saved = null;
-  try { saved = JSON.parse(sessionStorage.getItem(RESTORE_KEY) || 'null'); sessionStorage.removeItem(RESTORE_KEY); } catch { /* 忽略 */ }
+  try {
+    saved = JSON.parse(sessionStorage.getItem(RESTORE_KEY) || 'null');
+    sessionStorage.removeItem(RESTORE_KEY);
+  } catch {
+    /* 忽略 */
+  }
   const fromHash = location.hash.slice(1);
   showTab(fromHash || (saved && saved.tab) || content.dataset.defaultTab, { push: !!fromHash });
   if (saved && typeof saved.y === 'number') requestAnimationFrame(() => window.scrollTo(0, saved.y));
@@ -64,15 +72,23 @@ function restoreView() {
 
 function reloadPreserving() {
   const active = tabs.find((t) => t.getAttribute('aria-selected') === 'true');
-  try { sessionStorage.setItem(RESTORE_KEY, JSON.stringify({ tab: active && active.dataset.tab, y: window.scrollY })); } catch { /* 忽略 */ }
+  try {
+    sessionStorage.setItem(RESTORE_KEY, JSON.stringify({ tab: active && active.dataset.tab, y: window.scrollY }));
+  } catch {
+    /* 忽略 */
+  }
   location.reload();
 }
 
 // ---------------------------------------------------------------------------
 // 推进 / 门禁
 // ---------------------------------------------------------------------------
+/**
+ * 触发一次后端动作。返回错误消息(null = 成功);失败已经弹过提示。
+ * 返回值给「门禁 A 被 lint 拦下 → 仍然继续」那条分支用。
+ */
 async function act(btn, url, body, label) {
-  await withLoading(btn, async () => {
+  return withLoading(btn, async () => {
     try {
       const data = await api.post(url, body);
       if (data.state && data.state !== lastState) {
@@ -92,7 +108,8 @@ async function act(btn, url, body, label) {
 }
 
 const btnAdvance = $('#btn-advance');
-if (btnAdvance) btnAdvance.addEventListener('click', () => act(btnAdvance, `/api/projects/${PID}/advance`, undefined, '推进'));
+if (btnAdvance)
+  btnAdvance.addEventListener('click', () => act(btnAdvance, `/api/projects/${PID}/advance`, undefined, '推进'));
 
 // 概念动画模版面板(本片有概念拍时才显示);门禁 B 上换模版会退回渲染,刷新页面跟上状态
 const conceptStyle = initConceptStyle(PID, { onRerender: () => setTimeout(reloadPreserving, 700) });
@@ -110,11 +127,15 @@ if (btnGateA) {
     }
     const ok = await confirmDialog({
       title: '确认脚本与分镜?',
-      body: h('div', {},
+      body: h(
+        'div',
+        {},
         h('p', {}, '确认后先合成全片旁白,再按旁白时长逐拍渲染,不调用视频生成。'),
         h('p', {}, `本项目共 ${DATA.shot_count} 个${UNIT},确认后脚本与分镜将不能再修改。`),
         conceptStyle && conceptStyle.hasConcepts()
-          ? h('p', {}, `概念动画模版:${conceptStyle.currentName()}(审片时还能换,只重渲概念动画那几拍)`) : null),
+          ? h('p', {}, `概念动画模版:${conceptStyle.currentName()}(审片时还能换,只重渲概念动画那几拍)`)
+          : null,
+      ),
       confirmText: '确认并开始渲染',
       tone: 'success',
     });
@@ -125,9 +146,16 @@ if (btnGateA) {
       if (err && err.includes(LINT_BLOCK_MARK)) {
         const go = await confirmDialog({
           title: '脚本还有必须修的问题',
-          body: h('div', {},
-            h('p', {}, '门禁 A 被拦下了:脚本里有机器查得出的问题(套话开场、空洞评价、没出处的数字、对比章节拿厂商口径当论据)。'),
-            h('p', {}, '改完再确认最省事 —— 确认时会自动重跑一遍检查。也可以明知有问题直接继续。')),
+          body: h(
+            'div',
+            {},
+            h(
+              'p',
+              {},
+              '门禁 A 被拦下了:脚本里有机器查得出的问题(套话开场、空洞评价、没出处的数字、对比章节拿厂商口径当论据)。',
+            ),
+            h('p', {}, '改完再确认最省事 —— 确认时会自动重跑一遍检查。也可以明知有问题直接继续。'),
+          ),
           confirmText: '仍然继续',
           cancelText: '我去改',
           tone: 'danger',
@@ -141,7 +169,8 @@ if (btnGateA) {
 const btnGateB = $('#btn-gate-b');
 if (btnGateB) {
   // 草稿就是成片,没有第二遍生成,也就没有分批放行
-  $('#gate-hint').textContent = `共 ${DATA.total || DATA.shot_count} 拍。不满意的拍可以单独「重拍」换一组背景,全部满意后确认,直接拼接混音出成片。`;
+  $('#gate-hint').textContent =
+    `共 ${DATA.total || DATA.shot_count} 拍。不满意的拍可以单独「重拍」换一组背景,全部满意后确认,直接拼接混音出成片。`;
   btnGateB.addEventListener('click', async () => {
     const ok = await confirmDialog({
       title: '各拍都审过了?',
@@ -167,7 +196,9 @@ function autosize(ta) {
   ta.style.height = 'auto';
   ta.style.height = `${ta.scrollHeight + 2}px`;
 }
-function autosizeAll() { scriptRows.forEach((r) => autosize(r.querySelector('.script-text'))); }
+function autosizeAll() {
+  scriptRows.forEach((r) => autosize(r.querySelector('.script-text')));
+}
 
 function updateCounts() {
   let total = 0;
@@ -184,8 +215,14 @@ function updateCounts() {
 }
 
 function scriptDirty() {
-  if (thesisInput && thesisInput.value !== originalThesis) return true;
-  return scriptRows.some((r) => r.querySelector('.script-text').value !== original.get(r));
+  return isDirty(dirtyFields());
+}
+
+/** 当前每一段的文字和当初载入时比,加上论点框。 */
+function dirtyFields() {
+  const fields = scriptRows.map((r) => ({ now: r.querySelector('.script-text').value, was: original.get(r) }));
+  if (thesisInput) fields.push({ now: thesisInput.value, was: originalThesis });
+  return fields;
 }
 
 function setStatus(text, iconName) {
@@ -195,16 +232,12 @@ function setStatus(text, iconName) {
 }
 
 function updateDirty() {
-  let n = 0;
   for (const r of scriptRows) {
-    const d = r.querySelector('.script-text').value !== original.get(r);
-    r.classList.toggle('is-dirty', d);
-    if (d) n++;
+    r.classList.toggle('is-dirty', r.querySelector('.script-text').value !== original.get(r));
   }
-  const thesisDirty = thesisInput && thesisInput.value !== originalThesis;
   if (!savebar || !DATA.editable) return;
-  savebar.classList.toggle('is-dirty', n > 0 || thesisDirty);
-  const total = n + (thesisDirty ? 1 : 0);
+  const total = countDirty(dirtyFields());
+  savebar.classList.toggle('is-dirty', total > 0);
   setStatus(total ? `${total} 处有未保存的修改` : '所有修改已保存', total ? null : 'check');
 }
 
@@ -240,27 +273,49 @@ function renderLint(issues) {
   const warns = issues.filter((i) => i.severity !== 'error');
   if (!issues.length) {
     panel.hidden = false;
-    panel.replaceChildren(h('div', { class: 'lint-head tone-ok' },
-      h('strong', {}, '检查通过'), h('span', { class: 'subtle small' }, '没有必须修的问题,可以确认门禁 A')));
+    panel.replaceChildren(
+      h(
+        'div',
+        { class: 'lint-head tone-ok' },
+        h('strong', {}, '检查通过'),
+        h('span', { class: 'subtle small' }, '没有必须修的问题,可以确认门禁 A'),
+      ),
+    );
     return;
   }
   panel.hidden = false;
-  const line = (i) => h('div', { class: 'rowline' },
-    h('span', { class: `badge tone-${i.severity === 'error' ? 'danger' : 'warning'}` },
-      h('span', { class: 'dot' }), i.severity === 'error' ? '错误' : '提醒'),
-    h('span', { class: 'subtle num' }, `段落 ${i.segment_idx}`),
-    h('span', { class: 'grow' }, i.message));
+  const line = (i) =>
+    h(
+      'div',
+      { class: 'rowline' },
+      h(
+        'span',
+        { class: `badge tone-${i.severity === 'error' ? 'danger' : 'warning'}` },
+        h('span', { class: 'dot' }),
+        i.severity === 'error' ? '错误' : '提醒',
+      ),
+      h('span', { class: 'subtle num' }, `段落 ${i.segment_idx}`),
+      h('span', { class: 'grow' }, i.message),
+    );
   panel.replaceChildren(
-    h('div', { class: 'lint-head' },
+    h(
+      'div',
+      { class: 'lint-head' },
       h('strong', {}, errors.length ? `${errors.length} 处必须修` : '没有必须修的问题'),
-      h('span', { class: 'subtle small' }, warns.length ? `另有 ${warns.length} 条提醒` : '')),
-    h('div', { class: 'rows' }, ...issues.map(line)));
+      h('span', { class: 'subtle small' }, warns.length ? `另有 ${warns.length} 条提醒` : ''),
+    ),
+    h('div', { class: 'rows' }, ...issues.map(line)),
+  );
 }
 
 if (scriptRows.length) {
   scriptRows.forEach((r) => {
     const ta = r.querySelector('.script-text');
-    ta.addEventListener('input', () => { autosize(ta); updateCounts(); updateDirty(); });
+    ta.addEventListener('input', () => {
+      autosize(ta);
+      updateCounts();
+      updateDirty();
+    });
   });
   if (thesisInput) thesisInput.addEventListener('input', updateDirty);
   updateCounts();
@@ -274,16 +329,23 @@ if (scriptRows.length) {
     }
   });
   window.addEventListener('beforeunload', (e) => {
-    if (scriptDirty()) { e.preventDefault(); e.returnValue = ''; }
+    if (scriptDirty()) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
   });
 }
 
 // 点击脚本里的事实编号 → 跳到对应事实并高亮
 document.addEventListener('click', (e) => {
-  const ref = e.target.closest('.js-fact-ref');
+  const from = /** @type {Element|null} */ (e.target);
+  const ref = /** @type {HTMLElement|null} */ (from && from.closest('.js-fact-ref'));
   if (!ref) return;
   const target = document.getElementById(`fact-${ref.dataset.ref}`);
-  if (!target) { toast(`找不到事实 ${ref.dataset.ref}`, { type: 'warning' }); return; }
+  if (!target) {
+    toast(`找不到事实 ${ref.dataset.ref}`, { type: 'warning' });
+    return;
+  }
   resetFactFilters();
   showTab('facts');
   target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -300,7 +362,7 @@ let factQuery = '';
 function applyFactFilters() {
   let n = 0;
   for (const f of $$('#fact-list .fact')) {
-    const show = (factScope === 'all' || f.dataset.scope === factScope) && (!factQuery || f.dataset.text.includes(factQuery));
+    const show = matchFact(f.dataset.scope, f.dataset.text, factScope, factQuery);
     f.classList.toggle('hidden', !show);
     if (show) n++;
   }
@@ -315,26 +377,31 @@ function resetFactFilters() {
   $$('#fact-filters .chip').forEach((c) => c.setAttribute('aria-pressed', String(c.dataset.scope === 'all')));
   applyFactFilters();
 }
-$$('#fact-filters .chip').forEach((chip) => chip.addEventListener('click', () => {
-  factScope = chip.dataset.scope;
-  $$('#fact-filters .chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
-  applyFactFilters();
-}));
+$$('#fact-filters .chip').forEach((chip) =>
+  chip.addEventListener('click', () => {
+    factScope = chip.dataset.scope;
+    $$('#fact-filters .chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+    applyFactFilters();
+  }),
+);
 const factSearch = $('#fact-search');
-if (factSearch) factSearch.addEventListener('input', debounce(() => { factQuery = factSearch.value.trim().toLowerCase(); applyFactFilters(); }, 120));
+if (factSearch)
+  factSearch.addEventListener(
+    'input',
+    debounce(() => {
+      factQuery = factSearch.value.trim().toLowerCase();
+      applyFactFilters();
+    }, 120),
+  );
 
 // ---------------------------------------------------------------------------
 // 渲染看板
 // ---------------------------------------------------------------------------
-const LIVE = new Set(['submitted', 'queued', 'running']);
 const shots = $$('#shot-grid .shot');
 let shotFilter = 'all';
 
 function shotMatches(s, f) {
-  const st = s.dataset.status;
-  if (f === 'all') return true;
-  if (f === 'live') return LIVE.has(st);
-  return st === f;
+  return matchShot(s.dataset.status, f);
 }
 function applyShotFilter() {
   let n = 0;
@@ -352,44 +419,34 @@ function countShots() {
     if (el) el.textContent = shots.filter((s) => shotMatches(s, f)).length;
   }
 }
-$$('#shot-filters .chip').forEach((chip) => chip.addEventListener('click', () => {
-  shotFilter = chip.dataset.f;
-  $$('#shot-filters .chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
-  applyShotFilter();
-}));
+$$('#shot-filters .chip').forEach((chip) =>
+  chip.addEventListener('click', () => {
+    shotFilter = chip.dataset.f;
+    $$('#shot-filters .chip').forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+    applyShotFilter();
+  }),
+);
 countShots();
 
 // 视频只在进入视口时加载:40 个镜头同时 autoplay 会把浏览器拖垮。
 // 能悬停的设备只显示首帧、悬停才播;触屏没有悬停,进入视口就播。
 const canHover = matchMedia('(hover: hover)').matches;
 let io = null;
-// 成片合成后 shots/ 里的单拍会被清掉,只剩草稿:成片地址 404 时退回草稿
-function withFallback(v) {
-  v.addEventListener('error', () => {
-    const fb = v.dataset.fallback;
-    if (!fb || v.dataset.src === fb) return;
-    v.dataset.src = fb;
-    const wasPlaying = v.closest('.shot.is-playing');
-    v.src = v.src.includes('#t=') ? `${fb}#t=0.1` : fb;
-    if (wasPlaying || v.autoplay) v.play().catch(() => {});
-  });
-  return v;
-}
-function loadVideo(v) {
-  if (v.src) return;
-  withFallback(v);
-  v.preload = 'metadata';
-  // #t=0.1 让浏览器解出第一帧当封面,不然是黑块
-  v.src = `${v.dataset.src}#t=0.1`;
-}
 function observeVideos() {
   if (io || !shots.length) return;
-  const vids = $$('#shot-grid video[data-src]');
+  const vids = /** @type {HTMLVideoElement[]} */ ($$('#shot-grid video[data-src]'));
   if (canHover) {
     for (const v of vids) {
       const shot = v.closest('.shot');
-      const play = () => { loadVideo(v); shot.classList.add('is-playing'); v.play().catch(() => {}); };
-      const stop = () => { shot.classList.remove('is-playing'); v.pause(); };
+      const play = () => {
+        loadVideo(v);
+        shot.classList.add('is-playing');
+        v.play().catch(() => {});
+      };
+      const stop = () => {
+        shot.classList.remove('is-playing');
+        v.pause();
+      };
       shot.addEventListener('mouseenter', play);
       shot.addEventListener('mouseleave', stop);
       shot.addEventListener('focus', play);
@@ -397,20 +454,26 @@ function observeVideos() {
     }
   }
   if (!('IntersectionObserver' in window)) {
-    vids.forEach((v) => { loadVideo(v); if (!canHover) v.play().catch(() => {}); });
+    vids.forEach((v) => {
+      loadVideo(v);
+      if (!canHover) v.play().catch(() => {});
+    });
     return;
   }
-  io = new IntersectionObserver((entries) => {
-    for (const en of entries) {
-      const v = en.target;
-      if (en.isIntersecting) {
-        loadVideo(v);
-        if (!canHover) v.play().catch(() => {});
-      } else if (!v.paused) {
-        v.pause();
+  io = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        const v = /** @type {HTMLVideoElement} */ (en.target);
+        if (en.isIntersecting) {
+          loadVideo(v);
+          if (!canHover) v.play().catch(() => {});
+        } else if (!v.paused) {
+          v.pause();
+        }
       }
-    }
-  }, { rootMargin: '120px' });
+    },
+    { rootMargin: '120px' },
+  );
   vids.forEach((v) => io.observe(v));
 }
 
@@ -423,22 +486,53 @@ function openShot(idx) {
 
   const media = h('div', { class: 'lb-media' });
   const side = h('div', { class: 'lb-body' });
-  const prev = h('button', { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '上一个镜头' }, icon('chevron-left'));
-  const next = h('button', { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '下一个镜头' }, icon('chevron-right'));
-  const closeBtn = h('button', { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '关闭' }, icon('x'));
+  const prev = h(
+    'button',
+    { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '上一个镜头' },
+    icon('chevron-left'),
+  );
+  const next = h(
+    'button',
+    { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '下一个镜头' },
+    icon('chevron-right'),
+  );
+  const closeBtn = h(
+    'button',
+    { class: 'btn btn-ghost btn-icon btn-sm', type: 'button', 'aria-label': '关闭' },
+    icon('x'),
+  );
   const counter = h('span', { class: 'subtle small num' });
-  const wrap = h('div', { class: 'lightbox' }, media,
-    h('div', { class: 'lb-side' },
+  const wrap = h(
+    'div',
+    { class: 'lightbox' },
+    media,
+    h(
+      'div',
+      { class: 'lb-side' },
       h('div', { class: 'modal-head' }, counter, h('div', { class: 'lb-nav' }, prev, next, closeBtn)),
-      side));
+      side,
+    ),
+  );
 
   function render() {
     const card = visible[pos];
     const v = card.querySelector('video[data-src]');
-    media.replaceChildren(v
-      ? withFallback(h('video', { src: v.dataset.src, 'data-fallback': v.dataset.fallback || '', 'data-src': v.dataset.src,
-                                  controls: true, autoplay: true, muted: true, loop: true, playsinline: true }))
-      : card.querySelector('.shot-ph').cloneNode(true));
+    media.replaceChildren(
+      v
+        ? withFallback(
+            h('video', {
+              src: v.dataset.src,
+              'data-fallback': v.dataset.fallback || '',
+              'data-src': v.dataset.src,
+              controls: true,
+              autoplay: true,
+              muted: true,
+              loop: true,
+              playsinline: true,
+            }),
+          )
+        : card.querySelector('.shot-ph').cloneNode(true),
+    );
     side.replaceChildren(card.querySelector('template.shot-detail').content.cloneNode(true));
     counter.textContent = `${pos + 1} / ${visible.length}`;
     prev.disabled = pos === 0;
@@ -456,23 +550,34 @@ function openShot(idx) {
   }
 
   const { el, close } = openModal(wrap, {
-    size: 'modal-lg', label: '镜头详情',
-    onClose: () => { lightboxOpen = false; document.removeEventListener('keydown', onKey); },
+    size: 'modal-lg',
+    label: '镜头详情',
+    onClose: () => {
+      lightboxOpen = false;
+      document.removeEventListener('keydown', onKey);
+    },
   });
   prev.addEventListener('click', () => move(-1));
   next.addEventListener('click', () => move(1));
   closeBtn.addEventListener('click', () => close());
   document.addEventListener('keydown', onKey);
   el.addEventListener('click', async (e) => {
-    const btn = e.target.closest('.js-retry');
-    if (btn) { await retryShot(btn); }
+    const btn = /** @type {Element|null} */ (e.target).closest('.js-retry');
+    if (btn) {
+      await retryShot(btn);
+    }
   });
   render();
 }
 
 shots.forEach((s) => {
   s.addEventListener('click', () => openShot(s.dataset.idx));
-  s.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openShot(s.dataset.idx); } });
+  s.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openShot(s.dataset.idx);
+    }
+  });
 });
 
 async function retryShot(btn) {
@@ -537,10 +642,13 @@ async function openPublish() {
 
   const picks = new Map();
   const body = h('div', { class: 'pub-drawer' });
-  body.appendChild(h('p', { class: 'muted small' },
-    preview.has_vertical
-      ? '横版与竖版都已就绪。'
-      : '竖版还在生成 —— 发布到竖屏平台时会自动先补一版。'));
+  body.appendChild(
+    h(
+      'p',
+      { class: 'muted small' },
+      preview.has_vertical ? '横版与竖版都已就绪。' : '竖版还在生成 —— 发布到竖屏平台时会自动先补一版。',
+    ),
+  );
   if (preview.has_output === false) {
     body.appendChild(h('div', { class: 'callout tone-danger' }, '横屏成片还没生成,先出成片。'));
   }
@@ -556,33 +664,55 @@ async function openPublish() {
     picks.set(p.platform, { check, titleInput, descInput, accountIds: p.accounts.map((a) => a.id) });
 
     const stateBadge = done
-      ? h('span', { class: `badge tone-${done.state === 'published' ? 'success' : (done.state === 'failed' ? 'danger' : 'neutral')}` },
-        done.state === 'published' ? '已发布' : (done.state === 'failed' ? '上次失败' : done.state))
+      ? h(
+          'span',
+          {
+            class: `badge tone-${done.state === 'published' ? 'success' : done.state === 'failed' ? 'danger' : 'neutral'}`,
+          },
+          done.state === 'published' ? '已发布' : done.state === 'failed' ? '上次失败' : done.state,
+        )
       : null;
 
-    body.appendChild(h('div', { class: 'pub-pick-card' },
-      h('div', { class: 'pub-pick-head' },
-        check,
-        h('strong', {}, p.rule.label),
-        h('span', { class: 'subtle small' }, `${p.aspect} · ${p.accounts.length} 个账号`),
-        stateBadge),
-      h('label', { class: 'field' },
-        h('span', { class: 'field-label' }, `标题(上限 ${p.rule.title_max} 字)`),
-        titleInput),
-      h('label', { class: 'field' },
-        h('span', { class: 'field-label' }, '简介 / 正文'),
-        descInput),
-      h('p', { class: 'subtle small' },
-        `标签:${(p.tags || []).join('、') || '(无)'}`)));
+    body.appendChild(
+      h(
+        'div',
+        { class: 'pub-pick-card' },
+        h(
+          'div',
+          { class: 'pub-pick-head' },
+          check,
+          h('strong', {}, p.rule.label),
+          h('span', { class: 'subtle small' }, `${p.aspect} · ${p.accounts.length} 个账号`),
+          stateBadge,
+        ),
+        h(
+          'label',
+          { class: 'field' },
+          h('span', { class: 'field-label' }, `标题(上限 ${p.rule.title_max} 字)`),
+          titleInput,
+        ),
+        h('label', { class: 'field' }, h('span', { class: 'field-label' }, '简介 / 正文'), descInput),
+        h('p', { class: 'subtle small' }, `标签:${(p.tags || []).join('、') || '(无)'}`),
+      ),
+    );
   }
 
-  const content = h('div', {},
-    h('div', { class: 'modal-head' },
+  const content = h(
+    'div',
+    {},
+    h(
+      'div',
+      { class: 'modal-head' },
       h('div', { class: 'modal-icon tone-brand' }, icon('external', 'i-lg')),
-      h('div', {},
+      h(
+        'div',
+        {},
         h('div', { class: 'modal-title' }, '一键发布'),
-        h('div', { class: 'muted small' }, preview.title || ''))),
-    h('div', { class: 'modal-body' }, body));
+        h('div', { class: 'muted small' }, preview.title || ''),
+      ),
+    ),
+    h('div', { class: 'modal-body' }, body),
+  );
 
   const publishBtn = h('button', { class: 'btn btn-primary', type: 'button' }, '发布');
   const cancel = h('button', { class: 'btn btn-ghost', type: 'button' }, '取消');
@@ -599,10 +729,13 @@ async function openPublish() {
       overrides[key] = {
         title: pick.titleInput.value.trim(),
         description: pick.descInput.value.trim(),
-        tags: (preview.platforms[key].tags || []),
+        tags: preview.platforms[key].tags || [],
       };
     }
-    if (!accountIds.length) { toast('至少勾一个平台', { type: 'warning' }); return; }
+    if (!accountIds.length) {
+      toast('至少勾一个平台', { type: 'warning' });
+      return;
+    }
     const ok = await confirmDialog({
       title: '发布到这些平台?',
       body: `共 ${accountIds.length} 个账号。发布后不可撤回,各平台会各自走一遍审核。`,
@@ -674,7 +807,9 @@ async function refreshStatus() {
       lastSucceeded = done;
       toast(`${n} 个${UNIT}已渲染完成`, { type: 'brand', action: { label: '刷新查看', onClick: reloadPreserving } });
     }
-  } catch { /* 轮询失败静默重试 */ }
+  } catch {
+    /* 轮询失败静默重试 */
+  }
 }
 
 function onStateChanged(state) {
@@ -684,7 +819,11 @@ function onStateChanged(state) {
   const label = stateMeta(state).label;
   // 正在编辑脚本或看镜头时不强制刷新,免得丢东西
   if (scriptDirty() || lightboxOpen) {
-    toast(`项目状态已更新为「${label}」`, { type: 'brand', duration: 0, action: { label: '刷新页面', onClick: reloadPreserving } });
+    toast(`项目状态已更新为「${label}」`, {
+      type: 'brand',
+      duration: 0,
+      action: { label: '刷新页面', onClick: reloadPreserving },
+    });
     return;
   }
   toast(`项目状态已更新为「${label}」`, { type: 'brand' });
@@ -702,7 +841,10 @@ function stopPolling() {
 // 页面切到后台就停,回来立刻补一次
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopPolling();
-  else { refreshStatus(); startPolling(); }
+  else {
+    refreshStatus();
+    startPolling();
+  }
 });
 
 restoreView();

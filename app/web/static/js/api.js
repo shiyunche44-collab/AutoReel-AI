@@ -8,7 +8,11 @@ async function request(method, url, body) {
   });
   const text = await res.text();
   let data;
-  try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { detail: text };
+  }
   if (!res.ok) {
     let msg = data.detail;
     // 422 校验错误的 detail 是数组

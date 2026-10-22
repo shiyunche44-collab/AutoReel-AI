@@ -20,14 +20,28 @@ function stack() {
 export function toast(message, opts = {}) {
   const type = opts.type || 'success';
   const duration = opts.duration ?? (type === 'danger' ? 8000 : 3800);
-  const body = h('div', { class: 'toast-body' },
+  const body = h(
+    'div',
+    { class: 'toast-body' },
     opts.title ? h('div', { class: 'toast-title' }, opts.title) : null,
-    h('div', {}, message));
+    h('div', {}, message),
+  );
   if (opts.action) {
-    body.appendChild(h('button', {
-      class: 'btn btn-sm', type: 'button', style: 'margin-top:8px',
-      onclick: () => { opts.action.onClick(); close(); },
-    }, opts.action.label));
+    body.appendChild(
+      h(
+        'button',
+        {
+          class: 'btn btn-sm',
+          type: 'button',
+          style: 'margin-top:8px',
+          onclick: () => {
+            opts.action.onClick();
+            close();
+          },
+        },
+        opts.action.label,
+      ),
+    );
   }
   const closeBtn = h('button', { class: 'toast-close', type: 'button', 'aria-label': '关闭' }, icon('x', 'i-sm'));
   const el = h('div', { class: `toast tone-${type}` }, icon(ICONS[type] || 'info'), body, closeBtn);
@@ -42,7 +56,9 @@ export function toast(message, opts = {}) {
   if (duration > 0) {
     timer = setTimeout(close, duration);
     el.addEventListener('mouseenter', () => clearTimeout(timer));
-    el.addEventListener('mouseleave', () => { timer = setTimeout(close, 1800); });
+    el.addEventListener('mouseleave', () => {
+      timer = setTimeout(close, 1800);
+    });
   }
   const s = stack();
   s.appendChild(el);

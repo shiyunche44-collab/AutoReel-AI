@@ -8,33 +8,47 @@ import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/modal.js';
 import { api } from '../api.js';
 
+/**
+ * 概念动画模版面板。返回 { currentName, hasConcepts };没有面板时返回 null。
+ *
+ * @param {string} pid
+ * @param {{ onRerender?: () => void }} [opts]
+ */
 export function initConceptStyle(pid, { onRerender } = {}) {
   const card = $('#concept-style');
   if (!card) return null;
   const grid = $('#cs-grid', card);
   const atGateB = card.dataset.state === 'GATE_B';
 
-  let styles = [];      // [{id, name, desc, light, image}]
-  let current = null;   // 项目当前模版 id
+  let styles = []; // [{id, name, desc, light, image}]
+  let current = null; // 项目当前模版 id
   let busy = false;
 
   const nameOf = (id) => (styles.find((s) => s.id === id) || {}).name || id;
 
   function paint() {
     $('#cs-current', card).textContent = current ? `当前:${nameOf(current)}` : '';
-    grid.replaceChildren(...styles.map((s, n) => {
-      const on = s.id === current;
-      const img = s.image
-        ? h('img', { src: `/api/concept-styles/image/${encodeURIComponent(s.image)}`, alt: s.name, loading: 'lazy' })
-        : h('div', { class: 'cs-ph' }, '暂无示例图');
-      return h('button', {
-        class: `cs-tile${on ? ' is-on' : ''}`, type: 'button', 'aria-pressed': String(on), title: s.desc,
-        onclick: () => choose(s.id),
-      },
-      h('div', { class: 'cs-thumb' }, img, h('span', { class: 'cs-check' }, icon('check', 'i-sm'))),
-      h('div', { class: 'cs-name' }, h('span', { class: 'num subtle' }, String(n + 1).padStart(2, '0')), s.name),
-      h('div', { class: 'cs-desc subtle small' }, s.desc));
-    }));
+    grid.replaceChildren(
+      ...styles.map((s, n) => {
+        const on = s.id === current;
+        const img = s.image
+          ? h('img', { src: `/api/concept-styles/image/${encodeURIComponent(s.image)}`, alt: s.name, loading: 'lazy' })
+          : h('div', { class: 'cs-ph' }, '暂无示例图');
+        return h(
+          'button',
+          {
+            class: `cs-tile${on ? ' is-on' : ''}`,
+            type: 'button',
+            'aria-pressed': String(on),
+            title: s.desc,
+            onclick: () => choose(s.id),
+          },
+          h('div', { class: 'cs-thumb' }, img, h('span', { class: 'cs-check' }, icon('check', 'i-sm'))),
+          h('div', { class: 'cs-name' }, h('span', { class: 'num subtle' }, String(n + 1).padStart(2, '0')), s.name),
+          h('div', { class: 'cs-desc subtle small' }, s.desc),
+        );
+      }),
+    );
   }
 
   async function choose(sid) {
@@ -54,8 +68,9 @@ export function initConceptStyle(pid, { onRerender } = {}) {
       current = res.style;
       paint();
       const redo = (res.rerender || []).length;
-      toast(redo ? `已换成「${nameOf(sid)}」,正在重渲 ${redo} 拍概念动画` : `概念动画模版:${nameOf(sid)}`,
-        { type: 'success' });
+      toast(redo ? `已换成「${nameOf(sid)}」,正在重渲 ${redo} 拍概念动画` : `概念动画模版:${nameOf(sid)}`, {
+        type: 'success',
+      });
       if (redo && onRerender) onRerender();
     } catch (err) {
       toast(err.message, { type: 'danger', title: '换模版失败' });

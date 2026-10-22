@@ -8,13 +8,15 @@
     "test:watch": "vitest",
     "lint": "eslint app/web/static/js",
     "lint:fix": "eslint app/web/static/js --fix",
-    "format": "prettier --write \"app/web/static/js/**/*.js\"",
-    "format:check": "prettier --check \"app/web/static/js/**/*.js\"",
+    "format": "prettier --write \"app/web/static/js/**/*.js\" \"tests/web/**/*.js\" \"*.js\"",
+    "format:check": "prettier --check \"app/web/static/js/**/*.js\" \"tests/web/**/*.js\" \"*.js\"",
     "typecheck": "tsc -p app/web/jsconfig.json",
     "check": "npm run lint && npm run typecheck && npm run test"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "eslint": "^9.17.0",
+    "globals": "^17.13.0",
     "jsdom": "^26.0.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
