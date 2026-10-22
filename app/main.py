@@ -106,6 +106,9 @@ SCHEDULER_INTERVAL = 20
 AUTO_ADVANCE_STATES = frozenset({
     str(State.DRAFT_RENDERING),
     str(State.FINAL_RENDERING),
+    # 解说轨成片渲完落在 QA_PASSED(跳过视觉质检),之后就是合成。漏了它项目会停在
+    # QA_PASSED 不动 —— 之前只能手改库进 COMPOSING;手动 /advance 又会和调度器的合成撞车
+    str(State.QA_PASSED),
     str(State.COMPOSING),
 })
 

@@ -254,7 +254,7 @@ def test_scheduler_covers_every_autonomous_state():
     from app.main import AUTO_ADVANCE_STATES
     from app.state import State
 
-    for state in (State.DRAFT_RENDERING, State.FINAL_RENDERING, State.COMPOSING):
+    for state in (State.DRAFT_RENDERING, State.FINAL_RENDERING, State.QA_PASSED, State.COMPOSING):
         assert str(state) in AUTO_ADVANCE_STATES, f"调度器未覆盖 {state}"
 
 
