@@ -8,6 +8,8 @@ aspect_ratio: "16:9"
 track: explainer
 duration_grid: 8
 durations: [120, 240, 360]
+# 竖屏项目的时长档位(竖屏平台看完播率,更短)。不是栅格整数倍也行:拍数四舍五入
+durations_portrait: [60, 90, 120, 180]
 
 fact_sources:
   - ifind.product_news
@@ -44,17 +46,18 @@ themes:
       - 开场第一句不超过 18 字,直接抛冲突或结论;不说"大家好""今天来聊聊""欢迎"之类的开场白。
       - 开头三段分开写:先抛冲突,立刻兑现刚才抛出的那个数字,再用一句话亮出"每个数字都能查到出处"。
       - 结尾要给行动:最后一句要么提问(你在纠结哪款?评论区说),要么预告下期做什么。
+    # 竖屏短时长(60s ≈ 8 拍)放不下全部块时按 drop 整档精简(1 先砍,0 = 必留);横屏档位块数放得下,不受影响
     blocks:
       - {section: 开场, weight: 1, remainder: false}
-      - {section: 兑现承诺, weight: 1, remainder: false}
-      - {section: 亮出出处, weight: 1, remainder: false}
+      - {section: 兑现承诺, weight: 1, remainder: false, drop: 1}
+      - {section: 亮出出处, weight: 1, remainder: false, drop: 1}
       - {section: 定位与价格, weight: 2}
       - {section: 材质与安全, weight: 2}
       - {section: 质量记录, weight: 1, remainder: false}
       - {section: 核心功能, weight: 3}
-      - {section: 适用月龄与场景, weight: 2}
-      - {section: 规格怎么选, weight: 2}
-      - {section: 竞品对比, weight: 1}
+      - {section: 适用月龄与场景, weight: 2, drop: 3}
+      - {section: 规格怎么选, weight: 2, drop: 2}
+      - {section: 竞品对比, weight: 1, drop: 2}
       - {section: 结论建议, weight: 1, remainder: false}
 
 # 版式说明见 auto_long.yaml。angle 只决定背景偏产品本身还是偏使用场景。

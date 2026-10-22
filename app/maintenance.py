@@ -56,7 +56,7 @@ PRUNABLE_CACHE_DIRS = ("tts", "motion", "trends", "webassets")
 TEMP_DIRS = ("_probe", "_tmp")
 
 #: 项目目录里**永不自动删**的东西 —— 用户的创作内容与成片。
-PROJECT_KEEP = ("output.mp4", "cover.jpg", "script.json", "storyboard.json",
+PROJECT_KEEP = ("output.mp4", "cover.jpg", "output_vertical.mp4", "cover_vertical.jpg", "script.json", "storyboard.json",
                 "facts.json", "lint.json", "topic.json", "review_state.json",
                 "concept_style.json", "rhythm.json", "render.json", "cards.json",
                 "narration.json", "beats")

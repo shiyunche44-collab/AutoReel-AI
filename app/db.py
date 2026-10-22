@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS projects (
     duration        INTEGER NOT NULL,
     shot_count      INTEGER NOT NULL DEFAULT 0,
     narration_mode  TEXT NOT NULL DEFAULT 'tts',
+    -- 画幅:16:9 | 9:16。创建时定,之后不可改(改画幅等于整片重渲)。
+    aspect          TEXT NOT NULL DEFAULT '16:9',
     state           TEXT NOT NULL,
     state_reason    TEXT,
     quota_budget    REAL NOT NULL DEFAULT 40,
@@ -243,6 +245,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "resume_state" not in _column_names(conn, "projects"):
         # 因配额暂停时,从哪个状态暂停的 —— 提额后要回到那里。
         conn.execute("ALTER TABLE projects ADD COLUMN resume_state TEXT NOT NULL DEFAULT ''")
+    if "aspect" not in _column_names(conn, "projects"):
+        # 画幅:16:9 | 9:16。老库的项目一律横屏 —— 与它们改造前的行为一致。
+        conn.execute("ALTER TABLE projects ADD COLUMN aspect TEXT NOT NULL DEFAULT '16:9'")
 
 
 def init_db() -> None:
@@ -358,15 +363,15 @@ def create_project(row: dict[str, Any], conn: sqlite3.Connection | None = None) 
     这样"插项目 + 记事件"可以是一个原子单元。
     """
     init_db()
-    row = {"angle": "", **row}
+    row = {"angle": "", "aspect": "16:9", **row}
     subjects = row.get("subjects") or []
     row["subjects"] = subjects if isinstance(subjects, str) else json.dumps(subjects, ensure_ascii=False)
     sql = (
         """INSERT INTO projects
            (id, title, subject, category, theme, angle, subjects, duration, shot_count, narration_mode,
-            state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
+            aspect, state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
            VALUES (:id, :title, :subject, :category, :theme, :angle, :subjects, :duration, :shot_count, :narration_mode,
-                   :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
+                   :aspect, :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
                    :created_at, :updated_at)"""
     )
     if conn is not None:

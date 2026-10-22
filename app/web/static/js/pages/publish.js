@@ -257,10 +257,15 @@ function updateBatchNote() {
   const project = $('#batch-project');
   if (!project) return;
   const opt = project.selectedOptions[0];
-  const vertical = opt && opt.dataset.vertical === '1';
-  const picked = $$('.pub-check:checked').length;
-  batchNote.textContent = picked
-    ? `将发到 ${picked} 个平台${vertical ? '' : '(竖版还在生成,发布时会自动补)'}`
+  const aspect = (opt && opt.dataset.aspect) || '16:9';
+  const picked = $$('.pub-check:checked');
+  const mismatch = picked
+    .map((c) => PLATFORMS.find((r) => r.key === c.value))
+    .filter((r) => r && r.aspect !== aspect)
+    .map((r) => r.label);
+  batchNote.textContent = picked.length
+    ? `将发到 ${picked.length} 个平台(成片 ${aspect})` +
+      (mismatch.length ? `;${mismatch.join('、')}推荐另一种画幅,仍可发布` : '')
     : '先勾选要发的平台';
 }
 
@@ -289,7 +294,8 @@ $('#batch-publish')?.addEventListener('click', async (e) => {
       const r = await api.post(`/api/projects/${project.value}/publish`, { account_ids: accountIds });
       const n = (r.created || []).length;
       const s = (r.skipped || []).length;
-      say(`已排入 ${n} 条${s ? `,跳过 ${s} 条(已发过)` : ''}`);
+      const w = (r.warnings || []).join(';');
+      say(`已排入 ${n} 条${s ? `,跳过 ${s} 条(已发过)` : ''}${w ? `。${w}` : ''}`, w ? 'warning' : undefined);
       setTimeout(() => location.reload(), 600);
     } catch (err) {
       say(err.message, 'danger');

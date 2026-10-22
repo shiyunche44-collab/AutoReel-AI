@@ -36,7 +36,7 @@ from typing import Any, Sequence
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import cards, library, motion, motion_assets, narration, overlays, rhythm
+from . import aspect, cards, library, motion, motion_assets, narration, overlays, rhythm
 from . import render as render_mod
 from .grounding import numbers_in
 
@@ -62,8 +62,8 @@ XFADE_KINDS: tuple[str, ...] = ("fade", "smoothleft", "slideleft", "circleopen",
                                 "fadewhite")
 #: 关键词每行最多几个字
 KEYWORD_CHARS = 12
-#: 横屏字幕单行字数(竖屏是 16)
-SUBTITLE_LINE_CHARS = 22
+#: 横屏字幕单行字数。竖屏是 15 —— 两者都定义在 `aspect.LINE_CHARS`,按项目取用 `aspect.line_chars`
+SUBTITLE_LINE_CHARS = aspect.LINE_CHARS[config.LANDSCAPE]
 #: 图片背景的运镜(按片段散开挑,见 motion_for)
 STILL_MOTIONS = render_mod.STILL_MOTIONS
 #: 中间产物的编码参数:拼接用 -c copy,所以所有片段必须完全一致
@@ -840,8 +840,9 @@ def beat_durations(cues: Sequence[Any], count: int, gap: float | None = None) ->
 def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
                ) -> tuple[list[ShotSpec], narration.NarrationResult]:
     """跑 TTS(含字幕与 BGM),把每拍时长写回分镜。"""
+    project = db.get_project(project_id)
     nar = narration.build(project_id, specs, profile=profile,
-                          size=profile.frame_size, line_chars=SUBTITLE_LINE_CHARS)
+                          size=aspect.frame_size(project), line_chars=aspect.line_chars(project))
     if not nar.ok or not nar.cues:
         raise RuntimeError("旁白生成失败:" + "; ".join(nar.warnings or ["未知原因"]))
     if nar.missing_sentences:
@@ -1422,6 +1423,8 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     out_dir = config.project_dir(project_id) / "drafts"
     bg_cache: dict[str, list[Path]] = {}
     style = concept_style_of(project_id)
+    # 画幅是项目属性(创建时定),不是品类属性
+    size = aspect.frame_size(db.get_project(project_id))
     done, errors = [], []
     for s in todo:
         # 停机信号:在**拍与拍之间**收手。手头这一拍做完就停,剩下的
@@ -1439,7 +1442,7 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
             bg_cache[car] = card_backgrounds(car)
         bgs = bg_cache[car]
         try:
-            path, pieces = render_beat(s, subject=car, size=profile.frame_size,
+            path, pieces = render_beat(s, subject=car, size=size,
                                        out_dir=out_dir, chapters=chapters,
                                        chapter_idx=where[pos], used=used,
                                        card_bg=bgs[s.idx % len(bgs)] if bgs else None,
@@ -1551,6 +1554,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         raise RuntimeError(f"还有 {len(missing)} 拍没有成片:{missing[:12]}")
     nar = db.read_json(project_id, "narration.json", {}) or {}
     project_dir = config.project_dir(project_id)
+    project = db.get_project(project_id) or {}
+    size = aspect.frame_size(project)
     # 拼接缓存按序号命名,重拍过的拍必须重新归一化
     shutil.rmtree(project_dir / "_render", ignore_errors=True)
     result = render_mod.compose(
@@ -1558,7 +1563,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         ass_path=Path(nar["ass_path"]) if nar.get("ass_path") else None,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
         bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
-        size=profile.frame_size, durations=[s.duration for s in beats],
+        size=size, durations=[s.duration for s in beats],
+        output_name=aspect.output_name(project),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -1566,10 +1572,10 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     meta = cover_meta(project_id, profile, total)
     # 封面底图优先用素材池里的干净官图(白底棚拍图没有第三方水印);
     # 没有官图才从成片抽帧。
-    subject = str((db.get_project(project_id) or {}).get("subject") or "")
+    subject = str(project.get("subject") or "")
     still = library.cover_still(subject) if subject else None
-    cover = render_mod.build_cover(result.output_path, title, project_dir / "cover.jpg",
-                                   subtitle=meta["subtitle"], size=profile.frame_size,
+    cover = render_mod.build_cover(result.output_path, title, project_dir / aspect.cover_name(project),
+                                   subtitle=meta["subtitle"], size=size,
                                    still=still, kicker=meta["kicker"])
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
                "cover_meta": meta, "cover_still": str(still) if still else None,

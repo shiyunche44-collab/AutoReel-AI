@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import config, db
+from .pipeline import aspect
 from .categories import load_profile
 from .models import (
     Fact,
@@ -88,7 +89,7 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         raise ProjectNotFound("项目不存在")
     shot_rows = db.get_shots(project_id, stage) or db.get_shots(project_id, "draft")
     project_dir = config.project_dir(project_id)
-    output = project_dir / "output.mp4"
+    output = project_dir / aspect.output_name(row)
     return ProjectDetail(
         id=row["id"],
         title=row["title"],
@@ -97,6 +98,7 @@ def build_detail(project_id: str, stage: str = "final") -> ProjectDetail:
         angle=row.get("angle") or "",
         subjects=db.project_subjects(row),
         duration=row["duration"],
+        aspect=aspect.of(row),
         shot_count=row["shot_count"],
         state=row["state"],
         est_cost=row["est_cost"],
@@ -127,6 +129,7 @@ def build_summary(row: dict[str, Any]) -> ProjectSummary:
         angle=row.get("angle") or "",
         subjects=db.project_subjects(row),
         duration=row["duration"],
+        aspect=aspect.of(row),
         shot_count=row["shot_count"],
         state=row["state"],
         state_reason=row.get("state_reason") or "",
@@ -135,7 +138,7 @@ def build_summary(row: dict[str, Any]) -> ProjectSummary:
         quota_budget=row["quota_budget"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-        has_output=(project_dir / "output.mp4").is_file(),
+        has_output=(project_dir / aspect.output_name(row)).is_file(),
     )
 
 

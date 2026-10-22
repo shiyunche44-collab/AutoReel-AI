@@ -82,7 +82,7 @@ def _install(monkeypatch, adapter: FakeAdapter) -> FakeAdapter:
 # --------------------------------------------------------------------------
 def test_enqueue_creates_one_task(env, monkeypatch):
     _install(monkeypatch, FakeAdapter())
-    out = service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    out = service.enqueue("p_1", account_ids=["acc_1"])
     assert len(out["created"]) == 1
     assert out["skipped"] == []
     row = db.list_publications(project_id="p_1")[0]
@@ -93,8 +93,8 @@ def test_enqueue_creates_one_task(env, monkeypatch):
 
 def test_enqueue_is_idempotent(env, monkeypatch):
     _install(monkeypatch, FakeAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
-    again = service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
+    again = service.enqueue("p_1", account_ids=["acc_1"])
     assert len(again["created"]) == 0
     assert len(again["skipped"]) == 1
     assert len(db.list_publications(project_id="p_1")) == 1
@@ -103,10 +103,10 @@ def test_enqueue_is_idempotent(env, monkeypatch):
 def test_enqueue_force_reuses_the_same_row(env, monkeypatch):
     """重发走同一条记录(唯一索引不允许第二条),状态被重置。"""
     _install(monkeypatch, FakeAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     db.update_publication(pub_id, state="published", remote_id="BV1old")
-    again = service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"], force=True)
+    again = service.enqueue("p_1", account_ids=["acc_1"], force=True)
     assert len(again["created"]) == 1
     assert len(db.list_publications(project_id="p_1")) == 1
     row = db.get_publication(pub_id)
@@ -116,21 +116,34 @@ def test_enqueue_force_reuses_the_same_row(env, monkeypatch):
 
 def test_enqueue_ignores_unknown_account(env, monkeypatch):
     _install(monkeypatch, FakeAdapter())
-    out = service.enqueue("p_1", account_ids=["acc_nope"], aspects=["16:9"])
+    out = service.enqueue("p_1", account_ids=["acc_nope"])
     assert out["created"] == []
 
 
-def test_aspect_follows_platform_preference(env, monkeypatch):
-    """没指定画幅时按平台推荐:B站 16:9,抖音 9:16 —— 竖屏平台发横屏会被重排裁切。"""
+def test_aspect_follows_the_project_not_the_platform(env, monkeypatch):
+    """画幅是建项目时选的:横屏项目发抖音也是 16:9,只给一句提示,不再按平台补竖版。"""
     _install(monkeypatch, FakeAdapter())
     db.create_account({
         "id": "acc_dy", "platform": "douyin", "name": "抖号", "auth_kind": "oauth",
         "credential": "{}", "meta": "{}", "enabled": 1, "created_at": 0.0, "updated_at": 0.0,
     })
-    service.enqueue("p_1", account_ids=["acc_1", "acc_dy"])
+    out = service.enqueue("p_1", account_ids=["acc_1", "acc_dy"])
     aspects = {r["account_id"]: r["aspect"] for r in db.list_publications(project_id="p_1")}
-    assert aspects["acc_1"] == "16:9"
-    assert aspects["acc_dy"] == "9:16"
+    assert aspects == {"acc_1": "16:9", "acc_dy": "16:9"}
+    assert len(out["warnings"]) == 1 and "抖音" in out["warnings"][0]
+
+
+def test_portrait_project_publishes_vertical_file_with_warning(env, monkeypatch):
+    """竖屏项目发 B站:照发竖屏成片,提示「B站推荐横屏」。"""
+    _install(monkeypatch, FakeAdapter())
+    # 画幅建项目时定、之后不可改(update_project 不认 aspect 列),所以另建一个竖屏项目
+    db.create_project({**db.get_project("p_1"), "id": "p_v", "aspect": "9:16", "subjects": []})
+    (config.project_dir("p_v") / "output_vertical.mp4").write_bytes(b"fake")
+    out = service.enqueue("p_v", account_ids=["acc_1"])
+    row = out["created"][0]
+    assert row["aspect"] == "9:16"
+    assert row["artifact"] == "output_vertical.mp4"
+    assert out["warnings"] and "横屏" in out["warnings"][0]
 
 
 # --------------------------------------------------------------------------
@@ -138,7 +151,7 @@ def test_aspect_follows_platform_preference(env, monkeypatch):
 # --------------------------------------------------------------------------
 def test_advance_publishes_and_stores_remote_id(env, monkeypatch):
     adapter = _install(monkeypatch, FakeAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     result = service.advance(pub_id)
     assert result["ok"] is True
@@ -151,7 +164,7 @@ def test_advance_publishes_and_stores_remote_id(env, monkeypatch):
 
 def test_credential_error_is_not_retried(env, monkeypatch):
     _install(monkeypatch, FakeAdapter("credential"))
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     result = service.advance(pub_id)
     assert result["ok"] is False
@@ -162,7 +175,7 @@ def test_credential_error_is_not_retried(env, monkeypatch):
 
 def test_retryable_error_goes_back_to_pending(env, monkeypatch):
     _install(monkeypatch, FakeAdapter("retryable"))
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     result = service.advance(pub_id)
     assert result["retryable"] is True
@@ -173,7 +186,7 @@ def test_retryable_error_goes_back_to_pending(env, monkeypatch):
 
 def test_retries_stop_at_max_attempts(env, monkeypatch):
     _install(monkeypatch, FakeAdapter("retryable"))
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     for _ in range(service.MAX_ATTEMPTS):
         service.advance(pub_id)
@@ -184,7 +197,7 @@ def test_retries_stop_at_max_attempts(env, monkeypatch):
 
 def test_not_ok_result_is_a_failure(env, monkeypatch):
     _install(monkeypatch, FakeAdapter("notok"))
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     service.advance(pub_id)
     assert db.get_publication(pub_id)["state"] == "failed"
@@ -193,7 +206,7 @@ def test_not_ok_result_is_a_failure(env, monkeypatch):
 def test_forbidden_word_blocks_publishing(env, monkeypatch):
     """文案含广告法禁用词就不发 —— 投放被拒等于白忙。"""
     adapter = _install(monkeypatch, FakeAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     db.update_publication(pub_id, title="史上最强车型")
     result = service.advance(pub_id)
@@ -230,7 +243,7 @@ def test_one_platform_failure_does_not_roll_back_the_other(env, monkeypatch):
         "id": "acc_2", "platform": "douyin", "name": "抖号", "auth_kind": "oauth",
         "credential": "{}", "meta": "{}", "enabled": 1, "created_at": 0.0, "updated_at": 0.0,
     })
-    service.enqueue("p_1", account_ids=["acc_1", "acc_2"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1", "acc_2"])
     for row in db.list_publications(project_id="p_1"):
         service.advance(row["id"])
     states = {r["platform"]: r["state"] for r in db.list_publications(project_id="p_1")}
@@ -243,7 +256,7 @@ def test_one_platform_failure_does_not_roll_back_the_other(env, monkeypatch):
 # --------------------------------------------------------------------------
 def test_retry_resets_and_runs(env, monkeypatch):
     _install(monkeypatch, FakeAdapter("credential"))
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     service.advance(pub_id)
     assert db.get_publication(pub_id)["state"] == "failed"
@@ -257,7 +270,7 @@ def test_retry_resets_and_runs(env, monkeypatch):
 # --------------------------------------------------------------------------
 def test_publication_view_has_no_credential(env, monkeypatch):
     _install(monkeypatch, FakeAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     view = service.publication_view(db.list_publications(project_id="p_1")[0])
     assert "credential" not in view
     assert "SESSDATA" not in json.dumps(view, ensure_ascii=False)
@@ -300,7 +313,7 @@ def test_session_is_persisted_when_adapter_provides_one(env, monkeypatch):
             return PublishResult(ok=True, state="published", remote_id="BV1ok")
 
     _install(monkeypatch, SessionAdapter())
-    service.enqueue("p_1", account_ids=["acc_1"], aspects=["16:9"])
+    service.enqueue("p_1", account_ids=["acc_1"])
     pub_id = db.list_publications(project_id="p_1")[0]["id"]
     service.advance(pub_id)
     assert seen.get("called")

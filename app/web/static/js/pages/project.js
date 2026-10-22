@@ -646,11 +646,11 @@ async function openPublish() {
     h(
       'p',
       { class: 'muted small' },
-      preview.has_vertical ? '横版与竖版都已就绪。' : '竖版还在生成 —— 发布到竖屏平台时会自动先补一版。',
+      `这个项目是${preview.aspect_label || preview.aspect},各平台都发这一版成片。`,
     ),
   );
   if (preview.has_output === false) {
-    body.appendChild(h('div', { class: 'callout tone-danger' }, '横屏成片还没生成,先出成片。'));
+    body.appendChild(h('div', { class: 'callout tone-danger' }, '成片还没生成,先出成片。'));
   }
 
   for (const p of platforms) {
@@ -682,9 +682,10 @@ async function openPublish() {
           { class: 'pub-pick-head' },
           check,
           h('strong', {}, p.rule.label),
-          h('span', { class: 'subtle small' }, `${p.aspect} · ${p.accounts.length} 个账号`),
+          h('span', { class: 'subtle small' }, `推荐 ${p.aspect} · ${p.accounts.length} 个账号`),
           stateBadge,
         ),
+        p.aspect_warning ? h('p', { class: 'small tone-warning' }, `${p.aspect_warning},仍可发布。`) : null,
         h(
           'label',
           { class: 'field' },
@@ -748,6 +749,7 @@ async function openPublish() {
         const n = (r.created || []).length;
         const s = (r.skipped || []).length;
         toast(`已排入 ${n} 条${s ? `,跳过 ${s} 条(已发过)` : ''}`);
+        for (const w of r.warnings || []) toast(w, { type: 'warning' });
         close();
       } catch (err) {
         toast(err.message, { type: 'danger' });

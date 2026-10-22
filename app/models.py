@@ -177,6 +177,9 @@ class ProjectCreate(BaseModel):
     #: 目标时长(秒)。成片跟着旁白走,这只是目标
     duration: int = 240
     narration_mode: NarrationMode = "tts"
+    #: 成片画幅:16:9(横屏)| 9:16(竖屏)。创建时定,之后不可改。
+    #: 空 = 取品类 profile 的默认画幅(现在是 16:9)。
+    aspect: str = ""
     quota_budget: float | None = None
     title: str | None = None
     #: 选题角度(来自热点选题或手填),如「月销破 3 万背后:它到底赢在哪」。
@@ -229,6 +232,8 @@ class ProjectSummary(BaseModel):
     subjects: list[SubjectEntry] = Field(default_factory=list)
     duration: int
     shot_count: int
+    #: 成片画幅:16:9 | 9:16
+    aspect: str = "16:9"
     state: str
     #: 停在这个状态的原因(配额暂停 / 失败时写明卡在哪)。列表页要显示它 ——
     #: 只说"失败了"不说是为什么,等于让人自己去看日志。

@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from .. import config, db
+from ..pipeline import aspect as aspect_mod
 from . import accounts as accounts_mod
 from . import metadata as md
 from .base import Account, PlatformRef, PublishError, PublishRequest, PublishResult
-from .registry import LANDSCAPE, PORTRAIT, adapter_for, rule_for
+from .registry import LANDSCAPE, adapter_for, rule_for
 
 #: 单条发布最多尝试几次(含首次)
 MAX_ATTEMPTS = 3
@@ -54,12 +55,14 @@ _lock = threading.Lock()
 # --------------------------------------------------------------------------
 # 产物
 # --------------------------------------------------------------------------
+# 文件名的唯一定义在 `pipeline/aspect.py`。一个项目只有一种画幅、只出一份成片 ——
+# 画幅在新建项目时就定了,发布层不再"按平台补一版另一个画幅"。
 def artifact_name(aspect: str) -> str:
-    return "output_vertical.mp4" if aspect == PORTRAIT else "output.mp4"
+    return aspect_mod.output_name_for(aspect)
 
 
 def cover_name(aspect: str) -> str:
-    return "cover_vertical.jpg" if aspect == PORTRAIT else "cover.jpg"
+    return aspect_mod.cover_name_for(aspect)
 
 
 def artifact_path(project_id: str, aspect: str) -> Path:
@@ -130,13 +133,13 @@ def forbidden_hits(text: str, category: str, theme: str = "") -> list[str]:
 # --------------------------------------------------------------------------
 # 建任务
 # --------------------------------------------------------------------------
-def enqueue(project_id: str, *, account_ids: list[str], aspects: list[str] | None = None,
+def enqueue(project_id: str, *, account_ids: list[str],
             overrides: dict[str, dict[str, Any]] | None = None,
-            force: bool = False) -> dict[str, list[dict[str, Any]]]:
-    """为 (账号 × 画幅) 建发布任务。已发过的默认跳过(幂等)。
+            force: bool = False) -> dict[str, list[Any]]:
+    """为每个账号建一条发布任务,画幅就是**项目的画幅**。已发过的默认跳过(幂等)。
 
-    `aspects` 为空时**按平台推荐自动选**:B站 / YouTube 走 16:9,
-    抖音 / 小红书 / 视频号走 9:16 —— 竖屏平台发横屏会被重排裁切。
+    平台推荐的画幅与项目不一致时(竖屏项目发 B站 / YouTube,横屏项目发抖音)
+    照发,但在 `warnings` 里提示一句 —— 画幅是建项目时选的,这里不替用户改。
     """
     project = db.get_project(project_id)
     if not project:
@@ -147,14 +150,18 @@ def enqueue(project_id: str, *, account_ids: list[str], aspects: list[str] | Non
     ctx = build_context(project_id)
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    project_aspect = aspect_mod.of(project)
 
     for account_id in account_ids:
         account = accounts_mod.get_account(account_id)
         if not account or not account.enabled:
             continue
         rule = rule_for(account.platform)
-        wanted = aspects or [rule.aspect]
-        for aspect in wanted:
+        warning = aspect_warning(account.platform, project_aspect)
+        if warning and warning not in warnings:
+            warnings.append(warning)
+        for aspect in (project_aspect,):
             existing = db.find_publication(project_id, account_id, aspect)
             if existing and not force:
                 skipped.append(existing)
@@ -194,7 +201,15 @@ def enqueue(project_id: str, *, account_ids: list[str], aspects: list[str] | Non
                          reason=f"排队发布到{rule.label}({aspect})")
             created.append(row)
 
-    return {"created": created, "skipped": skipped}
+    return {"created": created, "skipped": skipped, "warnings": warnings}
+
+
+def aspect_warning(platform: str, project_aspect: str) -> str:
+    """平台推荐画幅与项目画幅不一致时的提示;一致返回空串。"""
+    rule = rule_for(platform)
+    if rule.aspect == project_aspect:
+        return ""
+    return f"{rule.label}推荐{aspect_mod.label(rule.aspect)},这个项目是{aspect_mod.label(project_aspect)}"
 
 
 # --------------------------------------------------------------------------
@@ -242,15 +257,10 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
 
 
 def _ensure_artifact(row: dict[str, Any]) -> None:
-    """竖版产物可能还没生成。缺就先渲染一版(在后台线程里跑,不阻塞 HTTP)。"""
+    """成片必须已经在了。画幅建项目时就定了,这里不再补渲另一个画幅。"""
     path = artifact_path(row["project_id"], row.get("aspect") or LANDSCAPE)
-    if path.is_file():
-        return
-    if (row.get("aspect") or LANDSCAPE) != PORTRAIT:
+    if not path.is_file():
         raise PublishError(f"成片不存在:{path.name}", retryable=False)
-    from ..pipeline import vertical
-
-    vertical.build(row["project_id"])
 
 
 def attempt(row: dict[str, Any]) -> PublishResult:

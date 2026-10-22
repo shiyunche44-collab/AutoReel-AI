@@ -21,7 +21,7 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
-from . import concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen
+from . import aspect, concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen
 
 log = logging.getLogger(__name__)
 
@@ -129,9 +129,19 @@ def create_project(payload: ProjectCreate) -> str:
             f"品类「{profile.label}」目前是骨架配置,尚未完整实现。"
             f"待补齐:{'; '.join(profile.todo) or '行业逻辑'}"
         )
-    if payload.duration not in profile.supported_durations():
+
+    # 画幅:创建时定,之后不可改。空 = 品类默认画幅。
+    wanted_aspect = (payload.aspect or "").strip()
+    if wanted_aspect and wanted_aspect not in config.ASPECTS:
         raise PipelineError(
-            f"不支持的时长 {payload.duration}s。可选:{list(profile.supported_durations())}"
+            f"不支持的画幅 {wanted_aspect!r}。可选:{list(config.ASPECTS)}"
+        )
+    project_aspect = wanted_aspect or aspect.normalise(profile.aspect_ratio)
+    # 时长档位跟画幅走:竖屏 60/90/120/180,横屏 120/240/360/480
+    durations = profile.supported_durations(project_aspect)
+    if payload.duration not in durations:
+        raise PipelineError(
+            f"{aspect.label(project_aspect)}不支持时长 {payload.duration}s。可选:{list(durations)}"
         )
 
     theme_name = (payload.theme or "").strip()
@@ -185,6 +195,7 @@ def create_project(payload: ProjectCreate) -> str:
             "duration": payload.duration,
             "shot_count": shot_count,
             "narration_mode": payload.narration_mode,
+            "aspect": project_aspect,
             "state": str(State.DRAFT_INTENT),
             "state_reason": None,
             "quota_budget": budget,
@@ -205,7 +216,7 @@ def create_project(payload: ProjectCreate) -> str:
         project_id, str(State.DRAFT_INTENT),
         reason=f"创建项目:{title}(方向:{theme_name}"
                + (f",角度:{payload.angle.strip()}" if (payload.angle or "").strip() else "")
-               + ")",
+               + f",画幅:{aspect.label(project_aspect)})",
     )
     return project_id
 

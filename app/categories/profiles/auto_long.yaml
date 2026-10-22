@@ -11,6 +11,8 @@ aspect_ratio: "16:9"
 track: explainer
 duration_grid: 8
 durations: [120, 240, 360, 480]
+# 竖屏项目的时长档位(竖屏平台看完播率,更短)。不是栅格整数倍也行:拍数四舍五入
+durations_portrait: [60, 90, 120, 180]
 
 # 事实来源:车型硬参数走 ifind.product_news(检索新闻正文),
 # 公司/行业数据走 iFinD,工商与合规走企查查。
@@ -62,18 +64,19 @@ themes:
         不许写"配置给得足""门槛压得低"这种没有数字的比较。
       - 用车成本段讲落地价之后还要花的钱:电费、保险、保养、保值率。
         有事实就写数字并说明口径;算不出年成本就只讲定性,不许编。
+    # 竖屏短时长(60s ≈ 8 拍)放不下全部块时按 drop 整档精简(1 先砍,0 = 必留);横屏档位块数放得下,不受影响
     blocks:
       - {section: 开场, weight: 1, remainder: false}
-      - {section: 兑现承诺, weight: 1, remainder: false}
-      - {section: 亮出出处, weight: 1, remainder: false}
+      - {section: 兑现承诺, weight: 1, remainder: false, drop: 1}
+      - {section: 亮出出处, weight: 1, remainder: false, drop: 1}
       - {section: 定位与价格, weight: 2}
       - {section: 外观设计, weight: 2}
-      - {section: 内饰空间, weight: 2}
+      - {section: 内饰空间, weight: 2, drop: 3}
       - {section: 三电性能, weight: 3}
       - {section: 智能配置, weight: 2}
-      - {section: 版本选择, weight: 2}
-      - {section: 竞品对比, weight: 2}
-      - {section: 用车成本, weight: 2}
+      - {section: 版本选择, weight: 2, drop: 2}
+      - {section: 竞品对比, weight: 2, drop: 3}
+      - {section: 用车成本, weight: 2, drop: 2}
       - {section: 结论建议, weight: 1, remainder: false}
 
   # 多车横评:建项目时填车单(3–5 台),subject 是选题名(如「15 万级纯电 SUV 横评」)。

@@ -29,22 +29,49 @@ SHOT_GRID_SECONDS = 6
 
 #: 品类没声明 durations 时的可选成片时长(秒)
 SUPPORTED_DURATIONS: tuple[int, ...] = (120, 240, 360, 480)
+#: 竖屏项目的可选成片时长(秒)。竖屏平台看完播率,档位更短。
+SUPPORTED_DURATIONS_PORTRAIT: tuple[int, ...] = (60, 90, 120, 180)
+
+#: 画幅。横屏 16:9 与竖屏 9:16 —— 新建项目时选,决定这个项目的成片画幅。
+#:
+#: 画幅是**项目属性**:项目行上的 `aspect` 字段说了算(见 `pipeline/aspect.py`)。
+#: 品类 YAML 里的 `aspect_ratio` 只是新建时的默认值。
+LANDSCAPE = "16:9"
+PORTRAIT = "9:16"
+ASPECTS: tuple[str, ...] = (LANDSCAPE, PORTRAIT)
+
+#: 两种画幅的成片像素尺寸。**短边都是 1080** —— 叠加层字号按短边推导,
+#: 所以横竖两版的字号完全一致,变的只是排布(见 `pipeline/overlays.py`)。
+LANDSCAPE_SIZE = (1920, 1080)
+PORTRAIT_SIZE = (1080, 1920)
 
 #: 归一化片段的缺省画幅。
 #:
 #: ⚠️ 这里曾经是 **1080×1920(竖屏 9:16)** —— 那是已删除的竖屏链路留下的
 #: 残留。它是 `cards.geo_for` / `render._size` / `timeline` / `narration.make_cover`
 #: / `providers.clips` 的**兜底**画幅:解说轨正常路径都显式传
-#: `profile.frame_size`(16:9),所以大多数时候是对的;但任何一处漏传 size,
-#: 就会**静默产出竖屏**画面 —— 竖屏的画幅常量在横屏项目里是活的雷。
+#: 项目自己的画幅(`aspect.frame_size`),所以大多数时候是对的;但任何一处
+#: 漏传 size,就会**静默产出另一个画幅**的画面 —— 兜底画幅在项目里是活的雷。
 #:
-#: 现在改成 16:9,让它与解说轨的实际画幅一致;漏传 size 最多得到一张
-#: 16:9 的图,而不是一张竖的。
-OUTPUT_WIDTH = 1920
-OUTPUT_HEIGHT = 1080
+#: 所以它固定为横屏 16:9(与解说轨的默认画幅一致):漏传 size 最多得到一张
+#: 16:9 的图,而不是一张竖的。要竖屏必须显式传 size。
+OUTPUT_WIDTH, OUTPUT_HEIGHT = LANDSCAPE_SIZE
 
 #: 横屏解说轨的标准画幅比例
 FRAME_ASPECT = 16 / 9
+
+
+def size_for_aspect(aspect: str) -> tuple[int, int]:
+    """画幅名 -> 像素尺寸。未知画幅退回横屏。"""
+    return PORTRAIT_SIZE if aspect == PORTRAIT else LANDSCAPE_SIZE
+
+
+def aspect_for_size(size: tuple[int, int]) -> str:
+    """像素尺寸 -> 画幅名。竖着的就是竖屏。"""
+    w, h = size
+    if w and h and h > w:
+        return PORTRAIT
+    return LANDSCAPE
 
 
 def frame_is_landscape(size: tuple[int, int]) -> bool:

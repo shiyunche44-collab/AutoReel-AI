@@ -407,13 +407,16 @@ def _build_trends(raw: Any) -> TrendSpec:
 class CategoryProfile:
     name: str
     label: str
-    aspect_ratio: str = "9:16"
+    #: 新建项目时的**默认**画幅。真正的画幅是项目属性(见 pipeline/aspect.py)
+    aspect_ratio: str = "16:9"
     duration_grid: int = 6
     #: 画面链路。目前只有 explainer = 横屏信息解说(实拍只当背景,信息靠叠加层,
     #: 时长跟着旁白走);竖屏逐镜头生成链路已删除
     track: str = "explainer"
     #: 可选成片时长(秒)。空 = 全局 SUPPORTED_DURATIONS
     durations: tuple[int, ...] = ()
+    #: 竖屏项目的可选成片时长(秒)。空 = 全局 SUPPORTED_DURATIONS_PORTRAIT
+    durations_portrait: tuple[int, ...] = ()
     fact_sources: tuple[str, ...] = ()
     #: duration -> 段落名列表,长度必须等于 duration/6
     #: (未声明 themes 的老 profile 走这条路径)
@@ -471,18 +474,30 @@ class CategoryProfile:
     def is_explainer(self) -> bool:
         return self.track == "explainer"
 
-    def supported_durations(self) -> tuple[int, ...]:
+    def supported_durations(self, aspect: str | None = None) -> tuple[int, ...]:
+        """这个画幅可选的成片时长。不给画幅 = 横屏(老调用方的语义)。"""
         from .. import config
 
+        if aspect == config.PORTRAIT:
+            return self.durations_portrait or config.SUPPORTED_DURATIONS_PORTRAIT
         return self.durations or config.SUPPORTED_DURATIONS
 
+    def all_durations(self) -> tuple[int, ...]:
+        """横竖两种画幅的时长并集 —— 配置自检要对每一档都铺展得开。"""
+        from .. import config
+
+        return tuple(sorted({*self.supported_durations(config.LANDSCAPE),
+                             *self.supported_durations(config.PORTRAIT)}))
+
     def shots_for(self, duration: int) -> int:
-        """该时长铺几个镜头(解说轨叫节拍)。按本 profile 的栅格算。"""
-        if duration % self.duration_grid != 0:
-            raise ProfileError(
-                f"品类 {self.name}: 时长 {duration}s 必须是 {self.duration_grid} 的整数倍"
-            )
-        return duration // self.duration_grid
+        """该时长铺几个镜头(解说轨叫节拍)。按本 profile 的栅格四舍五入。
+
+        成片时长本来就跟着旁白走,目标时长只是估算;竖屏的 60/90/180 秒
+        不一定是栅格的整数倍(栅格 8 秒时 60s → 8 拍),所以取最接近的拍数,
+        不再要求整除。横屏档位都是整数倍,结果与原来一致。"""
+        if duration <= 0:
+            raise ProfileError(f"品类 {self.name}: 时长必须为正数,收到 {duration}s")
+        return max(1, int(duration / self.duration_grid + 0.5))
 
     @property
     def frame_size(self) -> tuple[int, int]:
@@ -542,7 +557,7 @@ class CategoryProfile:
             raise ProfileError(f"品类 {self.name} 未声明任何 section_plan 或 blocks")
         # 退化路径:用最接近的方案裁剪/补齐
         closest = min(plan, key=lambda d: abs(d - duration))
-        target_shots = duration // self.duration_grid
+        target_shots = self.shots_for(duration)
         base = list(plan[closest])
         while len(base) < target_shots:
             base.insert(max(1, len(base) - 1), base[len(base) // 2])
@@ -561,12 +576,12 @@ class CategoryProfile:
         if not theme.roundup:
             return tuple(Slot(s) for s in self.plan_for(duration, name))
         names = [str(x).strip() for x in (subjects or theme.placeholder_subjects()) if str(x).strip()]
-        flat = self.roundup_blocks(theme, names, shots=duration // self.duration_grid)
+        flat = self.roundup_blocks(theme, names, shots=self.shots_for(duration))
         counts = self._allocate(flat, duration)
         out: list[Slot] = []
         for block, count in zip(flat, counts):
             out.extend([Slot(str(block.get("section", "")), str(block.get("subject", "")))] * count)
-        return tuple(out[:duration // self.duration_grid])
+        return tuple(out[:self.shots_for(duration)])
 
     @staticmethod
     def roundup_blocks(theme: ThemeSpec, subjects: Sequence[str],
@@ -588,18 +603,47 @@ class CategoryProfile:
         per_car = [{**b, "subject": name} for name in subjects for b in per_subject]
         return [*theme.blocks[:at], *per_car, *theme.blocks[at:]]
 
+    def max_subjects(self, theme: ThemeSpec, duration: int) -> int:
+        """横评在这个时长下最多放得下几台车(精简到底后)。放不下最少台数时返回 0。"""
+        lo, hi = theme.subject_count
+        shots = self.shots_for(duration)
+        for n in range(hi, lo - 1, -1):
+            if self.roundup_min_blocks(theme, n) <= shots:
+                return n
+        return 0
+
     @staticmethod
     def roundup_min_blocks(theme: ThemeSpec, count: int) -> int:
         """`count` 台车精简到底(只留 drop=0 的段落)时的段落块数。"""
         core = [b for b in theme.per_subject if not b.get("drop")]
         return len(theme.blocks) + len(core) * count
 
+    @staticmethod
+    def shed_blocks(blocks: Sequence[dict[str, Any]], shots: int) -> list[dict[str, Any]]:
+        """段落块多于拍数时,按 `drop` 从小到大整档砍掉(0 = 必留)。
+
+        竖屏 60 秒只有 8 拍左右,单车方向的 12 个块铺不开 —— 不精简的话
+        铺展会把**末尾**的块(结论)截掉。和横评每车段落的精简同一套规则。
+        块数本来就放得下时原样返回,横屏档位的铺展结果不变。"""
+        out = list(blocks)
+        for level in sorted({b["drop"] for b in out if b.get("drop")}):
+            if len(out) <= shots:
+                break
+            out = [b for b in out if b.get("drop") != level]
+        return out
+
+    @staticmethod
+    def core_blocks(blocks: Sequence[dict[str, Any]]) -> int:
+        """精简到底(只留 drop=0)时的块数。"""
+        return sum(1 for b in blocks if not b.get("drop"))
+
     def _expand_blocks(self, theme: ThemeSpec, duration: int) -> tuple[str, ...]:
-        counts = self._allocate(theme.blocks, duration)
+        blocks = self.shed_blocks(theme.blocks, self.shots_for(duration))
+        counts = self._allocate(blocks, duration)
         out: list[str] = []
-        for block, count in zip(theme.blocks, counts):
+        for block, count in zip(blocks, counts):
             out.extend([str(block.get("section", ""))] * count)
-        return tuple(out[:duration // self.duration_grid])
+        return tuple(out[:self.shots_for(duration)])
 
     def _allocate(self, blocks: Sequence[dict[str, Any]], duration: int) -> list[int]:
         """把段落块权重表铺展成恰好 duration/6 个段落的序列。
@@ -616,11 +660,7 @@ class CategoryProfile:
         里有 6 个拿到 2 个钩子,12 秒纯悬念开场把正片挤掉了。
         钩子这类铺垫段落取 floor 就够,补位名额应该留给内容块。
         """
-        if duration % self.duration_grid != 0:
-            raise ProfileError(
-                f"品类 {self.name}: 时长 {duration}s 必须是 {self.duration_grid} 的整数倍"
-            )
-        shots = duration // self.duration_grid
+        shots = self.shots_for(duration)
         weights = [max(1, int(b.get("weight", 1))) for b in blocks]
         total = sum(weights)
 
@@ -827,10 +867,11 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
     return CategoryProfile(
         name=str(raw.get("name", name)),
         label=str(raw.get("label", name)),
-        aspect_ratio=str(raw.get("aspect_ratio", "9:16")),
+        aspect_ratio=str(raw.get("aspect_ratio", "16:9")),
         duration_grid=int(raw.get("duration_grid", 6)),
         track=str(raw.get("track", "explainer") or "explainer"),
         durations=tuple(int(d) for d in (raw.get("durations") or ())),
+        durations_portrait=tuple(int(d) for d in (raw.get("durations_portrait") or ())),
         fact_sources=tuple(raw.get("fact_sources") or ()),
         section_plan=plan,
         sections=sections,
@@ -869,8 +910,8 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
 
 def _min_supported_shots(profile: CategoryProfile) -> int:
     """最短受支持时长对应的镜头数 —— 块数不能超过它,否则铺展会挤爆。"""
-    durations = profile.supported_durations() or (60,)
-    return min(durations) // profile.duration_grid
+    durations = profile.all_durations() or (60,)
+    return profile.shots_for(min(durations))
 
 
 #: 解说轨的版式名。与 pipeline/explainer.LAYOUTS 保持一致(这里不反向导入流水线)
@@ -891,7 +932,7 @@ def _validate(profile: CategoryProfile) -> None:
 
     # 1. 老写法:手写 section_plan
     for duration, plan in profile.section_plan.items():
-        expected = duration // profile.duration_grid
+        expected = profile.shots_for(duration)
         if len(plan) != expected:
             raise ProfileError(
                 f"品类 {profile.name}: 时长 {duration}s 需 {expected} 个段落,"
@@ -914,11 +955,20 @@ def _validate(profile: CategoryProfile) -> None:
             if not any(not b.get("drop") for b in theme.per_subject):
                 raise ProfileError(
                     f"品类 {profile.name} 方向 {tname}: per_subject 至少要有一个必留(drop=0)段落")
-            # 最多台数精简到底,也要塞得进最短时长 —— 任何车数 × 任何时长都能建项目
+            # 横屏:最多台数精简到底,也要塞得进横屏最短时长 —— 任何车数 × 任何横屏时长都能建项目。
+            # 竖屏档位更短(60s ≈ 8 拍),只保证**最少**台数放得下;车多时建项目会提示加长时长。
+            from .. import config as _config
+
+            landscape_min = profile.shots_for(min(profile.supported_durations(_config.LANDSCAPE)))
             need = CategoryProfile.roundup_min_blocks(theme, hi)
-            if need > min_shots:
+            if need > landscape_min:
                 raise ProfileError(
                     f"品类 {profile.name} 方向 {tname}: {hi} 台车精简后仍要 {need} 个段落块,"
+                    f"超过横屏最短时长的镜头数 {landscape_min}")
+            need = CategoryProfile.roundup_min_blocks(theme, lo)
+            if need > min_shots:
+                raise ProfileError(
+                    f"品类 {profile.name} 方向 {tname}: {lo} 台车精简后仍要 {need} 个段落块,"
                     f"超过最短时长的镜头数 {min_shots}")
             for block in (*theme.blocks, *theme.per_subject):
                 section = str(block.get("section", ""))
@@ -929,10 +979,12 @@ def _validate(profile: CategoryProfile) -> None:
                     raise ProfileError(
                         f"品类 {profile.name} 方向 {tname}: 段落块 {section} 的 weight 必须 ≥1")
         elif theme.uses_blocks:
-            if len(theme.blocks) > min_shots:
+            core = CategoryProfile.core_blocks(theme.blocks)
+            if core > min_shots:
                 raise ProfileError(
-                    f"品类 {profile.name} 方向 {tname}: 声明了 {len(theme.blocks)} 个段落块,"
-                    f"超过最短时长的镜头数 {min_shots},铺展时必然压到 0"
+                    f"品类 {profile.name} 方向 {tname}: 精简到底仍有 {core} 个段落块,"
+                    f"超过最短时长的镜头数 {min_shots},铺展时必然压到 0。"
+                    f"给可省的块标 drop(1 先砍)"
                 )
             for block in theme.blocks:
                 section = str(block.get("section", ""))
@@ -949,7 +1001,7 @@ def _validate(profile: CategoryProfile) -> None:
                     )
         else:
             for duration, plan in theme.plan.items():
-                expected = duration // profile.duration_grid
+                expected = profile.shots_for(duration)
                 if len(plan) != expected:
                     raise ProfileError(
                         f"品类 {profile.name} 方向 {tname}: 时长 {duration}s 需 {expected} 个段落,"
@@ -969,15 +1021,13 @@ def _validate(profile: CategoryProfile) -> None:
             )
 
     # 4. 铺展必须落在栅格上 —— 这是最容易写错的环节,在加载期就拦掉
-    for duration in profile.supported_durations():
-        if duration % profile.duration_grid != 0:
-            continue
+    for duration in profile.all_durations():
         for tname in profile.themes:
             got = len(profile.plan_for(duration, tname))
-            if got != duration // profile.duration_grid:
+            if got != profile.shots_for(duration):
                 raise ProfileError(
                     f"品类 {profile.name} 方向 {tname}: {duration}s 铺展出 {got} 个段落,"
-                    f"应为 {duration // profile.duration_grid} 个"
+                    f"应为 {profile.shots_for(duration)} 个"
                 )
 
     # 5. 视角表前后自洽:写错一个视角名,背景会静默挑不到图
@@ -1050,6 +1100,9 @@ def available_categories() -> list[dict[str, Any]]:
             # 时长由 profile 声明(缺省用全局档位),不再取 section_plan 的键 ——
             # 方向库模式下 plan 由 blocks 铺展而来,没有"键"可言。
             "durations": list(profile.supported_durations()),
+            "durations_by_aspect": {
+                a: list(profile.supported_durations(a)) for a in _config_aspects()
+            },
             "track": profile.track,
             "aspect_ratio": profile.aspect_ratio,
             "default_theme": profile.default_theme,
@@ -1061,11 +1114,20 @@ def available_categories() -> list[dict[str, Any]]:
             },
             "themes": [
                 {"name": t.name, "label": t.label, "intent": t.intent,
-                 "roundup": t.roundup, "subject_count": list(t.subject_count)}
+                 "roundup": t.roundup, "subject_count": list(t.subject_count),
+                 # 横评:每档时长最多放得下几台车(竖屏短档位放不下最多台数)
+                 "max_subjects": ({str(d): profile.max_subjects(t, d) for d in profile.all_durations()}
+                                  if t.roundup else {})}
                 for t in profile.themes.values()
             ],
         })
     return out
+
+
+def _config_aspects() -> tuple[str, ...]:
+    from .. import config
+
+    return config.ASPECTS
 
 
 def default_category() -> str:

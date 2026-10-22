@@ -96,7 +96,7 @@
       <span class="field-label">选项目</span>
       <select class="select" id="batch-project">
         {% for p in projects %}
-        <option value="{{ p.id }}" data-vertical="{{ '1' if p.has_vertical else '0' }}">{{ p.title }}（{{ p.subject }}）</option>
+        <option value="{{ p.id }}" data-aspect="{{ p.aspect }}">{{ p.title }}（{{ p.subject }}·{{ '竖屏' if p.aspect == '9:16' else '横屏' }}）</option>
         {% endfor %}
       </select>
     </label>

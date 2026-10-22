@@ -40,11 +40,10 @@ from .models import (
     ScriptSegment,
     ShotPatch,
 )
-from .pipeline import concept_styles, library, orchestrator
+from .pipeline import aspect, concept_styles, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
-from .pipeline import vertical
 from .providers import cli
 from .publish import accounts as publish_accounts
 from .publish import browser as publish_browser
@@ -374,17 +373,15 @@ async def lifespan(app: FastAPI):
     )
 
     scheduler.start()
-    # 分发侧的后台循环:发布任务、指标抓取、竖版补产。
+    # 分发侧的后台循环:发布任务、指标抓取。
     # 都是守护线程,进程退出即结束,不挡 Web。
     publish_accounts.import_from_file()
     publish_service.start()
     metrics_worker.start()
-    vertical.start()
     yield
     await scheduler.stop()
     publish_service.stop()
     metrics_worker.stop()
-    vertical.stop()
 
 
 app = FastAPI(title="aimovice", version="0.1.0", lifespan=lifespan)
@@ -456,7 +453,7 @@ def project_page(request: Request, project_id: str):
     except ProjectNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
     profile = load_profile(detail.category)
-    w, h = profile.frame_size
+    w, h = aspect.size_for(detail.aspect)
     beats = len(detail.shots) or detail.shot_count
     estimate = costs.estimate_explainer(detail.duration)
     facts_report = db.read_json(project_id, "facts_report.json", {}) or {}
@@ -916,7 +913,7 @@ def status(project_id: str):
 
 @app.get("/api/projects/{project_id}/download")
 def download(project_id: str):
-    path = config.project_dir(project_id) / "output.mp4"
+    path = aspect.output_path(project_id)
     if not path.is_file():
         raise HTTPException(404, "成片尚未生成")
     return FileResponse(path, media_type="video/mp4", filename=path.name)
@@ -924,7 +921,7 @@ def download(project_id: str):
 
 @app.get("/api/projects/{project_id}/cover")
 def cover(project_id: str):
-    path = config.project_dir(project_id) / "cover.jpg"
+    path = aspect.cover_path(project_id)
     if not path.is_file():
         raise HTTPException(404, "封面尚未生成")
     return FileResponse(path, media_type="image/jpeg")
@@ -970,8 +967,6 @@ class PublishPayload(BaseModel):
 
     #: 要发到哪些账号
     account_ids: list[str] = []
-    #: 要发哪些画幅(空 = 按平台推荐)
-    aspects: list[str] | None = None
     #: 逐平台的文案覆盖:{"bilibili": {"title": ..., "description": ..., "tags": [...]}}
     overrides: dict[str, dict[str, Any]] | None = None
     #: 已发过的是否重发
@@ -990,8 +985,8 @@ def publish_page(request: Request):
             continue
         projects.append({
             "id": row["id"], "title": row["title"], "subject": row["subject"],
-            "has_output": (config.project_dir(row["id"]) / "output.mp4").is_file(),
-            "has_vertical": vertical.exists(row["id"]),
+            "has_output": aspect.output_path(row["id"]).is_file(),
+            "aspect": aspect.of(row),
         })
     return templates.TemplateResponse(
         request, "publish.html",
@@ -1110,12 +1105,15 @@ def project_publish_preview(project_id: str):
             "accounts": [{"id": a.id, "name": a.name}
                          for a in accounts if a.platform == account.platform],
             "aspect": rule.aspect,
+            # 平台推荐画幅与项目不一致时的提示(照样能发)
+            "aspect_warning": publish_service.aspect_warning(account.platform, aspect.of(project)),
         }
     return {
         "project_id": project_id,
         "title": project["title"],
-        "has_output": (config.project_dir(project_id) / "output.mp4").is_file(),
-        "has_vertical": vertical.exists(project_id),
+        "has_output": aspect.output_path(project_id).is_file(),
+        "aspect": aspect.of(project),
+        "aspect_label": aspect.label(aspect.of(project)),
         "platforms": by_platform,
         "published": publish_service.list_for_project(project_id),
     }
@@ -1130,13 +1128,14 @@ def project_publish(project_id: str, payload: PublishPayload):
         raise HTTPException(400, "没有选平台")
     try:
         result = publish_service.enqueue(
-            project_id, account_ids=payload.account_ids, aspects=payload.aspects,
+            project_id, account_ids=payload.account_ids,
             overrides=payload.overrides, force=payload.force)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {
         "created": [publish_service.publication_view(r) for r in result["created"]],
         "skipped": [publish_service.publication_view(r) for r in result["skipped"]],
+        "warnings": result["warnings"],
     }
 
 
