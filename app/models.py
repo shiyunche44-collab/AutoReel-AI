@@ -196,6 +196,8 @@ class ProjectCreate(BaseModel):
     #: 开头 / 结尾写法(pipeline/variety.py 的 id)。为空 = 自动挑,避开最近几条用过的
     opening: str | None = Field(default=None, max_length=20)
     ending: str | None = Field(default=None, max_length=20)
+    #: 视觉包(pipeline/looks.py 的 id)。为空 = 自动挑
+    look: str | None = Field(default=None, max_length=20)
     #: 多车横评的车单(方向为 roundup 时必填);此时 subject 是选题名
     subjects: list[SubjectEntry] | None = Field(default=None, max_length=8)
 

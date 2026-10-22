@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -21,8 +22,8 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
-from . import (aspect, concept_styles, explainer, intake, library, locks, motion, rhythm, script_gen,
-               variety)
+from . import (aspect, concept_styles, explainer, intake, library, locks, looks, motion, rhythm,
+               script_gen, variety)
 
 log = logging.getLogger(__name__)
 
@@ -170,8 +171,11 @@ def create_project(payload: ProjectCreate) -> str:
     # 开头 / 结尾写法与中段顺序:用户指定的优先,否则避开同品类最近几条用过的
     project_id = new_id("p_")
     try:
-        variant = variety.pick(theme, project_id, db.recent_variants(payload.category),
+        recent = db.recent_variants(payload.category)
+        variant = variety.pick(theme, project_id, recent,
                                opening=payload.opening or None, ending=payload.ending or None)
+        # 视觉包同理:避开最近几条用过的
+        variant["look"] = looks.pick(project_id, recent, payload.look or None)
     except ValueError as exc:
         raise PipelineError(str(exc)) from exc
 
@@ -292,8 +296,10 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             return {"state": row.get("state") or "", "action": "项目正在推进中",
                     "busy": True, "waiting": False}
         try:
-            return _advance(project_id, confirmed=confirmed, force=force,
-                            stop_event=stop_event)
+            # 这一步里画的面板、数据卡、章节条、字幕、封面都用项目的视觉包
+            with looks.use(looks.of_project(project_id)):
+                return _advance(project_id, confirmed=confirmed, force=force,
+                                stop_event=stop_event)
         except costs.BudgetExceeded as exc:
             # 额度用尽:不是错误,是"该停"。进 PAUSED_BUDGET,提额后可恢复。
             return _pause_for_budget(project_id, exc)
@@ -809,6 +815,29 @@ def set_concept_style(project_id: str, style: str) -> dict[str, Any]:
             db.add_event(project_id, str(state), src=str(state),
                          reason=f"概念动画模版:{motion.get_style(style).name}")
         return {"style": style, "rerender": redo}
+
+
+def set_look(project_id: str, look: str) -> dict[str, Any]:
+    """换视觉包。只在开始渲染之前能换:换了等于所有面板、卡片、字幕都要重画。
+
+    没单独选过概念动画模版的项目,模版跟着视觉包一起换。"""
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        if look not in looks.LOOKS:
+            raise PipelineError(f"没有这个视觉包:{look}")
+        state = State(project["state"])
+        if state not in _STYLE_FREE:
+            raise PipelineError("现在不能换视觉包:渲染已经开始,换了要整片重画")
+        variant = _variant(project)
+        before = looks.of_variant(variant).id
+        if look != before:
+            variant["look"] = look
+            db.update_project(project_id, variant=json.dumps(variant, ensure_ascii=False))
+            db.add_event(project_id, str(state), src=str(state),
+                         reason=f"视觉包:{looks.get(look).label}")
+        return {"look": look, "concept": explainer.concept_style_of(project_id)}
 
 
 def run_until_waiting(project_id: str, max_steps: int = 12) -> list[dict[str, Any]]:

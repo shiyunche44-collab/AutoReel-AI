@@ -27,23 +27,32 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .. import config
-from . import cards
+from . import cards, looks
 
 # --------------------------------------------------------------------------
 # 配色
 # --------------------------------------------------------------------------
-#: 纸面底色
-PAPER = (236, 238, 233)
-#: 墨色(正文)
-INK = (18, 22, 26)
-#: 参数名的次级色(比 bakeoff C 的 .row .k 深一点,小字在纸上要更实)
-KEY = (61, 68, 76)
-#: 次级灰(单位、来源行)
-MUTED = (93, 101, 110)
-#: 强调橙
-ACCENT = (255, 90, 31)
-#: 纸面不透明度:留一点点底,不像贴上去的白纸片
-PAPER_ALPHA = 244
+#: 纸面 / 墨色 / 次级色 / 强调色都来自当前视觉包(looks.current())。
+#: 基线视觉包 hud 的取值就是这一套原来的常量:
+#:   PAPER (236, 238, 233) 纸面底色;INK (18, 22, 26) 墨色(正文);
+#:   KEY (61, 68, 76) 参数名的次级色(比 bakeoff C 的 .row .k 深一点,小字在纸上要更实);
+#:   MUTED (93, 101, 110) 单位、来源行;ACCENT (255, 90, 31) 强调橙;
+#:   PAPER_ALPHA 244 纸面不透明度:留一点点底,不像贴上去的白纸片。
+#: 纸上的淡色 GRID_COLOR / RULE_COLOR / EDGE_COLOR 由纸面和墨色预先混成实色;
+#: ACCENT_DARK 是纸上小字用的深一档强调色(纯橙配浅纸只有 3:1 对比)。
+_PALETTE = ("PAPER", "INK", "KEY", "MUTED", "ACCENT", "PAPER_ALPHA",
+            "GRID_COLOR", "RULE_COLOR", "EDGE_COLOR", "ACCENT_DARK")
+
+
+def __getattr__(name: str):
+    """`hud.ACCENT` 这类名字按当前视觉包取值(PEP 562)。"""
+    if name in _PALETTE:
+        return looks.current().hud_color(name)
+    raise AttributeError(name)
+
+
+def _c(name: str):
+    return looks.current().hud_color(name)
 
 
 def rgba(color: tuple[int, int, int], alpha: int = 255) -> tuple[int, int, int, int]:
@@ -61,14 +70,6 @@ def mix(base: tuple[int, int, int], ink: tuple[int, int, int], t: float) -> tupl
     return tuple(int(round(base[i] + (ink[i] - base[i]) * t)) for i in range(3))
 
 
-#: 纸上的淡色(都已预先混成实色)
-GRID_COLOR = mix(PAPER, INK, 0.07)
-RULE_COLOR = mix(PAPER, INK, 0.26)
-EDGE_COLOR = mix(PAPER, INK, 0.55)
-#: 纸上小字用的深一档橙:纯橙配浅纸只有 3:1 对比,小字看不清
-ACCENT_DARK = mix(ACCENT, INK, 0.24)
-
-
 # --------------------------------------------------------------------------
 # 字体
 # --------------------------------------------------------------------------
@@ -83,7 +84,8 @@ _MONO_FILES = {
 def mono_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """等宽字体(数字、拉丁、标签)。找不到任何一款就用系统黑体,别画成豆腐块。"""
     fonts = Path(config.FONTS_DIR)
-    for name in _MONO_FILES[bold]:
+    custom = looks.current().number_fonts[1 if bold else 0]
+    for name in (*custom, *_MONO_FILES[bold]):
         p = fonts / name
         if p.is_file():
             try:
@@ -193,7 +195,7 @@ def value_width(draw: ImageDraw.ImageDraw, text: str, number_size: int, unit_siz
 
 
 def draw_value(draw: ImageDraw.ImageDraw, x: float, y: float, text: str,
-               number_size: int, unit_size: int, number_fill=INK, unit_fill=MUTED,
+               number_size: int, unit_size: int, number_fill=None, unit_fill=None,
                mono_bold: bool = True) -> float:
     """画一个取值:HUD C 的写法是「大号等宽数字 + 小一号灰单位」。
 
@@ -202,6 +204,8 @@ def draw_value(draw: ImageDraw.ImageDraw, x: float, y: float, text: str,
     """
     import re
 
+    number_fill = _c("INK") if number_fill is None else number_fill
+    unit_fill = _c("MUTED") if unit_fill is None else unit_fill
     text = str(text or "")
     m = re.search(r"[-]?[0-9][0-9,]*[.]?[0-9]*", text)
     if not m:
@@ -234,11 +238,13 @@ def draw_value(draw: ImageDraw.ImageDraw, x: float, y: float, text: str,
 # 图元
 # --------------------------------------------------------------------------
 def plate(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
-          alpha: int = PAPER_ALPHA, grid_step: int = 58) -> None:
-    """纸面 + 发丝网格。网格是 bakeoff C 画布上的那种 7% 墨色细线。"""
+          alpha: int | None = None, grid_step: int = 58) -> None:
+    """纸面 + 发丝网格。网格是 bakeoff C 画布上的那种 7% 墨色细线(视觉包关掉网格就不画)。"""
     x0, y0, x1, y1 = box
-    draw.rectangle(box, fill=rgba(PAPER, alpha))
-    if grid_step > 0:
+    look = looks.current()
+    draw.rectangle(box, fill=rgba(look.paper, look.paper_alpha if alpha is None else alpha))
+    GRID_COLOR, EDGE_COLOR = look.grid_color, look.edge_color
+    if grid_step > 0 and look.grid:
         x = x0 + grid_step
         while x < x1:
             draw.line((x, y0, x, y1), fill=GRID_COLOR, width=1)
@@ -251,12 +257,15 @@ def plate(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
 
 
 def brackets(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
-             color=ACCENT, length: int = 44, width: int = 5) -> None:
+             color=None, length: int = 44, width: int = 5) -> None:
     """取景框角标:bakeoff C 里给画面加的四个橙色 L 形角。
 
     角标贴着纸面的四个内角画(不是骑在边上),这样纸是一张完整的规格页,
-    而不是被裁掉四个角。
+    而不是被裁掉四个角。视觉包关掉角标(暗场电影、杂志编排)就不画。
     """
+    if not looks.current().brackets:
+        return
+    color = _c("ACCENT") if color is None else color
     x0, y0, x1, y1 = box
     w = width
     for (cx, cy, sx, sy) in ((x0, y0, 1, 1), (x1, y0, -1, 1),
@@ -272,18 +281,20 @@ def brackets(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
 
 
 def rule(draw: ImageDraw.ImageDraw, x0: float, x1: float, y: float,
-         color=RULE_COLOR, width: int = 2) -> None:
+         color=None, width: int = 2) -> None:
     """发丝分隔线。"""
+    color = _c("RULE_COLOR") if color is None else color
     draw.line((x0, y, x1, y), fill=color, width=width)
 
 
 def ruler(draw: ImageDraw.ImageDraw, x0: float, x1: float, y: float,
-          color=RULE_COLOR, step: int = 17, minor: int = 7, major: int = 15) -> None:
+          color=None, step: int = 17, minor: int = 7, major: int = 15) -> None:
     """刻度尺:一条基线加长短相间的竖线。
 
     纯装饰 —— bakeoff C 的速度标尺也是这么画的。刻度间距固定,不表示任何数值,
     不给观众"这是进度条"的错觉。
     """
+    color = _c("RULE_COLOR") if color is None else color
     draw.line((x0, y, x1, y), fill=color, width=1)
     n = 0
     x = x0

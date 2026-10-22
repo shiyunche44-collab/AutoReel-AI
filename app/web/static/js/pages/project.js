@@ -8,6 +8,7 @@ import { countDirty, isDirty } from '../ui/dirty.js';
 import { loadVideo, withFallback } from '../ui/media.js';
 import { api } from '../api.js';
 import { initConceptStyle } from './concept-style.js';
+import { initLookPicker } from './look-pick.js';
 
 initChrome();
 
@@ -112,6 +113,7 @@ if (btnAdvance)
   btnAdvance.addEventListener('click', () => act(btnAdvance, `/api/projects/${PID}/advance`, undefined, '推进'));
 
 // 概念动画模版面板(本片有概念拍时才显示);门禁 B 上换模版会退回渲染,刷新页面跟上状态
+initLookPicker(PID);
 const conceptStyle = initConceptStyle(PID, { onRerender: () => setTimeout(reloadPreserving, 700) });
 
 // 门禁 A 被 lint 拦下时,后端错误消息里的标记

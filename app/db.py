@@ -452,7 +452,7 @@ def project_subjects(row: dict[str, Any] | None) -> list[dict[str, str]]:
 #: 是内部字面量,**没有注入面**;但这是一张等着被人顺手塞进用户输入
 #: 的表 —— 白名单把这条路堵死,代价只是一份常量。
 _PROJECT_COLUMNS = frozenset({
-    "title", "subject", "category", "theme", "angle", "thesis", "subjects",
+    "title", "subject", "category", "theme", "angle", "variant", "thesis", "subjects",
     "duration", "shot_count", "narration_mode", "state", "state_reason",
     "quota_budget", "spent_cost", "reserved_cost", "resume_state", "est_cost",
     "created_at", "updated_at",

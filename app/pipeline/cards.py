@@ -78,14 +78,14 @@ def geo_for(size: tuple[int, int] | None = None) -> Geo:
 _GEO = geo_for()
 _TOP, _BOTTOM, _LEFT, _RIGHT = _GEO.top, _GEO.bottom, _GEO.left, _GEO.right
 
-_BG_TOP = (15, 17, 21)
-_BG_BOTTOM = (28, 34, 48)
-_PANEL = (255, 255, 255, 22)
-_TEXT = (255, 255, 255)
-_MUTED = (176, 184, 196)
-_ACCENT = (77, 163, 255)
-_ACCENT_B = (255, 181, 71)
-_RULE = (255, 255, 255, 40)
+#: 数据卡的配色跟着当前视觉包(looks)走。基线视觉包 hud 的取值就是原来这套
+#: 深蓝底 + 蓝 / 橙双强调色;其它视觉包换成和它的面板、章节条同一套颜色。
+
+
+def _look():
+    from . import looks
+
+    return looks.current()
 
 
 # --------------------------------------------------------------------------
@@ -275,13 +275,13 @@ def _background(bg: Path | None, g: Geo = _GEO) -> Image.Image:
             img = img.resize((int(img.width * scale) + 1, int(img.height * scale) + 1))
             left, top = (img.width - g.w) // 2, (img.height - g.h) // 2
             img = img.crop((left, top, left + g.w, top + g.h)).filter(ImageFilter.GaussianBlur(28))
-            return Image.blend(img, Image.new("RGB", (g.w, g.h), _BG_TOP), 0.62)
+            return Image.blend(img, Image.new("RGB", (g.w, g.h), _look().card_bg_top), 0.62)
         except OSError:
             pass
     grad = Image.new("RGB", (1, g.h))
     for y in range(g.h):
         t = y / (g.h - 1)
-        grad.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(_BG_TOP, _BG_BOTTOM)))
+        grad.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(_look().card_bg_top, _look().card_bg_bottom)))
     return grad.resize((g.w, g.h))
 
 
@@ -322,15 +322,15 @@ def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Im
     img = base.copy().convert("RGBA")
     overlay = Image.new("RGBA", (g.w, g.h), (0, 0, 0, 0))
     d = ImageDraw.Draw(overlay)
-    d.rounded_rectangle((g.left - 30, g.top - 40, g.right + 30, g.bottom + 30), radius=36, fill=_PANEL)
+    d.rounded_rectangle((g.left - 30, g.top - 40, g.right + 30, g.bottom + 30), radius=36, fill=_look().card_panel)
 
     inner_w = g.right - g.left
     y = g.top
     tag, tag_f = _fit(d, subject, 36, inner_w)
-    d.text((g.left, y), tag, font=tag_f, fill=_ACCENT)
+    d.text((g.left, y), tag, font=tag_f, fill=_look().card_accent)
     y += 58
     title, title_f = _fit(d, card.get("title") or "关键数据", 66, inner_w, bold=True)
-    d.text((g.left, y), title, font=title_f, fill=_TEXT)
+    d.text((g.left, y), title, font=title_f, fill=_look().card_text)
     y += 110
 
     rows = card["rows"][:visible_rows]
@@ -346,7 +346,7 @@ def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Im
         _draw_spec(d, card, rows, y, area, g)
 
     src, src_f = _fit(d, card.get("source", ""), 26, inner_w)
-    d.text((g.left, g.bottom - 20), src, font=src_f, fill=_MUTED)
+    d.text((g.left, g.bottom - 20), src, font=src_f, fill=_look().card_muted)
     return Image.alpha_composite(img, overlay).convert("RGB")
 
 
@@ -359,16 +359,16 @@ def _draw_spec(d, card, rows, y, area, g: Geo = _GEO) -> None:
     half = (g.right - g.left) // 2
     for r in rows:
         label, lf = _fit(d, r["label"], 40, half - 20)
-        d.text((g.left, y + rh // 2), label, font=lf, fill=_MUTED, anchor="lm")
+        d.text((g.left, y + rh // 2), label, font=lf, fill=_look().card_muted, anchor="lm")
         # 口径 / 来源小字跟在参数名后面(「CLTC · 标准版 | 官方」):
         # 懂车的观众判断这个数字靠不靠谱,看的就是这一行
         if r.get("tag"):
             gap = int(d.textlength(label + "  ", font=lf))
             tag_txt, tgf = _fit(d, str(r["tag"]), 24, max(40, half - gap))
-            d.text((g.left + gap, y + rh // 2 + 2), tag_txt, font=tgf, fill=_ACCENT, anchor="lm")
+            d.text((g.left + gap, y + rh // 2 + 2), tag_txt, font=tgf, fill=_look().card_accent, anchor="lm")
         value, vf = _fit(d, r["values"][0], 64, half + 20, bold=True)
-        d.text((g.right, y + rh // 2), value, font=vf, fill=_TEXT, anchor="rm")
-        d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
+        d.text((g.right, y + rh // 2), value, font=vf, fill=_look().card_text, anchor="rm")
+        d.line((g.left, y + rh, g.right, y + rh), fill=_look().card_rule, width=2)
         y += rh
 
 
@@ -378,24 +378,24 @@ def _draw_compare(d, card, rows, y, area, g: Geo = _GEO, half: bool = False) -> 
     a, b = card["columns"]
     a, af = _fit(d, a, 42, col_w - 30, bold=True)
     b, bf = _fit(d, b, 42, col_w - 30, bold=True)
-    d.text((g.left + col_w // 2, y + 30), a, font=af, fill=_ACCENT, anchor="mm")
-    d.text((g.right - col_w // 2, y + 30), b, font=bf, fill=_ACCENT_B, anchor="mm")
+    d.text((g.left + col_w // 2, y + 30), a, font=af, fill=_look().card_accent, anchor="mm")
+    d.text((g.right - col_w // 2, y + 30), b, font=bf, fill=_look().card_accent_b, anchor="mm")
     y += 80
     rh = _row_h(card, area - 80)
     cx = (g.left + g.right) // 2
     for n, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 32, g.right - g.left)
-        d.text((cx, y + 26), label, font=lf, fill=_MUTED, anchor="mm")
+        d.text((cx, y + 26), label, font=lf, fill=_look().card_muted, anchor="mm")
         if r.get("tag"):
             gap = int(d.textlength(label + "  ", font=lf))
             tag_txt, tgf = _fit(d, str(r["tag"]), 22, 280)
-            d.text((cx + gap // 2, y + 26), tag_txt, font=tgf, fill=_ACCENT, anchor="lm")
+            d.text((cx + gap // 2, y + 26), tag_txt, font=tgf, fill=_look().card_accent, anchor="lm")
         va, vaf = _fit(d, r["values"][0], 54, col_w - 30, bold=True)
         vb, vbf = _fit(d, r["values"][1], 54, col_w - 30, bold=True)
-        d.text((g.left + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_TEXT, anchor="mm")
+        d.text((g.left + col_w // 2, y + rh * 0.62), va, font=vaf, fill=_look().card_text, anchor="mm")
         if not (half and n == len(rows) - 1):
-            d.text((g.right - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_TEXT, anchor="mm")
-        d.line((g.left, y + rh, g.right, y + rh), fill=_RULE, width=2)
+            d.text((g.right - col_w // 2, y + rh * 0.62), vb, font=vbf, fill=_look().card_text, anchor="mm")
+        d.line((g.left, y + rh, g.right, y + rh), fill=_look().card_rule, width=2)
         y += rh
     return y
 
@@ -404,14 +404,14 @@ def _draw_timeline(d, card, rows, y, area, g: Geo = _GEO) -> None:
     rh = _row_h(card, area)
     x_line = g.left + 20
     if rows:
-        d.line((x_line, y + rh // 2, x_line, y + rh * (len(rows) - 1) + rh // 2), fill=_RULE, width=4)
+        d.line((x_line, y + rh // 2, x_line, y + rh * (len(rows) - 1) + rh // 2), fill=_look().card_rule, width=4)
     for r in rows:
         cy = y + rh // 2
-        d.ellipse((x_line - 14, cy - 14, x_line + 14, cy + 14), fill=_ACCENT)
+        d.ellipse((x_line - 14, cy - 14, x_line + 14, cy + 14), fill=_look().card_accent)
         year, yf = _fit(d, r["label"], 46, 220, bold=True)
-        d.text((x_line + 44, cy), year, font=yf, fill=_ACCENT, anchor="lm")
+        d.text((x_line + 44, cy), year, font=yf, fill=_look().card_accent, anchor="lm")
         ev, ef = _fit(d, r["values"][0], 40, g.right - x_line - 290)
-        d.text((x_line + 270, cy), ev, font=ef, fill=_TEXT, anchor="lm")
+        d.text((x_line + 270, cy), ev, font=ef, fill=_look().card_text, anchor="lm")
         y += rh
 
 
@@ -423,19 +423,19 @@ def _draw_bars(d, card, rows, y, area, g: Geo = _GEO, progress: float = 1.0) -> 
     bar_w = g.right - g.left
     for i, r in enumerate(rows):
         label, lf = _fit(d, r["label"], 36, bar_w)
-        d.text((g.left, y + 8), label, font=lf, fill=_MUTED)
+        d.text((g.left, y + 8), label, font=lf, fill=_look().card_muted)
         if r.get("tag"):
             gap = int(d.textlength(label + "  ", font=lf))
             tag_txt, tgf = _fit(d, str(r["tag"]), 22, max(40, bar_w - gap))
-            d.text((g.left + gap, y + 14), tag_txt, font=tgf, fill=_ACCENT)
+            d.text((g.left + gap, y + 14), tag_txt, font=tgf, fill=_look().card_accent)
         v = max(0.0, _bar_value(r["values"][0]) or 0)
         top, bottom = y + 60, y + min(rh - 20, 60 + 54)
         length = max(12, int((bar_w - 220) * v / peak * progress))
         d.rounded_rectangle((g.left, top, g.left + length, bottom), radius=10,
-                            fill=_ACCENT if i == 0 else (*_ACCENT, 150))
+                            fill=_look().card_accent if i == 0 else (*_look().card_accent, 150))
         if progress >= 0.999:
             value, vf = _fit(d, r["values"][0], 40, 210, bold=True)
-            d.text((g.left + length + 16, (top + bottom) // 2), value, font=vf, fill=_TEXT,
+            d.text((g.left + length + 16, (top + bottom) // 2), value, font=vf, fill=_look().card_text,
                    anchor="lm")
         y += rh
 

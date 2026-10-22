@@ -192,7 +192,7 @@ def fresh_db(tmp_path, monkeypatch):
 def _project_with_beats(db, state: State) -> str:
     from app.pipeline import orchestrator
 
-    pid = orchestrator.create_project(ProjectCreate(subject="小米YU7"))
+    pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", look="hud"))
     beats = [
         {"idx": 0, "visual_zh": "[broll] 外观", "layout": "broll", "duration": 4.0},
         {"idx": 1, "visual_zh": "[concept] 电池", "layout": "concept", "duration": 6.0,

@@ -20,10 +20,9 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageDraw
 
-from . import aspect, hud
+from . import aspect, hud, looks
 from .cards import _fit, _font
 
-_ACCENT = hud.rgba(hud.ACCENT)
 _TEXT = (255, 255, 255, 255)
 _MUTED = (196, 204, 216, 255)
 _EDGE = (0, 0, 0, 255)
@@ -33,6 +32,11 @@ _SHADE = (6, 10, 18, 120)
 
 #: 大标题每行最多几个字(1080 宽、两侧各留 64px,96px 的字放 9–10 个)
 HEADLINE_CHARS = 10
+
+
+def _accent(alpha: int = 255) -> tuple[int, int, int, int]:
+    """当前视觉包的强调色。"""
+    return hud.rgba(hud.ACCENT, alpha)
 
 
 def _canvas(size: tuple[int, int]) -> tuple[Image.Image, ImageDraw.ImageDraw]:
@@ -75,7 +79,7 @@ def _two_lines(d: ImageDraw.ImageDraw, lines: Sequence[str], g: aspect.PortraitG
     total = sum(int(px * 1.18) for _, _, px in fitted)
     y = top + max(0, (bottom - top - total) // 2)
     for n, (t, f, px) in enumerate(fitted):
-        d.text((g.w // 2, y), t, font=f, fill=_TEXT if n == 0 else _ACCENT, anchor="mt",
+        d.text((g.w // 2, y), t, font=f, fill=_TEXT if n == 0 else _accent(), anchor="mt",
                stroke_width=max(4, px // 12), stroke_fill=_EDGE)
         y += int(px * 1.18)
 
@@ -97,7 +101,7 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
         name = chapters[cur][0]
         tag = f"{cur + 1:02d}/{len(chapters):02d}"
         tf = _font(34, bold=True)
-        d.text((g.left, top + 6), tag, font=tf, fill=_ACCENT, stroke_width=2, stroke_fill=_EDGE)
+        d.text((g.left, top + 6), tag, font=tf, fill=_accent(), stroke_width=2, stroke_fill=_EDGE)
         tag_w = int(d.textlength(tag + "  ", font=tf))
         n_text, nf = _fit(d, name, 34, g.w - 2 * g.left - tag_w, bold=True)
         d.text((g.left + tag_w, top + 6), n_text, font=nf, fill=_TEXT, stroke_width=2, stroke_fill=_EDGE)
@@ -108,7 +112,7 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
         for n in range(len(chapters)):
             x0 = int(g.left + n * (seg + gap))
             x1 = int(g.left + n * (seg + gap) + seg)
-            d.rectangle((x0, y, x1, y + 6), fill=_ACCENT if n <= cur else _DIM)
+            d.rectangle((x0, y, x1, y + 6), fill=_accent() if n <= cur else _DIM)
     if headline:
         _two_lines(d, split_headline(headline), g, top + 80, g.title.bottom - 16, (100, 88))
     return _save(img, dest)
@@ -218,7 +222,7 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
     note = str(overlay.get("note") or "")
     num_size, num_y = (130, g.data.mid - 22) if note else (168, g.data.mid + 4)
     _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), num_size, max_w, bold=True)
-    d.text((cx, num_y), value, font=nf, fill=_ACCENT, anchor="mm",
+    d.text((cx, num_y), value, font=nf, fill=_accent(), anchor="mm",
            stroke_width=8, stroke_fill=_EDGE)
     if note:
         n, f = _fit(d, note, 38, max_w, bold=True)
@@ -242,8 +246,8 @@ def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | P
     text = f"{subject} · {chapter}" if chapter else subject
     text, f = _fit(d, text, 38, g.right - g.left - int(bh * 0.9), bold=True)
     tw = int(d.textlength(text, font=f))
-    d.rounded_rectangle((x0, y0, x0 + tw + int(bh * 0.9), y0 + bh), radius=10, fill=(10, 16, 30, 210))
-    d.rectangle((x0, y0, x0 + int(bh * 0.14), y0 + bh), fill=_ACCENT)
+    d.rounded_rectangle((x0, y0, x0 + tw + int(bh * 0.9), y0 + bh), radius=10, fill=(*looks.current().label_bg, 210))
+    d.rectangle((x0, y0, x0 + int(bh * 0.14), y0 + bh), fill=_accent())
     d.text((x0 + int(bh * 0.45), y0 + bh // 2), text, font=f, anchor="lm", fill=_TEXT)
     return _save(img, dest)
 
@@ -265,10 +269,10 @@ def sting(number: int, name: str, size: tuple[int, int], dest: Path, wipe: float
     shown = int((num_w + name_w) * max(0.0, min(1.0, wipe)))
     if shown > 0:
         layer, ld = _canvas(size)
-        ld.rectangle((x0, y0, x0 + min(shown, num_w), y0 + bh), fill=_ACCENT)
+        ld.rectangle((x0, y0, x0 + min(shown, num_w), y0 + bh), fill=_accent())
         if shown > num_w:
-            ld.rectangle((x0 + num_w, y0, x0 + shown, y0 + bh), fill=(10, 16, 30, 215))
-        ld.text((x0 + num_w // 2, y0 + bh // 2), num, font=nf, anchor="mm", fill=(20, 20, 20, 255))
+            ld.rectangle((x0 + num_w, y0, x0 + shown, y0 + bh), fill=(*looks.current().label_bg, 215))
+        ld.text((x0 + num_w // 2, y0 + bh // 2), num, font=nf, anchor="mm", fill=looks.current().bar_on_text)
         ld.text((x0 + num_w + int(bh * 0.3), y0 + bh // 2), name, font=tf, anchor="lm", fill=_TEXT)
         mask = Image.new("L", size, 0)
         ImageDraw.Draw(mask).rectangle((x0, y0, x0 + shown, y0 + bh), fill=255)
@@ -297,7 +301,7 @@ def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest
         d.text((cx, g.data.top + 50), tag, font=tf, fill=_TEXT, anchor="mm",
                stroke_width=3, stroke_fill=_EDGE)
         num, nf = _fit(d, str(stat_.get("value") or ""), int(180 * scale), max_w, bold=True)
-        d.text((cx, g.data.mid + 20), num, font=nf, fill=_ACCENT, anchor="mm",
+        d.text((cx, g.data.mid + 20), num, font=nf, fill=_accent(), anchor="mm",
                stroke_width=9, stroke_fill=_EDGE)
     if alpha < 1:
         img.putalpha(img.getchannel("A").point(lambda v: int(v * max(0.0, alpha))))

@@ -860,6 +860,34 @@ def concept_style_set(project_id: str, payload: ConceptStyleRequest):
         raise HTTPException(400, str(exc)) from exc
 
 
+class LookRequest(BaseModel):
+    look: str
+
+
+@app.get("/api/projects/{project_id}/look")
+def look_status(project_id: str):
+    """项目的视觉包 + 可选列表。渲染开始后只读。"""
+    from .pipeline import looks
+
+    row = db.get_project(project_id)
+    if not row:
+        raise HTTPException(404, "项目不存在")
+    return {
+        "look": looks.of_project(project_id).id,
+        "options": looks.options(),
+        "editable": row["state"] in {str(s) for s in orchestrator._STYLE_FREE},
+        "portrait": aspect.is_portrait(row),
+    }
+
+
+@app.post("/api/projects/{project_id}/look")
+def look_set(project_id: str, payload: LookRequest):
+    try:
+        return orchestrator.set_look(project_id, payload.look)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 class BudgetRequest(BaseModel):
     budget: float
 

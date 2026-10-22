@@ -736,3 +736,8 @@
 .is-portrait .asset-media { aspect-ratio: 9 / 16; max-height: 360px; }
 .cs-tile.is-pending { opacity: .45; cursor: not-allowed; }
 .cs-card.is-portrait .cs-thumb { aspect-ratio: 9 / 16; }
+
+/* 视觉包:沿用概念模版的卡片样式;锁定后只亮当前那套 */
+.look-card .cs-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.look-card.is-portrait .cs-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.look-card.is-locked .cs-tile:not(.is-on) { opacity: .45; cursor: not-allowed; }

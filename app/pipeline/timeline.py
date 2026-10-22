@@ -266,6 +266,7 @@ def format_ass(
     height: int | None = None,
     font_name: str = "Microsoft YaHei",
     line_chars: int | None = None,
+    look=None,
 ) -> str:
     """生成 ASS 字幕文件内容。
 
@@ -291,6 +292,14 @@ def format_ass(
     outline = max(3, font_size // 6)      # 盒子模式下这个值是"盒子厚度"(留白)
     shadow = 0
     box_colour = "&H80000000"
+    text_colour = "&H00FFFFFF"
+    # 视觉包(looks)换字幕样式:outline = 描边无底(暗场电影),band = 色块底(蓝图 / 杂志)
+    if look is not None:
+        text_colour = look.sub_text
+        if look.subs == "outline":
+            border_style, outline, shadow, box_colour = 1, max(2, font_size // 18), 1, "&H00000000"
+        elif look.subs == "band":
+            box_colour = look.sub_box
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -301,7 +310,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,{box_colour},&H00000000,-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,{int(w * 0.06)},{int(w * 0.06)},{margin_v},1
+Style: Default,{font_name},{font_size},{text_colour},&H000000FF,{box_colour},&H00000000,-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,{int(w * 0.06)},{int(w * 0.06)},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

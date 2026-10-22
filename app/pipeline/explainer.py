@@ -35,7 +35,7 @@ from typing import Any, Sequence
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import aspect, cards, library, motion, motion_assets, narration, overlays, rhythm
+from . import aspect, cards, library, looks, motion, motion_assets, narration, overlays, rhythm
 from . import render as render_mod
 from .grounding import numbers_in
 
@@ -771,14 +771,16 @@ def assign_broll_styles(specs: list[ShotSpec]) -> list[ShotSpec]:
     - 分屏不连着两拍(相邻 broll 都分屏就成了监控墙);
     - 每章第一拍开头已经有章节标牌占着左上角,不再放角标;
     - 别的版式的 overlay 不动;broll 的样式记在 overlay = {"kind": "broll", "style": ...}。
+    - 轮换顺序跟着当前视觉包(暗场电影多全屏、杂志编排多分屏),没声明就用 BROLL_STYLES。
     """
+    cycle = looks.current().broll_cycle or BROLL_STYLES
     k = 0
     prev_split = False
     for n, s in enumerate(specs):
         if s.layout != "broll":
             prev_split = False
             continue
-        style = BROLL_STYLES[k % len(BROLL_STYLES)]
+        style = cycle[k % len(cycle)]
         k += 1
         chapter = s.chapter or s.section
         first = n == 0 or (specs[n - 1].chapter or specs[n - 1].section) != chapter
@@ -1311,9 +1313,9 @@ def portrait_concept_style(scene: str, style: str | None,
 
 
 def concept_style_of(project_id: str) -> str:
-    """项目选定的概念动画风格(`concept_style.json`);没选过 = 默认风格。"""
+    """项目选定的概念动画风格(`concept_style.json`);没单独选过 = 视觉包配的那套模版。"""
     got = db.read_json(project_id, "concept_style.json", {}) or {}
-    return motion.get_style(got.get("style")).id
+    return motion.get_style(got.get("style") or looks.of_project(project_id).concept).id
 
 
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,

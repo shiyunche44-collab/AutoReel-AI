@@ -120,6 +120,17 @@
   </div>
 </section>
 
+{# 视觉包:面板、数据卡、字幕、封面、BGM 一起换;渲染开始前可改,之后只显示 #}
+<section class="card cs-card look-card hidden" id="look-pick" data-state="{{ p.state }}">
+  <div class="card-head">
+    <h2>{{ m.icon("layers", "i-sm") }}视觉包<span class="tag tone-brand" id="look-current"></span></h2>
+    <span class="subtle small" id="look-hint"></span>
+  </div>
+  <div class="card-body stack">
+    <div class="cs-grid" id="look-grid"></div>
+  </div>
+</section>
+
 {# 概念动画模版:渲染前(门禁 A 前后)和审片时可选;JS 拉到本片有概念拍才显示 #}
 {% if p.state in ('STORYBOARD_READY', 'GATE_A', 'ASSETS_READY', 'PROMPTS_READY', 'GATE_B') %}
 <section class="card cs-card hidden" id="concept-style" data-state="{{ p.state }}">

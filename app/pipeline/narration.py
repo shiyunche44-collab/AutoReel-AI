@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .. import config, db
+from . import looks
 from ..models import SubtitleCue
 from ..providers import audio
 from .timeline import (
@@ -191,7 +192,7 @@ def build(
 
     w, h = size or (None, None)
     ass_content = format_ass(cues, width=w, height=h, font_name=_pick_font_name(),
-                             line_chars=line_chars)
+                             line_chars=line_chars, look=looks.current())
     ass_path = audio_dir / "subs.ass"
     ass_path.write_text(ass_content, encoding="utf-8")
     result.ass_path = ass_path
@@ -293,14 +294,24 @@ def _own_bgm(project_id: str, profile: Any = None) -> Path | None:
             return []
         return sorted(p for p in d.iterdir() if p.suffix.lower() in exts and p.stat().st_size > 0)
 
-    sub = root / getattr(profile, "name", "") if profile is not None else root
-    tracks = _tracks(sub) or _tracks(root)
-    genres = getattr(profile, "bgm_genres", ()) if profile is not None else ()
+    sub = base = root / getattr(profile, "name", "") if profile is not None else root
+    look = looks.current()
+    if look.bgm_genres:
+        # 视觉包自带曲风(暗场电影配氛围乐、蓝图配电子):单独一个子目录,和品类默认曲库分开
+        sub = sub / look.id
+        tracks = _tracks(sub)
+        genres = look.bgm_genres
+    else:
+        tracks = _tracks(sub) or _tracks(root)
+        genres = getattr(profile, "bgm_genres", ()) if profile is not None else ()
     if not tracks and genres and config.BGM_AUTO_COLLECT:
         from ..providers import bgm_source
 
         bgm_source.collect(genres, sub)
         tracks = _tracks(sub)
+    if not tracks and look.bgm_genres:
+        # 视觉包的曲风没收到(网络 / 站点改版):退回品类默认曲库,总比没有 BGM 强
+        tracks = _tracks(base) or _tracks(root)
     if not tracks:
         return None
     return tracks[int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)]
@@ -615,6 +626,10 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
         text_color = COVER_DARK_TEXT if light else COVER_TEXT
         sub_color = COVER_DARK_SUB if light else COVER_SUB
         accent = COVER_DARK_ACCENT if light else COVER_ACCENT
+        look_accent = looks.current().cover_accent
+        if look_accent:
+            # 视觉包自带封面强调色;浅底上压深一档,不然细字看不清
+            accent = looks.mix(look_accent, (0, 0, 0), 0.35) if light else look_accent
         stroke = (255, 255, 255) if light else (0, 0, 0)
 
         # 底部渐变,保证文字可读。浅底上用白色渐变(不然白字压在白底上等于没有)
@@ -796,8 +811,9 @@ def _draw_portrait_cover(image: Any, title: str, subtitle: str, size: tuple[int,
     line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
     y = g.title.top + 10
     if kicker:
-        draw.rectangle([g.left, y, g.left + 6, y + 38], fill=COVER_ACCENT)
-        draw.text((g.left + 18, y), kicker, font=kicker_font, fill=COVER_ACCENT,
+        kicker_accent = looks.current().cover_accent or COVER_ACCENT
+        draw.rectangle([g.left, y, g.left + 6, y + 38], fill=kicker_accent)
+        draw.text((g.left + 18, y), kicker, font=kicker_font, fill=kicker_accent,
                   stroke_width=2, stroke_fill=(0, 0, 0))
         y += 60
     for line in lines:

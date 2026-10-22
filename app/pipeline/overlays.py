@@ -18,17 +18,24 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageDraw
 
-from . import aspect, hud, overlays_portrait
+from . import aspect, hud, looks, overlays_portrait
 from .cards import _fit, _font
 
-#: 强调色统一到 HUD 的橙(和面板的纸面、角标是同一套视觉语言)
-_ACCENT = hud.rgba(hud.ACCENT)
+#: 强调色跟着当前视觉包(looks)走,和面板的纸面、角标是同一套视觉语言
 _TEXT = (255, 255, 255, 255)
 _MUTED = (180, 190, 205, 255)
 _RULE = (255, 255, 255, 46)
-_BAR_BG = (0, 0, 0, 175)
-_BAR_ON = hud.rgba(hud.ACCENT, 235)
-_BAR_ON_TEXT = (20, 20, 20, 255)
+
+
+def _accent(alpha: int = 255) -> tuple[int, int, int, int]:
+    return hud.rgba(hud.ACCENT, alpha)
+
+
+def __getattr__(name: str):
+    # 老写法 overlays._ACCENT:当前视觉包的强调色
+    if name == "_ACCENT":
+        return _accent()
+    raise AttributeError(name)
 
 #: 章节条高度(占画面高度)。
 #:
@@ -140,7 +147,7 @@ def highlight(lines: Sequence[str], size: tuple[int, int], dest: str | Path) -> 
     y = int(h * (0.56 if len(lines) > 1 else 0.62))
     for n, text in enumerate(lines):
         t, f = _fit(d, text, sizes[n], max_w, bold=True)
-        fill = _TEXT if n == 0 else _ACCENT
+        fill = _TEXT if n == 0 else _accent()
         d.text((w // 2, y), t, font=f, fill=fill, anchor="mt",
                stroke_width=max(4, sizes[n] // 12), stroke_fill=(0, 0, 0, 255))
         y += int(sizes[n] * 1.18)
@@ -165,7 +172,7 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
     img, d = _canvas(size)
     bar_h = int(h * BAR_HEIGHT)
     top = h - bar_h
-    d.rectangle((0, top, w, h), fill=_BAR_BG)
+    d.rectangle((0, top, w, h), fill=looks.current().bar_bg)
     if not chapters:
         img.save(dest)
         return Path(dest)
@@ -180,12 +187,12 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
         cw *= scale
         x0, x1 = int(x), int(x + cw)
         if n == current:
-            d.rectangle((x0, top, x1, h), fill=_BAR_ON)
+            d.rectangle((x0, top, x1, h), fill=hud.rgba(hud.ACCENT, 235))
         elif n:
             d.line((x0, top + 10, x0, h - 10), fill=(255, 255, 255, 90), width=2)
         label, lf = _fit(d, name, font_size, max(10, x1 - x0 - 16), bold=True)
         d.text(((x0 + x1) // 2, top + bar_h // 2), label, font=lf, anchor="mm",
-               fill=_BAR_ON_TEXT if n == current else _TEXT)
+               fill=looks.current().bar_on_text if n == current else _TEXT)
         x += cw
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -240,7 +247,7 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
            stroke_width=4, stroke_fill=(0, 0, 0, 255))
     # 字号按最终值定,滚动时不忽大忽小
     _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), 210, max_w, bold=True)
-    d.text((w // 2, int(h * 0.46)), value, font=nf, fill=_ACCENT, anchor="mm",
+    d.text((w // 2, int(h * 0.46)), value, font=nf, fill=_accent(), anchor="mm",
            stroke_width=10, stroke_fill=(0, 0, 0, 255))
     # "所以呢":这个数字对观众意味着什么。有它就把口径和出处往下让一行
     shift = 0.0
@@ -308,10 +315,10 @@ def _sting(number: int, name: str, size: tuple[int, int], dest: Path, wipe: floa
     shown = int(full * max(0.0, min(1.0, wipe)))
     if shown > 0:
         layer, ld = _canvas(size)
-        ld.rectangle((x0, y0, x0 + min(shown, num_w), y0 + bh), fill=_ACCENT)
+        ld.rectangle((x0, y0, x0 + min(shown, num_w), y0 + bh), fill=_accent())
         if shown > num_w:
-            ld.rectangle((x0 + num_w, y0, x0 + shown, y0 + bh), fill=(10, 16, 30, 215))
-        ld.text((x0 + num_w // 2, y0 + bh // 2), num, font=nf, anchor="mm", fill=_BAR_ON_TEXT)
+            ld.rectangle((x0 + num_w, y0, x0 + shown, y0 + bh), fill=(*looks.current().label_bg, 215))
+        ld.text((x0 + num_w // 2, y0 + bh // 2), num, font=nf, anchor="mm", fill=looks.current().bar_on_text)
         ld.text((x0 + num_w + int(bh * 0.3), y0 + bh // 2), name, font=tf, anchor="lm", fill=_TEXT)
         # 文字只在擦开的部分里显示
         mask = Image.new("L", size, 0)
@@ -355,8 +362,8 @@ def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | P
     text = f"{subject} · {chapter}" if chapter else subject
     text, f = _fit(d, text, int(bh * 0.5), int(w * 0.36), bold=True)
     tw = int(d.textlength(text, font=f))
-    d.rounded_rectangle((x0, y0, x0 + tw + int(bh * 0.9), y0 + bh), radius=10, fill=(10, 16, 30, 200))
-    d.rectangle((x0, y0, x0 + int(bh * 0.14), y0 + bh), fill=_ACCENT)
+    d.rounded_rectangle((x0, y0, x0 + tw + int(bh * 0.9), y0 + bh), radius=10, fill=(*looks.current().label_bg, 200))
+    d.rectangle((x0, y0, x0 + int(bh * 0.14), y0 + bh), fill=_accent())
     d.text((x0 + int(bh * 0.45), y0 + bh // 2), text, font=f, anchor="lm", fill=_TEXT)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -394,7 +401,7 @@ def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest
         d.text((w // 2, int(h * 0.24)), tag, font=tf, fill=_TEXT, anchor="mm",
                stroke_width=4, stroke_fill=edge)
         num, nf = _fit(d, str(stat_.get("value") or ""), int(230 * scale), max_w, bold=True)
-        d.text((w // 2, int(h * 0.42)), num, font=nf, fill=_ACCENT, anchor="mm",
+        d.text((w // 2, int(h * 0.42)), num, font=nf, fill=_accent(), anchor="mm",
                stroke_width=11, stroke_fill=edge)
         y, sizes = int(h * 0.60), (96, 84)
     else:
@@ -402,7 +409,7 @@ def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest
     for n, text in enumerate(lines):
         px = int(sizes[n] * scale)
         t, f = _fit(d, text, px, max_w, bold=True)
-        d.text((w // 2, y), t, font=f, fill=_TEXT if n == 0 else _ACCENT, anchor="mt",
+        d.text((w // 2, y), t, font=f, fill=_TEXT if n == 0 else _accent(), anchor="mt",
                stroke_width=max(4, px // 12), stroke_fill=edge)
         y += int(px * 1.2)
     if alpha < 1:
