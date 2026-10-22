@@ -128,7 +128,12 @@ def highlight(lines: Sequence[str], size: tuple[int, int], dest: str | Path) -> 
 # 数据区
 # --------------------------------------------------------------------------
 def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path) -> Path:
-    """数据区一张 HUD 规格纸:顶行「车名 · SPEC/SHEET」,标题,参数两列网格,来源行。"""
+    """数据区一张 HUD 规格纸:标题行(右边「可查出处」),参数横排(每行最多 3 个:
+    标签 / 大数字 / 口径),来源行。
+
+    竖屏数据区只有约 300px 高、手机上看:实跑时沿用横屏的「标签行 + 标题 + 两列网格」,
+    标签只剩 21px、数字 45px,看不清。这里砍掉 SPEC/SHEET 标签行,参数横着排,
+    数字放到 76px。"""
     g = aspect.portrait_grid(size)
     img, d = _canvas(size)
     x0, x1 = g.left - 24, g.right
@@ -140,52 +145,57 @@ def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: st
     hud.plate(d, box, grid_step=34)
     hud.brackets(d, box, length=26, width=4)
 
-    pad = 22
+    pad = 24
     cx0, cx1 = x0 + pad, x1 - pad
     inner = cx1 - cx0
-    tag_size = 22
-    tag = f"{subject} · SPEC/SHEET" if subject else "SPEC/SHEET"
-    hud.draw_tracked(d, cx0, y0 + pad - 4, tag, tag_size, tag_size, hud.MUTED, tracking=3)
-    note = "可查出处"
-    hud.draw_tracked(d, cx1 - hud.tracked_width(d, note, tag_size, tag_size, 3), y0 + pad - 4,
-                     note, tag_size, tag_size, hud.ACCENT_DARK, tracking=3)
-    y = y0 + pad + tag_size + 6
-    title, tf = _fit(d, str(overlay.get("title") or "核心参数"), 44, inner, bold=True)
+    note, note_size = "可查出处", 24
+    note_w = hud.tracked_width(d, note, note_size, note_size, 3)
+    hud.draw_tracked(d, cx1 - note_w, y0 + pad + 8, note, note_size, note_size, hud.ACCENT_DARK, tracking=3)
+    y = y0 + pad - 2
+    title_text = str(overlay.get("title") or "核心参数")
+    if subject and subject not in title_text:
+        title_text = f"{subject} · {title_text}"
+    title, tf = _fit(d, title_text, 44, inner - note_w - 24, bold=True)
     d.text((cx0, y), title, font=tf, fill=hud.INK)
-    y += int(getattr(tf, "size", 44)) + 10
+    y += int(getattr(tf, "size", 44)) + 12
     hud.rule(d, cx0, cx1, y, hud.INK, 3)
-    y += 12
+    y += 16
 
     src = str(overlay.get("source") or "")
-    bottom = y1 - 12
+    bottom = y1 - 14
     if src:
-        s, ms, cs = hud.fit_mixed(d, src, 18, 18, inner)
-        hud.draw_tracked(d, cx0, bottom - 18, s, ms, cs, hud.MUTED, tracking=1.2)
-        bottom -= 26
+        s, ms, cs = hud.fit_mixed(d, src, 20, 20, inner)
+        hud.draw_tracked(d, cx0, bottom - 20, s, ms, cs, hud.MUTED, tracking=1.2)
+        bottom -= 30
     rows = list(overlay.get("rows") or [])[:6]
-    cols = 1 if len(rows) <= 2 else 2
-    per_col = -(-len(rows) // cols) if rows else 1
-    col_w = (inner - (cols - 1) * 24) // cols
-    rh = max(56, (bottom - y) // per_col)
-    key_size = max(20, min(28, int(rh * 0.28)))
-    num_size = max(30, min(60, int(rh * 0.6)))
-    unit_size = max(16, int(num_size * 0.5))
+    if not rows:
+        return _save(img, dest)
+    lines = 1 if len(rows) <= 3 else 2
+    per_line = -(-len(rows) // lines)
+    gap = 28
+    col_w = (inner - (per_line - 1) * gap) // per_line
+    rh = (bottom - y) // lines
+    # 两行时每格只有约 90px:口径行让掉,标签 + 数字
+    with_tag = lines == 1
+    key_size = 30 if lines == 1 else 24
+    tag_size = 20
+    num_size = min(76, rh - key_size - (tag_size + 12 if with_tag else 0) - 10)
     for n, r in enumerate(rows):
-        col, row = divmod(n, per_col)
-        cx = cx0 + col * (col_w + 24)
-        ry = y + row * rh
+        line, col = divmod(n, per_line)
+        cx = cx0 + col * (col_w + gap)
+        ry = y + line * rh
+        if col:
+            d.line((cx - gap // 2, ry + 4, cx - gap // 2, ry + rh - 10), fill=hud.MUTED, width=1)
         label, kf = _fit(d, str(r.get("label") or ""), key_size, col_w)
         d.text((cx, ry), label, font=kf, fill=hud.KEY)
-        if r.get("tag"):
-            gap = int(d.textlength(label + "  ", font=kf))
-            t2, ms, cs = hud.fit_mixed(d, str(r["tag"]), int(key_size * 0.76),
-                                       int(key_size * 0.76), max(40, col_w - gap))
-            hud.draw_tracked(d, cx + gap, ry + 3, t2, ms, cs, hud.MUTED, tracking=1.2)
         value = str((r.get("values") or [""])[0])
         px = num_size
-        while px > 22 and hud.value_width(d, value, px, unit_size) > col_w:
+        while px > 24 and hud.value_width(d, value, px, int(px * 0.45)) > col_w:
             px -= 2
-        hud.draw_value(d, cx, ry + key_size + 2, value, px, unit_size)
+        hud.draw_value(d, cx, ry + key_size + 6, value, px, max(14, int(px * 0.45)))
+        if with_tag and r.get("tag"):
+            t2, ms, cs = hud.fit_mixed(d, str(r["tag"]), tag_size, tag_size, col_w)
+            hud.draw_tracked(d, cx, ry + key_size + 6 + px + 10, t2, ms, cs, hud.MUTED, tracking=1)
     return _save(img, dest)
 
 
