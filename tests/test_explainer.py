@@ -95,7 +95,9 @@ def test_build_beats_grounds_panel_and_downgrades_bad_data():
     assert panel.layout == "panel" and panel.overlay["kind"] == "panel"
     assert [r["values"][0] for r in panel.overlay["rows"]] == ["25.35万元", "835公里"]
     assert specs[0].layout == "broll"
-    assert specs[-1].layout == p.section(segs[-1].section).layouts[0]
+    # 不在可选版式里 → 段落默认版式(结论段是 card);没给卡片数据,核不过再退回 broll
+    assert p.section(segs[-1].section).layouts[0] == "card"
+    assert specs[-1].layout == explainer.SAFE_LAYOUT
     assert not explainer.validate_beats(specs)
     assert any(e["idx"] == 0 for e in log)
     assert all(s.chapter for s in specs)
@@ -354,3 +356,48 @@ def test_fill_skips_black_title_cards(pool, tmp_path):
     lib.save()
     ids = [p.item_id for p in library.fill("测试车", 6.0, used={})]
     assert "clean1" not in ids and ids
+
+
+def test_fill_confirmed_only_takes_official_or_recognised_footage(pool):
+    lib = library.Library.load("测试车")
+    lib.items.append(library.Item(id="logo1", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="yes", problem="text_overlay",
+                                  start=40, end=50))
+    lib.items.append(library.Item(id="off1", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="unknown", official=True,
+                                  start=50, end=60))
+    lib.save()
+    ids = {p.item_id for p in library.fill("测试车", 60.0, used={}, confirmed=True)}
+    assert "unknown1" not in ids                       # 没认出是这台车:开场不用
+    assert "logo1" not in ids                          # 第三方台标:池子再小也不用
+    assert "off1" in ids                               # 官方来源:认不认出都能用
+    loose = {p.item_id for p in library.fill("测试车", 60.0, used={})}
+    assert "unknown1" in loose                         # 普通拍照旧只是降权
+
+
+def test_fill_edge_crops_third_party_video_only(pool):
+    lib = library.Library.load("测试车")
+    lib.items.append(library.Item(id="off1", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="yes", official=True,
+                                  start=50, end=60))
+    lib.save()
+    pieces = {p.item_id: p for p in library.fill("测试车", 60.0, used={})}
+    assert pieces["clean1"].crop_edge == library.EDGE_CROP
+    assert pieces["off1"].crop_edge == 0.0
+    assert pieces["still1"].crop_edge == 0.0
+
+
+def test_fit_filter_edge_crop_runs_before_fit():
+    out = explainer._fit_filter(1920, 1080, 0.0, 0.14)
+    assert out.startswith("[0:v]crop=trunc(iw*0.860/2)*2:trunc(ih*0.860/2)*2,split")
+    both = explainer._fit_filter(1920, 1080, 0.22, 0.14)
+    assert both.startswith("[0:v]crop=iw:trunc(ih*0.780/2)*2:0:0,crop=trunc(iw*0.860")
+    assert explainer._fit_filter(1920, 1080) == explainer._fit_filter(1920, 1080, 0.0, 0.0)
+
+
+def test_stat_note_only_uses_numbers_from_narration():
+    narration = "15分钟补能405公里,吃顿饭的工夫够从上海到南京。"
+    assert explainer.ground_note("吃顿饭的工夫", narration) == "吃顿饭的工夫"
+    assert explainer.ground_note("够跑300公里", narration) == ""          # 旁白没说过 300
+    assert explainer.ground_note("这是一个特别长的注解超过了字数上限的", narration) == ""
+    assert explainer.ground_note(None, narration) == ""

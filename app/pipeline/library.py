@@ -1106,6 +1106,8 @@ class Piece:
     length: float
     #: 截取时裁掉画面底部的比例(烧录字幕段裁掉字幕区再放大),0 = 不裁
     crop_bottom: float = 0.0
+    #: 截取时四边一起往里收的比例(第三方视频的角标安全裁切),0 = 不裁
+    crop_edge: float = 0.0
 
 
 #: 一段最长用几秒就换下一段 —— 信息解说的背景是 2–4 秒一刀的节奏,
@@ -1141,6 +1143,19 @@ def is_dark(item: Item) -> bool:
 #: 烧录字幕段当背景时裁掉画面底部的比例。字幕几乎都在下方五分之一,
 #: 成片自己的字幕和章节条也盖在这一带,裁掉不损失要看的东西
 SUBTITLE_CROP = 0.22
+
+#: 非官方视频段当背景时四边往里收的比例(各收一半)。第三方账号的台标几乎都贴在
+#: 四个角上,VLM 常漏标(Soda 那支源 25 段判成干净)—— 不靠判定,一律收掉这一圈
+EDGE_CROP = 0.14
+
+
+def _crop_edge(item: Item) -> float:
+    return EDGE_CROP if item.kind == "video" and not item.official else 0.0
+
+
+def _confirmed(item: Item) -> bool:
+    """开场拍只用的素材:官方来源,或认出就是这台车的。"""
+    return item.official or item.target == "yes"
 
 
 #: 干净池子(剔掉主持人出镜、第三方水印后)至少这么多秒,才把那两类整个拦在背景之外;
@@ -1370,7 +1385,7 @@ def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
 
 
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
-         recent: list[str] | None = None, detail: str = "") -> list[Piece]:
+         recent: list[str] | None = None, detail: str = "", confirmed: bool = False) -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -1383,6 +1398,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     `recent` 是全片最近用过的 item_id(调用方跨节拍传同一个列表,这里就地追加):
     和最近几刀同簇的、和上一刀同视角的往后排 —— 只是排序,池子不够时照样铺满。
     `detail` 是这一拍在讲的细节(旁白原文),用来避开配错的特写(见 `_detail_conflict`)。
+    `confirmed`(开场拍用):只取官方来源或认出是这台车的素材,台标 / 主持人一律不要,
+    不受 `HARD_FILTER_MIN_SECONDS` 的豁免 —— 前三秒观众只确认一件事:是不是我要看的那台车。
     返回空列表表示池子里什么都没有。
     """
     seconds = float(seconds)
@@ -1395,7 +1412,11 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
-    pool = _drop_hard_bad(pool, _host_sources(lib.items))
+    hosts = _host_sources(lib.items)
+    if confirmed:
+        pool = [i for i in pool if _confirmed(i) and not _hard_bad(i, hosts)]
+    else:
+        pool = _drop_hard_bad(pool, hosts)
     # 讲某个部件时,把**别的**部件的特写整类剔掉:特写太抢戏,配错了观众就
     # 以为在讲那个部件。池子剔完不够铺满这一拍时,才退回"降权排序"
     # (宁可配得不对,也不要这一拍没有背景)。
@@ -1453,7 +1474,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         if take < min(FILL_MIN_PIECE, remaining):
             continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3),
-                         crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0))
+                         crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0,
+                         crop_edge=_crop_edge(i)))
         used[i.id] = used.get(i.id, 0) + 1
         recent.append(i.id)
         del recent[:-RECENT_PIECES]
@@ -1468,6 +1490,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         spare = [i for i in lib.items if i.kind == "still" and i.usable
                  and Path(i.path).is_file() and not is_dark(i)
                  and i.problem not in ("cropped", "unclear", "poster")
+                 and (not confirmed or _confirmed(i))
                  and not (want_detail and _detail_conflict(i, want_detail, vocab))]
         spare.sort(key=lambda i: (bool(want) and i.view not in want,
                                    used.get(i.id, 0), i.target != "yes", i.id))
@@ -1533,7 +1556,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     recent.append(i.id)
     del recent[:-RECENT_PIECES]
     return Piece(item_id=i.id, kind="video", path=i.path, start=round(start, 3), length=round(take, 3),
-                 crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0)
+                 crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0, crop_edge=_crop_edge(i))
 
 
 # --------------------------------------------------------------------------

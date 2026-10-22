@@ -357,7 +357,7 @@ def test_beat_prompt_tells_the_model_broll_is_capped():
     # 口径里的拍数上限要跟着拍数走
     system = text.format(kw=12, domain="汽车", subject_noun="车", keyword_examples="x",
                           stat_examples="x", view_enum="x", view_guide="x", count=10,
-                          broll_cap=3, concept_guide="")
+                          broll_cap=3, concept_guide="", note_chars=14)
     assert "最多 3 拍" in system
 
 

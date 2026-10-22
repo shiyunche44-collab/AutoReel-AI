@@ -403,8 +403,24 @@ QUALITY_TOOLS = frozenset(QCC[k] for k in ("product_recall", "product_spot_check
                                             "counterfeit_cosmetics"))
 
 
+def dongchedi_lineup(subject: str, project_dir: Path | None = None) -> RawDoc:
+    """在售版本清单(年款、版本名、指导价、驱动形式),见 car_lineup。"""
+    from . import car_lineup
+
+    return car_lineup.lineup(subject, project_dir)
+
+
 #: 品类 Profile 里可以直接引用的来源名 → 函数
+def autohome_specs(subject: str, project_dir: Path | None = None) -> RawDoc:
+    """参数配置表(整备质量、悬架、轮胎、电芯、离地间隙…),见 car_specs。"""
+    from . import car_specs
+
+    return car_specs.specs(subject, project_dir)
+
+
 SOURCES = {
+    "dongchedi.lineup": dongchedi_lineup,
+    "autohome.specs": autohome_specs,
     "ifind.stock_summary": ifind_stock_summary,
     "ifind.financials": ifind_financials,
     "ifind.news": ifind_news,

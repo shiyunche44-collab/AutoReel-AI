@@ -20,7 +20,7 @@ from .. import db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact
 from ..providers import facts as facts_provider
-from . import derive, script_gen
+from . import derive, grounding, script_gen
 
 #: 热点选题依据进事实抽取时的来源名
 HOT_TOPIC_TOOL = "hot_topic.evidence"
@@ -344,6 +344,57 @@ def extract_facts(
     return facts, dropped_competitor
 
 
+#: 在售版本清单的来源名(providers.car_lineup.TOOL)
+LINEUP_TOOL = "dongchedi.lineup"
+#: 只列在售版本的来源(在售清单、参数配置表):它们写的旧年款版本还在卖
+ON_SALE_TOOLS = (LINEUP_TOOL, "autohome.specs")
+#: 最新年款至少要有这么多条产品事实,才去屏蔽旧款(只有一两条新款时,旧款可能才是主力)
+STALE_MIN_CURRENT = 3
+
+
+def fact_year(fact: Fact) -> int | None:
+    """这条事实说的是哪一年款;没写年款 = None。"""
+    years = [int(y) for y in grounding.YEAR_RE.findall(f"{fact.basis} {fact.claim}")]
+    return max(years) if years else None
+
+
+def _changed(old: Fact, new: Fact) -> bool:
+    """新年款的这条事实是不是改了旧年款的同一个数(同版本或任一方是全系,同维度,取值不同)。"""
+    return bool(grounding.differing_measures(old.claim, old.basis, new.claim, new.basis))
+
+
+def mark_stale_years(facts: Sequence[Fact]) -> list[Fact]:
+    """屏蔽被新年款**改掉**的旧年款产品事实(enabled=False),返回被屏蔽的那些。
+
+    新闻检索会把上一年款的参数一起捞回来:2025 款标准版 96.3kWh / 835 公里 / 800V
+    和 2026 款标准版 73kWh / 643 公里 / 752V 并存在事实池里,脚本一引错,
+    懂车的观众当场就能指出来。
+
+    但多数参数是沿用的(车身尺寸、悬架、屏幕),旧年款写着也照样对,不能一刀切:
+    只有新年款把同一版本、同一维度的数改了(见 `_changed`),旧的那条才屏蔽。
+    被屏蔽的列在采集报告里,项目页概览会提示。
+    """
+    dated = [(f, fact_year(f)) for f in facts
+             if f.scope == "product" and f.source_kind != "derived" and not f.compare_with]
+    # 在售清单 / 配置表本身就是"还在卖"的证据,它们列出的旧年款版本不能被屏蔽
+    on_sale = {f.id for f in facts if f.source_tool in ON_SALE_TOOLS}
+    years = [y for _, y in dated if y]
+    if not years:
+        return []
+    newest = max(years)
+    current = [f for f, y in dated if y == newest]
+    if len(current) < STALE_MIN_CURRENT:
+        return []
+    stale: list[Fact] = []
+    for f, y in dated:
+        if not y or y >= newest or not f.enabled or f.id in on_sale:
+            continue
+        if any(_changed(f, c) for c in current):
+            f.enabled = False
+            stale.append(f)
+    return stale
+
+
 def run(
     project_id: str,
     profile: CategoryProfile,
@@ -393,6 +444,7 @@ def run(
             )
         except Exception as exc:  # noqa: BLE001 - 事实层降级不应中断流水线
             error = str(exc)
+    stale = mark_stale_years(facts)
     derived = derive.derive(facts, profile.derive)
     facts.extend(derived)
 
@@ -413,6 +465,11 @@ def run(
         "product_gap": product_gap_warning(facts, profile, theme),
         "extract_error": error,
     }
+    if stale:
+        report["stale_year_disabled"] = len(stale)
+        report["stale_year_note"] = (
+            f"{len(stale)} 条旧年款事实的数字已被新款改掉,不进脚本"
+            "(facts.json 里 enabled 改回 true 可恢复):" + ";".join(f.claim[:30] for f in stale[:5]))
     if dropped_competitor:
         # 只讲别家车、句中没有本车的数字:丢掉了,免得挂到本车名下
         report["competitor_only_dropped"] = dropped_competitor
@@ -482,6 +539,7 @@ def run_roundup(
                 )
             except Exception as exc:  # noqa: BLE001 - 一台车抽取失败不拖垮其它车
                 errors.append(f"{name}:{exc}")
+        stale = mark_stale_years(own)
         own.extend(derive.derive(own, profile.derive))
         for f in own:
             f.subject = name
@@ -494,6 +552,7 @@ def run_roundup(
             "facts": len(own),
             "product": product,
             "derived": sum(1 for f in own if f.source_kind == "derived"),
+            "stale_year_disabled": len(stale),
         }
 
     db.write_json(project_id, "facts_raw.json", docs_payload)

@@ -108,7 +108,8 @@ def build(
         result.warnings.append("分镜中没有解说词,成片将无旁白")
         return result
 
-    texts = [normalize_for_tts(t) for t, _ in pairs]
+    pronounce = getattr(getattr(profile, "vocab", None), "pronounce", None)
+    texts = [normalize_for_tts(t, pronounce) for t, _ in pairs]
     shot_indices = [idx for _, idx in pairs]
     result.sentences = texts
     result.total_chars = sum(len(t) for t in texts)

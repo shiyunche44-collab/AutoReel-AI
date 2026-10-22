@@ -232,6 +232,13 @@ class Vocab:
     depth_sections: tuple[str, ...] = ()
     #: 口径词:引用的事实原文里有它、句子里却没说,depth_lint 提醒补口径(如 CLTC)
     basis_terms: tuple[str, ...] = ()
+    #: 错误的部件名 → 为什么错。模型压缩句子时会把两个部件并成一个不存在的东西
+    #: ("碳陶卡钳":碳陶的是盘),懂行的观众一眼看穿。出现即 error
+    term_guard: dict[str, str] = field(default_factory=dict)
+    #: 行家最想听的硬料(圈速、制动距离、刚度、保值率…):事实里有却全片不用,提醒
+    hero_terms: tuple[str, ...] = ()
+    #: TTS 读法:写法 → 读法(只改送 TTS 的文本,字幕照原文)。长词优先替换
+    pronounce: dict[str, str] = field(default_factory=dict)
 
     # ---- 背景细节冲突 ----
     #: 细节类型 → 该类型在旁白 / 画面描述里的各种说法。

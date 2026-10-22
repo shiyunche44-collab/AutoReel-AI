@@ -88,7 +88,8 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
 - 对比卡(compare):每行引用**一条同时写着两台车取值的事实**(事实清单里带 [对比:车名] 的那些),
   `values` 按 `columns` 的顺序给两台车的取值,只填这一条 fact_id。两台车没写在同一条事实里
   就别做对比卡 —— 核不过会自动作废。口径不一致的数字不放在一起比。
-- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx"}}{concept_guide}
+- stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx",
+  "note": "这个数字对观众意味着什么({note_chars} 字内,从这一拍旁白里取,如「吃顿饭的工夫」「同价位最低一档」)"}}{concept_guide}
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或解释文字。
@@ -195,9 +196,26 @@ def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact],
     return out[:2]
 
 
-def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]]:
+#: 大数字下面那行"所以呢"的字数上限
+STAT_NOTE_CHARS = 14
+
+
+def ground_note(raw: Any, narration: str) -> str:
+    """大数字的"所以呢"(对观众意味着什么)。数字只能是旁白里说过的,超长或编了数字就不上屏。
+
+    单摆一个数字没有意义:"23.35 万"要跟着"同价位最低一档","15 分钟"要跟着"吃顿饭的工夫"。"""
+    note = re.sub(r"\s+", " ", str(raw or "")).strip(" ,，。.")
+    if not note or len(note) > STAT_NOTE_CHARS:
+        return ""
+    if numbers_in(note) - numbers_in(narration or ""):
+        return ""
+    return note
+
+
+def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "") -> tuple[dict | None, list[str]]:
     """核对大数字:当成一行参数卡交给 `cards.ground`(数字必须见于引用的事实),
-    再要求取值里确实有个能滚动的数字。核不过返回 (None, 原因)。"""
+    再要求取值里确实有个能滚动的数字。核不过返回 (None, 原因)。
+    `narration` 是这一拍的旁白,"所以呢"那行(`note`)只能用它里面的数字。"""
     if not isinstance(raw, dict):
         return None, ["stat 缺数据"]
     row = {"label": raw.get("label"), "values": [raw.get("value")], "fact_id": raw.get("fact_id")}
@@ -208,9 +226,13 @@ def ground_stat(raw: Any, facts: Sequence[Fact]) -> tuple[dict | None, list[str]
     value = r["values"][0]
     if overlays.split_number(value) is None:
         return None, dropped + [f"「{value}」里没有可滚动的数字"]
-    return {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
-            "fact_id": r["fact_id"], "source": grounded.get("source", ""),
-            "tag": r.get("tag", "")}, dropped
+    out = {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
+           "fact_id": r["fact_id"], "source": grounded.get("source", ""),
+           "tag": r.get("tag", "")}
+    note = ground_note(raw.get("note"), narration)
+    if note:
+        out["note"] = note
+    return out, dropped
 
 
 #: 取值要带单位,不然屏幕上只有一个"643",观众不知道那是什么
@@ -439,7 +461,7 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             kw=KEYWORD_CHARS, domain=vocab.domain, subject_noun=vocab.subject_noun,
             keyword_examples=vocab.keyword_examples, stat_examples=vocab.stat_examples,
             view_enum=vocab.view_enum, view_guide=vocab.view_guide,
-            count=len(segments),
+            count=len(segments), note_chars=STAT_NOTE_CHARS,
             broll_cap=max(1, int(len(segments) * rhythm.BROLL_RATIO_MAX)),
             concept_guide=concept_guide(vocab, len(segments)))
         if subjects:
@@ -564,7 +586,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         else:
             layout = SAFE_LAYOUT
     elif layout == "stat":
-        overlay, dropped = ground_stat(item.get("stat"), facts)
+        overlay, dropped = ground_stat(item.get("stat"), facts, seg.text)
         if overlay is None:
             # 大数字做不出来(取值里没有能滚的数字):同一行数据改成参数面板照样上屏
             raw = item.get("stat")
@@ -862,17 +884,20 @@ def _ff(args: Sequence[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return render_mod._run(["-y", "-v", "error", *args], timeout=timeout)
 
 
-def _fit_filter(w: int, h: int, crop_bottom: float = 0.0) -> str:
+def _fit_filter(w: int, h: int, crop_bottom: float = 0.0, crop_edge: float = 0.0) -> str:
     """任意比例的视频放进 w×h:前景完整缩进画幅,空出的地方用同一画面放大模糊铺满。
     横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。
 
     `crop_bottom` > 0(烧录字幕段):裁掉底部这一截后放大**铺满**画幅,不留模糊边 ——
-    这类段基本是横屏评测,裁完再缩进画幅会上下各空出一条模糊带,一眼就是裁过的。"""
+    这类段基本是横屏评测,裁完再缩进画幅会上下各空出一条模糊带,一眼就是裁过的。
+    `crop_edge` > 0(第三方视频):先把四边各收一半这个比例,角上的台标就出了画。"""
+    edge = (f"crop=trunc(iw*{1 - crop_edge:.3f}/2)*2:trunc(ih*{1 - crop_edge:.3f}/2)*2,"
+            if crop_edge > 0 else "")
     if crop_bottom > 0:
-        return (f"[0:v]crop=iw:trunc(ih*{1 - crop_bottom:.3f}/2)*2:0:0,"
+        return (f"[0:v]crop=iw:trunc(ih*{1 - crop_bottom:.3f}/2)*2:0:0,{edge}"
                 f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 f"setsar=1,fps={render_mod.FPS},format=yuv420p")
-    return (f"[0:v]split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,"
+    return (f"[0:v]{edge}split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},boxblur=20:2[bg];[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={render_mod.FPS},format=yuv420p")
 
@@ -884,7 +909,7 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
                                         motion=motion, size=size)
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐。
     # 竖屏也照常裁烧录字幕:实拍只放在 16:9 的画面带里,和横屏是同一个比例
-    vf = _fit_filter(w, h, piece.crop_bottom) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+    vf = _fit_filter(w, h, piece.crop_bottom, piece.crop_edge) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -1014,7 +1039,7 @@ def concept_background(piece: library.Piece, seconds: float, size: tuple[int, in
     dest = work / "bg.mp4"
     w, h = size
     factor = max(1.0, seconds / max(0.1, piece.length))
-    vf = (_fit_filter(w, h, piece.crop_bottom) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
+    vf = (_fit_filter(w, h, piece.crop_bottom, piece.crop_edge) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
           f"tpad=stop_mode=clone:stop_duration={seconds:.3f}[v]")
     proc = _ff(["-ss", f"{piece.start:.3f}", "-t", f"{piece.length:.3f}", "-i", piece.path,
                 "-filter_complex", vf, "-map", "[v]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
@@ -1189,11 +1214,15 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
 def hook_background(subject: str, seconds: float, size: tuple[int, int], work: Path,
                     used: dict[str, int], recent: list[str], hint: str, seed: int
                     ) -> tuple[Path, list[library.Piece]]:
-    """黄金三秒的背景:前几秒每 1 秒一刀硬切(不 xfade),之后接正常背景铺满这一拍。"""
+    """黄金三秒的背景:前几秒每 1 秒一刀硬切(不 xfade),之后接正常背景铺满这一拍。
+
+    整拍只用确认是这台车的素材(`confirmed`):前三秒观众只确认"是不是我要看的那台车",
+    配错车或挂着别人的台标就划走了。确认过的一条都没有才退回普通取法。"""
     n = 3 if seconds >= 3.5 else 2 if seconds >= 2.0 else 1
     cuts: list[library.Piece] = []
     for _ in range(n):
-        got = library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent)
+        got = (library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent, confirmed=True)
+               or library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent))
         if got:
             cuts.append(replace(got[0], length=HOOK_CUT))
     if not cuts:
@@ -1212,7 +1241,8 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
         parts.append(_piece_clip(p, work / f"cut_{k:02d}.mp4", size, m))
     pieces = list(cuts)
     if rest > 0:
-        more = library.fill(subject, rest, hint=hint, used=used, recent=recent)
+        more = (library.fill(subject, rest, hint=hint, used=used, recent=recent, confirmed=True)
+                or library.fill(subject, rest, hint=hint, used=used, recent=recent))
         parts.append(background_clip(more, rest, size, work / "rest", motion_seed=seed + 9))
         pieces += more
     dest = work / "hook_bg.mp4"

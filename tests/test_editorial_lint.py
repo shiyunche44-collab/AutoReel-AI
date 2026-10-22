@@ -389,3 +389,125 @@ def test_thesis_lint_quiet_without_conclusion_section(auto):
 def test_thesis_lint_quiet_when_no_thesis(auto):
     segs = [_seg(0, "结论建议", "总结一下。")]
     assert script_gen.thesis_lint(segs, "") == []
+
+
+# ------------------------------------------------------------------ 立场 / 所以呢
+def test_stance_lint_flags_topic_style_hook():
+    topic = [_seg(0, "开场", "别急着订车，先搞清楚YU7买哪版。")]
+    assert [i.severity for i in script_gen.stance_lint(topic)] == ["warning"]
+    stance = [_seg(0, "开场", "多花3万,买的不是续航是快充。")]
+    assert script_gen.stance_lint(stance) == []
+    assert script_gen.stance_lint([_seg(0, "使用成本", "先搞清楚电费。")]) == []
+
+
+def test_meaning_lint_flags_spec_dump_once():
+    dump = [_seg(i, "外观设计", f"车长{4999 + i}毫米。") for i in range(5)]
+    issues = script_gen.meaning_lint(dump)
+    assert len(issues) == 1 and issues[0].severity == "warning"
+    assert "5/5" in issues[0].message
+    judged = [_seg(i, "外观设计", f"车宽{1996 + i}毫米,老小区地库拐弯得先量一量。")
+              for i in range(5)]
+    assert script_gen.meaning_lint(judged) == []
+    assert script_gen.meaning_lint([_seg(0, "开场", "这台车很有意思。")]) == []
+
+
+# ------------------------------------------------------------------ 车迷视角:说对、说全、说到点子上
+def test_term_lint_catches_merged_part_name(auto):
+    """真片竖版写成「碳陶卡钳」,事实原文是「卡钳 + 碳陶瓷制动盘」。"""
+    bad = [_seg(0, "三电性能", "碳陶卡钳制动32.9米。")]
+    issues = script_gen.term_lint(bad, auto)
+    assert [i.severity for i in issues] == ["error"] and "制动盘" in issues[0].message
+    assert script_gen.term_lint([_seg(0, "三电性能", "碳陶制动盘,制动32.9米。")], auto) == []
+
+
+def test_derived_lint_wants_hedge_on_computed_number_only():
+    src = _f("f_src", "标准版73kWh磷酸铁锂电池,CLTC续航643公里。", source_kind="official")
+    der = _f("f_der", "按 73kWh 电池、CLTC 续航 643 公里粗算,每百公里约用 11.4 度电(推算,源自 f_src)",
+             source_kind="derived", source_query="f_src")
+    facts = [src, der]
+    bare = [_seg(0, "三电性能", "百公里11.4度电。", ["f_src", "f_der"])]
+    assert [i.severity for i in script_gen.derived_lint(bare, facts)] == ["warning"]
+    hedged = [_seg(0, "三电性能", "粗算百公里11.4度电。", ["f_der"])]
+    assert script_gen.derived_lint(hedged, facts) == []
+    # 只说源头的官方数(643 公里)不算推算数字
+    official = [_seg(0, "三电性能", "CLTC 643公里。", ["f_src", "f_der"])]
+    assert script_gen.derived_lint(official, facts) == []
+
+
+def test_hero_lint_flags_unused_hard_facts(auto):
+    hero = _f("f_ring", "YU7 GT在纽博格林北环跑出7分22秒755的圈速。")
+    plain = _f("f_len", "车长4999mm。")
+    segs = [_seg(0, "外观设计", "车长4999毫米。", ["f_len"])]
+    assert [i.severity for i in script_gen.hero_lint(segs, auto, [hero, plain])] == ["warning"]
+    used = segs + [_seg(1, "三电性能", "纽北7分22秒755。", ["f_ring"])]
+    assert script_gen.hero_lint(used, auto, [hero, plain]) == []
+    assert script_gen.hero_lint(segs, auto, [plain]) == []
+
+
+def test_rival_lint_wants_a_name_in_comparison_section():
+    cmp = _f("f_cmp", "YU7四驱版零百2.98秒,岚图追光S四驱版4.5秒。", compare_with="岚图追光S")
+    vague = [_seg(0, "竞品对比", "同价位比,它的牌面是激光雷达。", [])]
+    assert [i.severity for i in script_gen.rival_lint(vague, [cmp])] == ["warning"]
+    named = [_seg(0, "竞品对比", "比岚图追光S快1.5秒。", ["f_cmp"])]
+    assert script_gen.rival_lint(named, [cmp]) == []
+    # 没有对比段(竖屏精简掉了)就不提
+    assert script_gen.rival_lint([_seg(0, "结论建议", "买标准版。")], [cmp]) == []
+
+
+def test_disabled_facts_stay_out_of_script():
+    off = _f("f_old", "2025款标准版CLTC续航835公里。", enabled=False)
+    on = _f("f_new", "2026款标准版CLTC续航643公里。")
+    assert [f.id for f in script_gen.usable_facts([off, on])] == ["f_new"]
+
+
+def test_conflict_lint_wants_basis_when_two_facts_disagree():
+    off = _f("f_off", "YU7 GT零百加速2.92秒。", basis="GT版 · 2026款", source_kind="official")
+    med = _f("f_med", "YU7 GT零百加速2.98秒。", basis="GT版 · 不含起步时间", source_kind="media")
+    seg = [_seg(0, "三电性能", "零百2.92秒。", ["f_off"])]
+    issues = script_gen.conflict_lint(seg, [off, med])
+    assert [i.severity for i in issues] == ["warning"] and "f_med" in issues[0].message
+    # 版本不同(标准版 vs GT 版)不是冲突
+    std = _f("f_std", "YU7标准版零百加速5.9秒。", basis="标准版 · 2026款")
+    assert script_gen.conflict_lint(seg, [off, std]) == []
+
+
+def test_range_lint_wants_soc_window():
+    f = _f("f_ch", "全系5.2C超充,10%-80%最快充电12分钟,15分钟补能620公里。")
+    bare = [_seg(0, "三电性能", "12分钟就能充好。", ["f_ch"])]
+    assert [i.severity for i in script_gen.range_lint(bare, [f])] == ["warning"]
+    ok = [_seg(0, "三电性能", "10%到80%只要12分钟。", ["f_ch"])]
+    assert script_gen.range_lint(ok, [f]) == []
+    # 用的是别的分句里的数(620 公里),不要求区间
+    other = [_seg(0, "三电性能", "15分钟补620公里。", ["f_ch"])]
+    assert script_gen.range_lint(other, [f]) == []
+
+
+def test_numbers_in_does_not_read_lingbai_as_hundred():
+    """「零百」是 0-100km/h 加速,不是 100:以前读成 100292,和事实的 2.92 对不上。"""
+    from app.pipeline.grounding import numbers_in
+    assert numbers_in("零百2.92秒") == {"292"}
+    assert numbers_in("三十一辆") == {"31"}
+
+
+def test_new_lints_regressions_from_live_run():
+    """p_a4b14e3ff3a7 实跑暴露的三处误报 / 漏报。"""
+    # 竞品叫法:「特斯拉Model Y」只说「Model Y」也算点名
+    cmp = _f("f_cmp", "YU7标准版CLTC续航643公里,比Model Y入门版多50公里。", compare_with="特斯拉Model Y")
+    assert script_gen.rival_lint([_seg(0, "竞品对比", "和Model Y比。", [])], [cmp]) == []
+    # 推算出处里的事实 ID 数字不算推算数
+    src = _f("f_63d4b", "标准版73kWh电池,CLTC续航643公里。")
+    der = _f("f_der", "按 73kWh 电池、CLTC 续航 643 公里粗算,每百公里约用 11.4 度电(推算,源自 f_63d4b)",
+             source_kind="derived", source_query="f_63d4b")
+    assert script_gen.derived_lint([_seg(0, "用车成本", "一公里不到6分钱。", ["f_der"])], [src, der]) == []
+    # 「搭载 800V」和「采用 752V」是同一参数;单位写法不同(km/公里)也算同一维度
+    v800 = _f("f_800", "小米YU7全系搭载800V碳化硅高压平台。", basis="全系 · 2025款")
+    v752 = _f("f_752", "小米YU7标准版采用752V碳化硅平台。", basis="标准版 · 2026款")
+    seg = [_seg(0, "三电性能", "全系800V平台。", ["f_800"])]
+    assert [i.severity for i in script_gen.conflict_lint(seg, [v800, v752])] == ["warning"]
+    old = _f("f_o", "标准版CLTC工况续航835km。", basis="CLTC · 标准版 · 2025款")
+    new = _f("f_n", "标准版CLTC续航643公里。", basis="CLTC · 标准版 · 2026款")
+    bare = [_seg(0, "版本选择", "标准版835公里续航。", ["f_o"])]
+    assert [i.severity for i in script_gen.conflict_lint(bare, [old, new])] == ["warning"]
+    # 说了年款就清楚了
+    named = [_seg(0, "版本选择", "2025款标准版835公里续航。", ["f_o"])]
+    assert script_gen.conflict_lint(named, [old, new]) == []

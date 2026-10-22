@@ -9,7 +9,22 @@
     {
       "name": "aimovice-dev",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["run.py", "--port", "8849", "--reload"],
+      "runtimeArgs": [
+        "run.py",
+        "--port",
+        "8849",
+        "--reload"
+      ],
+      "port": 8849
+    },
+    {
+      "name": "aimovice-e2e",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "run.py",
+        "--port",
+        "8849"
+      ],
       "port": 8849
     }
   ]

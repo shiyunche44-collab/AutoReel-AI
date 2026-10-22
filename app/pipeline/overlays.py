@@ -242,13 +242,20 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
     _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), 210, max_w, bold=True)
     d.text((w // 2, int(h * 0.46)), value, font=nf, fill=_ACCENT, anchor="mm",
            stroke_width=10, stroke_fill=(0, 0, 0, 255))
+    # "所以呢":这个数字对观众意味着什么。有它就把口径和出处往下让一行
+    shift = 0.0
+    if overlay.get("note"):
+        note, nof = _fit(d, str(overlay["note"]), int(h * 0.05), max_w, bold=True)
+        d.text((w // 2, int(h * 0.615)), note, font=nof, fill=_TEXT, anchor="mm",
+               stroke_width=5, stroke_fill=(0, 0, 0, 255))
+        shift = 0.08
     if overlay.get("tag"):
         # 口径 + 来源类型("CLTC · 标准版 | 官方"):大数字不带口径,懂车的人第一反应就是"哪个工况?"
         tag_txt, tgf = _fit(d, str(overlay["tag"]), int(h * 0.034), max_w, bold=True)
-        d.text((w // 2, int(h * 0.60)), tag_txt, font=tgf, fill=_TEXT, anchor="mm",
+        d.text((w // 2, int(h * (0.60 + shift))), tag_txt, font=tgf, fill=_TEXT, anchor="mm",
                stroke_width=3, stroke_fill=(0, 0, 0, 255))
     src, sf = _fit(d, overlay.get("source", ""), 24, max_w)
-    d.text((w // 2, int(h * 0.66)), src, font=sf, fill=_MUTED, anchor="mm")
+    d.text((w // 2, int(h * (0.66 + shift))), src, font=sf, fill=_MUTED, anchor="mm")
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     img.save(dest)

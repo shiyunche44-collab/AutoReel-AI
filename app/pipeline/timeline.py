@@ -152,7 +152,7 @@ def _decimal_to_chinese(text: str) -> str:
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
-def normalize_for_tts(text: str) -> str:
+def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str:
     """把阿拉伯数字转成中文读法,并规范常见单位。
 
     "702公里" → "七百零二公里","3.8秒" → "三点八秒"。
@@ -170,6 +170,9 @@ def normalize_for_tts(text: str) -> str:
     out = out.replace("km/h", "公里每小时").replace("KM/H", "公里每小时")
     out = out.replace("kWh", "千瓦时").replace("KWh", "千瓦时")
     out = out.replace("Wh", "瓦时")
+    # 品类读法表(N·m→牛米、rpm→转):长词优先,免得 "N·m/deg" 先被 "N·m" 吃掉
+    for raw in sorted(pronounce or {}, key=len, reverse=True):
+        out = out.replace(raw, pronounce[raw])
     out = re.sub(r"\s+", " ", out)
     return out.strip()
 

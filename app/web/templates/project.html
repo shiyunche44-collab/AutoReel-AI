@@ -185,6 +185,10 @@
       <div class="callout tone-danger">{{ m.icon("alert-circle") }}<div><strong>产品级事实不足</strong> · {{ facts_report.product_gap }}</div></div>
       {% endif %}
 
+      {% if facts_report and facts_report.stale_year_note %}
+      <div class="callout tone-warning">{{ m.icon("alert-circle") }}<div><strong>旧年款事实已屏蔽</strong> · {{ facts_report.stale_year_note }}</div></div>
+      {% endif %}
+
       {% if lint %}
       <div>
         <h3 class="section-title">{{ m.icon("shield", "i-sm") }}合规检查 <span class="count">{{ lint | length }}</span></h3>

@@ -214,9 +214,16 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
     d.text((cx, g.data.top + 46), tag, font=tf, fill=_TEXT, anchor="mm",
            stroke_width=3, stroke_fill=_EDGE)
     value = count_text(str(overlay.get("value") or ""), progress)
-    _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), 168, max_w, bold=True)
-    d.text((cx, g.data.mid + 4), value, font=nf, fill=_ACCENT, anchor="mm",
+    # 有"所以呢"(这个数字对观众意味着什么)时数据区要多放一行:大数字缩小上移,注解压在它和口径之间
+    note = str(overlay.get("note") or "")
+    num_size, num_y = (130, g.data.mid - 22) if note else (168, g.data.mid + 4)
+    _, nf = _fit(d, count_text(str(overlay.get("value") or ""), 1.0), num_size, max_w, bold=True)
+    d.text((cx, num_y), value, font=nf, fill=_ACCENT, anchor="mm",
            stroke_width=8, stroke_fill=_EDGE)
+    if note:
+        n, f = _fit(d, note, 38, max_w, bold=True)
+        d.text((cx, g.data.mid + 70), n, font=f, fill=_TEXT, anchor="mm",
+               stroke_width=4, stroke_fill=_EDGE)
     y = g.data.bottom - 70
     if overlay.get("tag"):
         t, f = _fit(d, str(overlay["tag"]), 32, max_w, bold=True)
