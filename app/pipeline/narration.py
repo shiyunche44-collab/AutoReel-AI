@@ -588,7 +588,10 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
                     raw.unlink()
                 except OSError:
                     pass
+    portrait = out_h > out_w
     try:
+        if portrait:
+            return _portrait_cover(image, from_video, title, dest, subtitle, (out_w, out_h), kicker)
         # 裁成成片画幅。抽帧来的先切掉底部 7%(章节条在那儿),再取景;
         # 官图不用切,直接取景。
         w, h = image.size
@@ -685,6 +688,93 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
         return dest
     except Exception:  # noqa: BLE001
         return None
+
+
+#: 小红书封面是 3:4。竖屏封面从顶上裁一张 1080×1440(标题区 + 画面带都在里面)
+COVER_3X4_SUFFIX = "_3x4"
+
+
+def cover_3x4_path(cover: str | Path) -> Path:
+    """竖屏封面旁边那张 3:4 裁切版的路径。"""
+    cover = Path(cover)
+    return cover.with_name(f"{cover.stem}{COVER_3X4_SUFFIX}{cover.suffix}")
+
+
+def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtitle: str,
+                    size: tuple[int, int], kicker: str) -> Path | None:
+    """竖屏封面,三段式:模糊压暗的同图铺底,整车完整放在画面带,标题放在上方标题区。
+
+    宽图直接裁成 9:16 会把车头车尾裁掉 —— 封面上的车必须是完整的。
+    抽帧来的(成片里截的)只取画面带那一截:标题区和数据区上已经有字了。
+    另存一张 3:4 的裁切版给小红书(`cover_3x4_path`)。"""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+    from .aspect import portrait_grid
+
+    out_w, out_h = size
+    g = portrait_grid(size)
+    if from_video:
+        fw, fh = image.size
+        scale = fh / out_h
+        image = image.crop((0, int(g.band.top * scale), fw, int(g.band.bottom * scale)))
+    # 铺底:同图放大铺满,模糊、压暗
+    w, h = image.size
+    k = max(out_w / w, out_h / h)
+    bg = image.resize((int(w * k) + 1, int(h * k) + 1), Image.LANCZOS)
+    left, top = (bg.width - out_w) // 2, (bg.height - out_h) // 2
+    bg = bg.crop((left, top, left + out_w, top + out_h)).filter(ImageFilter.GaussianBlur(32))
+    bg = Image.blend(bg, Image.new("RGB", size, (8, 10, 14)), 0.55)
+    # 主图:按宽度放进画面带(比画面带略大一点也行,完整优先)
+    k = out_w / w
+    main = image.resize((out_w, max(1, int(h * k))), Image.LANCZOS)
+    y_main = max(g.title.bottom - 40, g.band.mid - main.height // 2)
+    bg.paste(main, (0, y_main))
+
+    draw = ImageDraw.Draw(bg)
+    font_path = _font_file(bold=True)
+    sub_font_path = _font_file(bold=False)
+    try:
+        kicker_font = ImageFont.truetype(sub_font_path, 38) if sub_font_path else ImageFont.load_default()
+        sub_font = ImageFont.truetype(sub_font_path, 44) if sub_font_path else ImageFont.load_default()
+    except OSError:
+        kicker_font = sub_font = ImageFont.load_default()
+    max_width = out_w - g.left * 2
+    lines, title_font = _cover_fit(title, font_path, max_width)
+    line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
+    y = g.title.top + 10
+    if kicker:
+        draw.rectangle([g.left, y, g.left + 6, y + 38], fill=COVER_ACCENT)
+        draw.text((g.left + 18, y), kicker, font=kicker_font, fill=COVER_ACCENT,
+                  stroke_width=2, stroke_fill=(0, 0, 0))
+        y += 60
+    for line in lines:
+        draw.text((g.left, y), line, font=title_font, fill=COVER_TEXT, stroke_width=3,
+                  stroke_fill=(0, 0, 0))
+        y += line_h
+    # 副标题(主论点)放在画面带下面的数据区
+    sub_lines = _cover_wrap(subtitle, sub_font, max_width, 2) if subtitle else []
+    y = max(y_main + main.height, g.data.top) + 36
+    for line in sub_lines:
+        draw.text((g.left, y), line, font=sub_font, fill=COVER_SUB, stroke_width=2,
+                  stroke_fill=(0, 0, 0))
+        y += int(line_h * 0.8)
+
+    tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
+    try:
+        bg.save(tmp, quality=92)
+        os.replace(tmp, dest)
+        three_four = bg.crop((0, 0, out_w, out_w * 4 // 3))
+        tmp34 = cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")
+        three_four.save(tmp34, quality=92)
+        os.replace(tmp34, cover_3x4_path(dest))
+    except BaseException:
+        for t in (tmp, cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")):
+            try:
+                t.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    return dest
 
 
 def _font_file(bold: bool = True) -> str | None:

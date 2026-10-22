@@ -162,3 +162,110 @@ def test_fit_filter_with_crop_bottom_fills_the_frame():
     out = explainer._fit_filter(1920, 1080, 0.22)
     assert "crop=iw" in out
     assert "force_original_aspect_ratio=increase" in out
+
+
+# --------------------------------------------------------------------------
+# 竖屏三段式网格与叠加层
+# --------------------------------------------------------------------------
+PORTRAIT = (1080, 1920)
+
+
+def test_portrait_grid_zones_are_ordered_and_band_is_16_9():
+    g = aspect.portrait_grid(PORTRAIT)
+    assert g.title.top < g.title.bottom == g.band.top < g.band.bottom == g.data.top
+    assert g.data.bottom <= g.sub.top < g.sub.bottom <= int(1920 * 0.90)
+    assert g.band_size == (1080, 608)
+    assert g.right <= int(1080 * 0.88)
+
+
+def _alpha_bbox(path):
+    from PIL import Image
+
+    img = Image.open(path)
+    assert img.size == PORTRAIT
+    return img.getchannel("A").getbbox()
+
+
+def test_portrait_overlays_stay_in_their_zones(tmp_path):
+    from app.pipeline import overlays
+
+    g = aspect.portrait_grid(PORTRAIT)
+    panel = {"title": "三电", "source": "官网",
+             "rows": [{"label": "续航", "values": ["835 km"]}, {"label": "功率", "values": ["508 kW"]},
+                      {"label": "零百", "values": ["3.23 秒"]}]}
+    # 数据区里的东西:不压画面带,不进字幕区
+    for p in (overlays.panel(panel, "小米YU7", PORTRAIT, tmp_path / "p.png"),
+              overlays.stat({"label": "续航", "value": "835 km", "source": "官网"}, "小米YU7",
+                            PORTRAIT, tmp_path / "s.png"),
+              overlays.lower_third("小米YU7", "三电", PORTRAIT, tmp_path / "l.png")):
+        box = _alpha_bbox(p)
+        assert box[1] >= g.data.top and box[3] <= g.sub.top, p.name
+    # 标题区里的东西:不压画面带
+    for p in (overlays.highlight(["800V 碳化硅", "15 分钟补能"], PORTRAIT, tmp_path / "h.png"),
+              overlays.chapter_bar([("开场", 3), ("三电", 10)], 1, PORTRAIT, tmp_path / "b.png",
+                                   headline="小米YU7:25万的SUV值不值得买")):
+        box = _alpha_bbox(p)
+        assert box[1] >= g.title.top and box[3] <= g.band.top, p.name
+
+
+def test_split_headline_breaks_at_punctuation():
+    from app.pipeline.overlays_portrait import split_headline
+
+    assert split_headline("小米YU7:25万的SUV值不值得买") == ["小米YU7", "25万的SUV值不值得买"]
+    assert split_headline("短标题") == ["短标题"]
+    assert len(split_headline("一二三四五六七八九十十一十二十三")) == 2
+
+
+def test_card_geometry_leaves_title_band_and_subtitles_free():
+    from app.pipeline import cards
+
+    g = aspect.portrait_grid(PORTRAIT)
+    geo = cards.geo_for(PORTRAIT)
+    assert geo.top > g.band.top and geo.bottom < g.sub.top
+
+
+def test_landscape_card_geometry_unchanged():
+    from app.pipeline import cards
+
+    geo = cards.geo_for((1920, 1080))
+    assert (geo.top, geo.bottom, geo.left, geo.right) == (140, 842, 384, 1536)
+
+
+def test_render_portrait_beat_with_ffmpeg(tmp_path, monkeypatch):
+    if not (config.FFMPEG_PATH and config.FFMPEG_PATH.is_file()):
+        pytest.skip("没有 ffmpeg")
+    from app.models import ShotSpec
+    from app.pipeline import timeline as tl
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    spec = ShotSpec(idx=0, duration=2.0, visual_zh="[stat] x", narration_zh="a", layout="stat",
+                    overlay={"kind": "stat", "label": "续航", "value": "835公里", "source": "官网"})
+    dest, _ = explainer.render_beat(spec, subject="测试车", size=(540, 960), out_dir=tmp_path,
+                                    chapters=[("开头", 2.0)], chapter_idx=0, used={}, card_bg=None,
+                                    headline="测试车:值不值")
+    assert tl.probe_safe(dest, default=0.0) == pytest.approx(2.0, abs=0.1)
+    import subprocess
+
+    from PIL import Image
+
+    from app.pipeline import render as render_mod
+
+    frame = tmp_path / "f.png"
+    subprocess.run([render_mod._ffmpeg(), "-y", "-v", "error", "-ss", "1", "-i", str(dest),
+                    "-frames:v", "1", str(frame)], check=True)
+    assert Image.open(frame).size == (540, 960)
+
+
+def test_portrait_cover_keeps_whole_still_and_writes_3x4(tmp_path):
+    from PIL import Image
+
+    from app.pipeline import narration
+
+    still = tmp_path / "car.jpg"
+    Image.new("RGB", (1600, 900), (40, 120, 60)).save(still)
+    dest = narration.make_cover(tmp_path / "none.mp4", "小米YU7:值不值得买", tmp_path / "cover_vertical.jpg",
+                                subtitle="一句话结论", size=PORTRAIT, still=still, kicker="深度")
+    assert dest is not None
+    assert Image.open(dest).size == PORTRAIT
+    three_four = narration.cover_3x4_path(dest)
+    assert Image.open(three_four).size == (1080, 1440)

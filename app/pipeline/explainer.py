@@ -28,7 +28,6 @@ import re
 import shutil
 import subprocess
 import zlib
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -863,23 +862,6 @@ def _ff(args: Sequence[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return render_mod._run(["-y", "-v", "error", *args], timeout=timeout)
 
 
-#: 竖版渲染时置位:背景一律走「前景完整 + 模糊铺底」,不按"裁掉底部烧录字幕"处理。
-#: 横屏下那一支滤镜是"裁完放大铺满",竖版用等于把车头车尾全裁掉。
-_FIT_BACKGROUND = False
-
-
-@contextmanager
-def fit_background():
-    """上下文:本次渲染的背景不做底部裁切。退出时自动还原。"""
-    global _FIT_BACKGROUND
-    old = _FIT_BACKGROUND
-    _FIT_BACKGROUND = True
-    try:
-        yield
-    finally:
-        _FIT_BACKGROUND = old
-
-
 def _fit_filter(w: int, h: int, crop_bottom: float = 0.0) -> str:
     """任意比例的视频放进 w×h:前景完整缩进画幅,空出的地方用同一画面放大模糊铺满。
     横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。
@@ -900,10 +882,9 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
     if piece.kind == "still":
         return render_mod.still_to_clip(piece.path, dest, seconds=piece.length,
                                         motion=motion, size=size)
-    # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐
-    # 竖版渲染时 crop_bottom 归零:那一支滤镜是"裁完放大铺满",竖版下等于把车裁掉
-    crop = 0.0 if _FIT_BACKGROUND else piece.crop_bottom
-    vf = _fit_filter(w, h, crop) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+    # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐。
+    # 竖屏也照常裁烧录字幕:实拍只放在 16:9 的画面带里,和横屏是同一个比例
+    vf = _fit_filter(w, h, piece.crop_bottom) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -991,6 +972,37 @@ def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple
     return dest
 
 
+def footage_size(size: tuple[int, int]) -> tuple[int, int]:
+    """实拍按什么尺寸渲。横屏 = 整个画面;竖屏 = 三段式中间的画面带(1080×608,16:9)。
+
+    竖屏的实拍**先按画面带渲**(横屏那套背景逻辑原样复用:拼接、转场、运镜、
+    裁烧录字幕、分屏),再由 `band_frame` 放进竖屏画布。"""
+    if aspect.is_portrait_size(size):
+        return aspect.portrait_grid(size).band_size
+    return size
+
+
+def band_frame(band_clip: Path, size: tuple[int, int], dest: Path) -> Path:
+    """画面带放进竖屏画布:同一段画面放大模糊压暗铺满全幅,清晰的 16:9 画面压在画面带上。
+    上下不是黑边,而是同一画面的延伸,标题区和数据区的字压在上面也看得清。"""
+    w, h = size
+    g = aspect.portrait_grid(size)
+    graph = (f"[0:v]split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+             f"boxblur=30:2,eq=brightness=-0.24:saturation=0.8[bg];"
+             f"[bg][b]overlay=0:{g.band.top},setsar=1,fps={render_mod.FPS},format=yuv420p[v]")
+    proc = _ff(["-i", str(band_clip), "-filter_complex", graph, "-map", "[v]", "-an", *_ENC, str(dest)])
+    if proc.returncode != 0 or not dest.is_file():
+        raise render_mod.RenderError(f"竖屏画面带合成失败:{(proc.stderr or '')[-300:]}")
+    return dest
+
+
+def _framed(clip: Path, size: tuple[int, int], work: Path) -> Path:
+    """竖屏时把画面带包成整幅画面;横屏原样返回。"""
+    if not aspect.is_portrait_size(size):
+        return clip
+    return band_frame(clip, size, work / f"{clip.stem}_framed.mp4")
+
+
 #: 概念动画的实拍底从外观组里挑(行驶、航拍也在这组),车内镜头压上数据不好看
 CONCEPT_FOOTAGE_HINT = "exterior"
 
@@ -1058,6 +1070,12 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
 
     `layout` 除了版式名,还可以是 broll 的样式 `lower_third`(角标从左擦入)。"""
     w, h = size
+    if layout == "highlight" and has_layer and aspect.is_portrait_size(size):
+        # 竖屏:实拍本来就在画面带里,不用再缩小窗;关键词占标题区,淡入
+        return (
+            f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
+            f"[0:v][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
+        )
     if layout == "highlight" and has_layer:
         pip_w = int(w * 0.62) // 2 * 2
         pip_h = int(h * 0.62) // 2 * 2
@@ -1221,8 +1239,10 @@ def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int
                                                used=used, recent=recent)
         if got:
             try:
-                bg_clip = (concept_background(take, seconds, size, work) if take else
-                           background_clip(got, seconds, size, work, motion_seed=spec.idx))
+                fsize = footage_size(size)
+                bg_clip = (concept_background(take, seconds, fsize, work) if take else
+                           background_clip(got, seconds, fsize, work, motion_seed=spec.idx))
+                bg_clip = _framed(bg_clip, size, work)
                 pieces = got
             except Exception:
                 bg_clip = None
@@ -1242,11 +1262,15 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 used: dict[str, int], card_bg: Path | None,
                 recent: list[str] | None = None,
                 sting: tuple[int, str] | None = None,
-                style: str | None = None) -> tuple[Path, list[dict]]:
+                style: str | None = None, headline: str = "") -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
-    `sting` = (章号, 章名) 时在开头叠章节标牌(每章第一拍)。"""
+    `sting` = (章号, 章名) 时在开头叠章节标牌(每章第一拍)。
+    `headline` 是竖屏标题区常驻的两行大标题(横屏不用)。
+
+    竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
+    放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
     seconds = max(0.5, spec.duration)
     recent = recent if recent is not None else []
     work = out_dir / "_work" / f"{spec.idx:03d}"
@@ -1255,10 +1279,12 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     work.mkdir(parents=True, exist_ok=True)
 
     pieces: list[library.Piece] = []
+    fsize = footage_size(size)
     if spec.layout == "hook" and spec.overlay:
         try:
-            base, pieces = hook_background(subject, seconds, size, work / "hook", used, recent,
+            base, pieces = hook_background(subject, seconds, fsize, work / "hook", used, recent,
                                            spec.view, spec.idx)
+            base = _framed(base, size, work)
         except Exception:  # noqa: BLE001 - 冷开场做不出来:同一批关键词退回 highlight 版式
             lines = spec.overlay.get("lines") or []
             fallback = spec.model_copy(update={
@@ -1266,7 +1292,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 "overlay": {"kind": "highlight", "lines": lines} if lines else None})
             return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
                                chapters=chapters, chapter_idx=chapter_idx, used=used,
-                               card_bg=card_bg, recent=recent, sting=sting, style=style)
+                               card_bg=card_bg, recent=recent, sting=sting, style=style,
+                               headline=headline)
     elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
@@ -1284,9 +1311,12 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
     else:
-        base, pieces = _broll_base(spec, subject, seconds, size, work, used, recent, card_bg)
+        base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg)
+        base = _framed(base, size, work)
 
-    bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png")
+    # 竖屏标题区:highlight / hook 拍的关键词占这块,大标题让位
+    bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png",
+                               headline="" if spec.layout in ("highlight", "hook") else headline)
     layer: Path | None = None
     layer_input: list[str] = []
     flt = spec.layout
@@ -1424,7 +1454,10 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     bg_cache: dict[str, list[Path]] = {}
     style = concept_style_of(project_id)
     # 画幅是项目属性(创建时定),不是品类属性
-    size = aspect.frame_size(db.get_project(project_id))
+    project = db.get_project(project_id) or {}
+    size = aspect.frame_size(project)
+    # 竖屏标题区常驻的大标题:脚本阶段 LLM 起的片名
+    headline = str(project.get("title") or "") if aspect.is_portrait(project) else ""
     done, errors = [], []
     for s in todo:
         # 停机信号:在**拍与拍之间**收手。手头这一拍做完就停,剩下的
@@ -1448,7 +1481,7 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        card_bg=bgs[s.idx % len(bgs)] if bgs else None,
                                        recent=recent,
                                        sting=sting_for(specs, where, chapters, s.idx),
-                                       style=style)
+                                       style=style, headline=headline)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])

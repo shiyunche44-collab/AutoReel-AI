@@ -223,6 +223,16 @@ def _tags_of(row: dict[str, Any]) -> list[str]:
         return []
 
 
+def _cover_for(project_id: str, aspect: str, platform: str) -> Path | None:
+    """封面文件。小红书的封面是 3:4:竖屏项目有 3:4 裁切版就用它。"""
+    from ..pipeline.narration import cover_3x4_path
+
+    cover = cover_path(project_id, aspect)
+    if platform == "xiaohongshu" and cover_3x4_path(cover).is_file():
+        return cover_3x4_path(cover)
+    return cover if cover.is_file() else None
+
+
 def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
     project_id = row["project_id"]
     aspect = row.get("aspect") or LANDSCAPE
@@ -246,7 +256,7 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
         platform=row["platform"],
         aspect=aspect,
         video_path=artifact_path(project_id, aspect),
-        cover_path=cover_path(project_id, aspect) if cover_path(project_id, aspect).is_file() else None,
+        cover_path=_cover_for(project_id, aspect, account.platform),
         title=row.get("title") or "",
         description=row.get("description") or "",
         tags=_tags_of(row),

@@ -63,15 +63,16 @@ class Geo:
 
 def geo_for(size: tuple[int, int] | None = None) -> Geo:
     w, h = size or (W, H)
-    if not config.frame_is_landscape((w, h)):
-        # 竖屏残留过一次(缺省画幅是 1080×1920),这里留一道告警:
-        # 画幅不对时数据卡会按竖屏的几何排版,内容被裁在不该裁的地方。
-        log.warning("数据卡画幅不是 16:9:%sx%s", w, h)
     if w > h:
         return Geo(w, h, top=int(h * 0.13), bottom=int(h * 0.78),
                    left=int(w * 0.20), right=int(w * 0.80))
-    return Geo(w, h, top=int(h * 0.15), bottom=int(h * 0.70),
-               left=int(w * 0.07), right=int(w * 0.88))
+    # 竖屏三段式:卡片占画面带 + 数据区,标题区留给章节进度,字幕区与平台按钮区不压
+    from .aspect import portrait_grid
+
+    g = portrait_grid((w, h))
+    # 顶部多留一截给章节标牌(贴在画面带左上角,停 1 秒多),不压卡片标题
+    return Geo(w, h, top=g.band.top + 150, bottom=g.data.bottom - 30,
+               left=g.left + 44, right=g.right - 20)
 
 
 _GEO = geo_for()

@@ -1,4 +1,6 @@
-"""横屏解说轨的叠加层:侧边参数面板、两行大字关键词、大数字滚动、底部章节条。
+"""解说轨的叠加层:侧边参数面板、两行大字关键词、大数字滚动、底部章节条。
+
+竖屏(9:16)尺寸下每个函数转到 `overlays_portrait`(三段式排版),横屏走这里。
 
 全部画成透明 PNG,由 `explainer.py` 用 ffmpeg overlay 叠到背景画面上。
 画法与数据卡(`cards.py`)同源 —— 同一套字体与取字号逻辑,数字同样只来自
@@ -16,7 +18,7 @@ from typing import Any, Sequence
 
 from PIL import Image, ImageDraw
 
-from . import hud
+from . import aspect, hud, overlays_portrait
 from .cards import _fit, _font
 
 #: 强调色统一到 HUD 的橙(和面板的纸面、角标是同一套视觉语言)
@@ -48,6 +50,8 @@ def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: st
     版式照搬 bakeoff C:浅色纸面、发丝网格、橙色取景框角标、等宽大数字,
     参数名右边压一行口径小标签。`overlay` 形状同 spec 卡片。
     """
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.panel(overlay, subject, size, dest)
     w, h = size
     img, d = _canvas(size)
     x0, x1 = int(w * 0.035), int(w * 0.335)
@@ -126,6 +130,8 @@ def panel(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: st
 
 def highlight(lines: Sequence[str], size: tuple[int, int], dest: str | Path) -> Path:
     """两行大字关键词,压在小窗画面的下沿。第一行白、第二行强调色,粗描边。"""
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.highlight(lines, size, dest)
     w, h = size
     img, d = _canvas(size)
     lines = [str(x).strip() for x in lines if str(x).strip()][:2]
@@ -145,12 +151,16 @@ def highlight(lines: Sequence[str], size: tuple[int, int], dest: str | Path) -> 
 
 
 def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple[int, int],
-                dest: str | Path) -> Path:
+                dest: str | Path, headline: str = "") -> Path:
     """底部章节条:按各章时长分宽,当前章高亮。`chapters` = [(名字, 时长秒), ...]。
+
+    竖屏下画在标题区,并带上两行大标题 `headline`(横屏不用它)。
 
     宽度按时长分,但每章至少给能放下名字的宽度 —— 开头、结尾往往只有一两拍,
     纯按比例会窄到写不下字。
     """
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.chapter_bar(chapters, current, size, dest, headline)
     w, h = size
     img, d = _canvas(size)
     bar_h = int(h * BAR_HEIGHT)
@@ -218,6 +228,8 @@ def count_text(value: str, progress: float) -> str:
 def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path,
          progress: float = 1.0) -> Path:
     """画面中央一个大数字:上面一行小字标签,数字本体强调色粗描边,下面一行出处。"""
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.stat(overlay, subject, size, dest, progress)
     w, h = size
     img, d = _canvas(size)
     label = str(overlay.get("label") or "")
@@ -273,6 +285,8 @@ def _sting(number: int, name: str, size: tuple[int, int], dest: Path, wipe: floa
            alpha: float) -> Path:
     """左上角章节标牌:强调色色块里是章号,右边白字章名。`wipe` 0–1 是色块擦开的进度,
     `alpha` 0–1 是整体不透明度(淡出用)。"""
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.sting(number, name, size, dest, wipe, alpha)
     w, h = size
     img, d = _canvas(size)
     x0, y0 = int(w * 0.035), int(h * 0.04)
@@ -325,6 +339,8 @@ def chapter_sting_frames(number: int, name: str, size: tuple[int, int],
 
 def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | Path) -> Path:
     """左上角角标:强调色竖条 + 「车名 · 章名」。只用已有的文字,不需要任何数据。"""
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.lower_third(subject, chapter, size, dest)
     w, h = size
     img, d = _canvas(size)
     x0, y0 = int(w * 0.035), int(h * 0.04)
@@ -356,6 +372,8 @@ def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest
               scale: float = 1.0, alpha: float = 1.0) -> Path:
     """开场大字。有 `stat` 时:上面小字标签、中央大数字,关键词压在下面;
     没有就只有一两行关键词居中。数字取原文,不滚动(三秒里没有时间滚)。"""
+    if aspect.is_portrait_size(size):
+        return overlays_portrait.hook_text(overlay, subject, size, dest, scale, alpha)
     w, h = size
     img, d = _canvas(size)
     max_w = int(w * 0.86)
