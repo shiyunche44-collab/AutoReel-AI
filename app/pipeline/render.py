@@ -233,19 +233,22 @@ BGM_DUCK_THRESHOLD = 0.01
 
 
 def _build_audio_graph(
-    has_narration: bool, has_bgm: bool, narration_duration: float
+    has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
 ) -> tuple[str, str]:
     """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
 
     旁白优先:先把旁白和 BGM 各自响度对齐(BGM 比旁白低),再用旁白做侧链压 BGM,
     最后 amix **不做归一化**(默认的 amix 会把每路除以路数,旁白白白少一半),
     整体只过一遍 loudnorm。旁白在侧链和混音两处都要用,必须先 asplit。
+
+    `first_input`:旁白(没旁白时是 BGM)的输入序号。单独混音时是 0,
+    跟视频同一条命令时视频占了 0,就是 1。
     """
     filters: list[str] = []
     if has_narration:
-        filters.append("[1:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr0]")
+        filters.append(f"[{first_input}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr0]")
     if has_bgm:
-        bgm_index = 2 if has_narration else 1
+        bgm_index = first_input + 1 if has_narration else first_input
         filters.append(
             f"[{bgm_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
             f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}[bgmraw]"
@@ -281,6 +284,38 @@ def _build_audio_graph(
             "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]"
         )
     return ";".join(f for f in filters if f), "[aout]"
+
+
+def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: float,
+               dest: Path) -> tuple[Path | None, str]:
+    """旁白 + BGM 单独混成一条 wav,返回 (路径, 错误信息)。
+
+    **不能**跟视频放在同一条 ffmpeg 里混:2026-10-23 实测(ffmpeg 9.0.2),
+    视频拼接/烧字幕与 loudnorm 同一条命令时,音频帧会成段丢掉 —— 成片
+    音轨时间戳出现一串约 3 秒(正好是 loudnorm 前瞻窗口)的空洞,
+    108 秒的片只剩 64 秒声音,播放时就是"好几处没配音"。
+    同样的滤镜单独跑一条纯音频命令,一帧不丢。
+    """
+    has_narration = bool(narration_path and Path(narration_path).is_file())
+    has_bgm = bool(bgm_path and Path(bgm_path).is_file())
+    if not has_narration and not has_bgm:
+        return None, ""
+    inputs: list[str] = []
+    if has_narration:
+        inputs += ["-i", str(narration_path)]
+    if has_bgm:
+        # -stream_loop -1:BGM 比成片短时循环铺满
+        inputs += ["-stream_loop", "-1", "-i", str(bgm_path)]
+    graph, label = _build_audio_graph(has_narration, has_bgm, 0.0, first_input=0)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    proc = _run(
+        ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
+         "-t", f"{seconds:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", str(dest)],
+        timeout=900,
+    )
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        return None, (proc.stderr or "")[-300:]
+    return dest, ""
 
 
 def compose(
@@ -333,52 +368,60 @@ def compose(
         warnings.append(f"旁白文件不存在,成片将没有解说声:{narration_path}")
 
     concat_file = timeline_mod.concat_list_file(normalised, work_dir / "concat.txt")
+    total_seconds = sum(durations) if durations else config.SHOT_GRID_SECONDS * len(normalised)
+
+    # 音频先单独混好(原因见 _mix_audio),主命令只负责视频 + 封装现成的音轨
+    mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav")
+    if mix_err:
+        warnings.append(f"旁白/BGM 混音失败,成片将没有声音:{mix_err}")
 
     inputs: list[str] = ["-f", "concat", "-safe", "0", "-i", str(concat_file)]
-    has_narration = bool(narration_path and Path(narration_path).is_file())
-    has_bgm = bool(bgm_path and Path(bgm_path).is_file())
-    if has_narration:
-        inputs += ["-i", str(narration_path)]
-    if has_bgm:
-        # -stream_loop -1:BGM 比成片短时循环铺满
-        inputs += ["-stream_loop", "-1", "-i", str(bgm_path)]
+    if mix_path:
+        inputs += ["-i", str(mix_path)]
 
-    # 视频滤镜链:拼接后的视频 → 可选烧字幕
+    # 视频滤镜链:拼接后的视频 → 归一化 → 可选烧字幕
     vf_parts = [f"scale={w}:{h}", f"fps={FPS}", "setsar=1", "format=yuv420p"]
     ass_filter = _build_ass_filter(ass_path, project_dir)
     if ass_filter:
         vf_parts.append(ass_filter)
-
-    audio_filter, audio_label = _build_audio_graph(
-        has_narration, has_bgm, 0.0
-    )
-    # 视频滤镜链:拼接后的视频 → 归一化 → 可选烧字幕
     vf = ",".join(vf_parts)
-    filters = f"[0:v]{vf}[vout]" + (f";{audio_filter}" if audio_filter else "")
+    filters = f"[0:v]{vf}[vout]"
+    if mix_path:
+        audio_map = "1:a"
+    else:
+        # 哑片兜底:拼接流里每拍自带的静音轨(见 _build_audio_graph 的说明)
+        silent, audio_map = _build_audio_graph(False, False, 0.0)
+        filters += f";{silent}"
 
     args: list[str] = ["-y", "-v", "error", *inputs]
-    args += ["-filter_complex", filters, "-map", "[vout]"]
-    if audio_filter:
-        args += ["-map", audio_label]
+    args += ["-filter_complex", filters, "-map", "[vout]", "-map", audio_map]
     args += [
         "-c:v", "libx264", "-preset", "slow", "-crf", "20",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-        "-t", f"{sum(durations):.3f}" if durations
-        else str(config.SHOT_GRID_SECONDS * len(normalised)),
+        "-t", f"{total_seconds:.3f}",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        str(tmp_output),
     ]
-    if audio_filter:
-        args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
-    args += [str(tmp_output)]
+
+    def _check(path: Path) -> str | None:
+        """出片前的两道校验:整片解码 + 音轨完整。返回不合格原因。"""
+        if not _decodes_clean(path):
+            # 2026-10-21 实测:同样的参数,管线里合出的成片偶发 H.264 NAL 损坏(满屏
+            # "Invalid NAL unit size"),重合一次就干净。
+            return "成片解码校验未通过"
+        if mix_path:
+            return _audio_intact(path, total_seconds)
+        return None
 
     proc = _run(args, timeout=2400, cwd=project_dir)
-    if proc.returncode == 0 and tmp_output.is_file() and not _decodes_clean(tmp_output):
-        # 2026-10-21 实测:同样的参数,管线里合出的成片偶发 H.264 NAL 损坏(满屏
-        # "Invalid NAL unit size"),重合一次就干净。出片前整片解码验一遍,坏了重合。
-        warnings.append("成片解码校验未通过,已重新合成一次")
+    problem = _check(tmp_output) if proc.returncode == 0 and tmp_output.is_file() else None
+    if problem:
+        warnings.append(f"{problem},已重新合成一次")
         tmp_output.unlink(missing_ok=True)
         proc = _run(args, timeout=2400, cwd=project_dir)
-        if proc.returncode == 0 and tmp_output.is_file() and not _decodes_clean(tmp_output):
-            warnings.append("成片重合后仍有解码错误,请检查后重新合成")
+        problem = _check(tmp_output) if proc.returncode == 0 and tmp_output.is_file() else None
+        if problem:
+            warnings.append(f"重合后仍不合格:{problem},请检查后重新合成")
     if proc.returncode != 0 or not tmp_output.is_file():
         # 字幕烧录是 Windows 上最容易出问题的一环,失败时退化为"无字幕重试"
         if ass_filter:
@@ -412,6 +455,57 @@ def _decodes_clean(video: Path) -> bool:
     """整片解码一遍,有任何错误输出就算不干净。"""
     proc = _run(["-v", "error", "-i", str(video), "-f", "null", "-"], timeout=900)
     return proc.returncode == 0 and not proc.stderr.strip()
+
+
+#: 音轨时长至少是预期的这个比例;相邻音频包时间戳差超过这个秒数就算空洞
+AUDIO_MIN_RATIO = 0.98
+AUDIO_MAX_GAP = 0.1
+
+
+def _audio_intact(video: Path, expected_seconds: float) -> str | None:
+    """音轨是否完整:包时长合计够长、时间戳没有空洞。合格返回 None,否则返回原因。
+
+    `_decodes_clean` 抓不到丢帧 —— 时间戳空洞不算解码错误,播放器在空洞处
+    直接静音。所以要单独数音频包。
+    """
+    if not config.FFPROBE_PATH or not config.FFPROBE_PATH.is_file():
+        return None
+    try:
+        proc = subprocess.run(
+            [str(config.FFPROBE_PATH), "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0", str(video)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return audio_problem(proc.stdout, expected_seconds)
+
+
+def audio_problem(packets_csv: str, expected_seconds: float) -> str | None:
+    """解析 ffprobe 的 `pts_time,duration_time` 逐包输出,找音轨缺口。"""
+    total = 0.0
+    gaps: list[tuple[float, float]] = []
+    prev_end: float | None = None
+    for line in packets_csv.splitlines():
+        parts = [p for p in line.strip().split(",") if p]
+        if len(parts) < 2:
+            continue
+        try:
+            pts, dur = float(parts[0]), float(parts[1])
+        except ValueError:
+            continue
+        total += dur
+        if prev_end is not None and pts - prev_end > AUDIO_MAX_GAP:
+            gaps.append((prev_end, pts))
+        prev_end = pts + dur
+    if total <= 0:
+        return "成片没有音轨"
+    if gaps:
+        lost = sum(b - a for a, b in gaps)
+        return f"成片音轨有 {len(gaps)} 处断档,共缺 {lost:.1f} 秒(首处 {gaps[0][0]:.1f} 秒)"
+    if total < expected_seconds * AUDIO_MIN_RATIO:
+        return f"成片音轨只有 {total:.1f} 秒,应为 {expected_seconds:.1f} 秒"
+    return None
 
 
 def _build_ass_filter(ass_path: Path | None, project_dir: Path) -> str | None:

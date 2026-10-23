@@ -69,6 +69,8 @@ def test_compose_renames_the_temp_file_into_place(store, monkeypatch):
     assert out.is_file(), "成片应该在正式位置"
     # 没有任何一次 ffmpeg 调用是直接写 output.mp4 的
     for args in calls:
+        if Path(args[-1]).name == "mix.wav":
+            continue  # 单独混音那一步写的是中间文件
         assert Path(args[-1]).name != "output.mp4", "ffmpeg 不该直接写正式成片"
         # 临时文件必须保留扩展名 —— ffmpeg 靠它推断封装格式
         assert Path(args[-1]).suffix in (".mp4", ".mov", ".mkv"), \
@@ -129,6 +131,83 @@ def test_audio_graph_with_narration_only():
     assert "[narr0]" in filt
     assert "[bgmraw]" not in filt
     assert label == "[aout]"
+
+
+# --------------------------------------------------------------------------
+# 旁白断音(2026-10-23):混音必须单独一条命令,出片前数音频包
+# --------------------------------------------------------------------------
+def test_narration_is_mixed_separately_from_video(store, monkeypatch):
+    """视频与 loudnorm 同一条 ffmpeg 会成段丢音频帧,所以先混出 mix.wav,
+    主命令只封装它,里面不能再有任何音频滤镜。"""
+    calls = _fake_ffmpeg(monkeypatch)
+    monkeypatch.setattr(render, "_audio_intact", lambda p, s: None)
+    nar = store / "narration.wav"
+    nar.write_bytes(b"fake")
+    bgm = store / "bgm.mp3"
+    bgm.write_bytes(b"fake")
+
+    result = render.compose("p_atomic", [_shot(store)], narration_path=nar, bgm_path=bgm,
+                            size=(1920, 1080), durations=[12.0])
+
+    assert result.ok
+    mix_calls = [a for a in calls if Path(a[-1]).name == "mix.wav"]
+    assert len(mix_calls) == 1
+    mix = mix_calls[0]
+    assert "-f" not in mix[:mix.index("-filter_complex")], "混音命令不该带视频输入"
+    assert "[0:a]" in mix[mix.index("-filter_complex") + 1]
+    main = [a for a in calls if Path(a[-1]).suffix == ".mp4" and "concat" in a][-1]
+    graph = main[main.index("-filter_complex") + 1]
+    assert "loudnorm" not in graph and "amix" not in graph
+    assert main[main.index("-map", main.index("[vout]")) + 1] == "1:a"
+
+
+def test_compose_retries_when_audio_track_has_holes(store, monkeypatch):
+    calls = _fake_ffmpeg(monkeypatch)
+    seen: list[int] = []
+
+    def holey(path, seconds):
+        seen.append(1)
+        return "成片音轨有 3 处断档"
+
+    monkeypatch.setattr(render, "_audio_intact", holey)
+    nar = store / "narration.wav"
+    nar.write_bytes(b"fake")
+    result = render.compose("p_atomic", [_shot(store)], narration_path=nar,
+                            size=(1920, 1080), durations=[12.0])
+    assert len(seen) == 2, "不合格要重合一次再验"
+    assert any("断档" in w for w in result.warnings)
+    assert len([a for a in calls if "concat" in a]) == 2
+
+
+def test_audio_problem_finds_timestamp_holes():
+    ok = "\n".join(f"{i * 0.021333:.6f},0.021333" for i in range(470))
+    assert render.audio_problem(ok, 10.0) is None
+    holey = "0.000000,0.021333\n0.021333,0.021333\n3.500000,0.021333\n"
+    msg = render.audio_problem(holey, 3.5)
+    assert msg and "断档" in msg
+    assert "只有" in render.audio_problem("0.0,0.5\n0.5,0.5\n", 10.0)
+    assert render.audio_problem("", 10.0) == "成片没有音轨"
+
+
+@pytest.mark.skipif(not (config.FFMPEG_PATH and config.FFMPEG_PATH.is_file()), reason="需要 ffmpeg")
+def test_real_compose_keeps_every_audio_frame(store, monkeypatch):
+    """真 ffmpeg:两段视频 + 10 秒旁白,成片音轨一帧不能少。"""
+    monkeypatch.setattr(render, "_decodes_clean", lambda p: True)
+    shots = []
+    for i in range(2):
+        s = store / f"s{i}.mp4"
+        render._run(["-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+                     "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "5",
+                     "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(s)])
+        shots.append(s)
+    nar = store / "nar.wav"
+    render._run(["-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                 "-t", "10", str(nar)])
+    result = render.compose("p_real", shots, narration_path=nar, size=(320, 180),
+                            durations=[5.0, 5.0])
+    assert result.ok, result.warnings
+    assert render._audio_intact(result.output_path, 10.0) is None
+    assert not any("断档" in w or "只有" in w for w in result.warnings or [])
 
 
 # --------------------------------------------------------------------------
