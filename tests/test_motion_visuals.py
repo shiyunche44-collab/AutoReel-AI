@@ -231,6 +231,20 @@ def test_hook_with_invented_keywords_falls_back_to_broll():
     assert got[0].layout == "broll" and got[0].overlay is None
 
 
+def test_hook_lines_do_not_repeat_narration_or_the_stat_number():
+    p = load_profile("auto_long")
+    segs = _segments(p)
+    segs[0].text = "周六早上,一家人在服务区排队等充电桩。"
+    items = [{"idx": 1, "layout": "hook",
+              "keywords": ["服务区排队等充电桩", "835公里够用吗"],
+              "stat": {"label": "CLTC 续航", "value": "835 公里", "fact_id": "f_1"}}]
+    got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
+                                llm=FakeLLM(items))
+    # 第一行照抄旁白、第二行重复大数字里的 835:都不上屏,只留大数字
+    assert got[0].layout == "hook" and got[0].overlay["lines"] == []
+    assert got[0].overlay["stat"]["value"] == "835 公里"
+
+
 def test_hook_stat_must_come_from_facts():
     p = load_profile("auto_long")
     segs = _segments(p)

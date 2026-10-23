@@ -48,6 +48,8 @@ SAFE_LAYOUT = "broll"
 #: 黄金三秒:开场拍前几秒是快切 + 大字的冷开场,每刀多长、大字停多久
 HOOK_SECONDS = 3.0
 HOOK_CUT = 1.0
+#: 开场一刀实测发黑时最多重取几次
+HOOK_CUT_RETRIES = 3
 #: 连续几拍整屏卡片就太像 PPT 了
 MAX_CARD_RUN = 2
 #: 概念动画全片最多几拍(每拍要渲染半分钟左右,也不该喧宾夺主)
@@ -239,9 +241,13 @@ def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "") -> tuple[d
 
 
 #: 取值要带单位,不然屏幕上只有一个"643",观众不知道那是什么
-_UNITS = ("万元", "公里", "分钟", "秒", "马力", "匹", "度电", "kWh", "KWh", "TOPS",
-          "rpm", "km/h", "N·m", "MPa", "GPa", "kg", "mm", "cm", "km", "Nm", "nm",
-          "kg", "L", "V", "kW", "W", "m", "元", "块", "%", "°", "度")
+_UNITS = tuple(sorted((
+    "万元", "公里", "分钟", "小时", "秒", "马力", "匹", "度电", "kWh", "KWh", "TOPS",
+    "rpm", "km/h", "N·m", "MPa", "GPa", "kg", "mm", "cm", "km", "Nm", "nm",
+    "L", "V", "kW", "W", "m", "元", "块", "%", "°", "度",
+    "毫米", "厘米", "米", "英寸", "立方英尺", "升", "公斤", "吨", "千瓦时", "千瓦",
+    "牛米", "转", "座", "天", "个月", "倍", "档", "kPa",
+), key=len, reverse=True))  # 长的在前:"千瓦时"先于"千瓦","万元"先于"元"
 #: 这些 topic 当不了参数行名
 _BAD_TOPICS = {"对比", "quality", ""}
 
@@ -254,11 +260,18 @@ def _fact_value(claim: str, wanted: set[str]) -> str:
     for m in re.finditer(r"\d+(?:\.\d+)?", claim or ""):
         if m.group(0).replace(".", "") not in wanted:
             continue
-        tail = claim[m.end():]
-        for u in _UNITS:
-            if tail.startswith(u):
-                return m.group(0) + u
-        return m.group(0)
+        unit = _unit_after(claim, m.end())
+        if unit:  # 没单位的数字("Ioniq 5"的 5、"HW4"的 4)上屏就是一个看不懂的光杆数字
+            return m.group(0) + unit
+    return ""
+
+
+def _unit_after(claim: str, end: int) -> str:
+    """数字后面紧跟的单位(容忍一个空格);没有返回空串。数字紧贴在字母后面(型号)也不算。"""
+    tail = claim[end:].lstrip(" ")
+    for u in _UNITS:
+        if tail.startswith(u):
+            return u
     return ""
 
 
@@ -603,10 +616,15 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
             else:
                 layout = SAFE_LAYOUT
     elif layout == "hook":
-        lines = ground_keywords(item.get("keywords"), seg.text, facts)
+        # 开场大字也不许照抄旁白:旁白有字幕,第一句话是观众看得最认真的一句,
+        # 大字+字幕+口播三遍同一句就是在浪费这三秒。数字另有大数字展示,大字不再重复它
+        lines = ground_keywords(item.get("keywords"), seg.text, facts, drop_echo=True)
         stat = None
         if item.get("stat"):
             stat, dropped = ground_stat(item.get("stat"), facts)
+        if stat:
+            shown = numbers_in(stat["value"])
+            lines = [x for x in lines if not (numbers_in(x) & shown)]
         if lines or stat:
             overlay = {"kind": "hook", "lines": lines}
             if stat:
@@ -720,15 +738,13 @@ def rescue_broll(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
 
 
 def _headline_value(claim: str) -> str:
-    """事实原文里第一个带单位的数字(没有带单位的,取第一个数字)。取不到返回空串。"""
-    first = ""
+    """事实原文里第一个带单位的数字。没有带单位的数字就不上屏(返回空串),
+    不再退回"第一个数字":那样会把"Ioniq 5"的 5 当成车身尺寸摆出来。"""
     for m in re.finditer(r"\d+(?:\.\d+)?", claim or ""):
-        tail = claim[m.end():]
-        for u in _UNITS:
-            if tail.startswith(u):
-                return m.group(0) + u
-        first = first or m.group(0)
-    return first
+        unit = _unit_after(claim, m.end())
+        if unit:
+            return m.group(0) + unit
+    return ""
 
 
 def _cap_rows(seg: ScriptSegment, facts: Sequence[Fact], comparison: bool,
@@ -850,6 +866,85 @@ def enforce_broll_cap(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
                 break
         else:
             break
+    return specs
+
+
+#: 估算一拍多长(合成旁白之前还不知道):字数 ÷ 这个语速。偏慢一点,宁可多配
+QUIET_CPS = 5.0
+#: 连着这么多秒都没有叠加层,下一拍就该上一个关键词大字(复盘:5–6 秒必须有一次变化)
+QUIET_SECONDS = 5.5
+#: 短于这个的拍放不下大字(一闪而过读不完)
+KEYWORD_BEAT_MIN = 2.0
+
+KEYWORD_SYSTEM = """你在给信息型解说视频里「没有数据可上屏」的观点句配大字关键词,让画面有变化。
+每句配 1–2 行,每行 2–{kw} 字,是这句话的核心判断或要点。
+
+要求:
+1. **不要把原句抄一遍**:屏幕下方已经有字幕了。用更短更狠的说法概括,
+   例:旁白「代价是能量密度低」→「代价:能量密度」;「买它等于买一个会持续更新的预期」→「买的是预期」。
+2. 不得出现旁白里没有的数字、型号、英文;不写「最强」「第一」「闭眼入」这类夸张词。
+3. 只概括旁白已经说的意思,不加新的判断,不替车做新结论。
+
+只输出一个 JSON 对象:{{"items": [{{"idx": 拍号, "lines": ["…", "…"]}}]}},idx 用给定的拍号。
+
+必需键: items"""
+
+
+def add_keyword_beats(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
+                      facts: Sequence[Fact], profile: CategoryProfile, llm,
+                      *, portrait: bool = False) -> list[ShotSpec]:
+    """没数据可上屏的观点拍连成一串时,隔几拍配一个关键词大字,压低"整段没有画面变化"。
+
+    为什么单独一步:数据拍(panel / stat)已经由 `enforce_broll_cap` 转完了,剩下的 broll
+    是观点、取舍、过渡 —— 没有数字可摆,只能靠大字当信息层的变化。大字由 LLM 概括旁白,
+    再走 `ground_keywords(drop_echo=True)`:照抄旁白的、编了数字型号的都不上屏。
+    估算时长走字数,合成旁白之后才有真实时长,这里只管把静默串截短。
+    """
+    if llm is None or not specs:
+        return specs
+    cps = 4.7 if portrait else QUIET_CPS
+    quiet = 0.0
+    picks: list[int] = []
+    for n, spec in enumerate(specs):
+        text = segments[n].text if n < len(segments) else ""
+        dur = max(1.0, len(text or "") / cps)
+        if spec.layout != SAFE_LAYOUT:  # 面板 / 大字 / 大数字 / 卡片 / 动画 都是信息层的变化
+            quiet = 0.0
+            continue
+        quiet += dur
+        if quiet < QUIET_SECONDS or n == 0 or dur < KEYWORD_BEAT_MIN:
+            continue
+        allowed = "highlight" in (profile.section(spec.section).layouts or ()) or quiet > 9.0
+        if allowed:
+            picks.append(n)
+            quiet = 0.0
+    if not picks:
+        return specs
+    beats = "\n".join(f"[拍号 {specs[n].idx}] 段落:{specs[n].section} | 旁白:{segments[n].text}"
+                      for n in picks)
+    try:
+        system = KEYWORD_SYSTEM.format(kw=KEYWORD_CHARS // 2)
+        data = llm.structured(system, beats, required_keys=["items"], temperature=0.4)
+        items = data.get("items") or []
+    except Exception:  # noqa: BLE001 - 配不出来就保持原样,门禁会提示静默过长
+        return specs
+    lines_by_idx: dict[int, list] = {}
+    for it in items:
+        if isinstance(it, dict):
+            try:
+                lines_by_idx[int(it.get("idx"))] = it.get("lines") or []
+            except (TypeError, ValueError):
+                continue
+    for n in picks:
+        spec, seg = specs[n], segments[n]
+        lines = ground_keywords(lines_by_idx.get(spec.idx), seg.text,
+                                facts_for(facts, seg.subject, profile.section(seg.section).name),
+                                drop_echo=True)
+        if not lines:
+            continue
+        spec.layout, spec.card = "highlight", None
+        spec.overlay = {"kind": "highlight", "lines": lines}
+        spec.visual_zh = re.sub(r"^\[[^\]]*\]", "[highlight]", spec.visual_zh)
     return specs
 
 
@@ -1432,6 +1527,18 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
     return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
 
 
+def _clip_luma(clip: Path, frame: Path) -> float:
+    """一段背景片开头和中后段两帧里较暗那帧的平均亮度(0–255)。抽不出来按"不暗"算,不拦。
+    只看中间会漏掉源片淡入:前 0.3 秒是黑的,大字就弹在黑底上。"""
+    lumas: list[float] = []
+    for n, at in enumerate((0.2, 0.7)):
+        dest = frame.with_name(f"{frame.stem}_{n}.png")
+        proc = _ff(["-ss", f"{at:.2f}", "-i", str(clip), "-frames:v", "1", str(dest)], timeout=60)
+        if proc.returncode == 0 and dest.is_file():
+            lumas.append(library._luma(str(dest)))
+    return min(lumas) if lumas else 255.0
+
+
 def hook_background(subject: str, seconds: float, size: tuple[int, int], work: Path,
                     used: dict[str, int], recent: list[str], hint: str, seed: int
                     ) -> tuple[Path, list[library.Piece]]:
@@ -1440,26 +1547,38 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
     整拍只用确认是这台车的素材(`confirmed`):前三秒观众只确认"是不是我要看的那台车",
     配错车或挂着别人的台标就划走了。确认过的一条都没有才退回普通取法。"""
     n = 3 if seconds >= 3.5 else 2 if seconds >= 2.0 else 1
+    work.mkdir(parents=True, exist_ok=True)
     cuts: list[library.Piece] = []
-    for _ in range(n):
-        got = (library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent, confirmed=True)
-               or library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent))
-        if got:
-            cuts.append(replace(got[0], length=HOOK_CUT))
+    parts: list[Path] = []
+    prev = ""
+    for k in range(n):
+        # 这一刀实测是黑场(源片淡入、片名卡)就换一段重取:三秒里有一秒黑屏,
+        # 观众看到的就是"一块黑底上弹出大字"
+        for attempt in range(HOOK_CUT_RETRIES):
+            got = (library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent, confirmed=True)
+                   or library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent))
+            if not got:
+                break
+            p = replace(got[0], length=HOOK_CUT)
+            m = motion_for(p.item_id, seed + k, prev)
+            clip = _piece_clip(p, work / f"cut_{k:02d}_{attempt}.mp4", size, m)
+            if _clip_luma(clip, work / f"cut_{k:02d}_{attempt}.png") >= library.DARK_LUMA:
+                break
+        # 重试用完仍是黑场就用最后一次取到的(总比整拍失败强)
+        if not got:
+            continue
+        prev = m
+        cuts.append(p)
+        parts.append(clip)
     if not cuts:
         raise render_mod.RenderError("开场没有可用素材")
     head = HOOK_CUT * len(cuts)
     rest = round(seconds - head, 3)
     if rest < 0.2:  # 余下太短就并进最后一刀
-        cuts[-1] = replace(cuts[-1], length=round(seconds - HOOK_CUT * (len(cuts) - 1), 3))
+        last = replace(cuts[-1], length=round(seconds - HOOK_CUT * (len(cuts) - 1), 3))
+        parts[-1] = _piece_clip(last, work / "cut_last.mp4", size, prev)
+        cuts[-1] = last
         rest = 0.0
-    work.mkdir(parents=True, exist_ok=True)
-    parts: list[Path] = []
-    prev = ""
-    for k, p in enumerate(cuts):
-        m = motion_for(p.item_id, seed + k, prev)
-        prev = m
-        parts.append(_piece_clip(p, work / f"cut_{k:02d}.mp4", size, m))
     pieces = list(cuts)
     if rest > 0:
         more = (library.fill(subject, rest, hint=hint, used=used, recent=recent, confirmed=True)
@@ -1898,13 +2017,13 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
                "source_note": "画面素材:品牌官方宣传片与官方图片,仅作"
                f"{profile.vocab.subject_label}展示"}
     db.write_json(project_id, "render.json", payload)
-    return payload
-
     _make_packaging(project_id, profile, llm)
     cover_b = _make_cover_b(project_id, project, title, meta, size, result.output_path, still)
     if cover_b:
         payload["cover_b"] = cover_b
         db.write_json(project_id, "render.json", payload)
+    return payload
+
 
 def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: tuple[int, int],
                   video_path: Any, still_a: Any) -> dict | None:

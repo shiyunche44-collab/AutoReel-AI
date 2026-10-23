@@ -46,6 +46,35 @@ def test_broll_seconds_ratio_uses_real_durations():
     assert ratio == pytest.approx(0.8)
 
 
+def _panel(idx, fact):
+    return _spec(idx, "panel", overlay={"kind": "panel", "rows": [{"fact_id": fact}]})
+
+
+def test_blockers_pass_between_advice_and_block_line():
+    # 4/12 拍 = 33%:超过 30% 建议值(problems 报),但没到 35% 拦截线
+    specs = [_spec(i, "broll") if i % 3 == 0 else _panel(i, f"f_{i}") for i in range(12)]
+    assert rhythm.problems(specs)
+    assert rhythm.blockers(specs) == []
+
+
+def test_blockers_stop_broll_heavy_storyboard_before_tts():
+    specs = [_spec(i, "broll") if i % 2 == 0 else _panel(i, f"f_{i}") for i in range(10)]
+    assert any("拦截线" in m for m in rhythm.blockers(specs, timed=False))
+
+
+def test_blockers_stop_long_quiet_gap_only_when_timed():
+    specs = [_panel(0, "f_0"), _spec(1, "broll", duration=13.0, overlay=None),
+             _panel(2, "f_2"), _panel(3, "f_3"), _panel(4, "f_4")]
+    assert any("没有画面变化" in m for m in rhythm.blockers(specs))
+    # 时长未回填(合成旁白之前):不查"几秒没变化"
+    assert not any("没有画面变化" in m for m in rhythm.blockers(specs, timed=False))
+
+
+def test_blockers_stop_five_identical_beats_in_a_row():
+    specs = [_panel(i, "f_1") for i in range(5)] + [_panel(5, "f_9")]
+    assert any("连续" in m for m in rhythm.blockers(specs, timed=False))
+
+
 def test_long_beat_shows_up_as_a_visual_gap():
     """一个 12 秒的拍,后面接一个变化 —— 中间 12 秒没有画面变化。"""
     specs = [_spec(0, "panel", duration=12.0), _spec(1, "stat", duration=4.0)]
@@ -398,3 +427,67 @@ def test_split_never_breaks_a_word_or_leaves_a_midsentence_period():
     assert parts[0] == "我的判断是，YU7不是一台车。"
     # 真的太长才硬切,且优先切在空格上
     assert script_gen._hard_cut("a" * 15 + " " + "b" * 20, 22) == ["a" * 15, "b" * 20]
+
+
+# --------------------------------------------------------------------------
+# 观点拍配关键词大字:压低静默串
+# --------------------------------------------------------------------------
+class _KwLLM:
+    """按提示词里每一拍的旁白关键词回话:{旁白里的词: 大字}。"""
+
+    def __init__(self, by_marker):
+        self.by_marker = by_marker
+        self.user = ""
+
+    def structured(self, system, user, **_):
+        import re as _re
+        self.user = user
+        items = []
+        for line in user.splitlines():
+            m = _re.match(r"\[拍号 (\d+)\]", line)
+            for marker, text in self.by_marker.items():
+                if m and marker in line:
+                    items.append({"idx": int(m.group(1)), "lines": [text]})
+        return {"items": items}
+
+
+def _opinion_run(profile, n=6):
+    sec = next(s.name for s in profile.sections.values() if "highlight" in (s.layouts or ()))
+    texts = ["代价是能量密度低,冬天掉电更明显一些。", "这套方案靠摄像头感知,不堆激光雷达。",
+             "它的能力上限取决于算法迭代速度。", "买它等于买一个会持续更新的预期。",
+             "系数低不代表总风阻就小一些。", "它是台SUV,车身不小,迎风面积大。"][:n]
+    segs = [ScriptSegment(idx=i, section=sec, text=t) for i, t in enumerate(texts)]
+    specs = [_spec(i, "broll", duration=0.0, section=sec) for i in range(n)]
+    return specs, segs
+
+
+def test_keyword_beats_break_up_a_quiet_run_without_echoing_narration():
+    p = load_profile("auto_long")
+    specs, segs = _opinion_run(p)
+    llm = _KwLLM({"能量密度": "代价:能量密度",
+                  "摄像头": "这套方案靠摄像头感知",          # 照抄旁白 → 不上屏
+                  "预期": "买的是预期",
+                  "迎风": "迎风 0.22"})                      # 旁白里没有的数字 → 不上屏
+    out = explainer.add_keyword_beats(specs, segs, [], p, llm)
+    kept = {s.idx: s.overlay["lines"] for s in out if s.layout == "highlight"}
+    assert kept and all(i > 0 for i in kept)                     # 第一拍不动
+    assert not any("摄像头感知" in "".join(v) for v in kept.values())
+    assert not any("0.22" in "".join(v) for v in kept.values())
+    # 连着的 broll 串被截短:没有任何一段连续 broll 超过 3 拍
+    run = longest = 0
+    for s in out:
+        run = run + 1 if s.layout == "broll" else 0
+        longest = max(longest, run)
+    assert longest <= 3
+
+
+def test_keyword_beats_skip_when_no_llm_or_nothing_quiet():
+    p = load_profile("auto_long")
+    specs, segs = _opinion_run(p)
+    assert [s.layout for s in explainer.add_keyword_beats(specs, segs, [], p, None)] == ["broll"] * 6
+    short, short_segs = _opinion_run(p, n=2)
+    for seg in short_segs:
+        seg.text = "好的。"                                # 两拍加起来也就几秒:不算静默
+    llm = _KwLLM({"好的": "不该用到"})
+    out = explainer.add_keyword_beats(short, short_segs, [], p, llm)
+    assert all(s.layout == "broll" for s in out) and llm.user == ""

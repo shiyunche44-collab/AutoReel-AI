@@ -33,6 +33,16 @@ MAX_SAME_RUN = 2
 HOOK_CHANGE_SECONDS = 3.0
 
 
+#: 以上是"建议值",超了只提示;下面三条是"拦截线",超了门禁 A 不放行(显式选择"仍然继续"才过)。
+#: 拦截线比建议值松一档:自动兜底(`explainer.enforce_broll_cap`)已经在尽力压,
+#: 到这条线还压不下来,说明这一版稿子的事实撑不起足够的画面,该回去改稿,而不是硬渲。
+#: 数值按三条真实成片(自动兜底跑完之后)标定:没数据可上屏的观点拍连成一串时,
+#: 静默 9–10 秒、连 4 拍同画面是常态,拦线定在它之上,只拦最严重的那种(最长静默 14.5 秒那条)。
+BROLL_RATIO_BLOCK = 0.35
+CHANGE_GAP_BLOCK = 12.0
+SAME_RUN_BLOCK = 4
+
+
 def _overlay_signature(spec: ShotSpec) -> tuple:
     """叠加内容指纹:同样的版式 + 同样的行/词 = 同一屏画面。"""
     ov = spec.overlay if isinstance(spec.overlay, dict) else {}
@@ -164,6 +174,35 @@ def report(specs: Sequence[ShotSpec]) -> dict[str, Any]:
         "same_run_start": run_start,
         "problems": problems(specs),
     }
+
+
+def blockers(specs: Sequence[ShotSpec], *, timed: bool = True) -> list[str]:
+    """必须修的节奏问题(超过拦截线)。空列表 = 可以放行。
+
+    `timed=False`:各拍时长还没回填(合成旁白之前),只看拍数口径和连拍,
+    不查"几秒没变化"和秒数占比 —— 那两条要等时长出来才有意义。
+    """
+    out: list[str] = []
+    if not specs:
+        return out
+    beat_ratio = broll_ratio(specs)
+    if beat_ratio > BROLL_RATIO_BLOCK + 1e-6:
+        n = sum(1 for s in specs if s.layout == "broll")
+        out.append(f"broll {n}/{len(specs)} 拍({beat_ratio:.0%}),超过 {BROLL_RATIO_BLOCK:.0%} 拦截线"
+                   f"(建议 {BROLL_RATIO_MAX:.0%} 以内)")
+    if timed:
+        ratio, total = broll_seconds_ratio(specs)
+        if total > 0 and ratio > BROLL_RATIO_BLOCK + 1e-6:
+            out.append(f"broll 占全片 {ratio:.0%} 的时长(约 {total * ratio:.0f}/{total:.0f} 秒),"
+                       f"超过 {BROLL_RATIO_BLOCK:.0%} 拦截线")
+        gap = max_change_gap(specs)
+        if gap > CHANGE_GAP_BLOCK + 1e-6:
+            out.append(f"有 {gap:.1f} 秒没有画面变化,超过 {CHANGE_GAP_BLOCK:.0f} 秒拦截线"
+                       f"(建议 {MAX_CHANGE_GAP:.0f} 秒以内)")
+    run, start = same_run(specs)
+    if run > SAME_RUN_BLOCK:
+        out.append(f"从第 {start + 1} 拍起连续 {run} 拍画面完全一样")
+    return out
 
 
 def problems(specs: Sequence[ShotSpec]) -> list[str]:

@@ -145,6 +145,11 @@ def _unbacked_text(value: str, claim: str) -> bool:
     return key(value) not in key(claim)
 
 
+def _is_bare_number(value: str) -> bool:
+    """取值只有一个光杆数字("5""19.2"):没有单位,屏幕上不知道它是什么。"""
+    return bool(re.fullmatch(r"\s*[-+~约]?\d[\d,]*(?:\.\d+)?\s*", value))
+
+
 def _bar_value(text: str) -> float | None:
     m = re.search(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
     return float(m.group(0)) if m else None
@@ -175,6 +180,10 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         missing = numbers_in(text) - numbers_in(fact.claim)
         if missing:
             dropped.append(f"「{text}」中的 {sorted(missing)} 不见于 {fact.id}:{fact.claim}")
+            continue
+        bare = [v for v in row["values"] if _is_bare_number(v)]
+        if bare:
+            dropped.append(f"「{text}」的取值「{bare[0]}」没有单位,上屏观众看不懂")
             continue
         invented = [v for v in row["values"] if _unbacked_text(v, fact.claim)]
         if invented:

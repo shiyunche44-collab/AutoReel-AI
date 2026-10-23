@@ -422,7 +422,11 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
         segments = script_gen.split_segments(
             segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
-        segments = script_gen.ensure_disclaimers(segments, profile)
+        # 口播清洗:去"我没有数字"类自曝句,把碎句和半句并进相邻的拍(拆完再清,否则拆分又造出碎句)
+        segments = script_gen.clean_spoken(
+            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
+        # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
+        # 发布简介由 publish.metadata 带上品类免责声明。
         issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
                                             variant=_variant(project))
         blocking = [i for i in issues if i.is_error]
@@ -450,6 +454,9 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             with costs.project_spend(project_id, costs.stage_reserve("beats")):
                 specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
                                               facts=facts, llm=llm, card_log=log, subjects=subjects)
+                # 没数据可上屏的观点拍连成一串时,配不重复旁白的关键词大字,压低静默时长
+                specs = explainer.add_keyword_beats(specs, segments, facts, profile, llm,
+                                                    portrait=aspect.is_portrait(project))
         problems = explainer.validate_beats(specs)
         if problems:
             raise PipelineError("分镜自检未通过:" + "; ".join(problems))
@@ -498,6 +505,13 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         # 节奏体检:画面变化间隔 + broll 占比。写进 rhythm.json,门禁和前端都能看
         report = rhythm.report(specs)
         db.write_json(project_id, "rhythm.json", report)
+        # 时长出来后再查一遍完整拦截线(秒数占比、几秒没变化)。TTS 逐句缓存,
+        # 回去改稿重新确认不会重复花钱;明知如此仍要渲染就选"仍然继续"
+        hard = rhythm.blockers(specs)
+        if hard and not force:
+            raise PipelineError(
+                "画面节奏超过拦截线:" + ";".join(hard)
+                + " —— 回去改稿或分镜,或显式选择「仍然继续」。")
         total = sum(s.duration for s in specs)
         explainer.init_beats(project_id, specs)
         qa = getattr(nar, "qa_report", None) or {}
@@ -632,7 +646,14 @@ def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
     except Exception:  # noqa: BLE001 - 读不到脚本就别拦,交给后面报错
         return []
     issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
-    return [i.to_dict() for i in issues if i.is_error]
+    out = [i.to_dict() for i in issues if i.is_error]
+    # 节奏拦截线:分镜出来就能查的部分(拍数口径、连拍),赶在烧 TTS 之前拦住
+    try:
+        out += [{"code": "rhythm", "message": f"画面节奏:{m}"}
+                for m in rhythm.blockers(_specs(project_id), timed=False)]
+    except Exception:  # noqa: BLE001 - 读不到分镜就别拦
+        pass
+    return out
 
 
 def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:

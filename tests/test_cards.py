@@ -49,6 +49,26 @@ def test_ground_keeps_supported_and_drops_invented_numbers():
     assert grounded["source"].startswith("数据来源")
 
 
+def test_ground_drops_bare_number_values():
+    card = cards.normalise({"title": "核心参数", "rows": [
+        {"label": "CLTC 续航", "values": ["702 公里"], "fact_id": "f_1"},
+        {"label": "车身尺寸", "values": ["2026"], "fact_id": "f_1"},   # 光杆数字
+    ]}, "spec")
+    grounded, dropped = cards.ground(card, _facts())
+    assert [r["label"] for r in grounded["rows"]] == ["CLTC 续航"]
+    assert any("没有单位" in d for d in dropped)
+
+
+def test_panel_values_need_unit_and_skip_model_numbers():
+    from app.pipeline import explainer
+    claim = "Model Y 车长 4750 毫米,比 Ioniq 5 的 39.4 英寸轴距更长"
+    assert explainer._headline_value(claim) == "4750毫米"
+    # "Ioniq 5" 的 5 后面不是单位,不能被当成车身尺寸
+    assert explainer._fact_value("对比 Ioniq 5 的车型", {"5"}) == ""
+    assert explainer._fact_value("轴距 39.4 英寸", {"394"}) == "39.4英寸"
+    assert explainer._headline_value("标准版标配 HW4 硬件") == ""
+
+
 def test_ground_voids_card_below_minimum():
     card = cards.normalise({"title": "演进", "rows": [
         {"label": "2026", "values": ["续航 702 公里"], "fact_id": "f_1"},

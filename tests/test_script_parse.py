@@ -412,3 +412,52 @@ def test_brand_theme_is_not_killed_by_scope_rule(auto_profile, brand_profile):
     ]
     issues = compliance_lint(segments, auto_profile, facts_list, theme=theme)
     assert not [i for i in issues if i.is_error], [i.message for i in issues]
+
+
+# ---- 口播清洗 ----------------------------------------------------------------
+def _segs(*texts, section="body"):
+    return [ScriptSegment(idx=i, section=section, text=t, fact_refs=[f"f{i}"])
+            for i, t in enumerate(texts)]
+
+
+def test_clean_spoken_removes_self_exposure_and_its_dangling_remnant():
+    from app.pipeline.script_gen import clean_spoken, strip_self_exposure
+    text = "保险和保值率我没法给你确切数字,不乱说。能确定的是。"
+    assert strip_self_exposure(text) == ""
+    segs = _segs("开场钩子这一句要够长够吸引人。", text, "中段正常内容讲得很完整的一句话。",
+                 "最后给出结论并请观众留言。")
+    out = clean_spoken(segs)
+    assert [s.text for s in out] == [segs[0].text, segs[2].text, segs[3].text]
+    assert [s.idx for s in out] == [0, 1, 2]
+
+
+def test_clean_spoken_merges_fragment_into_previous_and_keeps_facts():
+    from app.pipeline.script_gen import clean_spoken
+    segs = _segs("开场钩子这一句要够长够吸引人。", "新能源车的补贴政策分了好几档。", "价格是阶梯式的。",
+                 "最后给出结论并请观众留言。")
+    out = clean_spoken(segs)
+    assert len(out) == 3
+    assert out[1].text == "新能源车的补贴政策分了好几档,价格是阶梯式的。".replace(",", "，")
+    assert out[1].fact_refs == ["f1", "f2"]
+
+
+def test_clean_spoken_merges_dangling_ending_into_next():
+    from app.pipeline.script_gen import clean_spoken
+    segs = _segs("开场钩子这一句要够长够吸引人。", "现代 Ioniq 5 的四驱版比。", "后驱版贵一万多块钱。",
+                 "最后给出结论并请观众留言。")
+    out = clean_spoken(segs)
+    assert len(out) == 3
+    assert out[1].text.startswith("现代 Ioniq 5 的四驱版比") and "后驱版" in out[1].text
+
+
+def test_clean_spoken_never_touches_first_and_last_beats():
+    from app.pipeline.script_gen import clean_spoken
+    segs = _segs("先说结论。", "中段这一句已经足够长而且完整了。", "关注我。")
+    assert [s.text for s in clean_spoken(segs)] == [s.text for s in segs]
+
+
+def test_spoken_lint_flags_overused_patterns_and_leftover_fragments():
+    from app.pipeline.script_gen import spoken_lint
+    segs = _segs("开场钩子这一句要够长够吸引人。", *["代价是电耗高一点点。"] * 4, "结尾。")
+    msgs = [i.message for i in spoken_lint(segs)]
+    assert any("代价是" in m and "4 次" in m for m in msgs)
