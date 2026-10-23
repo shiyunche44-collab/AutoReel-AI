@@ -559,7 +559,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             _set_state(project_id, state, State.COMPOSING, reason="拼接各拍与混音")
         try:
             payload = explainer.compose(project_id, _specs(project_id), profile,
-                                        project["title"])
+                                        project["title"], llm=llm)
         except RuntimeError as exc:
             raise PipelineError(str(exc)) from exc
         _set_state(project_id, State.COMPOSING, State.DONE,

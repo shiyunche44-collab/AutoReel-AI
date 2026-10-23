@@ -435,10 +435,12 @@ def _build_ass_filter(ass_path: Path | None, project_dir: Path) -> str | None:
 # --------------------------------------------------------------------------
 def build_cover(video_path: str | Path, title: str, dest: str | Path,
                 subtitle: str = "", size: tuple[int, int] | None = None,
-                still: str | Path | None = None, kicker: str = "") -> Path | None:
+                still: str | Path | None = None, kicker: str = "",
+                layout: str = "title", hook: str = "") -> Path | None:
     from .narration import make_cover
 
-    return make_cover(video_path, title, dest, subtitle, size=size, still=still, kicker=kicker)
+    return make_cover(video_path, title, dest, subtitle, size=size, still=still, kicker=kicker,
+                      layout=layout, hook=hook)
 
 
 # --------------------------------------------------------------------------

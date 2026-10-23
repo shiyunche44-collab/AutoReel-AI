@@ -991,9 +991,14 @@ def download(project_id: str):
 
 
 @app.get("/api/projects/{project_id}/cover")
-def cover(project_id: str):
-    path = aspect.cover_path(project_id)
-    if not path.is_file():
+def cover(project_id: str, variant: str = "a", ratio: str = ""):
+    """封面。variant=a|b;ratio=3x4 取竖屏的 3:4 版(给小红书)。"""
+    from .pipeline import packaging
+
+    if variant not in packaging.COVER_VARIANTS:
+        raise HTTPException(400, "variant 只能是 a 或 b")
+    path = packaging.cover_file(project_id, variant, ratio=ratio)
+    if path is None:
         raise HTTPException(404, "封面尚未生成")
     return FileResponse(path, media_type="image/jpeg")
 
@@ -1218,8 +1223,67 @@ def project_publish_preview(project_id: str):
         "aspect": aspect.of(project),
         "aspect_label": aspect.label(aspect.of(project)),
         "platforms": by_platform,
+        "packaging": _packaging_view(project_id),
         "published": publish_service.list_for_project(project_id),
     }
+
+
+def _packaging_view(project_id: str) -> dict[str, Any] | None:
+    from .pipeline import packaging
+
+    pkg = packaging.load(project_id)
+    if pkg is None:
+        return None
+    return {**pkg.model_dump(),
+            "covers": {v: packaging.cover_file(project_id, v) is not None for v in packaging.COVER_VARIANTS},
+            "cover_3x4": {v: packaging.cover_file(project_id, v, ratio="3x4") is not None
+                          for v in packaging.COVER_VARIANTS}}
+
+
+class PackagingPick(BaseModel):
+    """选标题(序号)和 / 或封面版本;不传的不动。"""
+
+    title: int | None = None
+    cover: str | None = None
+
+
+@app.get("/api/projects/{project_id}/packaging")
+def project_packaging(project_id: str):
+    """发布包装:3 个标题、2 版封面、置顶评论与备用回复。还没生成返回 null。"""
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    return _packaging_view(project_id)
+
+
+@app.put("/api/projects/{project_id}/packaging")
+def project_packaging_pick(project_id: str, payload: PackagingPick):
+    from .pipeline import packaging
+
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    try:
+        done = packaging.set_picked(project_id, title=payload.title, cover=payload.cover)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if done is None:
+        raise HTTPException(404, "还没有发布包装")
+    return _packaging_view(project_id)
+
+
+@app.post("/api/projects/{project_id}/packaging/regenerate")
+def project_packaging_regenerate(project_id: str):
+    """重新生成标题 / 评论 / 回复(约 ¥0.01);封面不重画,封面选择保留。"""
+    from .categories import load_profile
+    from .pipeline import packaging
+
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    if not db.read_json(project_id, "script.json", []):
+        raise HTTPException(400, "还没有脚本,先跑到成片")
+    profile = load_profile(project.get("category") or "auto_long")
+    packaging.ensure(project_id, profile, packaging.default_llm(), force=True)
+    return _packaging_view(project_id)
 
 
 @app.post("/api/projects/{project_id}/publish")

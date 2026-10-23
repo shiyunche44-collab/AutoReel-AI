@@ -472,6 +472,8 @@ class CategoryProfile:
     #: 视角标签 -> 检索用的中文描述
     angle_queries: dict[str, str] = field(default_factory=dict)
     forbidden_terms: tuple[str, ...] = ()
+    #: 发布标题里额外要躲开的套话 / 搜索词式说法(与 packaging.TITLE_AVOID 合并);标题里出现就重写
+    title_avoid: tuple[str, ...] = ()
     required_disclaimers: tuple[str, ...] = ()
     music_prompt: str = "instrumental background music, steady tempo, no vocals"
     #: 自动收集 BGM 的 Mixkit 风格页 slug(https://mixkit.co/free-stock-music/<slug>/),空 = 不自动收
@@ -1016,6 +1018,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         galleries=tuple(str(g) for g in (raw.get("galleries") or ())),
         voice_id=str(raw.get("voice_id") or ""),
         forbidden_terms=tuple(raw.get("forbidden_terms") or ()),
+        title_avoid=tuple(str(t) for t in (raw.get("title_avoid") or ())),
         required_disclaimers=tuple(raw.get("required_disclaimers") or ()),
         music_prompt=str(
             raw.get("music_prompt", "instrumental background music, no vocals")

@@ -122,8 +122,9 @@ def test_cover_build_cover_passes_through_still_and_kicker(tmp_path, monkeypatch
 
     seen = {}
 
-    def _fake(video, title, dest, subtitle="", size=None, still=None, kicker=""):
-        seen.update({"still": still, "kicker": kicker, "subtitle": subtitle, "size": size})
+    def _fake(video, title, dest, subtitle="", size=None, still=None, kicker="", layout="title", hook=""):
+        seen.update({"still": still, "kicker": kicker, "subtitle": subtitle, "size": size,
+                     "layout": layout, "hook": hook})
         return Path(dest)
 
     monkeypatch.setattr(narration, "make_cover", _fake)
@@ -132,6 +133,7 @@ def test_cover_build_cover_passes_through_still_and_kicker(tmp_path, monkeypatch
     assert got is not None
     assert seen["still"] == "still.jpg" and seen["kicker"] == "角标"
     assert seen["subtitle"] == "副" and seen["size"] == (1920, 1080)
+    assert seen["layout"] == "title" and seen["hook"] == ""
 
 
 # --------------------------------------------------------------------------

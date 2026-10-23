@@ -630,6 +630,8 @@ official_sites:
 
 # 合规:广告法绝对化用语
 forbidden_terms: [最强, 第一, 顶级, 永久, 国家级, 唯一, 最先进, 100%安全, 无敌, 秒杀]
+# 发布标题里额外躲开的套话(再叠加 packaging 里内置的搜索词式说法)
+title_avoid: [全网首发, 重磅, 炸裂, 颠覆, 秒懂, 干货]
 required_disclaimers: ["数据来源:公开信息与官方渠道,仅供参考,实际以购车时为准"]
 
 music_prompt: >

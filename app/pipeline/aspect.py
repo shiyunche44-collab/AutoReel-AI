@@ -67,9 +67,17 @@ def output_name_for(aspect: str | None) -> str:
     return OUTPUT_NAMES[normalise(aspect)]
 
 
-def cover_name_for(aspect: str | None) -> str:
-    """画幅名 -> 封面文件名。"""
-    return COVER_NAMES[normalise(aspect)]
+#: 封面 B(大字版)的文件名后缀;A 版沿用原文件名,B 版在扩展名前加它
+COVER_B_SUFFIX = "_b"
+
+
+def cover_name_for(aspect: str | None, variant: str = "a") -> str:
+    """画幅名 -> 封面文件名。variant="b" 给大字版封面。"""
+    name = COVER_NAMES[normalise(aspect)]
+    if variant != "b":
+        return name
+    stem, dot, ext = name.rpartition(".")
+    return f"{stem}{COVER_B_SUFFIX}{dot}{ext}"
 
 
 def is_portrait_for(aspect: str | None) -> bool:
@@ -116,9 +124,9 @@ def output_name(project: dict[str, Any] | None) -> str:
     return output_name_for(of(project))
 
 
-def cover_name(project: dict[str, Any] | None) -> str:
+def cover_name(project: dict[str, Any] | None, variant: str = "a") -> str:
     """项目行 -> 封面文件名。"""
-    return cover_name_for(of(project))
+    return cover_name_for(of(project), variant)
 
 
 def is_portrait(project: dict[str, Any] | None) -> bool:

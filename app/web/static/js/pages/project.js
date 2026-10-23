@@ -644,6 +644,11 @@ async function openPublish() {
 
   const picks = new Map();
   const body = h('div', { class: 'pub-drawer' });
+  const packaging = packagingPanel(preview.packaging, (title) => {
+    // 选了标题:所有平台的标题框都换成它(发布时以框里的为准,仍可逐平台再改)
+    for (const pick of picks.values()) pick.titleInput.value = title;
+  });
+  body.appendChild(packaging.el);
   body.appendChild(
     h(
       'p',
@@ -660,7 +665,11 @@ async function openPublish() {
     const check = h('input', { type: 'checkbox', class: 'pub-check' });
     check.checked = !done || done.state === 'failed';
     check.disabled = !p.accounts.length;
-    const titleInput = h('input', { class: 'input', type: 'text', value: p.title || '' });
+    const titleInput = h('input', {
+      class: 'input',
+      type: 'text',
+      value: packaging.pickedTitle() || p.title || '',
+    });
     const descInput = h('textarea', { class: 'textarea', rows: 3 });
     descInput.value = p.description || '';
     picks.set(p.platform, { check, titleInput, descInput, accountIds: p.accounts.map((a) => a.id) });
@@ -758,6 +767,132 @@ async function openPublish() {
       }
     });
   });
+}
+
+/**
+ * 发布包装:3 个候选标题、2 版封面、置顶评论与备用回复。
+ * 选择即时存到后端(发布时按它取封面、记下标题写法,数据回流后能比 A/B);
+ * 标题还会同步到各平台的标题框。没有包装(老项目)时给一个「生成」按钮。
+ */
+function packagingPanel(initial, onTitle) {
+  let pkg = initial;
+  const el = h('div', { class: 'pkg-card' });
+  const kindLabel = { stake: '立场', number: '数字', person: '人群' };
+
+  const copy = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('已复制');
+    } catch {
+      toast('复制失败,手动选中复制吧', { type: 'warning' });
+    }
+  };
+  const save = async (patch) => {
+    try {
+      pkg = await api.put(`/api/projects/${PID}/packaging`, patch);
+      render();
+      return true;
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+      return false;
+    }
+  };
+  const regenerate = async (btn) => {
+    await withLoading(btn, async () => {
+      try {
+        pkg = await api.post(`/api/projects/${PID}/packaging/regenerate`);
+        render();
+        onTitle(pickedTitle());
+      } catch (err) {
+        toast(err.message, { type: 'danger' });
+      }
+    });
+  };
+  const pickedTitle = () => (pkg && pkg.titles[pkg.picked.title] ? pkg.titles[pkg.picked.title].text : '');
+
+  function render() {
+    el.replaceChildren();
+    if (!pkg) {
+      const btn = h('button', { class: 'btn btn-sm', type: 'button' }, '生成标题 / 封面文案 / 置顶评论');
+      btn.addEventListener('click', () => regenerate(btn));
+      el.appendChild(h('div', { class: 'pkg-head' }, h('strong', {}, '发布包装'), btn));
+      return;
+    }
+    const regen = h('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '重新生成');
+    regen.addEventListener('click', () => regenerate(regen));
+    el.appendChild(
+      h(
+        'div',
+        { class: 'pkg-head' },
+        h('strong', {}, '发布包装'),
+        h('span', { class: 'subtle small' }, pkg.source === 'llm' ? 'AI 生成,数字已对过事实' : '模板兜底'),
+        regen,
+      ),
+    );
+
+    // 标题
+    const titles = h('div', { class: 'pkg-titles' });
+    pkg.titles.forEach((t, i) => {
+      const on = pkg.picked.title === i;
+      const row = h(
+        'button',
+        { type: 'button', class: `pkg-option${on ? ' is-on' : ''}`, 'aria-pressed': String(on) },
+        h('span', { class: 'badge tone-neutral' }, kindLabel[t.kind] || t.kind),
+        h('span', { class: 'pkg-text' }, t.text),
+        t.note ? h('span', { class: 'subtle small' }, t.note) : null,
+      );
+      row.addEventListener('click', async () => {
+        if (await save({ title: i })) onTitle(t.text);
+      });
+      titles.appendChild(row);
+    });
+    el.appendChild(titles);
+
+    // 封面
+    const covers = h('div', { class: 'pkg-covers' });
+    for (const v of ['a', 'b']) {
+      if (!pkg.covers[v]) continue;
+      const on = pkg.picked.cover === v;
+      const btn = h(
+        'button',
+        { type: 'button', class: `pkg-cover${on ? ' is-on' : ''}`, 'aria-pressed': String(on) },
+        h('img', { src: `/api/projects/${PID}/cover?variant=${v}&t=${pkg.made_at || 0}`, alt: `封面 ${v.toUpperCase()}` }),
+        h('span', { class: 'small' }, v === 'a' ? '封面 A · 标题版' : '封面 B · 大字版'),
+      );
+      btn.addEventListener('click', () => save({ cover: v }));
+      covers.appendChild(btn);
+    }
+    if (covers.children.length === 1) {
+      covers.appendChild(h('p', { class: 'subtle small' }, '这条片取不到合适的大字,只有一版封面。'));
+    }
+    el.appendChild(covers);
+
+    // 置顶评论与备用回复:发布后手动贴(平台没有开放评论接口)
+    const c = pkg.comment;
+    const copyBtn = (text) => {
+      const b = h('button', { class: 'btn btn-ghost btn-sm', type: 'button' }, '复制');
+      b.addEventListener('click', () => copy(text));
+      return b;
+    };
+    el.appendChild(
+      h(
+        'div',
+        { class: 'pkg-comment' },
+        h('div', { class: 'pkg-line' }, h('span', { class: 'field-label' }, '置顶评论'), copyBtn(c.text)),
+        h('p', { class: 'pkg-text' }, c.text),
+        pkg.replies.length
+          ? h(
+              'details',
+              {},
+              h('summary', { class: 'small subtle' }, `备用回复 ${pkg.replies.length} 条`),
+              ...pkg.replies.map((r) => h('div', { class: 'pkg-line' }, h('span', { class: 'small' }, r), copyBtn(r))),
+            )
+          : null,
+      ),
+    );
+  }
+  render();
+  return { el, pickedTitle };
 }
 
 $('#btn-publish')?.addEventListener('click', openPublish);

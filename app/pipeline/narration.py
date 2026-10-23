@@ -732,7 +732,8 @@ def _cover_is_light(image: Any) -> bool:
 
 def make_cover(video_path: str | Path, title: str, dest: str | Path,
                subtitle: str = "", size: tuple[int, int] | None = None,
-               still: str | Path | None = None, kicker: str = "") -> Path | None:
+               still: str | Path | None = None, kicker: str = "",
+               layout: str = "title", hook: str = "") -> Path | None:
     """封面:优先用干净的官方图当底,没有才从成片抽帧。
 
     封面是唯一决定点击率的一帧,不能是"随便截的一帧"——从成片抽出来的画面上
@@ -741,9 +742,14 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
     - 只能抽帧时把底部的章节条裁掉,再把字往上放;
     - 标题按宽度**自适应缩排**,不再 `title[:14]` 硬截断;
     - 白底棚拍图自动换成深色字,不然白字压在白底上等于没有标题。
+
+    `layout="hook"` 是封面 B:一个超大的数字 / 短句(`hook`)当主视觉,标题退到下面当说明。
+    没给 `hook` 就按 "title" 排 —— B 版不能出一张空的大字。
     """
     from PIL import Image, ImageDraw, ImageFont
 
+    if not hook:
+        layout = "title"
     dest = Path(dest)
     out_w, out_h = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
     image = None
@@ -773,7 +779,8 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
     portrait = out_h > out_w
     try:
         if portrait:
-            return _portrait_cover(image, from_video, title, dest, subtitle, (out_w, out_h), kicker)
+            return _portrait_cover(image, from_video, title, dest, subtitle, (out_w, out_h), kicker,
+                                   layout, hook)
         # 裁成成片画幅。抽帧来的先切掉底部 7%(章节条在那儿),再取景;
         # 官图不用切,直接取景。
         w, h = image.size
@@ -830,6 +837,26 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
             kicker_font = sub_font = ImageFont.load_default()
 
         max_width = out_w - COVER_MARGIN * 2
+        if layout == "hook":
+            hook_font = _hook_font(hook, font_path, max_width, COVER_HOOK_MAX_LAND)
+            hook_h = int(hook_font.getlength("测") * 1.3) if hook_font else 120
+            # 标题退到大字下面当说明,用副标题那档字
+            cap_lines = _cover_wrap(title, sub_font, max_width, 2)
+            cap_h = int(getattr(sub_font, "size", 40) * 1.4)
+            y = out_h - COVER_MARGIN - hook_h - cap_h * len(cap_lines) - (52 if kicker else 0)
+            if kicker:
+                draw.rectangle([COVER_MARGIN, y, COVER_MARGIN + 6, y + 34], fill=accent)
+                draw.text((COVER_MARGIN + 18, y), kicker, font=kicker_font, fill=accent,
+                          stroke_width=2, stroke_fill=stroke)
+                y += 52
+            draw.text((COVER_MARGIN, y), hook, font=hook_font, fill=accent, stroke_width=4,
+                      stroke_fill=stroke)
+            y += hook_h
+            for line in cap_lines:
+                draw.text((COVER_MARGIN, y), line, font=sub_font, fill=text_color,
+                          stroke_width=2, stroke_fill=stroke)
+                y += cap_h
+            return _save_cover(image, dest)
         lines, title_font = _cover_fit(title, font_path, max_width)
         line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
         block_h = line_h * len(lines)
@@ -856,24 +883,51 @@ def make_cover(video_path: str | Path, title: str, dest: str | Path,
                           stroke_width=2, stroke_fill=stroke)
                 y += int(line_h * 0.8)
 
-        # 原子写:先写临时文件再改名。进程在保存时被杀会留下半张封面 ——
-        # 封面是决定点击率的那一帧,半张比没有更糟(看着像有,其实打不开)。
-        #
-        # 临时文件**保留原扩展名**:PIL 靠扩展名推断格式,叫 "cover.jpg.part"
-        # 它会直接抛 "unknown file extension"。
-        tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
-        try:
-            image.save(tmp, quality=92)
-            os.replace(tmp, dest)
-        except BaseException:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise
-        return dest
+        return _save_cover(image, dest)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _save_cover(image: Any, dest: Path) -> Path:
+    """原子写:先写临时文件再改名。进程在保存时被杀会留下半张封面 ——
+    封面是决定点击率的那一帧,半张比没有更糟(看着像有,其实打不开)。
+
+    临时文件**保留原扩展名**:PIL 靠扩展名推断格式,叫 "cover.jpg.part"
+    它会直接抛 "unknown file extension"。"""
+    tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
+    try:
+        image.save(tmp, quality=92)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return dest
+
+
+#: 封面 B 的大字最大字号(横屏 / 竖屏)与最小字号
+COVER_HOOK_MAX_LAND = 300
+COVER_HOOK_MAX_PORT = 260
+COVER_HOOK_MIN = 90
+
+
+def _hook_font(text: str, font_path: str | None, max_width: int, biggest: int) -> Any:
+    """封面大字:单行,取放得进宽度的最大字号。"""
+    from PIL import ImageFont
+
+    if not font_path:
+        return ImageFont.load_default()
+    size = biggest
+    while True:
+        try:
+            font = ImageFont.truetype(font_path, size)
+        except OSError:
+            return ImageFont.load_default()
+        if font.getlength(text) <= max_width or size <= COVER_HOOK_MIN:
+            return font
+        size -= 8
 
 
 #: 小红书封面是 3:4。竖屏封面从顶上裁一张 1080×1440(标题区 + 画面带都在里面)
@@ -887,7 +941,8 @@ def cover_3x4_path(cover: str | Path) -> Path:
 
 
 def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtitle: str,
-                    size: tuple[int, int], kicker: str) -> Path | None:
+                    size: tuple[int, int], kicker: str, layout: str = "title",
+                    hook: str = "") -> Path | None:
     """竖屏封面,三段式:模糊压暗的同图铺底,整车完整放在画面带,标题放在上方标题区。
 
     宽图直接裁成 9:16 会把车头车尾裁掉 —— 封面上的车必须是完整的。
@@ -902,8 +957,9 @@ def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtit
         fw, fh = image.size
         scale = fh / out_h
         image = image.crop((0, int(g.band.top * scale), fw, int(g.band.bottom * scale)))
-    full = _draw_portrait_cover(image, title, subtitle, size, kicker)
-    three_four = _draw_portrait_cover(image, title, subtitle, (out_w, out_w * 4 // 3), kicker)
+    full = _draw_portrait_cover(image, title, subtitle, size, kicker, layout, hook)
+    three_four = _draw_portrait_cover(image, title, subtitle, (out_w, out_w * 4 // 3), kicker,
+                                      layout, hook)
     tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
     tmp34 = cover_3x4_path(dest).with_name(f"{cover_3x4_path(dest).stem}.part{dest.suffix}")
     try:
@@ -946,7 +1002,7 @@ def _cover_title_lines(title: str, font_path: str | None, max_width: int) -> tup
 
 
 def _draw_portrait_cover(image: Any, title: str, subtitle: str, size: tuple[int, int],
-                         kicker: str) -> Any:
+                         kicker: str, layout: str = "title", hook: str = "") -> Any:
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
     from .aspect import portrait_grid
@@ -977,7 +1033,14 @@ def _draw_portrait_cover(image: Any, title: str, subtitle: str, size: tuple[int,
     except OSError:
         kicker_font = sub_font = ImageFont.load_default()
     max_width = out_w - g.left * 2
-    lines, title_font = _cover_title_lines(title, font_path, max_width)
+    hooked = layout == "hook" and bool(hook)
+    if hooked:
+        # 封面 B:标题区放一行超大字(accent 色),原标题退到数据区当说明
+        title_font = _hook_font(hook, font_path, max_width, COVER_HOOK_MAX_PORT)
+        lines = [hook]
+        subtitle = title
+    else:
+        lines, title_font = _cover_title_lines(title, font_path, max_width)
     line_h = int(title_font.getlength("测") * 1.32) if title_font else 52
     y = g.title.top + 10
     if kicker:
@@ -987,8 +1050,9 @@ def _draw_portrait_cover(image: Any, title: str, subtitle: str, size: tuple[int,
                   stroke_width=2, stroke_fill=(0, 0, 0))
         y += 60
     for line in lines:
-        draw.text((g.left, y), line, font=title_font, fill=COVER_TEXT, stroke_width=3,
-                  stroke_fill=(0, 0, 0))
+        draw.text((g.left, y), line, font=title_font,
+                  fill=(looks.current().cover_accent or COVER_ACCENT) if hooked else COVER_TEXT,
+                  stroke_width=4 if hooked else 3, stroke_fill=(0, 0, 0))
         y += line_h
     # 副标题(主论点)放在画面带下面的数据区
     sub_lines = _cover_wrap(subtitle, sub_font, max_width, 2) if subtitle else []

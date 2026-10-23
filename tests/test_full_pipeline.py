@@ -138,7 +138,7 @@ def _fake_render_pending(project_id, specs, *, subject, profile, limit=3,
             "stage_complete": True}
 
 
-def _fake_compose(project_id, specs, profile, title):
+def _fake_compose(project_id, specs, profile, title, llm=None):
     root = config.project_dir(project_id)
     out = root / "output.mp4"
     out.write_bytes(b"fake mp4")

@@ -1359,7 +1359,7 @@ def is_studio_shot(path: str | Path) -> bool:
         return False
 
 
-def cover_still(subject: str) -> Path | None:
+def cover_still(subject: str, exclude: Sequence[str | Path] = ()) -> Path | None:
     """挑一张能当封面底图的官图。没有就返回 None(调用方退回抽帧)。
 
     封面是唯一决定点击率的一帧,对底图的要求比背景高:
@@ -1368,6 +1368,9 @@ def cover_still(subject: str) -> Path | None:
     3. **无水印优先** —— 白底棚拍图最理想(汽车之家这类图库图带角标水印,
        发出去等于替别人打广告);
     4. 认得出是这台车(target == yes)优先。
+
+    `exclude`:已经用过的底图。这些图本身和与它们近重复(dHash)的图都跳过 ——
+    封面 B 要一张**看起来不同**的图,同一张图换个角度裁剪不算。
     """
     try:
         lib = Library.load(subject)
@@ -1380,6 +1383,12 @@ def cover_still(subject: str) -> Path | None:
              if i.kind == "still" and i.usable and Path(i.path).is_file()
              and i.problem not in ("cropped", "unclear", "poster")
              and i.view in hero]
+    if exclude:
+        used = {str(Path(p)) for p in exclude}
+        used_ids = {i.id for i in lib.items if str(Path(i.path)) in used}
+        groups = near_dup_groups(lib.items)
+        banned = {groups.get(u, u) for u in used_ids} | used_ids
+        cands = [i for i in cands if i.id not in banned and groups.get(i.id, i.id) not in banned]
     if not cands:
         return None
 

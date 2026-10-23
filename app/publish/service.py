@@ -168,7 +168,8 @@ def enqueue(project_id: str, *, account_ids: list[str],
                 continue
             meta = md.metadata_for(account.platform, ctx)
             over = overrides.get(account.platform) or {}
-            title = str(over.get("title") or meta["title"])
+            choice = _packaging_choice(project_id, str(over.get("title") or ""), ctx.title)
+            title = str(over.get("title") or choice["title"] or meta["title"])
             description = str(over.get("description") or meta["description"])
             tags = [str(t) for t in (over.get("tags") or meta["tags"])]
             rule = rule_for(account.platform)
@@ -180,6 +181,7 @@ def enqueue(project_id: str, *, account_ids: list[str],
                 db.update_publication(existing["id"], state=PENDING, error="", attempts=0,
                                       title=title, description=description,
                                       tags=json.dumps(tags, ensure_ascii=False),
+                                      variant=_variant_json(choice),
                                       remote_id="", remote_url="", upload_id="",
                                       published_at=None)
                 row = db.get_publication(existing["id"])
@@ -193,6 +195,7 @@ def enqueue(project_id: str, *, account_ids: list[str],
                     "platform": account.platform, "aspect": aspect,
                     "artifact": artifact_name(aspect), "title": title,
                     "description": description, "tags": json.dumps(tags, ensure_ascii=False),
+                    "variant": _variant_json(choice),
                     "state": PENDING, "created_at": now, "updated_at": now,
                 })
                 row = db.get_publication(pub_id)
@@ -202,6 +205,38 @@ def enqueue(project_id: str, *, account_ids: list[str],
             created.append(row)
 
     return {"created": created, "skipped": skipped, "warnings": warnings}
+
+
+def _packaging_choice(project_id: str, override: str, original: str) -> dict[str, str]:
+    """发布用哪个标题、哪版封面。标题优先级:用户在发布时手改的 > 包装里选中的 > 原标题。
+    返回 {"title": 选中的包装标题或空, "kind": 写法, "source": override|picked|original, "cover": a|b}。"""
+    from ..pipeline import packaging
+
+    try:
+        pick = packaging.publish_choice(project_id)
+    except Exception:  # noqa: BLE001 - 包装是辅助,坏了就按原样发
+        pick = {"title": "", "kind": "", "cover": "a"}
+    if override.strip():
+        # 手改的标题恰好是某个候选就仍记它的写法,否则记 custom
+        pkg = packaging.load(project_id)
+        kind = next((t.kind for t in (pkg.titles if pkg else []) if t.text == override.strip()), "custom")
+        return {"title": "", "kind": kind, "source": "override", "cover": pick["cover"]}
+    if pick["title"]:
+        return {**pick, "source": "picked"}
+    return {"title": "", "kind": "", "source": "original", "cover": pick["cover"]}
+
+
+def _variant_json(choice: dict[str, str]) -> str:
+    return json.dumps({"title_kind": choice.get("kind", ""), "title_source": choice.get("source", ""),
+                       "cover": choice.get("cover", "a")}, ensure_ascii=False)
+
+
+def _variant_of(row: dict[str, Any]) -> dict[str, str]:
+    try:
+        data = json.loads(row.get("variant") or "{}")
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return {}
 
 
 def aspect_warning(platform: str, project_aspect: str) -> str:
@@ -223,11 +258,16 @@ def _tags_of(row: dict[str, Any]) -> list[str]:
         return []
 
 
-def _cover_for(project_id: str, aspect: str, platform: str) -> Path | None:
-    """封面文件。小红书的封面是 3:4:竖屏项目有 3:4 裁切版就用它。"""
+def _cover_for(project_id: str, aspect: str, platform: str, variant: str = "a") -> Path | None:
+    """封面文件。小红书的封面是 3:4:竖屏项目有 3:4 裁切版就用它。
+    variant="b" 取大字版;B 文件不在了就退回 A。"""
     from ..pipeline.narration import cover_3x4_path
 
     cover = cover_path(project_id, aspect)
+    if variant == "b":
+        alt = config.project_dir(project_id) / aspect_mod.cover_name_for(aspect, "b")
+        if alt.is_file():
+            cover = alt
     if platform == "xiaohongshu" and cover_3x4_path(cover).is_file():
         return cover_3x4_path(cover)
     return cover if cover.is_file() else None
@@ -256,7 +296,8 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
         platform=row["platform"],
         aspect=aspect,
         video_path=artifact_path(project_id, aspect),
-        cover_path=_cover_for(project_id, aspect, account.platform),
+        cover_path=_cover_for(project_id, aspect, account.platform,
+                              _variant_of(row).get("cover", "a")),
         title=row.get("title") or "",
         description=row.get("description") or "",
         tags=_tags_of(row),
@@ -466,6 +507,7 @@ def publication_view(row: dict[str, Any]) -> dict[str, Any]:
         "title": row.get("title") or "",
         "description": row.get("description") or "",
         "tags": _tags_of(row),
+        "variant": _variant_of(row),
         "state": row["state"],
         "remote_id": row.get("remote_id") or "",
         "remote_url": row.get("remote_url") or "",

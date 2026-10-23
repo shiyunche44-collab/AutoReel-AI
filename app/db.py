@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS publications (
     title         TEXT NOT NULL DEFAULT '',
     description   TEXT NOT NULL DEFAULT '',
     tags          TEXT NOT NULL DEFAULT '[]',
+    variant       TEXT NOT NULL DEFAULT '{}',      -- 发的是哪版包装:{"title_kind","title_source","cover"}
     state         TEXT NOT NULL DEFAULT 'pending', -- pending|uploading|submitted|published|failed
     remote_id     TEXT NOT NULL DEFAULT '',
     remote_url    TEXT NOT NULL DEFAULT '',
@@ -252,6 +253,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "aspect" not in _column_names(conn, "projects"):
         # 画幅:16:9 | 9:16。老库的项目一律横屏 —— 与它们改造前的行为一致。
         conn.execute("ALTER TABLE projects ADD COLUMN aspect TEXT NOT NULL DEFAULT '16:9'")
+    if "variant" not in _column_names(conn, "publications"):
+        # 发布时用的标题写法 / 封面版本,数据回流后按它比 A/B。老记录是空对象。
+        conn.execute("ALTER TABLE publications ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
 
 
 def init_db() -> None:
@@ -782,7 +786,7 @@ def create_publication(row: dict[str, Any]) -> None:
     now = time.time()
     row = {
         "aspect": "16:9", "artifact": "", "title": "", "description": "",
-        "tags": "[]", "state": "pending", "remote_id": "", "remote_url": "",
+        "tags": "[]", "variant": "{}", "state": "pending", "remote_id": "", "remote_url": "",
         "upload_id": "", "error": "", "attempts": 0, "published_at": None,
         **row,
     }
@@ -792,10 +796,10 @@ def create_publication(row: dict[str, Any]) -> None:
         conn.execute(
             """INSERT INTO publications
                (id, project_id, account_id, platform, aspect, artifact, title, description,
-                tags, state, remote_id, remote_url, upload_id, error, attempts,
+                tags, variant, state, remote_id, remote_url, upload_id, error, attempts,
                 published_at, created_at, updated_at)
                VALUES (:id, :project_id, :account_id, :platform, :aspect, :artifact, :title,
-                       :description, :tags, :state, :remote_id, :remote_url, :upload_id, :error,
+                       :description, :tags, :variant, :state, :remote_id, :remote_url, :upload_id, :error,
                        :attempts, :published_at, :created_at, :updated_at)""",
             row,
         )

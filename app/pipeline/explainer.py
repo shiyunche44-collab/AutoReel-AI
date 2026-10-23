@@ -1861,7 +1861,7 @@ def cover_meta(project_id: str, profile: CategoryProfile, total: float) -> dict[
 
 
 def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
-            title: str) -> dict[str, Any]:
+            title: str, llm: Any = None) -> dict[str, Any]:
     """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。"""
     rows = {r["idx"]: r for r in db.get_shots(project_id, "final")}
     beats = [s for s in specs if s.duration > 0]
@@ -1899,4 +1899,63 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
                f"{profile.vocab.subject_label}展示"}
     db.write_json(project_id, "render.json", payload)
     return payload
+
+    _make_packaging(project_id, profile, llm)
+    cover_b = _make_cover_b(project_id, project, title, meta, size, result.output_path, still)
+    if cover_b:
+        payload["cover_b"] = cover_b
+        db.write_json(project_id, "render.json", payload)
+
+def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: tuple[int, int],
+                  video_path: Any, still_a: Any) -> dict | None:
+    """封面 B:大字版。大字取自已校验的数字型标题 / 入门价 / 主论点(取不到就不出 B)。
+
+    底图尽量换一张**看起来不同**的官图;池子里没有第二张就用同一张,并在记录里标 same_still。
+    只是辅助物料:任何失败都不能让成片失败。"""
+    from . import packaging
+
+    try:
+        pkg = packaging.load(project_id)
+        price, _ = _price_of(db.read_json(project_id, "facts.json", []) or [])
+        hook = packaging.cover_hook(pkg.titles if pkg else [], price=price,
+                                    thesis=str(project.get("thesis") or ""))
+        if not hook:
+            return None
+        subject = str(project.get("subject") or "")
+        still = library.cover_still(subject, exclude=[still_a] if still_a else ()) if subject else None
+        same = still is None and bool(still_a)
+        if same:
+            still = still_a
+        # 标题:B 版说明文字用「选中的标题」,没有包装就用项目标题
+        caption = title
+        if pkg and pkg.titles:
+            caption = (packaging.hook_title(pkg.titles, hook)  # 大字出自哪条,说明文字就用哪条
+                       or pkg.titles[min(max(int(pkg.picked.get("title", 0)), 0), len(pkg.titles) - 1)].text)
+        dest = config.project_dir(project_id) / aspect.cover_name(project, "b")
+        cover = render_mod.build_cover(video_path, caption, dest, subtitle=meta.get("subtitle", ""),
+                                       size=size, still=still, kicker=meta.get("kicker", ""),
+                                       layout="hook", hook=hook)
+        if not cover:
+            return None
+        return {"path": str(cover), "hook": hook, "still": str(still) if still else None,
+                "same_still": same}
+    except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "packaging", reason=f"封面 B 生成失败:{exc}")
+        return None
+
+
+def _make_packaging(project_id: str, profile: CategoryProfile, llm: Any) -> None:
+    """成片后备好发布包装(3 标题 + 置顶评论)。已有就不重做,免得冲掉用户的选择。
+
+    只是辅助物料:任何失败都只记一条事件,不能让成片失败。
+    """
+    from . import packaging
+
+    try:
+        if packaging.load(project_id) is None:
+            made = packaging.ensure(project_id, profile, llm)
+            db.add_event(project_id, "packaging",
+                         reason=f"发布包装已生成({'LLM' if made.source == 'llm' else '模板兜底'})")
+    except Exception as exc:  # noqa: BLE001
+        db.add_event(project_id, "packaging", reason=f"发布包装生成失败:{exc}")
 

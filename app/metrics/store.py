@@ -88,6 +88,8 @@ def overview() -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     by_platform: dict[str, dict[str, Any]] = {}
     by_aspect: dict[str, dict[str, Any]] = {}
+    by_title_kind: dict[str, dict[str, Any]] = {}
+    by_cover: dict[str, dict[str, Any]] = {}
     for row in publications:
         view = service.publication_view(row)
         snap = db.latest_snapshot(row["id"])
@@ -102,14 +104,26 @@ def overview() -> dict[str, Any]:
             platform=row["platform"], label=view["platform_label"])), row, metrics)
         _add(by_aspect.setdefault(view["aspect"], _bucket(
             aspect=view["aspect"], label=view["aspect_label"])), row, metrics)
+        var = view.get("variant") or {}
+        kind = var.get("title_kind") or "unknown"
+        cover = var.get("cover") or "a"
+        _add(by_title_kind.setdefault(kind, _bucket(title_kind=kind, label=_KIND_LABEL.get(kind, kind))),
+             row, metrics)
+        _add(by_cover.setdefault(cover, _bucket(cover=cover, label=f"封面 {cover.upper()}")), row, metrics)
     items.sort(key=lambda x: -(x.get("published_at") or x.get("created_at") or 0))
-    for bucket in by_aspect.values():
-        # 横竖屏比的是「每条平均」,条数不一样时合计没有可比性
-        bucket["avg_views"] = round(bucket["views"] / bucket["with_views"]) if bucket["with_views"] else None
-        bucket["engagement_rate"] = engagement_rate(bucket)
+    for group in (by_aspect, by_title_kind, by_cover):
+        for bucket in group.values():
+            # 横竖屏、标题写法、封面版本比的是「每条平均」,条数不一样时合计没有可比性
+            bucket["avg_views"] = round(bucket["views"] / bucket["with_views"]) if bucket["with_views"] else None
+            bucket["engagement_rate"] = engagement_rate(bucket)
     return {"items": items, "by_platform": list(by_platform.values()),
-            "by_aspect": sorted(by_aspect.values(), key=lambda b: b["aspect"])}
+            "by_aspect": sorted(by_aspect.values(), key=lambda b: b["aspect"]),
+            "by_title_kind": sorted(by_title_kind.values(), key=lambda b: b["title_kind"]),
+            "by_cover": sorted(by_cover.values(), key=lambda b: b["cover"])}
 
+
+#: 标题写法的中文名(包装里 stake/number/person;custom 是发布时手改的;unknown 是没走包装的老记录)
+_KIND_LABEL = {"stake": "立场", "number": "数字", "person": "人群", "custom": "手改", "unknown": "未记录"}
 
 _SUM_KEYS = ("views", "likes", "comments", "favorites", "shares", "followers")
 
