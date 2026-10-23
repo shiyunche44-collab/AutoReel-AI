@@ -29,6 +29,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 语音质检的转写复核(可选;不装就只做信号检查)
+qa = ["faster-whisper>=1.0"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

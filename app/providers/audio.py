@@ -5,11 +5,16 @@
 """
 from __future__ import annotations
 
+import logging
+import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import cli
+
+log = logging.getLogger(__name__)
 
 TTS_TOOL = "connector__matrix__batch_text_to_audio"
 MUSIC_TOOL = "connector__matrix__batch_text_to_music"
@@ -17,6 +22,32 @@ LISTEN_TOOL = "connector__matrix__listen_audio"
 
 #: 批量 TTS 单次调用上限
 TTS_BATCH_LIMIT = 10
+#: 单批遇到 RPM 限流(1002)时的重发次数与退避基数(秒,逐次加长)。
+#: 以前一批撞限流就让整次调用抛错,已经合成好的句子连同后面的全丢,
+#: 上层补跑又立刻撞上同一个限流窗口 —— 143 句的长片要手动确认三四次才放行。
+TTS_RATE_LIMIT_RETRIES = 4
+TTS_RATE_LIMIT_BACKOFF = 30.0
+#: 批与批之间的最小间隔(秒)。每批 10 句 = 10 次请求计入 RPM,实测 143 句的长片
+#: 全速发会在第 6 批前后撞限流,且每次补跑只能多补回两成;主动控速到约 50 次/分钟
+#: 比「撞了再退」快得多(撞限流后窗口要一分钟以上才恢复)
+TTS_MIN_BATCH_INTERVAL = 12.0
+_last_batch_at = 0.0
+
+
+def _offset_from_name(file_name: str, prefix: str, start: int, size: int) -> int | None:
+    """`{prefix}_{序号:03d}.ext` → 这一批里的位置;对不上返回 None。"""
+    m = re.fullmatch(rf"{re.escape(prefix)}_(\d+)\.\w+", Path(file_name or "").name)
+    if not m:
+        return None
+    off = int(m.group(1)) - start
+    return off if 0 <= off < size else None
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "rate limit" in msg or "1002" in msg
+#: 短于这个时长(秒)的一句话当作没合成出来:有文件但几乎没声音,那一拍就是哑的
+MIN_CLIP_SECONDS = 0.15
 #: 批量音乐单次调用上限
 MUSIC_BATCH_LIMIT = 5
 
@@ -103,23 +134,53 @@ def synthesize_batch(
                 item["output_file"] = f"{file_prefix}_{start + offset:03d}.mp3"
             requests.append(item)
 
-        result = cli.call(TTS_TOOL, {"requests": requests}, timeout=timeout)
+        result = None
+        for attempt in range(TTS_RATE_LIMIT_RETRIES + 1):
+            global _last_batch_at
+            idle = TTS_MIN_BATCH_INTERVAL - (time.monotonic() - _last_batch_at)
+            if idle > 0 and _last_batch_at:
+                time.sleep(idle)
+            _last_batch_at = time.monotonic()
+            try:
+                result = cli.call(TTS_TOOL, {"requests": requests}, timeout=timeout)
+                break
+            except cli.ConnectorError as exc:
+                if not _is_rate_limited(exc) or attempt == TTS_RATE_LIMIT_RETRIES:
+                    if assets:  # 已经合成好的别丢:返回部分结果,让上层按位置补缺
+                        log.warning("TTS 第 %d 批失败,保留已完成的 %d 句:%s",
+                                    start // TTS_BATCH_LIMIT + 1, len(assets), exc)
+                        return assets
+                    raise
+                wait = TTS_RATE_LIMIT_BACKOFF * (attempt + 1)
+                log.info("TTS 限流,%.0f 秒后重发第 %d 批", wait, start // TTS_BATCH_LIMIT + 1)
+                time.sleep(wait)
         items = _extract_success_items(result)
-        for offset, item in enumerate(items[: len(batch)]):
+        for pos, item in enumerate(items):
+            # 成功项只含成功的:批内哪句失败了,后面的项在列表里整体前移。
+            # 按位置对回原句会把后一句的音频挂到前一句上(旁白与画面错位、
+            # 某一句念的是别句的词)。回显的 file_name 带着请求时的序号,以它为准;
+            # 取不到才退回按位置。
+            file_name = item.get("file_name") or ""
+            offset = _offset_from_name(file_name, file_prefix, start, len(batch))
+            if offset is None:
+                offset = pos
+            if offset >= len(batch):
+                continue
             node_id = item.get("node_id")
             if not node_id:
                 continue
-            file_name = item.get("file_name") or ""
             try:
                 url = cli.get_asset_url(str(node_id))
-            except cli.ConnectorError:
+            except cli.ConnectorError as exc:
+                log.warning("TTS 第 %d 句取不到下载地址:%s", start + offset, exc)
                 continue
             if out_dir:
                 ext = Path(file_name).suffix or ".mp3"
                 dest = out_dir / f"{file_prefix}_{start + offset:03d}{ext}"
                 try:
                     _download(url, dest)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("TTS 第 %d 句下载失败:%s", start + offset, exc)
                     continue
             else:
                 dest = Path(file_name or f"{file_prefix}_{start + offset:03d}.mp3")

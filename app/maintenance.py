@@ -60,7 +60,7 @@ PROJECT_KEEP = ("output.mp4", "cover.jpg", "output_vertical.mp4", "cover_vertica
                 "cover_vertical_3x4.jpg", "script.json", "storyboard.json",
                 "facts.json", "lint.json", "topic.json", "review_state.json",
                 "concept_style.json", "rhythm.json", "render.json", "cards.json",
-                "narration.json", "beats")
+                "narration.json", "voice_qa.json", "beats")
 
 #: 项目目录里可以清的中间产物。
 PROJECT_PRUNABLE_DIRS = ("drafts", "shots", "refs", "audio", "facts_raw", "_render")

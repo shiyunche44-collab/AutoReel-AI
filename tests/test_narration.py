@@ -197,7 +197,7 @@ def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):
     from app.providers.audio import AudioAsset
 
     def fake(texts, **kw):
-        if kw.get("file_prefix") == "tts_retry":
+        if str(kw.get("file_prefix", "")).startswith("tts_retry"):
             return []
         return [AudioAsset(text=t, local_path=_make_tone(tmp_path / f"t{i}.wav"), index=i)
                 for i, t in enumerate(texts) if i != 1]
@@ -297,3 +297,110 @@ def test_bgm_falls_back_to_library_when_generation_fails(monkeypatch, tmp_path):
     assert reused and path.read_bytes() == b"old"
     empty, _ = narration.library_bgm("没生成过的风格", tmp_path / "x", "p")
     assert empty is None
+
+
+# --------------------------------------------------------------------------
+# 切句 / 读法 / 缓存键(配音缺句、怪音、催眠感的回归)
+# --------------------------------------------------------------------------
+def test_split_sentences_breaks_on_fullwidth_punctuation():
+    from app.pipeline.timeline import split_sentences
+
+    text = "这车续航很扎实！你觉得值不值？先看数据；再说结论。"
+    assert split_sentences(text) == ["这车续航很扎实！", "你觉得值不值？", "先看数据；", "再说结论。"]
+
+
+def test_split_sentences_long_clause_cuts_at_comma_not_mid_word():
+    from app.pipeline.timeline import split_sentences
+
+    text = ("这车的续航表现非常扎实，冬天开空调也能跑到标称的八成左右，"
+            "对通勤用户来说完全够用。")
+    out = split_sentences(text)
+    assert all(len(s) <= config.MAX_TTS_CHARS for s in out)
+    assert "".join(out) == text
+    assert all(s[-1] in "，。" for s in out)
+
+
+def test_split_sentences_never_emits_punctuation_only_piece():
+    from app.pipeline.timeline import split_sentences
+
+    # 36 字恰好卡在句号前:以前硬切会剩出一条单独的"。"
+    text = "一" * 35 + "。"
+    out = split_sentences(text)
+    assert out and all(any(ch == "一" for ch in s) for s in out)
+    assert split_sentences("。！") == []
+
+
+def test_normalize_years_percent_thousands_and_ranges():
+    from app.pipeline.timeline import normalize_for_tts
+
+    assert normalize_for_tts("2025年") == "二零二五年"
+    assert normalize_for_tts("1,299台") == "一千二百九十九台"
+    assert normalize_for_tts("增长12.5%") == "增长百分之十二点五"
+    assert normalize_for_tts("50-60公里") == "五十到六十公里"
+
+
+def test_tts_key_changes_with_speed_and_emotion():
+    a = narration._tts_key("你好", "v", 1.0, "")
+    assert a != narration._tts_key("你好", "v", 1.12, "")
+    assert a != narration._tts_key("你好", "v", 1.0, "happy")
+
+
+def test_cached_clip_with_no_sound_is_not_reused(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    cache = narration.tts_cache_dir()
+    cache.mkdir(parents=True)
+    bad = cache / (narration._tts_key("你好", "v", 1.0, "") + ".mp3")
+    bad.write_bytes(b"x")
+    monkeypatch.setattr(narration, "probe_safe", lambda *a, **k: 0.02)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    assert narration.cached_tts(["你好"], voice_id="v", speed=1.0, dest_dir=dest) == {}
+    assert not bad.exists()
+
+
+def test_synthesize_batch_retries_rate_limited_batch_and_keeps_done(monkeypatch, tmp_path):
+    """某一批撞 RPM 限流:等一等重发;重发仍失败也要保留前面已合成好的句子。"""
+    from app.providers import audio, cli
+
+    texts = [f"第{i}句。" for i in range(25)]  # 3 批:10 + 10 + 5
+    calls = {"n": 0}
+
+    def fake_call(tool, payload, timeout=0):
+        calls["n"] += 1
+        if calls["n"] == 2:  # 第 2 批第一次撞限流
+            raise cli.ConnectorError(tool, "HTTP 200:1002: rate limit exceeded(RPM)")
+        if calls["n"] >= 4:  # 第 3 批一直撞限流
+            raise cli.ConnectorError(tool, "HTTP 200:1002: rate limit exceeded(RPM)")
+        return {"ok": True}
+
+    def fake_items(result):
+        return [{"node_id": f"n{calls['n']}_{i}", "file_name": "a.mp3"} for i in range(10)]
+
+    monkeypatch.setattr(audio.cli, "call", fake_call)
+    monkeypatch.setattr(audio, "_extract_success_items", fake_items)
+    monkeypatch.setattr(audio.cli, "get_asset_url", lambda node: "http://x/" + node)
+    monkeypatch.setattr(audio, "_download", lambda url, dest: Path(dest).write_bytes(b"x"))
+    got = audio.synthesize_batch(texts, output_dir=tmp_path)
+    assert [a.index for a in got] == list(range(20))  # 前两批齐了,第 3 批放弃但没丢前面的
+
+
+def test_synthesize_batch_maps_partial_batch_by_file_name_not_position(monkeypatch, tmp_path):
+    """批内第 2 句失败:成功项整体前移,必须按回显的文件名对回原句,
+    不能把第 3 句的音频挂到第 2 句上。"""
+    from app.providers import audio
+
+    texts = ["甲。", "乙。", "丙。", "丁。"]
+
+    def fake_call(tool, payload, timeout=0):
+        reqs = payload["requests"]
+        return {"success_items": [{"node_id": f"n_{r['text']}", "file_name": r["output_file"]}
+                                  for r in reqs if r["text"] != "乙。"]}
+
+    monkeypatch.setattr(audio.cli, "call", fake_call)
+    monkeypatch.setattr(audio.cli, "get_asset_url", lambda node: node)
+    monkeypatch.setattr(audio, "_download", lambda url, dest: Path(dest).write_bytes(url.encode()))
+    got = audio.synthesize_batch(texts, output_dir=tmp_path)
+    assert [(a.index, a.text) for a in got] == [(0, "甲。"), (2, "丙。"), (3, "丁。")]
+    assert [a.local_path.read_bytes() for a in got] == [b"n_\xe7\x94\xb2\xe3\x80\x82",
+                                                       b"n_\xe4\xb8\x99\xe3\x80\x82",
+                                                       b"n_\xe4\xb8\x81\xe3\x80\x82"]

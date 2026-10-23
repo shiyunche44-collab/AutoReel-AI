@@ -359,3 +359,60 @@ def test_dongchedi_expired_login_raises(monkeypatch):
         transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>")), **kw))
     with pytest.raises(official.DongchediLoginRequired):
         official.dongchedi_images("小米YU7", require_login=True)
+
+
+YICHE_HTML = """
+<title>小米YU7图片_小米YU7外观内饰图片-易车</title>
+<a href="/xiaomiyu7/tupian/">图片</a><a href="https://example.com/tupian/">别家</a>
+<img src="//image.bitautoimg.com/autoalbum/files/20250626/abc_1200x800.jpg">
+<img src="//image.bitautoimg.com/autoalbum/files/20250626/thumb_120x90.jpg">
+<img src="https://cdn.other.com/ad_1200x800.jpg">
+<img src="//image.bitautoimg.com/logo.png">
+"""
+
+
+def test_find_yiche_series(monkeypatch):
+    monkeypatch.setattr(official.webassets, "bing_web", lambda q, **k: [
+        "https://car.yiche.com/tupian/", "https://car.yiche.com/xiaomiyu7/tupian/",
+        "https://www.yiche.com/"])
+    assert official.find_yiche_series("小米YU7") == "xiaomiyu7"
+
+
+def test_parse_yiche_images_keeps_only_yiche_cdn_big_pics():
+    urls = official.parse_yiche_images(YICHE_HTML, "https://car.yiche.com/xiaomiyu7/")
+    assert urls == ["https://image.bitautoimg.com/autoalbum/files/20250626/abc_1200x800.jpg"]
+    assert official.yiche_gallery_links(YICHE_HTML, "https://car.yiche.com/xiaomiyu7/") == [
+        "https://car.yiche.com/xiaomiyu7/tupian/"]
+
+
+def test_yiche_images_via_browser(monkeypatch):
+    monkeypatch.setattr(official, "find_yiche_series", lambda s: "xiaomiyu7")
+    pages: list[str] = []
+
+    def fetch(url, **k):
+        pages.append(url)
+        return YICHE_HTML
+
+    monkeypatch.setattr(official.browser_fetch, "fetch", fetch)
+    refs = official.yiche_images("小米YU7")
+    assert pages == ["https://car.yiche.com/xiaomiyu7/", "https://car.yiche.com/xiaomiyu7/tupian/"]
+    assert [r.origin for r in refs] == ["official:yiche"]
+
+
+def test_yiche_captcha_raises_unavailable(monkeypatch):
+    monkeypatch.setattr(official, "find_yiche_series", lambda s: "xiaomiyu7")
+
+    def blocked(url, **k):
+        raise official.browser_fetch.BrowserBlocked("页面含「tcaptcha」")
+
+    monkeypatch.setattr(official.browser_fetch, "fetch", blocked)
+    with pytest.raises(official.YicheUnavailable, match="browser_unblock"):
+        official.GALLERIES["yiche"].fetch("小米YU7", {}, [])
+
+
+def test_yiche_other_series_page_gives_nothing_and_retries(monkeypatch):
+    monkeypatch.setattr(official, "find_yiche_series", lambda s: "xiaomiyu7")
+    monkeypatch.setattr(official.browser_fetch, "fetch",
+                        lambda url, **k: '<img src="//image.bitautoimg.com/a_1200x800.jpg">')
+    with pytest.raises(official.YicheUnavailable):
+        official.yiche_images("小米YU7")

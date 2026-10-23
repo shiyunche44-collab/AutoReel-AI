@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Sequence
 
 from .. import config
-from . import clips, platform_video, webassets
+from . import browser_fetch, clips, platform_video, webassets
 from .images import ImageRef
 
 #: 页面上明显不是车照的图:站点 logo、图标、头像、二维码、占位图
@@ -760,6 +760,97 @@ def dongchedi_images(subject: str, *, limit: int = 12, require_login: bool = Fal
     return _dedupe(refs)
 
 
+# --------------------------------------------------------------------------
+# 易车图库(要过验证码,只走浏览器兜底)
+# --------------------------------------------------------------------------
+YICHE_REFERER = "https://car.yiche.com/"
+#: 一个车系最多打开几个页面(车系页 + 图库页);每页最多收几张
+YICHE_PAGES_MAX = 3
+YICHE_PER_PAGE = 20
+_YICHE_SERIES_RE = re.compile(r"^https?://car\.yiche\.com/([a-z0-9][a-z0-9-]*)(?:/|$)", re.IGNORECASE)
+#: car.yiche.com 一级路径里不是车系的
+_YICHE_NOT_SERIES = {"tupian", "photo", "news", "pingce", "price", "brand", "search", "help",
+                     "koubei", "zhidao", "m", "www"}
+_YICHE_HREF_RE = re.compile(r"""href=["']([^"']*(?:tupian|photo\.yiche\.com)[^"']*)["']""",
+                            re.IGNORECASE)
+_YICHE_IMG_HOST_RE = re.compile(r"bitauto|yiche", re.IGNORECASE)
+
+
+class YicheUnavailable(RuntimeError):
+    """易车图库这次抓不到:撞验证码(等人工过一次)、页面都打不开,或页面里解析不出图。
+    素材池据此不把它记成「抓过了」,处理好之后下次重建自动补上。"""
+
+
+def find_yiche_series(subject: str) -> str:
+    """车型名 → 易车车系页路径(如 xiaomiyu7)。靠 Bing 站内检索:不碰易车本身的验证码。"""
+    for url in webassets.bing_web(f"site:car.yiche.com {subject}", limit=10):
+        m = _YICHE_SERIES_RE.match(url)
+        if m and m.group(1).lower() not in _YICHE_NOT_SERIES:
+            return m.group(1).lower()
+    return ""
+
+
+def parse_yiche_images(body: str, page_url: str, *, limit: int = YICHE_PER_PAGE) -> list[str]:
+    """页面里易车自家图床的大图(站点 logo、小缩略图 `extract_images` 已剔)。"""
+    return [u for u in extract_images(body, page_url)
+            if _YICHE_IMG_HOST_RE.search(urllib.parse.urlsplit(u).netloc)][:limit]
+
+
+def yiche_gallery_links(body: str, page_url: str) -> list[str]:
+    """车系页里指向图库的链接(同在易车域名下)。"""
+    out: list[str] = []
+    for raw in _YICHE_HREF_RE.findall(body):
+        url = urllib.parse.urljoin(page_url, html.unescape(raw))
+        if "yiche.com" in urllib.parse.urlsplit(url).netloc and url not in out:
+            out.append(url)
+    return out
+
+
+def yiche_images(subject: str, *, errors: list[str] | None = None) -> list[ImageRef]:
+    """易车车系页 + 图库页的大图。
+
+    易车对脚本回腾讯验证码,所以**只走浏览器兜底**(`browser_fetch`):人工跑一次
+    `python -m scripts.browser_unblock https://car.yiche.com/` 过验证码,登录态存下后
+    这里带着它抓。没过 / 过期了抛 `YicheUnavailable`。"""
+    slug = find_yiche_series(subject)
+    if not slug:
+        return []
+    home = f"https://car.yiche.com/{slug}/"
+    queue = [home, home + "tupian/"]
+    seen: set[str] = set()
+    refs: list[ImageRef] = []
+    loaded = 0
+    while queue and len(seen) < YICHE_PAGES_MAX:
+        page = queue.pop(0)
+        if page in seen:
+            continue
+        seen.add(page)
+        try:
+            body = browser_fetch.fetch(page, referer=YICHE_REFERER, as_text=True)
+        except browser_fetch.BrowserBlocked as exc:
+            raise YicheUnavailable(
+                f"易车要过验证码:python -m scripts.browser_unblock {home}({exc})") from exc
+        except browser_fetch.BrowserFetchError as exc:
+            if errors is not None:
+                errors.append(f"易车页面打不开({page}):{str(exc)[:100]}")
+            continue
+        loaded += 1
+        # 页面里没出现这台车的名字(跳到了别的车系 / 搜索页)就不要,免得把别的车的图当官图
+        if _norm(subject) not in _norm(body):
+            continue
+        queue += [u for u in yiche_gallery_links(body, page) if u not in seen]
+        for url in parse_yiche_images(body, page):
+            refs.append(ImageRef(
+                url=url, origin="official:yiche", note="易车图库",
+                license=f"易车图库:{page}", source_page=page,
+            ))
+    if not loaded:
+        raise YicheUnavailable("易车页面都打不开")
+    if loaded and not refs:
+        raise YicheUnavailable("易车页面里没解析出这台车的图(页面结构可能变了)")
+    return _dedupe(refs)
+
+
 def gallery_images(subject: str, *, errors: list[str] | None = None) -> list[ImageRef]:
     """官图库合并:汽车之家(按视角分好类)在前,懂车帝补位。结果缓存 24 小时。"""
     out: list[ImageRef] = []
@@ -821,6 +912,9 @@ GALLERIES: dict[str, Gallery] = {
     "dongchedi": Gallery(lambda subject, spec, errors: dongchedi_images(
         subject, require_login=True, errors=errors),
                          referer="https://www.dongchedi.com/"),
+    # 要过验证码:人工 browser_unblock 一次后带登录态抓;没过时抛错,素材池不记成抓过
+    "yiche": Gallery(lambda subject, spec, errors: yiche_images(subject, errors=errors),
+                     referer=YICHE_REFERER),
     # 车企官网车型页 + 媒体中心的大图(严格模式:只认点名这台车的页面,剔掉别的车型的图)
     "official_site": Gallery(lambda subject, spec, errors: site_assets(
         subject, spec, errors=errors)[1]),

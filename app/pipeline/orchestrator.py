@@ -500,8 +500,12 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         db.write_json(project_id, "rhythm.json", report)
         total = sum(s.duration for s in specs)
         explainer.init_beats(project_id, specs)
+        qa = getattr(nar, "qa_report", None) or {}
+        qa_note = (f",语音质检 {qa['sentences']} 句"
+                   + (f"重做 {len(qa['redone'])} 句" if qa.get("redone") else "全部通过")
+                   ) if qa.get("sentences") else ""
         cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
-            (",BGM 复用曲库" if nar.bgm_reused else "")
+            (",BGM 复用曲库" if nar.bgm_reused else "") + qa_note
         _set_state(project_id, state, State.ASSETS_READY,
                    reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
                           + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))
@@ -511,7 +515,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                    reason=f"开始逐拍渲染({len(specs)} 拍)")
         return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
                 "warnings": list(nar.warnings or []) + list(report["problems"]),
-                "rhythm": report}
+                "rhythm": report, "voice_qa": getattr(nar, "qa_report", None)}
 
     if state == State.PROMPTS_READY:
         _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")

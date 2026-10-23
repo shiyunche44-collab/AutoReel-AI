@@ -88,6 +88,7 @@ SYSTEM = """你是中文{domain}(/{category})品类的短视频解说编导。
    - segments 的数量与顺序必须严格对应给定的段落序列。
    - text 为口播文案,口语化、短句、有画面感,不要用书面语长句。
    - 数值一律写阿拉伯数字(如 26.35 万、593 公里、4.3 秒),字幕直接显示它,配音会自动转成读法。
+   - 清单里标了「对比[某车]」的事实只许写在竞品对比段;其他段落既不要引用它,也不要转述它的数字。
 3. **事实引用是强制的**:text 中每出现一个数字({number_examples}),
    必须在 fact_refs 中列出支撑该数字的事实 ID。没有事实支撑的数字一律不许写。
    可以改写成不含数字的定性表述,而不是硬写。
@@ -438,8 +439,13 @@ def generate(
 
     title = str(data.get("title") or "").strip() or f"{subject} 详解"
     thesis = str(data.get("thesis") or "").strip()
+    if not roundup:
+        segments = strip_foreign_comparison_refs(segments, facts)
     if portrait:
         segments = fit_length(segments, budget, llm)
+    else:
+        segments = fit_length(segments, budget, llm, tolerance=LANDSCAPE_LENGTH_TOLERANCE,
+                              keep_count=True)
     return segments, title, thesis
 
 
@@ -452,6 +458,11 @@ PORTRAIT_CHARS_PER_SECOND = 4.7
 #: 提示词里写明「硬上限」、段落砍到 6 段后仍写到 870 字 —— 光靠提示词压不住。
 #: 竖屏的时长是平台规则(60/90 秒档)而不是估算,超了就不是选的那个时长
 PORTRAIT_LENGTH_TOLERANCE = 1.1
+
+#: 横屏同理但更宽松。实测 240 秒目标(预算 1392 字)写出 2272 字、成片 442 秒,
+#: 超了 85%;「时长只是目标」不等于可以翻倍。横屏段落数由计划定死(对齐计划时
+#: 缺段会被复制占位),所以压缩时必须保持段数,只缩每段,不许删段
+LANDSCAPE_LENGTH_TOLERANCE = 1.25
 
 SHORTEN_SYSTEM = """你是短视频解说的剪辑编导。下面这份脚本念出来太长,把它压到 {chars} 字以内(空白不算字)。
 
@@ -469,15 +480,20 @@ def spoken_chars(segments: Sequence[ScriptSegment]) -> int:
 
 
 def fit_length(segments: list[ScriptSegment], budget: int, llm,
-               tolerance: float = PORTRAIT_LENGTH_TOLERANCE) -> list[ScriptSegment]:
+               tolerance: float = PORTRAIT_LENGTH_TOLERANCE,
+               keep_count: bool = False) -> list[ScriptSegment]:
     """超出目标字数 `tolerance` 倍时让 LLM 删一遍。压坏了(空、没变短、丢了开场或结论)就用原稿。"""
     have = spoken_chars(segments)
     if not segments or budget <= 0 or have <= budget * tolerance:
         return segments
     draft = json.dumps({"segments": [{"section": s.section, "text": s.text, "fact_refs": s.fact_refs}
                                      for s in segments]}, ensure_ascii=False)
+    system = SHORTEN_SYSTEM.format(chars=budget)
+    if keep_count:
+        system += (f"\n- 本稿必须保持恰好 {len(segments)} 段、顺序不变:不许删段或合并,"
+                   "每段都只缩短(压到只剩最硬的一个数字加一句观点)。")
     try:
-        data = llm.structured(SHORTEN_SYSTEM.format(chars=budget),
+        data = llm.structured(system,
                               f"目标 {budget} 字,现在 {have} 字。\n{draft}",
                               required_keys=["segments"], temperature=0.3)
     except Exception as exc:  # noqa: BLE001 —— 压缩是锦上添花,失败不拦脚本
@@ -499,6 +515,9 @@ def fit_length(segments: list[ScriptSegment], budget: int, llm,
         out.append(ScriptSegment(idx=len(out), section=section, text=text,
                                  fact_refs=[str(r) for r in refs if str(r)],
                                  heading=headings.get(section, "")))
+    if keep_count and len(out) != len(segments):
+        log.warning("脚本压缩改变了段数(%d → %d),用原稿", len(segments), len(out))
+        return segments
     if not out or spoken_chars(out) >= have or out[0].section != segments[0].section \
             or out[-1].section != segments[-1].section:
         log.warning("脚本压缩结果不可用(%d 段),用原稿", len(out))
@@ -558,6 +577,25 @@ _NOT_A_NAME = frozenset({
 def _is_comparison_section(section: str) -> bool:
     """这一段是不是在跟别的东西比。"""
     return any(w in (section or "") for w in _COMPARISON_SECTION_WORDS)
+
+
+def strip_foreign_comparison_refs(
+    segments: list[ScriptSegment], facts: Sequence[Fact],
+) -> list[ScriptSegment]:
+    """去掉非对比段里引用的对比事实。
+
+    LLM 常把讲别家车的那条事实(「极氪 7X 800V」)挂在开场、三电性能这些本车段落上,
+    再被 split_segments 摊到每一拍,lint 规则 9 就一口气报几十条。
+    源头剥掉:引用本来就不该出现在这里。剥完若句里还带数字,会被「数字没有事实引用」拦下,
+    交给人在门禁 A 处理,而不是静默放行。
+    """
+    rivals = {f.id for f in facts if f.compare_with}
+    if not rivals:
+        return segments
+    for seg in segments:
+        if not _is_comparison_section(seg.section):
+            seg.fact_refs = [r for r in seg.fact_refs if r not in rivals]
+    return segments
 
 
 def vendor_attribution(text: str) -> str:

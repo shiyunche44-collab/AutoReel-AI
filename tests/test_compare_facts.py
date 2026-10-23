@@ -167,3 +167,19 @@ def test_compare_card_rejected_when_fact_only_has_one_side():
     grounded, dropped = cards.ground(card, [fact])
     assert grounded is None
     assert any("26.39" in d for d in dropped)
+
+
+def test_strip_foreign_comparison_refs_only_keeps_comparison_sections():
+    """LLM 把对比事实挂在开场 / 三电性能上,源头剥掉;对比段保留。"""
+    from app.models import Fact, ScriptSegment
+    from app.pipeline import script_gen
+
+    rival = Fact(id="f_r", claim="Model Y 400V,极氪 7X 800V", source_tool="t", compare_with="极氪 7X")
+    own = Fact(id="f_o", claim="Model Y 快充 250kW", source_tool="t")
+    segs = [
+        ScriptSegment(idx=0, section="开场", text="a", fact_refs=["f_r", "f_o"]),
+        ScriptSegment(idx=1, section="竞品对比", text="b", fact_refs=["f_r"]),
+    ]
+    out = script_gen.strip_foreign_comparison_refs(segs, [rival, own])
+    assert out[0].fact_refs == ["f_o"]
+    assert out[1].fact_refs == ["f_r"]

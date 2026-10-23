@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import time
@@ -17,9 +18,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .. import config, db
-from . import looks
 from ..models import SubtitleCue
 from ..providers import audio
+from . import looks
 from .timeline import (
     build_subtitle_cues,
     format_ass,
@@ -27,6 +28,12 @@ from .timeline import (
     probe_safe,
     split_sentences,
 )
+
+log = logging.getLogger(__name__)
+
+#: TTS 补跑轮数与限流退避基数(秒):RPM 限流一般一分钟内恢复
+TTS_RETRY_ROUNDS = 5
+TTS_BACKOFF_SECONDS = 20.0
 
 
 @dataclass
@@ -49,6 +56,9 @@ class NarrationResult:
     synth_chars: int = 0
     #: BGM 是否来自共享曲库(没有新生成)
     bgm_reused: bool = False
+    #: 语音质检重做后仍不合格的句子(在 sentences 里的位置)与质检报告
+    qa_failed: list[int] = field(default_factory=list)
+    qa_report: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +72,7 @@ class NarrationResult:
             "cached_sentences": self.cached_sentences,
             "synth_chars": self.synth_chars,
             "bgm_reused": self.bgm_reused,
+            "qa_failed": self.qa_failed,
             "warnings": self.warnings,
             "cues": [c.model_dump() for c in self.cues],
         }
@@ -85,7 +96,8 @@ def build(
     specs: Sequence[Any],
     *,
     voice_id: str = "",
-    speed: float = 1.0,
+    speed: float | None = None,
+    emotion: str | None = None,
     with_bgm: bool = True,
     profile=None,
     size: tuple[int, int] | None = None,
@@ -97,6 +109,8 @@ def build(
     `voice_id` 空 = 品类 profile 声明的音色,再没有就用全局默认。
     """
     voice_id = voice_id or getattr(profile, "voice_id", "") or audio.DEFAULT_VOICE_ID
+    speed = config.TTS_SPEED if speed is None else speed
+    emotion = config.TTS_EMOTION if emotion is None else emotion
     project_dir = config.project_dir(project_id)
     audio_dir = project_dir / "audio"
     # 字幕在拼接之前就要落盘,目录必须先建好 —— 否则第一次跑就会
@@ -118,8 +132,11 @@ def build(
     # ---- TTS ----
     # 同一句话、同一音色语速合成过就直接用缓存:门禁 A 改几句稿子重新确认时,
     # 只为改动的句子付钱(以前是整片重合成)
-    by_pos = cached_tts(texts, voice_id=voice_id, speed=speed, dest_dir=audio_dir)
+    by_pos = cached_tts(texts, voice_id=voice_id, speed=speed, emotion=emotion, dest_dir=audio_dir)
     result.cached_sentences = len(by_pos)
+    # 语音质检要转写复核的句子:缓存里取出的(可能带毒,核对过的除外)和补跑批次里的(最易错位)
+    qa_hint = {i for i in by_pos
+               if not is_verified(texts[i], voice_id=voice_id, speed=speed, emotion=emotion)}
     todo = [i for i in range(len(texts)) if i not in by_pos]
     if todo:
         result.synth_chars += sum(len(texts[i]) for i in todo)
@@ -128,6 +145,7 @@ def build(
                 [texts[i] for i in todo],
                 voice_id=voice_id,
                 speed=speed,
+                emotion=emotion or None,
                 output_dir=audio_dir,
             )
         except Exception as exc:  # noqa: BLE001
@@ -138,23 +156,37 @@ def build(
             result.warnings.append(f"TTS 部分失败,将补跑:{exc}")
         # 失败的句子不在结果里,而且后面的会整体前移 —— 必须按输入位置对回原句,
         # 否则一句失败,之后每条字幕都挂到错的镜头上。
+        assets = usable_clips(assets)
         for n, a in enumerate(assets):
             by_pos[todo[a.index if getattr(a, "index", -1) >= 0 else n]] = a
     missing = [i for i in range(len(texts)) if i not in by_pos]
-    if missing:
-        # 批量接口偶发整批失败(限流、超时),补跑一次通常就齐了
+    # 批量接口会被 RPM 限流(1002)、超时偶发整批失败:补跑到齐为止,限流时先退避再试。
+    # 以前只补一次,长片(一百多句)一次确认要手动点三四回才能放行。
+    for attempt in range(1, TTS_RETRY_ROUNDS + 1):
+        if not missing:
+            break
+        retry_err = ""
         try:
             retry = audio.synthesize_batch([texts[i] for i in missing], voice_id=voice_id,
-                                           speed=speed, output_dir=audio_dir,
-                                           file_prefix="tts_retry")
+                                           speed=speed, emotion=emotion or None,
+                                           output_dir=audio_dir,
+                                           file_prefix="tts_retry" if attempt == 1 else f"tts_retry{attempt}")
         except Exception as exc:  # noqa: BLE001
             retry = []
-            result.warnings.append(f"TTS 补跑失败:{exc}")
-        for n, a in enumerate(retry):
+            retry_err = str(exc)
+            result.warnings.append(f"TTS 补跑第 {attempt} 轮失败:{exc}")
+        for n, a in enumerate(usable_clips(retry)):
             pos = missing[a.index if getattr(a, "index", -1) >= 0 else n]
             by_pos[pos] = a
+            qa_hint.add(pos)
         missing = [i for i in range(len(texts)) if i not in by_pos]
-    store_tts(texts, by_pos, voice_id=voice_id, speed=speed)
+        store_tts(texts, by_pos, voice_id=voice_id, speed=speed, emotion=emotion)
+        log.info("TTS 补跑第 %d 轮:还缺 %d 句%s", attempt, len(missing),
+                 f"({retry_err[:80]})" if retry_err else "")
+        if missing and attempt < TTS_RETRY_ROUNDS:
+            limited = "rate limit" in retry_err.lower() or "1002" in retry_err or not retry
+            time.sleep(TTS_BACKOFF_SECONDS * attempt if limited else 2)
+    store_tts(texts, by_pos, voice_id=voice_id, speed=speed, emotion=emotion)
     if missing:
         result.missing_sentences = missing
         result.warnings.append(
@@ -165,9 +197,14 @@ def build(
         result.warnings.append("TTS 未产出任何音频")
         return result
 
+    if config.VOICE_QA:
+        run_voice_qa(project_id, texts, [t for t, _ in pairs], by_pos, qa_hint, result,
+                     voice_id=voice_id, speed=speed, emotion=emotion, audio_dir=audio_dir)
+
     order = sorted(by_pos)
     assets = [by_pos[i] for i in order]
-    result.audio_paths = [a.local_path for a in assets]
+    result.audio_paths = [trim_clip(Path(a.local_path), audio_dir / f"trim_{i:03d}.wav")
+                          for i, a in zip(order, assets)]
     # 字幕用原文:TTS 文本把数字归一化成了中文读法("六百四十三公里"),
     # 上屏得是"643 公里""kWh",观众才能扫读、截图,也才和画面上的大字对得上
     used_texts = [pairs[i][0].strip() for i in order]
@@ -175,10 +212,10 @@ def build(
 
     # ---- 时长探测 ----
     durations: list[float] = []
-    for asset in assets:
-        dur = probe_safe(asset.local_path, default=0.0)
+    for path in result.audio_paths:
+        dur = probe_safe(path, default=0.0)
         if dur <= 0:
-            dur = audio_duration_fallback(asset.local_path)
+            dur = audio_duration_fallback(path)
         durations.append(dur)
     result.durations = durations
 
@@ -227,8 +264,8 @@ def build(
 BGM_LIBRARY_SIZE = 3
 
 
-def _tts_key(text: str, voice_id: str, speed: float) -> str:
-    raw = f"{config.TTS_MODEL}|{voice_id}|{speed:.3f}|{text}"
+def _tts_key(text: str, voice_id: str, speed: float, emotion: str = "") -> str:
+    raw = f"{config.TTS_MODEL}|{voice_id}|{speed:.3f}|{emotion}|{config.TTS_PITCH}|{text}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
@@ -240,7 +277,19 @@ def tts_cache_dir() -> Path:
     return cache_root() / "tts"
 
 
-def cached_tts(texts: Sequence[str], *, voice_id: str, speed: float,
+def usable_clips(assets: Sequence[Any]) -> list[Any]:
+    """丢掉几乎没声音的音频 —— 交给补跑循环重合成,而不是放进成片变成哑拍。
+    探测不出时长(没 ffprobe)不下判断。"""
+    out = []
+    for a in assets:
+        if probe_safe(a.local_path, default=audio.MIN_CLIP_SECONDS) < audio.MIN_CLIP_SECONDS:
+            log.warning("TTS 音频过短,按缺句处理:%s", a.local_path)
+            continue
+        out.append(a)
+    return out
+
+
+def cached_tts(texts: Sequence[str], *, voice_id: str, speed: float, emotion: str = "",
                dest_dir: Path) -> dict[int, audio.AudioAsset]:
     """命中缓存的句子复制进项目目录,返回 {句子位置: 音频}。"""
     out: dict[int, audio.AudioAsset] = {}
@@ -248,9 +297,16 @@ def cached_tts(texts: Sequence[str], *, voice_id: str, speed: float,
     if not cache.is_dir():
         return out
     for i, text in enumerate(texts):
-        src = next((p for p in cache.glob(_tts_key(text, voice_id, speed) + ".*")
+        src = next((p for p in cache.glob(_tts_key(text, voice_id, speed, emotion) + ".*")
                     if p.stat().st_size > 0), None)
         if src is None:
+            continue
+        if probe_safe(src, default=audio.MIN_CLIP_SECONDS) < audio.MIN_CLIP_SECONDS:
+            # 缓存里有文件但几乎没声音:当没命中,顺手清掉,别让坏句子永远复用
+            try:
+                src.unlink()
+            except OSError:
+                pass
             continue
         dest = dest_dir / f"tts_cached_{i:03d}{src.suffix}"
         try:
@@ -262,7 +318,7 @@ def cached_tts(texts: Sequence[str], *, voice_id: str, speed: float,
 
 
 def store_tts(texts: Sequence[str], by_pos: dict[int, Any], *, voice_id: str,
-              speed: float) -> None:
+              speed: float, emotion: str = "") -> None:
     """新合成的句子写进缓存。写失败无所谓,下次再合成而已。"""
     cache = tts_cache_dir()
     for i, a in by_pos.items():
@@ -273,9 +329,94 @@ def store_tts(texts: Sequence[str], by_pos: dict[int, Any], *, voice_id: str,
             continue
         try:
             cache.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, cache / f"{_tts_key(texts[i], voice_id, speed)}{src.suffix}")
+            shutil.copyfile(src, cache / f"{_tts_key(texts[i], voice_id, speed, emotion)}{src.suffix}")
         except OSError:
             pass
+
+
+def _verified_mark(text: str, voice_id: str, speed: float, emotion: str) -> Path:
+    return cache_root() / "tts_verified" / _tts_key(text, voice_id, speed, emotion)
+
+
+def is_verified(text: str, *, voice_id: str, speed: float, emotion: str = "") -> bool:
+    """这句缓存转写核对过了(下次命中不用再复核)。"""
+    return _verified_mark(text, voice_id, speed, emotion).is_file()
+
+
+def _mark_verified(text: str, voice_id: str, speed: float, emotion: str) -> None:
+    mark = _verified_mark(text, voice_id, speed, emotion)
+    try:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.touch()
+    except OSError:
+        pass
+
+
+def drop_cached(text: str, *, voice_id: str, speed: float, emotion: str = "") -> None:
+    """质检判错的句子:清掉缓存与核对标记,别让坏音频被下个项目继续复用。"""
+    key = _tts_key(text, voice_id, speed, emotion)
+    cache = tts_cache_dir()
+    paths = list(cache.glob(key + ".*")) if cache.is_dir() else []
+    for p in (*paths, _verified_mark(text, voice_id, speed, emotion)):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def run_voice_qa(project_id: str, texts: Sequence[str], originals: Sequence[str],
+                 by_pos: dict[int, Any], hint: set[int], result: NarrationResult, *,
+                 voice_id: str, speed: float, emotion: str, audio_dir: Path) -> None:
+    """语音质检:不合格的句子清缓存重合成(最多 VOICE_QA_RETRY_ROUNDS 轮),
+    仍不合格的记进 `result.qa_failed`,由 `time_beats` 拦在门禁 A。质检本身出错不拦出片。"""
+    from . import voice_qa
+
+    rounds = max(0, config.VOICE_QA_RETRY_ROUNDS)
+    redone: set[int] = set()
+    qa = None
+    try:
+        for rnd in range(rounds + 1):
+            clips = {i: Path(a.local_path) for i, a in by_pos.items()}
+            qa = voice_qa.check(texts, clips, originals=originals, hint=hint)
+            for i in qa.verified:
+                _mark_verified(texts[i], voice_id, speed, emotion)
+            bad = qa.errors
+            if not bad or rnd == rounds:
+                break
+            log.warning("语音质检:第 %s 句不合格,清缓存重合成(第 %d 轮)",
+                        [i + 1 for i in bad[:10]], rnd + 1)
+            for i in bad:
+                drop_cached(texts[i], voice_id=voice_id, speed=speed, emotion=emotion)
+            try:
+                fresh = audio.synthesize_batch(
+                    [texts[i] for i in bad], voice_id=voice_id, speed=speed,
+                    emotion=emotion or None, output_dir=audio_dir, file_prefix=f"tts_qa{rnd + 1}")
+            except Exception as exc:  # noqa: BLE001
+                result.warnings.append(f"语音质检重合成失败:{exc}")
+                break
+            for n, a in enumerate(usable_clips(fresh)):
+                pos = bad[a.index if getattr(a, "index", -1) >= 0 else n]
+                by_pos[pos] = a
+                redone.add(pos)
+                hint.add(pos)
+            store_tts(texts, {i: by_pos[i] for i in redone}, voice_id=voice_id, speed=speed,
+                      emotion=emotion)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("语音质检异常,跳过:%s", exc)
+        result.warnings.append(f"语音质检未能完成:{exc}")
+        return
+    if qa is None:
+        return
+    result.qa_failed = qa.errors
+    report = qa.to_dict()
+    report["redone"] = sorted(redone)
+    report["sentences"] = len(texts)
+    result.qa_report = report
+    if not qa.asr_available:
+        result.warnings.append("语音质检:未装 faster-whisper,只做了信号检查(pip install faster-whisper 可加转写复核)")
+    if qa.errors:
+        result.warnings.append(f"语音质检:第 {[i + 1 for i in qa.errors[:10]]} 句重做后仍不合格")
+    db.write_json(project_id, "voice_qa.json", report)
 
 
 def bgm_library_dir(prompt: str) -> Path:
@@ -380,6 +521,35 @@ def _pick_font_name() -> str:
     if (fonts / "simhei.ttf").is_file():
         return "SimHei"
     return "Arial"
+
+
+#: 去掉 TTS 自带的首尾静音(实测句间会出现 0.7 秒的空档),留 80ms 免得吃字。
+#: 先去头,反转去尾再反转回来
+_TRIM_SILENCE = (
+    "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.08,"
+    "areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.08,areverse"
+)
+
+
+def trim_clip(src: Path, dest: Path) -> Path:
+    """裁掉首尾静音,存成 wav。失败或裁完几乎没剩就原样用 src。
+    必须在量时长之前做:字幕和画面时间轴按这里的实际时长累加,和拼接用的是同一份文件。"""
+    if not config.FFMPEG_PATH:
+        return src
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [str(config.FFMPEG_PATH), "-y", "-v", "error", "-i", str(src),
+             "-af", _TRIM_SILENCE, "-ar", "48000", str(dest)],
+            capture_output=True, text=True, timeout=120)
+    except Exception:  # noqa: BLE001
+        return src
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size == 0:
+        return src
+    if probe_safe(dest, default=0.0) < audio.MIN_CLIP_SECONDS:
+        return src
+    return dest
 
 
 def _concat_audio(paths: Sequence[Path], dest: Path) -> tuple[bool, str]:

@@ -119,7 +119,19 @@ PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "2026-10-31")
 #: 单条 TTS 文本的最大汉字数。过长会导致语调疲劳与断句错误。
 MAX_TTS_CHARS = 30
 #: 句间停顿(毫秒)
-SENTENCE_GAP_MS = 300
+SENTENCE_GAP_MS = 220
+#: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪空 = 不传(试听后再定)
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.12"))
+TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
+TTS_PITCH = int(os.getenv("TTS_PITCH", "0"))
+#: 语音质检:每句合成后自动核对(信号检查 + 对可疑句转写比对),不合格自动重合成,
+#: 仍不合格拦在门禁 A。VOICE_QA_ASR=0 只做信号检查;转写需要 `pip install faster-whisper`,
+#: 按需加载、用完释放,CPU 跑 base 模型
+VOICE_QA = os.getenv("VOICE_QA", "1") != "0"
+VOICE_QA_ASR = os.getenv("VOICE_QA_ASR", "auto") != "0"
+VOICE_QA_MODEL = os.getenv("VOICE_QA_MODEL", "base")
+VOICE_QA_MIN_SIMILARITY = float(os.getenv("VOICE_QA_MIN_SIMILARITY", "0.2"))
+VOICE_QA_RETRY_ROUNDS = int(os.getenv("VOICE_QA_RETRY_ROUNDS", "2"))
 #: ASS 字幕单行最大汉字数
 MAX_SUBTITLE_LINE_CHARS = 16
 #: 成片响度目标

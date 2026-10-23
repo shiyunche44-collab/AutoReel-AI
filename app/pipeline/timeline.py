@@ -47,7 +47,33 @@ def total_duration(durations: Sequence[float]) -> float:
 # --------------------------------------------------------------------------
 # 句子切分
 # --------------------------------------------------------------------------
-_SENTENCE_END = "。!?!?;;"
+#: 句末标点。全角 ！？； 必须列出来(用转义写,免得编辑器把它显示成半角看不出差别):
+#: LLM 写的稿子全是全角,漏了它们长句就找不到断点,被硬切在词中间
+_SENTENCE_END = "。！？；!?;"
+#: 超长句的二次切分断点
+_CLAUSE_BREAK = ",，、；：;:"
+_WORD_RE = re.compile(r"[0-9A-Za-z一-鿿]")
+
+
+def _has_word(s: str) -> bool:
+    return bool(_WORD_RE.search(s))
+
+
+def _split_long(s: str, limit: int) -> list[str]:
+    """超长句在逗号处切:每次挑 limit 字以内最靠后的断点,没有断点才硬切。"""
+    out: list[str] = []
+    rest = s
+    while len(rest) > limit:
+        window = rest[: limit + 1]
+        cuts = [i + 1 for i, ch in enumerate(window) if ch in _CLAUSE_BREAK]
+        # 断点太靠前会切出几个字的碎句,朗读像卡壳;太短的不要
+        good = [c for c in cuts if c >= limit // 2]
+        cut = max(good) if good else (max(cuts) if cuts and max(cuts) >= 6 else limit)
+        out.append(rest[:cut].strip())
+        rest = rest[cut:].strip()
+    if rest:
+        out.append(rest)
+    return out
 
 
 def split_sentences(text: str, max_chars: int | None = None) -> list[str]:
@@ -55,6 +81,7 @@ def split_sentences(text: str, max_chars: int | None = None) -> list[str]:
 
     中文口播的经验上限是 30 字:超过后语调会疲劳、停顿会变得机械。
     超过上限的句子在逗号/顿号处二次切分,尽量不破坏语义。
+    没有文字的片段(单独一个"。")不会成句:合成出来是空音频,那一拍就没有配音。
     """
     limit = max_chars or config.MAX_TTS_CHARS
     text = (text or "").strip()
@@ -76,22 +103,17 @@ def split_sentences(text: str, max_chars: int | None = None) -> list[str]:
         s = sentence.strip()
         if not s:
             continue
-        if len(s) <= limit:
-            out.append(s)
-            continue
-        # 二次切分:优先在逗号处断开
-        piece = ""
-        for ch in s:
-            piece += ch
-            if len(piece) >= limit and ch in ",、,;:":
-                out.append(piece.strip())
-                piece = ""
-            elif len(piece) >= limit + 6:
-                out.append(piece.strip())
-                piece = ""
-        if piece.strip():
-            out.append(piece.strip())
-    return [s for s in out if s]
+        pieces = [s] if len(s) <= limit else _split_long(s, limit)
+        for piece in pieces:
+            if not piece:
+                continue
+            if not _has_word(piece):
+                # 纯标点:并回上一句,没有上一句就丢掉
+                if out:
+                    out[-1] += piece
+                continue
+            out.append(piece)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -165,6 +187,13 @@ def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str
         raw = match.group(0)
         return _decimal_to_chinese(raw)
 
+    # 千分位去逗号("1,299" 否则读成"一,二百九十九");年份逐位读(2025 → 二零二五);
+    # 百分号读"百分之"在数字前;区间 50-60 读"到"
+    text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
+    text = re.sub(r"(?<!\d)((?:19|20)\d{2})(?=年)",
+                  lambda m: "".join(_CN_DIGITS[int(c)] for c in m.group(1)), text)
+    text = re.sub(r"(\d+(?:\.\d+)?)\s*[%％]", lambda m: "百分之" + m.group(1), text)
+    text = re.sub(r"(?<=\d)\s*[-~～–—]\s*(?=\d)", "到", text)
     out = _NUM_RE.sub(repl, text)
     # 常见口语化读法修正。顺序很重要:必须先匹配 kWh,否则会被 Wh 先吃掉变成 "k瓦时"。
     out = out.replace("km/h", "公里每小时").replace("KM/H", "公里每小时")

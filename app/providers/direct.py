@@ -177,7 +177,7 @@ def tts_batch(args: dict, timeout: float) -> dict:
     errors: list[str] = []
     for req in args.get("requests") or []:
         voice = {"voice_id": req.get("voice_id"), "speed": req.get("speed", 1),
-                 "vol": req.get("volume", 1), "pitch": 0}
+                 "vol": req.get("volume", 1), "pitch": config.TTS_PITCH}
         if req.get("emotion"):
             voice["emotion"] = req["emotion"]
         body = {

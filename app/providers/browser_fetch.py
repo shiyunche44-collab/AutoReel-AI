@@ -35,6 +35,8 @@ FALLBACK_STATUS = frozenset({403, 412, 418, 429, 503, 521})
 
 #: 同一 host 两次浏览器请求的最小间隔(秒)
 _MIN_INTERVAL = 2.0
+#: 风控严的站单独放慢(后缀匹配):易车一分钟内连开几页就提示「操作过于频繁」
+_HOST_INTERVAL = {"yiche.com": 8.0}
 #: 浏览器抓到的结果缓存多久
 _CACHE_TTL = 24 * 3600
 #: 同一 host 浏览器连续失败(非验证码)几次后,本进程内不再试
@@ -47,7 +49,7 @@ _BLOCK_MARKERS = (
     "cf-challenge", "challenge-platform", "cf-turnstile", "g-recaptcha", "h-captcha",
     "anomaly-modal",
     "安全验证", "访问验证", "人机验证", "滑动验证", "请完成验证", "请按住滑块",
-    "访问过于频繁", "请求过于频繁", "异常访问",
+    "访问过于频繁", "请求过于频繁", "操作过于频繁", "异常访问",
 )
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _TITLE_MARKERS = ("验证", "captcha", "just a moment", "attention required", "access denied", "登录")
@@ -178,8 +180,13 @@ def _cache_write(url: str, body: bytes) -> None:
 
 
 # -- 抓取 --------------------------------------------------------------------
+def _interval(host: str) -> float:
+    return max((v for k, v in _HOST_INTERVAL.items() if host == k or host.endswith("." + k)),
+               default=_MIN_INTERVAL)
+
+
 def _throttle(host: str) -> None:
-    wait = _last_hit.get(host, 0.0) + _MIN_INTERVAL - time.time()
+    wait = _last_hit.get(host, 0.0) + _interval(host) - time.time()
     if wait > 0:
         time.sleep(wait)
     _last_hit[host] = time.time()

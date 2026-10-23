@@ -401,3 +401,82 @@ def test_stat_note_only_uses_numbers_from_narration():
     assert explainer.ground_note("够跑300公里", narration) == ""          # 旁白没说过 300
     assert explainer.ground_note("这是一个特别长的注解超过了字数上限的", narration) == ""
     assert explainer.ground_note(None, narration) == ""
+
+
+def test_fit_filter_crops_source_bars_first():
+    """源自带的黑边最先裁,后面的比例都按裁完的画面算。"""
+    bars = "crop=1920:752:0:130"
+    out = explainer._fit_filter(1920, 1080, 0.0, 0.0, bars)
+    assert out.startswith(f"[0:v]{bars},")
+    assert explainer._fit_filter(1920, 1080, 0.22, 0.14, bars).startswith(f"[0:v]{bars},crop=")
+    assert explainer._fit_filter(1920, 1080) == explainer._fit_filter(1920, 1080, 0.0, 0.0, "")
+
+
+def test_letterbox_crop_detects_bars_and_ignores_full_frame(tmp_path):
+    """宽银幕片(上下黑边)被检出;满画幅片不裁。"""
+    import shutil
+    import subprocess
+
+    from app import config
+
+    ff = str(config.FFMPEG_PATH or shutil.which("ffmpeg") or "")
+    if not ff:
+        pytest.skip("没有 ffmpeg")
+    full = tmp_path / "full.mp4"
+    boxed = tmp_path / "boxed.mp4"
+    subprocess.run([ff, "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=3:r=10",
+                    "-pix_fmt", "yuv420p", str(full)], check=True)
+    subprocess.run([ff, "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=640x360:d=3:r=10",
+                    "-vf", "pad=640:360:0:0,drawbox=0:0:640:60:black:fill,drawbox=0:300:640:60:black:fill",
+                    "-pix_fmt", "yuv420p", str(boxed)], check=True)
+    explainer.letterbox_crop.cache_clear()
+    assert explainer.letterbox_crop(str(full)) == ""
+    got = explainer.letterbox_crop(str(boxed))
+    assert got.startswith("crop=640:") and ":0:" in got
+
+
+def _cap_world(n=10, section="三电性能"):
+    """n 拍全是 broll,每拍引用 f_1 / f_2;偶数拍旁白带数字,奇数拍是观点。"""
+    segs = [ScriptSegment(idx=i, section=section,
+                          text="差了 228 公里。" if i % 2 == 0 else "这钱花得值。",
+                          fact_refs=["f_1", "f_2"]) for i in range(n)]
+    specs = [ShotSpec(idx=i, section=section, visual_zh="[broll] x", narration_zh=segs[i].text,
+                      layout="broll", duration=3.0) for i in range(n)]
+    return specs, segs
+
+
+def test_enforce_broll_cap_brings_broll_down_to_cap_with_grounded_panels():
+    from app.pipeline import rhythm
+
+    profile = load_profile("auto_long")
+    specs, segs = _cap_world()
+    out = explainer.enforce_broll_cap(specs, segs, _facts(), profile)
+    assert sum(1 for s in out if s.layout == "broll") <= max(1, int(10 * rhythm.BROLL_RATIO_MAX))
+    panels = [s for s in out if s.layout == "panel"]
+    assert panels
+    cited = {"f_1", "f_2"}
+    for s in panels:  # 上屏的行只来自这一拍引用过的事实
+        assert {r["fact_id"] for r in s.overlay["rows"]} <= cited
+    # 相邻两拍的画面指纹不一样,不会同一屏连着杵
+    sigs = [rhythm._overlay_signature(s) for s in out]
+    assert all(a != b for a, b in zip(sigs, sigs[1:]) if a[0] == "panel")
+
+
+def test_enforce_broll_cap_leaves_beats_without_refs_alone():
+    profile = load_profile("auto_long")
+    specs, segs = _cap_world()
+    for seg in segs:
+        seg.fact_refs = []
+    out = explainer.enforce_broll_cap(specs, segs, _facts(), profile)
+    assert all(s.layout == "broll" for s in out)  # 没有引用就没有依据,不编
+
+
+def test_enforce_broll_cap_skips_foreign_comparison_facts_outside_comparison():
+    profile = load_profile("auto_long")
+    specs, segs = _cap_world(section="三电性能")
+    rival = Fact(id="f_r", claim="极氪 7X 10 分钟补能 800V", source_tool="t",
+                 confidence="high", compare_with="极氪 7X")
+    for seg in segs:
+        seg.fact_refs = ["f_r"]
+    out = explainer.enforce_broll_cap(specs, segs, [rival], profile)
+    assert all(s.layout == "broll" for s in out)

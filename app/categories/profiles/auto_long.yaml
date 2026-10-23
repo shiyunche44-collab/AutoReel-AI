@@ -646,6 +646,9 @@ voice_id: male-qn-jingying
 # 车企官网车型页 + 媒体中心的大图(只认点名这台车的页面)。
 # 懂车帝(dongchedi)图库要登录(素材库页「登录懂车帝」):官方图 + 外观 / 内饰 1920 宽大图;
 # 没登录时这一项跳过、不记成抓过,登录后下次重建自动补上
+# 易车(yiche)代码已接入但暂未启用:对脚本回验证码,且被「操作过于频繁」限制过。
+# 能正常打开后:python -m scripts.browser_unblock https://car.yiche.com/ 过一次验证码,
+# 再把 yiche 加回下面这行(没过时会跳过、不记成抓过,下次补上)
 galleries: [autohome, official_site, dongchedi]
 
 # 热点选题口径(字段说明见 app/categories.TrendSpec)。品牌兜底词另外并上 official_sites 别名

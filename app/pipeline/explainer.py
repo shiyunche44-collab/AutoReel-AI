@@ -23,6 +23,7 @@ broll 拍按规则自动轮换三种样式(不经 LLM):全屏 / 左上角角标 
 """
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import shutil
@@ -51,6 +52,8 @@ HOOK_CUT = 1.0
 MAX_CARD_RUN = 2
 #: 概念动画全片最多几拍(每拍要渲染半分钟左右,也不该喧宾夺主)
 MAX_CONCEPT = 6
+#: 连着最多几拍 broll(都是底图换镜头,没有任何叠加层)。再长就是整段静默
+MAX_BROLL_RUN = 3
 #: broll 拍的样式,按出现顺序轮换(见 assign_broll_styles)
 BROLL_STYLES: tuple[str, ...] = ("plain", "lower_third", "split")
 #: 分屏至少要这么长,太短的拍几栏还没滑完就切走了
@@ -486,6 +489,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
     # broll 兜底:这一拍讲的数字还有事实支撑,就把它放上屏(见 rescue_broll)
     specs = rescue_broll(specs, segments, facts, profile)
     specs = enforce_rhythm(specs, profile)
+    # broll 仍超三成:对超出的拍强制上屏它引用过的事实(见 enforce_broll_cap)
+    specs = enforce_broll_cap(specs, segments, facts, profile)
     # 概念动画是全片视觉质量最高的部分,太少了就补(见 promote_concepts)
     specs = promote_concepts(specs, profile)
     return assign_broll_styles(specs)
@@ -714,6 +719,140 @@ def rescue_broll(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
     return specs
 
 
+def _headline_value(claim: str) -> str:
+    """事实原文里第一个带单位的数字(没有带单位的,取第一个数字)。取不到返回空串。"""
+    first = ""
+    for m in re.finditer(r"\d+(?:\.\d+)?", claim or ""):
+        tail = claim[m.end():]
+        for u in _UNITS:
+            if tail.startswith(u):
+                return m.group(0) + u
+        first = first or m.group(0)
+    return first
+
+
+def _cap_rows(seg: ScriptSegment, facts: Sequence[Fact], comparison: bool,
+              offset: int) -> list[dict]:
+    """这一拍引用过的事实里,挑出能上屏的行。
+
+    和 `auto_panel` 的区别:不要求数字在旁白里说过 —— 推导数字(「差了 228 公里」)
+    和观点拍(「这钱花得值」)说的话对不上事实原文的取值,但它引用的事实就是它的依据。
+    `offset` 让同一批引用连着几拍时各拍轮着展示不同的事实,不重复同一屏。
+    """
+    by_id = {f.id: f for f in facts}
+    pool: list[tuple[Fact, str]] = []
+    for ref in seg.fact_refs or []:
+        f = by_id.get(ref)
+        if f is None or not f.enabled or f.confidence == "low":
+            continue
+        if f.compare_with and not comparison:
+            continue
+        value = _headline_value(f.claim)
+        if value:
+            pool.append((f, value))
+    if not pool:
+        return []
+    k = offset % len(pool)
+    pool = pool[k:] + pool[:k]
+    return [{"label": _fact_label(f), "values": [v], "fact_id": f.id} for f, v in pool[:2]]
+
+
+def enforce_broll_cap(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
+                      facts: Sequence[Fact], profile: CategoryProfile) -> list[ShotSpec]:
+    """broll 拍数超三成上限时,把超出的那部分换成它引用过的事实的面板。
+
+    顺序:先旁白带(推导)数字的拍,再没数字但有引用的拍;每档里先隔拍转换
+    (不连着出现一样的画面,也缩短静默区间),不够再放开相邻限制。视觉语法里没有
+    面板的段(竞品对比 / 结论 / 开场)只在前面都做完仍超标时才破例,
+    且只展示这一拍自己引用的事实。核对不过(`cards.ground`)的行不上屏。
+    """
+    cap = max(1, int(len(specs) * rhythm.BROLL_RATIO_MAX))
+    excess = sum(1 for s in specs if s.layout == SAFE_LAYOUT) - cap
+    forced: set[int] = set()
+
+    def candidates(tier_numeric: bool, grammar_ok: bool) -> list[int]:
+        out = []
+        for n, s in enumerate(specs):
+            if s.layout != SAFE_LAYOUT or n >= len(segments) or not segments[n].fact_refs:
+                continue
+            has_panel = "panel" in (profile.section(s.section).layouts or ())
+            if has_panel != grammar_ok:
+                continue
+            if bool(numbers_in(segments[n].text or "")) != tier_numeric:
+                continue
+            out.append(n)
+        return out
+
+    def convert(n: int) -> bool:
+        seg, spec = segments[n], specs[n]
+        from .script_gen import _is_comparison_section
+        comparison = _is_comparison_section(spec.section)
+        offset = 0
+        m = n - 1
+        while m >= 0 and m in forced and specs[m].section == spec.section:
+            offset += 1
+            m -= 1
+        # 前一拍已经是同一批引用的面板:轮换行;和前后任一拍的画面指纹一样就放弃
+        rows = _cap_rows(seg, facts, comparison, offset)
+        overlay = _panel_from_rows(rows, facts) if rows else None
+        if not overlay:
+            return False
+        trial = spec.model_copy(update={"layout": "panel", "overlay": overlay, "card": None})
+        sig = rhythm._overlay_signature(trial)
+        if any(0 <= m < len(specs) and rhythm._overlay_signature(specs[m]) == sig
+               for m in (n - 1, n + 1)):
+            return False
+        spec.layout, spec.overlay, spec.card = "panel", overlay, None
+        spec.visual_zh = re.sub(r"^\[[^\]]*\]", "[panel]", spec.visual_zh)
+        forced.add(n)
+        return True
+
+    def run_len(n: int) -> int:
+        """第 n 拍所在的连续 broll 串有多长。"""
+        lo = hi = n
+        while lo > 0 and specs[lo - 1].layout == SAFE_LAYOUT:
+            lo -= 1
+        while hi + 1 < len(specs) and specs[hi + 1].layout == SAFE_LAYOUT:
+            hi += 1
+        return hi - lo + 1
+
+    def ordered(tier_numeric: bool, grammar_ok: bool) -> list[int]:
+        # 长 broll 串里的拍优先:整段静默比零星几拍更伤节奏
+        return sorted(candidates(tier_numeric, grammar_ok), key=lambda n: (-run_len(n), n))
+
+    for grammar_ok in (True, False):
+        for tier_numeric in (True, False):
+            for spaced in (True, False):
+                if excess <= 0:
+                    break
+                for n in ordered(tier_numeric, grammar_ok):
+                    if excess <= 0:
+                        break
+                    if specs[n].layout != SAFE_LAYOUT:
+                        continue
+                    if spaced and ((n - 1) in forced or (n + 1) in forced):
+                        continue
+                    if convert(n):
+                        excess -= 1
+    # 上限够了也不放过过长的 broll 串:连着 4 拍以上没有任何叠加层,
+    # 就是整段静默(复盘:每 5–6 秒必须有一次画面变化)—— 串中间的拍破例转换
+    for _ in range(len(specs)):
+        longest = [n for n in range(len(specs))
+                   if specs[n].layout == SAFE_LAYOUT and run_len(n) >= MAX_BROLL_RUN]
+        if not longest:
+            break
+        longest.sort(key=lambda n: (-run_len(n), n))
+        for n in longest:
+            lo = n
+            while lo > 0 and specs[lo - 1].layout == SAFE_LAYOUT:
+                lo -= 1
+            if n - lo >= 1 and n < len(segments) and segments[n].fact_refs and convert(n):
+                break
+        else:
+            break
+    return specs
+
+
 def _demote(spec: ShotSpec, profile: CategoryProfile | None = None) -> None:
     """把这一拍降级:能用已核过的数据改成面板就改,否则退回 broll。
 
@@ -887,6 +1026,12 @@ def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
         # 宁可停在这里让人再点一次确认,也不出一部没有结论的片子
         raise RuntimeError("旁白有句子没合成出来,请重新确认门禁 A 重试:"
                            + "; ".join(nar.warnings))
+    if nar.qa_failed:
+        # 语音质检:自动重合成后仍读错 / 错位 / 哑句的句子,不带着坏音频去渲染
+        why = {f["index"]: f["reason"] for f in nar.qa_report.get("findings", [])
+               if f.get("level") == "error"}
+        detail = ";".join(f"第 {i + 1} 句 {why.get(i, '不合格')}" for i in nar.qa_failed[:8])
+        raise RuntimeError(f"旁白质检未通过:{detail}。已自动重合成仍不合格,请改写这几句后重新确认门禁 A")
     durations = beat_durations(nar.cues, len(specs))
     for s, d in zip(specs, durations):
         s.duration = d
@@ -922,20 +1067,56 @@ def _ff(args: Sequence[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return render_mod._run(["-y", "-v", "error", *args], timeout=timeout)
 
 
-def _fit_filter(w: int, h: int, crop_bottom: float = 0.0, crop_edge: float = 0.0) -> str:
+#: 黑边小于这个比例就不裁(压缩噪点、一两像素的边)
+_BARS_MIN_RATIO = 0.04
+
+
+@functools.lru_cache(maxsize=256)
+def letterbox_crop(path: str) -> str:
+    """源视频自带的黑边(宽银幕官方片上下各一条):返回 `crop=w:h:x:y`,没有就返回空串。
+
+    不裁的话,黑边会被当作画面缩进 16:9 画幅,成片里车被压在一条窄带里。
+    `reset=0` 让检测框只增不减,整片取各帧非黑区域的并集 —— 夜景、暗场单帧会被
+    误判成黑边,取并集就不会把暗画面裁掉。按文件缓存:同一个源只测一次。
+    """
+    ffmpeg = str(config.FFMPEG_PATH or "ffmpeg")
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-v", "info", "-t", "180", "-i", path, "-an",
+             "-vf", "fps=1,cropdetect=limit=24:round=2:reset=0:skip=0", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    last = re.findall(r"crop=(\d+):(\d+):(\d+):(\d+)", proc.stderr or "")
+    size = re.search(r"Stream #0:\d+.*?Video:.*?, (\d{3,5})x(\d{3,5})", proc.stderr or "")
+    if not last or not size:
+        return ""
+    cw, ch, cx, cy = (int(x) for x in last[-1])
+    iw, ih = int(size.group(1)), int(size.group(2))
+    if cw <= 0 or ch <= 0 or cw > iw or ch > ih:
+        return ""
+    if (iw - cw) / iw < _BARS_MIN_RATIO and (ih - ch) / ih < _BARS_MIN_RATIO:
+        return ""
+    return f"crop={cw}:{ch}:{cx}:{cy}"
+
+
+def _fit_filter(w: int, h: int, crop_bottom: float = 0.0, crop_edge: float = 0.0,
+                bars: str = "") -> str:
     """任意比例的视频放进 w×h:前景完整缩进画幅,空出的地方用同一画面放大模糊铺满。
     横屏源基本铺满,竖屏抖音片也不会被裁掉车头车尾。
 
     `crop_bottom` > 0(烧录字幕段):裁掉底部这一截后放大**铺满**画幅,不留模糊边 ——
     这类段基本是横屏评测,裁完再缩进画幅会上下各空出一条模糊带,一眼就是裁过的。
-    `crop_edge` > 0(第三方视频):先把四边各收一半这个比例,角上的台标就出了画。"""
+    `crop_edge` > 0(第三方视频):先把四边各收一半这个比例,角上的台标就出了画。
+    `bars`:源自带的黑边(见 `letterbox_crop`),最先裁掉,后面的比例都按裁完的画面算。"""
+    pre = f"{bars}," if bars else ""
     edge = (f"crop=trunc(iw*{1 - crop_edge:.3f}/2)*2:trunc(ih*{1 - crop_edge:.3f}/2)*2,"
             if crop_edge > 0 else "")
     if crop_bottom > 0:
-        return (f"[0:v]crop=iw:trunc(ih*{1 - crop_bottom:.3f}/2)*2:0:0,{edge}"
+        return (f"[0:v]{pre}crop=iw:trunc(ih*{1 - crop_bottom:.3f}/2)*2:0:0,{edge}"
                 f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
                 f"setsar=1,fps={render_mod.FPS},format=yuv420p")
-    return (f"[0:v]{edge}split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,"
+    return (f"[0:v]{pre}{edge}split[a][b];[a]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},boxblur=20:2[bg];[b]scale={w}:{h}:force_original_aspect_ratio=decrease[fg];"
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={render_mod.FPS},format=yuv420p")
 
@@ -947,7 +1128,8 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
                                         motion=motion, size=size)
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐。
     # 竖屏也照常裁烧录字幕:实拍只放在 16:9 的画面带里,和横屏是同一个比例
-    vf = _fit_filter(w, h, piece.crop_bottom, piece.crop_edge) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+    vf = _fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
+                     letterbox_crop(piece.path)) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -1077,7 +1259,8 @@ def concept_background(piece: library.Piece, seconds: float, size: tuple[int, in
     dest = work / "bg.mp4"
     w, h = size
     factor = max(1.0, seconds / max(0.1, piece.length))
-    vf = (_fit_filter(w, h, piece.crop_bottom, piece.crop_edge) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
+    vf = (_fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
+                      letterbox_crop(piece.path)) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
           f"tpad=stop_mode=clone:stop_duration={seconds:.3f}[v]")
     proc = _ff(["-ss", f"{piece.start:.3f}", "-t", f"{piece.length:.3f}", "-i", piece.path,
                 "-filter_complex", vf, "-map", "[v]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
