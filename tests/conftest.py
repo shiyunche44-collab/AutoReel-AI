@@ -24,3 +24,5 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     # 转写永远关,免得测试去加载模型
     monkeypatch.setattr(config, "VOICE_QA", False)
     monkeypatch.setattr(config, "VOICE_QA_ASR", False)
+    # 统一风格封面要联网生图;默认关,专门的测试自己打开
+    monkeypatch.setattr(config, "COVER_ART", False)

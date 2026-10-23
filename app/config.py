@@ -308,6 +308,10 @@ BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"
 BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
+#: 统一风格封面:MiniMax 生成的浅色影棚底 + 官图抠出的真车 + 大字标题。生图/抠图不成自动退回老封面;COVER_ART=0 关
+COVER_ART = os.getenv("COVER_ART", "1") not in ("0", "false", "False")
+#: 封面角落的账号署名(如「柒哥&车」),每张封面同一个位置,主页一排看过去认得出是同一个号;空 = 不署名
+COVER_BRAND = os.getenv("COVER_BRAND", "").strip()
 #: Connector 调用的默认超时
 CONNECTOR_TIMEOUT_DEFAULT = 180
 

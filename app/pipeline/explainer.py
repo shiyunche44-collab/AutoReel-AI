@@ -2009,16 +2009,27 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     # 没有官图才从成片抽帧。
     subject = str(project.get("subject") or "")
     still = library.cover_still(subject) if subject else None
-    cover = render_mod.build_cover(result.output_path, title, project_dir / aspect.cover_name(project),
-                                   subtitle=meta["subtitle"], size=size,
-                                   still=still, kicker=meta["kicker"])
+    # 包装先出:统一风格封面的大标题用包装里选中的那条
+    _make_packaging(project_id, profile, llm)
+    from . import cover_art, packaging
+
+    dest_a = project_dir / aspect.cover_name(project)
+    title_a = cover_art.pick_title(packaging.load(project_id), title)
+    art = cover_art.build(project_id, dest_a, size=size, title=title_a, subject=subject,
+                          kicker=meta["kicker"])
+    cover = Path(art["path"]) if art else render_mod.build_cover(
+        result.output_path, title, dest_a, subtitle=meta["subtitle"], size=size,
+        still=still, kicker=meta["kicker"])
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
                "cover_meta": meta, "cover_still": str(still) if still else None,
+               "cover_style": "art" if art else "legacy",
                "source_note": "画面素材:品牌官方宣传片与官方图片,仅作"
                f"{profile.vocab.subject_label}展示"}
+    if art:
+        payload["cover_art"] = {"a": art}
     db.write_json(project_id, "render.json", payload)
-    _make_packaging(project_id, profile, llm)
-    cover_b = _make_cover_b(project_id, project, title, meta, size, result.output_path, still)
+    cover_b = _make_cover_b(project_id, project, title, meta, size, result.output_path, still,
+                            art=art, title_a=title_a)
     if cover_b:
         payload["cover_b"] = cover_b
         db.write_json(project_id, "render.json", payload)
@@ -2026,12 +2037,14 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
 
 
 def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: tuple[int, int],
-                  video_path: Any, still_a: Any) -> dict | None:
+                  video_path: Any, still_a: Any, art: dict | None = None,
+                  title_a: str = "") -> dict | None:
     """封面 B:大字版。大字取自已校验的数字型标题 / 入门价 / 主论点(取不到就不出 B)。
 
     底图尽量换一张**看起来不同**的官图;池子里没有第二张就用同一张,并在记录里标 same_still。
+    `art`:A 版用了统一风格封面,B 也先试统一风格(两版不混风格;A 是老封面 B 也走老封面)。
     只是辅助物料:任何失败都不能让成片失败。"""
-    from . import packaging
+    from . import cover_art, packaging
 
     try:
         pkg = packaging.load(project_id)
@@ -2051,6 +2064,13 @@ def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: 
             caption = (packaging.hook_title(pkg.titles, hook)  # 大字出自哪条,说明文字就用哪条
                        or pkg.titles[min(max(int(pkg.picked.get("title", 0)), 0), len(pkg.titles) - 1)].text)
         dest = config.project_dir(project_id) / aspect.cover_name(project, "b")
+        made = cover_art.build(project_id, dest, size=size,
+                               title=cover_art.b_title(pkg, title_a or caption, hook),
+                               subject=subject, kicker=meta.get("kicker", ""), variant="b",
+                               hook=hook, exclude=[art["still"]]) if art else None
+        if made:
+            return {"path": made["path"], "hook": cover_art.usable_hook(hook), "style": "art",
+                    "tone": made["tone"], "source": made["source"], "still": made["still"]}
         cover = render_mod.build_cover(video_path, caption, dest, subtitle=meta.get("subtitle", ""),
                                        size=size, still=still, kicker=meta.get("kicker", ""),
                                        layout="hook", hook=hook)
