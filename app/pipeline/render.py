@@ -531,10 +531,29 @@ def build_cover(video_path: str | Path, title: str, dest: str | Path,
                 subtitle: str = "", size: tuple[int, int] | None = None,
                 still: str | Path | None = None, kicker: str = "",
                 layout: str = "title", hook: str = "") -> Path | None:
-    from .narration import make_cover
+    from .narration import cover_3x4_path, cover_4x3_path, make_cover
 
-    return make_cover(video_path, title, dest, subtitle, size=size, still=still, kicker=kicker,
-                      layout=layout, hook=hook)
+    dest = Path(dest)
+    out = make_cover(video_path, title, dest, subtitle, size=size, still=still, kicker=kicker,
+                     layout=layout, hook=hook)
+    out_w, out_h = size or (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT)
+    if out is None or out_h > out_w:  # 竖屏封面自己会带 3:4,不用补
+        return out
+    # 横屏老封面(没有可抠的白底官图时的兜底)也要有 4:3 / 3:4 的重排版:
+    # 抖音网页版要横 4:3 + 竖 3:4 两张,缺了就是把 16:9 居中硬裁、竖封面干脆让平台自动生成。
+    short = min(out_w, out_h)
+    for path, sz in ((cover_4x3_path(dest), (short * 4 // 3, short)),
+                     (cover_3x4_path(dest), (short, short * 4 // 3))):
+        try:
+            make_cover(video_path, title, path, subtitle, size=sz, still=still, kicker=kicker,
+                       layout=layout, hook=hook)
+        except Exception:  # noqa: BLE001 - 补的封面失败不能拦住成片
+            pass
+        # 竖屏分支会顺手多写一张 `<名>_3x4`,这里只要主文件
+        extra = cover_3x4_path(path)
+        if extra != path:
+            extra.unlink(missing_ok=True)
+    return out
 
 
 # --------------------------------------------------------------------------

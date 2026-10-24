@@ -123,8 +123,9 @@ def test_cover_build_cover_passes_through_still_and_kicker(tmp_path, monkeypatch
     seen = {}
 
     def _fake(video, title, dest, subtitle="", size=None, still=None, kicker="", layout="title", hook=""):
-        seen.update({"still": still, "kicker": kicker, "subtitle": subtitle, "size": size,
-                     "layout": layout, "hook": hook})
+        if not seen:  # 只看主封面那一次;后面是补 4:3 / 3:4 的调用
+            seen.update({"still": still, "kicker": kicker, "subtitle": subtitle, "size": size,
+                         "layout": layout, "hook": hook})
         return Path(dest)
 
     monkeypatch.setattr(narration, "make_cover", _fake)
@@ -202,3 +203,20 @@ def test_portrait_cover_breaks_title_at_comma_and_relays_3x4(tmp_path):
                          subtitle="多数人买标准版就够", size=(1080, 1920), still=still, kicker="小米YU7")
     assert Image.open(dest).size == (1080, 1920)
     assert Image.open(narration.cover_3x4_path(dest)).size == (1080, 1440)
+
+
+def test_landscape_fallback_cover_also_writes_4x3_and_3x4(tmp_path):
+    """横屏老封面(没有白底官图的兜底)也要带 4:3 / 3:4 重排版,抖音网页版要这两张。"""
+    from PIL import Image
+
+    from app.pipeline import render
+
+    still = tmp_path / "still.jpg"
+    Image.new("RGB", (1920, 1080), (90, 100, 120)).save(still)
+    dest = tmp_path / "cover.jpg"
+    got = render.build_cover("no-such-video.mp4", "封面标题测试", dest, "副标题",
+                             size=(1920, 1080), still=still)
+    assert got == dest
+    assert Image.open(narration.cover_4x3_path(dest)).size == (1440, 1080)
+    assert Image.open(narration.cover_3x4_path(dest)).size == (1080, 1440)
+    assert not narration.cover_3x4_path(narration.cover_3x4_path(dest)).exists()
