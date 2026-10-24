@@ -15,7 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
-from .grounding import YEAR_RE, arabicize, differing_measures, numbers_in
+from .grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band
 from . import variety
 from .timeline import narration_budget_chars
 
@@ -1072,14 +1072,17 @@ def compliance_lint(
     theme=None,
     thesis: str = "",
     variant: Mapping[str, Any] | None = None,
+    angle: str = "",
 ) -> list[LintIssue]:
     """机械校验脚本。error 级问题必须修复后才能进入分镜阶段。
 
-    `variant`:项目的开头 / 结尾写法,开场立场与结尾行动这两条按它查。"""
+    `variant`:项目的开头 / 结尾写法,开场立场与结尾行动这两条按它查。
+    `angle`:选题角度。里面写了价位段(价位段选购),句子里复述这个价位段不算要查出处的数字。"""
     issues: list[LintIssue] = []
     known_ids = {f.id for f in facts}
     by_id = {f.id: f for f in facts}
     principle_ids = {p.id for p in profile.principles}
+    band = price_band(angle)
     forbidden = list(profile.forbidden_terms)
     if theme is not None:
         forbidden.extend(theme.extra_forbidden_terms)
@@ -1101,7 +1104,7 @@ def compliance_lint(
 
         # 1. 数字必须有事实引用(年款年份除外)。原理条目不含数字,只引原理不算有出处
         fact_refs = [r for r in seg.fact_refs if r not in principle_ids]
-        if has_numeric_claim(text) and not fact_refs:
+        if has_numeric_claim(strip_band(text, band)) and not fact_refs:
             issues.append(
                 LintIssue(
                     seg.idx,

@@ -166,7 +166,8 @@ def create_project(payload: ProjectCreate) -> str:
             f"「{theme.label}」最长 {theme.max_duration}s,可选:"
             f"{list(profile.theme_durations(theme, project_aspect))}")
     if theme.requires_angle and not (payload.angle or "").strip():
-        raise PipelineError(f"「{theme.label}」要先填选题角度:这期只讲的那一个点")
+        what = "价位段和能源,如「10-15万纯电」" if theme.multi else "这期只讲的那一个点"
+        raise PipelineError(f"「{theme.label}」要先填选题角度:{what}")
     subjects = roundup_subjects(payload, theme) if theme.multi else []
     # 开头 / 结尾写法与中段顺序:用户指定的优先,否则避开同品类最近几条用过的
     project_id = new_id("p_")
@@ -428,7 +429,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
         # 发布简介由 publish.metadata 带上品类免责声明。
         issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
-                                            variant=_variant(project))
+                                            variant=_variant(project), angle=angle)
         blocking = [i for i in issues if i.is_error]
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
         _save_script(project_id, segments)
@@ -660,10 +661,12 @@ def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
     try:
         segments = _script(project_id)
         facts = _facts(project_id)
-        thesis = (db.get_project(project_id) or {}).get("thesis") or ""
+        row = db.get_project(project_id) or {}
+        thesis = row.get("thesis") or ""
     except Exception:  # noqa: BLE001 - 读不到脚本就别拦,交给后面报错
         return []
-    issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis)
+    issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
+                                        angle=row.get("angle") or "")
     out = [i.to_dict() for i in issues if i.is_error]
     # 节奏拦截线:分镜出来就能查的部分(拍数口径、连拍),赶在烧 TTS 之前拦住
     try:
@@ -775,7 +778,7 @@ def update_script(project_id: str, segments: list[ScriptSegment],
         profile, theme = _theme_of(project)
         issues = script_gen.compliance_lint(segments, profile, _facts(project_id), theme=theme,
                                            thesis=fields.get("thesis", project.get("thesis") or ""),
-                                           variant=_variant(project))
+                                           variant=_variant(project), angle=project.get("angle") or "")
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
         return [i.to_dict() for i in issues]
 

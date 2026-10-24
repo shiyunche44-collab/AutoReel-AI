@@ -124,6 +124,9 @@ class ThemeSpec:
     endings: tuple[str, ...] = ()
     #: 只在某几种开头 / 结尾下才进提示词的规则:(规则原文, "opening"|"ending", (id, ...))
     rule_when: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    #: 有车单的片型在建项目页的选题框标签 / 占位;空 = 前端按横评 / 对决给默认文案
+    roster_label: str = ""
+    roster_placeholder: str = ""
 
     @property
     def multi(self) -> bool:
@@ -936,6 +939,8 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         versus=versus,
         requires_angle=bool(raw.get("requires_angle", False)),
         max_duration=int(raw.get("max_duration", 0) or 0),
+        roster_label=str(raw.get("roster_label", "") or ""),
+        roster_placeholder=str(raw.get("roster_placeholder", "") or ""),
     )
 
 
@@ -1263,6 +1268,7 @@ def available_categories() -> list[dict[str, Any]]:
                  # 前端的 roundup = "要填车单"(横评与对决都要)
                  "roundup": t.multi, "versus": t.versus, "subject_count": list(t.subject_count),
                  "requires_angle": t.requires_angle, "max_duration": t.max_duration,
+                 "roster_label": t.roster_label, "roster_placeholder": t.roster_placeholder,
                  # 开头 / 结尾写法下拉(第一项 = 自动)
                  **_variety_options(t),
                  # 横评:每档时长最多放得下几台车(竖屏短档位放不下最多台数)

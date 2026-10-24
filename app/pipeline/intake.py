@@ -508,6 +508,27 @@ ROUNDUP_CONTEXT_CHARS = EXTRACT_CONTEXT_CHARS // 2
 #: 一台车的 product 事实少于这么多条,就算"缺事实",门禁 A 标红
 THIN_PRODUCT_FACTS = 3
 
+#: 懂车帝车型库正文里的指导价(car_lineup.render 的写法)
+_GUIDE_PRICE_RE = re.compile(r"厂商指导价\s*(\d+(?:\.\d+)?)万")
+
+
+def guide_prices(docs: Sequence[Any]) -> list[float]:
+    """一台车各在售版本的厂商指导价(万元),只看懂车帝车型库那份正文。"""
+    from ..providers import car_lineup
+
+    return [float(x) for d in docs if d.tool == car_lineup.TOOL and d.ok
+            for x in _GUIDE_PRICE_RE.findall(d.text or "")]
+
+
+def band_check(prices: Sequence[float], band: tuple[float, float]) -> dict[str, Any]:
+    """这台车的指导价和价位段的关系:有没有版本落在段内、几个版本超出。"""
+    lo, hi = band
+    return {
+        "price_range": f"{min(prices):g}-{max(prices):g}万",
+        "in_band": any(lo <= p <= hi for p in prices),
+        "over_band": sum(1 for p in prices if p > hi),
+    }
+
 
 def run_roundup(
     project_id: str,
@@ -536,6 +557,8 @@ def run_roundup(
     docs_payload: list[dict[str, Any]] = []
     requested = list(profile.sources_for(theme))
     errors: list[str] = []
+    # 价位段选购:角度里写了价位段,就拿懂车帝指导价核一下每台车在不在段内(只提示不拦)
+    band = grounding.price_band(angle)
     for entry in subjects:
         name = entry["name"]
         collected = collect_raw(profile, name, project_dir, theme)
@@ -576,6 +599,9 @@ def run_roundup(
             "derived": sum(1 for f in own if f.source_kind == "derived"),
             "stale_year_disabled": len(stale),
         }
+        prices = guide_prices(collected.docs)
+        if band and prices:
+            per_subject[name].update(band_check(prices, band))
 
     db.write_json(project_id, "facts_raw.json", docs_payload)
     db.write_json(project_id, "facts.json", [f.model_dump() for f in facts])
@@ -596,6 +622,14 @@ def run_roundup(
         ) if thin else None,
         "extract_error": "; ".join(errors) or None,
     }
+    if band:
+        off = [n for n, r in per_subject.items() if r.get("in_band") is False]
+        report["subjects_off_band"] = off
+        report["band_note"] = (
+            f"这几台车没有一个在售版本的指导价落在 {band[0]:g}-{band[1]:g} 万:"
+            + "、".join(f"{n}({per_subject[n]['price_range']})" for n in off)
+            + "。建议换车,或改选题角度里的价位段。"
+        ) if off else None
     db.write_json(project_id, "facts_report.json", report)
     return facts, report
 

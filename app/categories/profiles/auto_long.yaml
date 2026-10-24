@@ -131,6 +131,49 @@ themes:
           - {section: 适合谁, weight: 1, drop: 1}
       - {section: 横评结论, weight: 2, remainder: false}
 
+  # 价位段选购:「10-15万纯电怎么选」这类选题。先给这个价位段的选车标准,每台车只讲它在
+  # 这几条标准上站哪,结论按需求分流。选题角度写价位段 + 能源(建项目必填),车单 3-4 台。
+  priceband:
+    label: 价位段选购
+    # 建项目页选题框的标签与占位(不写就用横评 / 对决的默认文案)
+    roster_label: 价位段选题
+    roster_placeholder: 例:10-15万纯电车型怎么选
+    intent: >
+      围绕"这个预算该按什么标准选车"展开:开场点出价位段,给出 2-3 条这个价位最该看的标准
+      (续航口径、补能、空间、智驾与车机)→ 每台车先交代定位和售价,再讲它在这几条标准上站哪 →
+      结论按需求分流(通勤 / 家用 / 常跑长途各选谁)。标准是主线,车是例子。
+    requires_angle: true
+    subject_count: [3, 4]
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.product_news
+      - ifind.tech_news
+    script_rules:
+      - 开场给出的选车标准不超过 3 条,每条讲清为什么在这个价位重要;讲机理只能用原理清单(k_ 开头)。
+      - 开场除了选题角度里的价位段,一个数字都不写:不说"3 条标准"(说"看这几件事"),不写充电区间、续航、价格;
+        标准用大白话说清看什么(如「补能看快充从低电量充到八成要多久」),具体数字留给每台车自己的段落。
+      - 开场要点名这期拿哪几台车对照(车单里的车名照写)。
+      - 「最强」「第一」「最值」这类词一律不写,否定句也不行(不说"不是谁最强");结论换成"谁更对得上你的用法"。
+      - 后面每台车的段落都按开场那几条标准说,不要另起新标准;每段只讲段落序列里〔〕标注的那台车。
+      - 售价说指导价区间;某台车有版本超出选题角度里的价位段,就点明"顶配超出预算",不许假装都在段内。
+      - 车与车的比较只放在开场和结论;比较时每个数字都要引用它自己那台车的事实,口径(CLTC / 版本)不一致的数字不放在一起比。
+      - 结论按需求分流(如"天天通勤选谁""常跑长途选谁"),不说"谁最值""谁赢了""闭眼入"。
+      - 开场第一句不超过 18 字,直接抛出这个价位段最大的纠结;不说"大家好""今天来聊聊"。
+      - 缺点只能用原理条目里写明的"代价/边界",或事实清单里明确写到的问题;不许自己推测某台车的缺点。
+      - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+      - 段落序列里某台车没有「标准对照」段时,在它「车型定位」段里用一句话说清它在标准上的长板和适合谁。
+    openings: [question, conflict, number]
+    endings: [decision_card, pick_side, action]
+    # 竖屏 90s 只有 5 段容量:3 台车时每车只留「车型定位」;时长够时再给车加「标准对照」
+    blocks:
+      - {section: 价位段对比开场, weight: 1, remainder: false}
+      - per_subject:
+          - {section: 车型定位, weight: 1}
+          - {section: 标准对照, weight: 2, drop: 1}
+      - {section: 价位段对比结论, weight: 2, remainder: false}
+
   # 单点深挖:整期只讲一个点(选题角度就是这个点,建项目必填),讲透"是什么 → 为什么 →
   # 数字 → 代价 → 对谁有用"。只讲一个点的片子不拉长:最长 4 分钟。
   deepdive:
@@ -385,6 +428,27 @@ sections:
     layouts: [broll, highlight]
   横评结论:
     beat: 把几台车放在一起,按人群和用途给推荐
+    chapter: 结论
+    angle: exterior_45
+    layouts: [card, highlight, broll]
+    card: bars
+
+  # ---- 价位段选购(priceband)。每车的段落章节名由代码换成车名 ----
+  价位段对比开场:
+    beat: 第一句 18 字内抛出这个价位段最大的纠结,再给出 2-3 条选车标准、交代拿哪几台车对照
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  车型定位:
+    beat: 这台车卖多少钱(指导价区间)、在这个价位段里是什么定位
+    angle: exterior_45
+    layouts: [panel, highlight, broll]
+  标准对照:
+    beat: 按开场那几条标准,讲这台车哪条是长板、哪条是短板
+    angle: exterior_45
+    layouts: [stat, panel, highlight, concept, broll]
+  价位段对比结论:
+    beat: 按需求分流:通勤 / 家用 / 常跑长途各选谁,最后一句给行动
     chapter: 结论
     angle: exterior_45
     layouts: [card, highlight, broll]

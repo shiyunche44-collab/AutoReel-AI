@@ -140,8 +140,9 @@ function syncRoster() {
   $('#roster-field').classList.toggle('hidden', !on);
   const label = $('label[for="subject"]');
   if (on) {
-    label.textContent = t.versus ? '对决选题' : '横评选题';
-    $('#subject').placeholder = t.versus ? '例:小米YU7 vs 特斯拉Model Y' : '例:25 万级纯电 SUV 横评';
+    label.textContent = t.roster_label || (t.versus ? '对决选题' : '横评选题');
+    $('#subject').placeholder = t.roster_placeholder
+      || (t.versus ? '例:小米YU7 vs 特斯拉Model Y' : '例:25 万级纯电 SUV 横评');
     $('#subject-help').textContent = subjectHelp();
     const roster = $('#roster');
     while ($$('.roster-row', roster).length < rosterRange()[0]) roster.append(rosterRow());

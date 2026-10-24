@@ -88,6 +88,12 @@ VERSUS_RULE = """
    - 例外:1v1 对决选题(theme={name})的 subject 写对决标题(如「小米YU7 vs 特斯拉Model Y」),
      另给 subjects:正好 {lo} 款车的数组,写法同上,且是同价位、真会被放在一起纠结的两台。{n} 个选题里最多 1 个对决。"""
 
+#: 价位段选购(有车单、且必须写角度的横评类片型):角度写价位段,车单是这个价位段的车
+BAND_RULE = """
+   - 例外:{label}选题(theme={name})的 subject 写选题标题(8-20 字,如「10-15万纯电车型怎么选」),
+     angle 必须写明价位段和能源(如「10-15万纯电:续航和补能怎么取舍」),
+     另给 subjects:{lo}-{hi} 款热点里出现过、指导价落在这个价位段的车。{n} 个选题里最多 1 个{label}。"""
+
 #: 必须有角度的片型(单点深挖):角度写成"这期只讲的那一个点"
 FOCUS_RULE = """
    - theme={name} 的 angle 写这期只讲的**那一个点**(一项技术、一个配置或一个争议参数),
@@ -100,8 +106,13 @@ def versus_theme(profile: CategoryProfile):
 
 
 def roundup_theme(profile: CategoryProfile):
-    """品类的横评方向(取第一个);没有返回 None。"""
-    return next((t for t in profile.themes.values() if t.roundup), None)
+    """品类的普通横评方向(取第一个,不含价位段选购这类必须写角度的);没有返回 None。"""
+    return next((t for t in profile.themes.values() if t.roundup and not t.requires_angle), None)
+
+
+def band_themes(profile: CategoryProfile) -> list:
+    """价位段选购类方向:有车单、且必须写角度(角度 = 价位段)。"""
+    return [t for t in profile.themes.values() if t.roundup and t.requires_angle]
 
 
 def _norm(text: str) -> str:
@@ -259,8 +270,11 @@ def suggest(
     vtheme = versus_theme(profile)
     if vtheme:
         roundup_rule += VERSUS_RULE.format(name=vtheme.name, lo=vtheme.subject_count[0], n=n)
+    for t in band_themes(profile):
+        roundup_rule += BAND_RULE.format(name=t.name, label=t.label, lo=t.subject_count[0],
+                                         hi=t.subject_count[1], n=n)
     for t in themes.values():
-        if t.requires_angle:
+        if t.requires_angle and not t.multi:
             roundup_rule += FOCUS_RULE.format(name=t.name)
     spec = profile.trends
     # 有榜单(懂车帝)的品类车系名就是权威,不按品牌放宽 —— 否则「小米YU9」这种编的也能过

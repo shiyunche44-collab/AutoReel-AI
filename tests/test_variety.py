@@ -8,7 +8,7 @@ from app.categories import load_profile, suggest_theme
 from app.models import ProjectCreate, ScriptSegment
 from app.pipeline import script_gen, variety
 
-FORMATS = ("buyguide", "roundup", "deepdive", "qa", "pk", "debate")
+FORMATS = ("buyguide", "roundup", "priceband", "deepdive", "qa", "pk", "debate")
 
 
 @pytest.fixture(scope="module")

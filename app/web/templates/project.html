@@ -184,6 +184,7 @@
             <strong>{{ r.name }}</strong>{% if r.group %}<span class="subtle">{{ r.group }}</span>{% endif %}
             <span class="grow subtle num {{ 'roster-thin' if r.thin else '' }}">
               {% if r.facts is not none %}事实 {{ r.facts }} 条(产品级 {{ r.product }}){% else %}事实未采集{% endif %}
+              {% if r.price_range %}· 指导价 {{ r.price_range }}{% if r.off_band %}(不在价位段){% endif %}{% endif %}
               · 素材池 {{ r.usable_seconds }} 秒(确认本车视频 {{ r.confirmed_video_seconds | int }} 秒){% if r.building %}(构建中){% endif %}
             </span>
           </div>
@@ -194,6 +195,10 @@
 
       {% if facts_report and facts_report.product_gap %}
       <div class="callout tone-danger">{{ m.icon("alert-circle") }}<div><strong>产品级事实不足</strong> · {{ facts_report.product_gap }}</div></div>
+      {% endif %}
+
+      {% if facts_report and facts_report.band_note %}
+      <div class="callout tone-warning">{{ m.icon("alert-circle") }}<div><strong>车单超出价位段</strong> · {{ facts_report.band_note }}</div></div>
       {% endif %}
 
       {% if footage_thin %}

@@ -257,3 +257,37 @@ def differing_measures(claim_a: str, basis_a: str, claim_b: str,
     # 取值有交集不算冲突(「2200MPa」和「1500/2200MPa 两种钢」说的是同一个数)
     return [(k[0], k[1], vals, mb[k]) for k, vals in measures(claim_a).items()
             if k in mb and not vals & mb[k]]
+
+
+# --------------------------------------------------------------------------
+# 价位段(价位段选购的选题角度:「10-15万纯电」)
+# --------------------------------------------------------------------------
+_BAND_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:万\s*)?[-~～至到]\s*(\d+(?:\.\d+)?)\s*万")
+_BAND_UNDER_RE = re.compile(r"(\d+(?:\.\d+)?)\s*万\s*(?:以内|以下|内)")
+
+
+def _band_of(m: re.Match) -> tuple[float, float]:
+    if m.re is _BAND_UNDER_RE:
+        return 0.0, float(m.group(1))
+    lo, hi = sorted((float(m.group(1)), float(m.group(2))))
+    return lo, hi
+
+
+def price_band(text: str) -> tuple[float, float] | None:
+    """从选题角度里取价位段(万元);没写返回 None。"""
+    for rx in (_BAND_RE, _BAND_UNDER_RE):
+        m = rx.search(text or "")
+        if m:
+            return _band_of(m)
+    return None
+
+
+def strip_band(text: str, band: tuple[float, float] | None) -> str:
+    """去掉句子里**等于选题价位段**的那几处写法(「10-15万」「15万以内」)。
+
+    价位段是选题本身,不是要查出处的参数;别的价格照样要引用事实。"""
+    if not band:
+        return text
+    for rx in (_BAND_RE, _BAND_UNDER_RE):
+        text = rx.sub(lambda m: "" if _band_of(m) == band else m.group(0), text)
+    return text

@@ -485,6 +485,8 @@ def project_page(request: Request, project_id: str):
             got = per.get(s.name) or {}
             roster.append({"name": s.name, "group": s.group, "facts": got.get("facts"),
                            "product": got.get("product"), "thin": s.name in thin,
+                           "price_range": got.get("price_range"),
+                           "off_band": got.get("in_band") is False,
                            "usable_seconds": st["usable_seconds"],
                            "confirmed_video_seconds": st["confirmed_video_seconds"],
                            "building": library.is_building(s.name)})
