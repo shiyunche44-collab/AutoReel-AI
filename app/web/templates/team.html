@@ -1,0 +1,62 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}AI 团队 · aimovice{% endblock %}
+{% block body_class %}page-team{% endblock %}
+{% set active_nav = 'team' %}
+
+{% block crumbs %}
+<nav class="crumbs" aria-label="面包屑"><span class="sep">/</span><span class="cur">AI 团队</span></nav>
+{% endblock %}
+
+{% block main %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">AI 团队</h1>
+    <p class="muted">情报员抓热点、主编排选题、制片按排期开工。你只批选题单;成片审核在第二期接上。</p>
+  </div>
+  <div class="row">
+    <span class="badge tone-neutral" id="team-state">—</span>
+    <button class="btn btn-ghost" type="button" id="btn-pause">{{ m.icon("pause", "i-sm") }}<span>暂停团队</span></button>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("inbox", "i-sm") }}待我批的选题 <span class="count" id="pending-count">0</span></h2>
+    <div class="row">
+      <button class="btn btn-sm btn-ghost" type="button" data-run="editor">{{ m.icon("refresh", "i-sm") }}让主编再排</button>
+      <button class="btn btn-sm btn-primary" type="button" id="btn-approve-all">{{ m.icon("check", "i-sm") }}全部批准</button>
+    </div>
+  </div>
+  <div class="card-body" id="pending-list"></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("calendar", "i-sm") }}排期</h2>
+    <span class="subtle small" id="plan-hint"></span>
+  </div>
+  <div class="card-body" id="plan-list"></div>
+</section>
+
+<div class="team-grid">
+  <section class="card">
+    <div class="card-head"><h2>{{ m.icon("layers", "i-sm") }}角色</h2></div>
+    <div class="card-body" id="role-list"></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <h2>{{ m.icon("flame", "i-sm") }}榜单上升</h2>
+      <span class="subtle small" id="trend-at"></span>
+    </div>
+    <div class="card-body" id="rising-list"></div>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head"><h2>{{ m.icon("activity", "i-sm") }}团队动态</h2></div>
+  <div class="card-body" id="run-list"></div>
+</section>
+{% endblock %}
+
+{% block script %}team{% endblock %}

@@ -161,6 +161,65 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_uniq
     ON metric_snapshots(publication_id, captured_at);
 CREATE INDEX IF NOT EXISTS idx_metric_pub ON metric_snapshots(publication_id);
+
+-- AI 团队(app/team)
+CREATE TABLE IF NOT EXISTS trend_snapshots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch       TEXT NOT NULL,          -- 同一次抓取的批次号
+    category    TEXT NOT NULL,
+    captured_at REAL NOT NULL,
+    source      TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    car         TEXT NOT NULL DEFAULT '',
+    rank        INTEGER,                -- 同来源内的名次,从 1 起
+    metric      TEXT NOT NULL DEFAULT '',
+    url         TEXT NOT NULL DEFAULT '',
+    date        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_trend_cat ON trend_snapshots(category, captured_at);
+CREATE INDEX IF NOT EXISTS idx_trend_batch ON trend_snapshots(batch);
+
+CREATE TABLE IF NOT EXISTS plan_items (
+    id           TEXT PRIMARY KEY,
+    category     TEXT NOT NULL,
+    slot_at      REAL NOT NULL,         -- 目标发布时刻
+    kind         TEXT NOT NULL DEFAULT 'single',   -- single / roundup / versus / rapid
+    subject      TEXT NOT NULL,
+    subjects     TEXT NOT NULL DEFAULT '[]',
+    angle        TEXT NOT NULL DEFAULT '',
+    theme        TEXT NOT NULL DEFAULT '',
+    aspect       TEXT NOT NULL DEFAULT '16:9',
+    duration     INTEGER NOT NULL DEFAULT 240,
+    hook         TEXT NOT NULL DEFAULT '',
+    search_terms TEXT NOT NULL DEFAULT '',
+    evidence     TEXT NOT NULL DEFAULT '[]',
+    rationale    TEXT NOT NULL DEFAULT '',
+    heat         INTEGER NOT NULL DEFAULT 3,
+    status       TEXT NOT NULL DEFAULT 'proposed',
+    project_id   TEXT NOT NULL DEFAULT '',
+    note         TEXT NOT NULL DEFAULT '',
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plan_slot ON plan_items(category, slot_at);
+CREATE INDEX IF NOT EXISTS idx_plan_status ON plan_items(status);
+
+CREATE TABLE IF NOT EXISTS team_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    role        TEXT NOT NULL,
+    started_at  REAL NOT NULL,
+    finished_at REAL,
+    status      TEXT NOT NULL DEFAULT 'running',  -- running / ok / failed / skipped / idle
+    summary     TEXT NOT NULL DEFAULT '',
+    trigger     TEXT NOT NULL DEFAULT 'schedule'  -- schedule / manual
+);
+CREATE INDEX IF NOT EXISTS idx_team_role ON team_runs(role, started_at);
+
+CREATE TABLE IF NOT EXISTS team_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -939,3 +998,217 @@ def latest_snapshot(publication_id: str) -> dict[str, Any] | None:
         )
         row = cur.fetchone()
     return dict(row) if row else None
+
+
+# --------------------------------------------------------------------------
+# AI 团队:热点快照 / 选题单 / 角色运行记录 / 团队设置
+# --------------------------------------------------------------------------
+_TREND_COLS = ("source", "kind", "title", "car", "rank", "metric", "url", "date")
+
+
+def add_trend_batch(category: str, batch: str, captured_at: float,
+                    rows: list[dict[str, Any]]) -> int:
+    """一次抓取的热点整批落库。返回条数。"""
+    init_db()
+    with transaction() as conn:
+        for row in rows:
+            conn.execute(
+                "INSERT INTO trend_snapshots (batch, category, captured_at, source, kind, title,"
+                " car, rank, metric, url, date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (batch, category, captured_at,
+                 *[row.get(c) if c == "rank" else str(row.get(c) or "") for c in _TREND_COLS]),
+            )
+    return len(rows)
+
+
+def trend_batches(category: str, limit: int = 20) -> list[dict[str, Any]]:
+    """最近几批的 (batch, captured_at, 条数),新的在前。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "SELECT batch, MAX(captured_at) AS captured_at, COUNT(*) AS n FROM trend_snapshots"
+            " WHERE category = ? GROUP BY batch ORDER BY captured_at DESC LIMIT ?",
+            (category, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def trend_rows(batch: str) -> list[dict[str, Any]]:
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("SELECT * FROM trend_snapshots WHERE batch = ? ORDER BY id", (batch,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+_PLAN_JSON = ("subjects", "evidence")
+
+
+def _plan_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    out = dict(row)
+    for key in _PLAN_JSON:
+        try:
+            out[key] = json.loads(out.get(key) or "[]")
+        except (TypeError, ValueError):
+            out[key] = []
+    return out
+
+
+def create_plan_item(row: dict[str, Any]) -> None:
+    init_db()
+    now = time.time()
+    row = {"kind": "single", "subjects": [], "angle": "", "theme": "", "aspect": "16:9",
+           "duration": 240, "hook": "", "search_terms": "", "evidence": [], "rationale": "",
+           "heat": 3, "status": "proposed", "project_id": "", "note": "", **row}
+    row.setdefault("created_at", now)
+    row["updated_at"] = now
+    for key in _PLAN_JSON:
+        if not isinstance(row[key], str):
+            row[key] = json.dumps(row[key], ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO plan_items
+               (id, category, slot_at, kind, subject, subjects, angle, theme, aspect, duration,
+                hook, search_terms, evidence, rationale, heat, status, project_id, note,
+                created_at, updated_at)
+               VALUES (:id, :category, :slot_at, :kind, :subject, :subjects, :angle, :theme,
+                       :aspect, :duration, :hook, :search_terms, :evidence, :rationale, :heat,
+                       :status, :project_id, :note, :created_at, :updated_at)""",
+            row,
+        )
+
+
+def get_plan_item(item_id: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        return _plan_row(conn.execute("SELECT * FROM plan_items WHERE id = ?", (item_id,)).fetchone())
+
+
+def list_plan_items(category: str | None = None, *, statuses: tuple[str, ...] = (),
+                    since: float | None = None, until: float | None = None,
+                    limit: int = 200) -> list[dict[str, Any]]:
+    """按目标发布时刻排序的选题。"""
+    init_db()
+    where, args = [], []
+    if category:
+        where.append("category = ?")
+        args.append(category)
+    if statuses:
+        where.append(f"status IN ({','.join('?' * len(statuses))})")
+        args.extend(statuses)
+    if since is not None:
+        where.append("slot_at >= ?")
+        args.append(since)
+    if until is not None:
+        where.append("slot_at < ?")
+        args.append(until)
+    sql = "SELECT * FROM plan_items"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY slot_at, created_at LIMIT ?"
+    args.append(limit)
+    with connect() as conn:
+        return [_plan_row(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def update_plan_item(item_id: str, **fields: Any) -> None:
+    if not fields:
+        return
+    init_db()
+    fields["updated_at"] = time.time()
+    for key in _PLAN_JSON:
+        if key in fields and not isinstance(fields[key], str):
+            fields[key] = json.dumps(fields[key], ensure_ascii=False)
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE plan_items SET {cols} WHERE id = ?", (*fields.values(), item_id))
+
+
+def cas_plan_status(item_id: str, expected: tuple[str, ...], new: str, **fields: Any) -> bool:
+    """状态是 expected 之一才改成 new。两个执行流抢同一条选题时只有一个成功。"""
+    init_db()
+    fields = {"status": new, "updated_at": time.time(), **fields}
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    marks = ",".join("?" * len(expected))
+    with connect() as conn:
+        cur = conn.execute(f"UPDATE plan_items SET {cols} WHERE id = ? AND status IN ({marks})",
+                           (*fields.values(), item_id, *expected))
+        return cur.rowcount == 1
+
+
+def start_team_run(role: str, trigger: str = "schedule", stale_after: float = 3600) -> int | None:
+    """登记一次角色运行。同角色已有一次在跑(且没超时)就返回 None。
+
+    用数据库而不是进程内锁:两个服务连同一个库时(以前出过事),
+    同一角色也只会跑一份。
+    """
+    init_db()
+    now = time.time()
+    with transaction() as conn:
+        busy = conn.execute(
+            "SELECT 1 FROM team_runs WHERE role = ? AND status = 'running' AND started_at > ?",
+            (role, now - stale_after)).fetchone()
+        if busy:
+            return None
+        cur = conn.execute("INSERT INTO team_runs (role, started_at, status, trigger)"
+                           " VALUES (?, ?, 'running', ?)", (role, now, trigger))
+        return int(cur.lastrowid)
+
+
+def finish_team_run(run_id: int, status: str, summary: str = "") -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("UPDATE team_runs SET finished_at = ?, status = ?, summary = ? WHERE id = ?",
+                     (time.time(), status, summary[:500], run_id))
+
+
+def list_team_runs(role: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    init_db()
+    with connect() as conn:
+        if role:
+            cur = conn.execute("SELECT * FROM team_runs WHERE role = ? ORDER BY id DESC LIMIT ?",
+                               (role, limit))
+        else:
+            cur = conn.execute("SELECT * FROM team_runs ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def last_team_run(role: str, *, scheduled_only: bool = False) -> dict[str, Any] | None:
+    init_db()
+    sql = "SELECT * FROM team_runs WHERE role = ?"
+    if scheduled_only:
+        sql += " AND trigger = 'schedule'"
+    with connect() as conn:
+        row = conn.execute(sql + " ORDER BY id DESC LIMIT 1", (role,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_team_setting(key: str, default: Any = None) -> Any:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM team_settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value"])
+    except ValueError:
+        return default
+
+
+def set_team_setting(key: str, value: Any) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT INTO team_settings (key, value) VALUES (?, ?)"
+                     " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     (key, json.dumps(value, ensure_ascii=False)))
+
+
+def prune_idle_runs(role: str) -> None:
+    """轮询型角色(制片每 5 分钟看一眼)大多数时候没事可做:只留最近一条空转记录。"""
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            "DELETE FROM team_runs WHERE role = ? AND status = 'idle' AND id < "
+            "(SELECT MAX(id) FROM team_runs WHERE role = ? AND status = 'idle')",
+            (role, role))

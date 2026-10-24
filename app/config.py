@@ -344,6 +344,27 @@ PUBLISH_MAX_INTERVAL = float(os.getenv("PUBLISH_MAX_INTERVAL", "90"))
 #: 平台数据监控
 METRICS_ENABLED = os.getenv("METRICS_ENABLED", "1") not in ("0", "false", "False")
 METRICS_INTERVAL_MIN = int(os.getenv("METRICS_INTERVAL_MIN", "30"))
+
+# --------------------------------------------------------------------------
+# AI 团队(app/team):情报 → 选题单 → 出片 的后台节奏
+# --------------------------------------------------------------------------
+#: 团队总开关。关掉后各角色不按节奏跑,页面上手动「立即运行」仍可用。
+TEAM_ENABLED = os.getenv("TEAM_ENABLED", "1") not in ("0", "false", "False")
+#: 团队做哪个品类
+TEAM_CATEGORY = os.getenv("TEAM_CATEGORY", "") or DEFAULT_CATEGORY
+#: 每天排几条
+TEAM_DAILY_SLOTS = max(1, int(os.getenv("TEAM_DAILY_SLOTS", "1")))
+#: 选题单往后排几天
+TEAM_PLAN_DAYS = max(1, int(os.getenv("TEAM_PLAN_DAYS", "7")))
+#: 每条的目标发布时刻(HH:MM,逗号分隔;条数多于时刻时轮着用)
+TEAM_SLOT_TIMES = tuple(t.strip() for t in os.getenv("TEAM_SLOT_TIMES", "18:30").split(",") if t.strip())
+#: 已批选题提前多少小时开工(事实别太早抓,成片也要留审核时间)
+TEAM_LEAD_HOURS = float(os.getenv("TEAM_LEAD_HOURS", "30"))
+#: 默认画幅 / 时长(不合主题时取最接近的档位)
+TEAM_ASPECT = os.getenv("TEAM_ASPECT", "16:9")
+TEAM_DURATION = int(os.getenv("TEAM_DURATION", "240"))
+#: 同一车型多少天内不重复做
+TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
 #: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
 #: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

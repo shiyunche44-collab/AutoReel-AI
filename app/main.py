@@ -52,6 +52,9 @@ from .publish import service as publish_service
 from .publish.registry import PLATFORMS, platforms_info
 from .metrics import store as metrics_store
 from .metrics import worker as metrics_worker
+from .team import plan as team_plan
+from .team import scheduler as team_scheduler
+from .team import views as team_views
 from .state import State
 from .views import ProjectNotFound, build_detail, build_summary, needs_attention
 
@@ -381,10 +384,12 @@ async def lifespan(app: FastAPI):
     publish_accounts.import_from_file()
     publish_service.start()
     metrics_worker.start()
+    team_scheduler.start()
     yield
     await scheduler.stop()
     publish_service.stop()
     metrics_worker.stop()
+    team_scheduler.stop()
 
 
 app = FastAPI(title="aimovice", version="0.1.0", lifespan=lifespan)
@@ -1109,6 +1114,117 @@ def analytics_page(request: Request):
         {"request": request, "items": data["items"], "by_platform": data["by_platform"],
          "by_aspect": data["by_aspect"], "platforms": platforms_info()},
     )
+
+
+# --------------------------------------------------------------------------
+# AI 团队
+# --------------------------------------------------------------------------
+@app.get("/team", response_class=HTMLResponse)
+def team_page(request: Request):
+    """AI 团队:待我处理、选题排期、各角色动态。"""
+    return templates.TemplateResponse(request, "team.html", {"request": request})
+
+
+def _team_themes(category: str) -> list[dict[str, Any]]:
+    profile = load_profile(category)
+    out = []
+    for name, spec in profile.themes.items():
+        out.append({"name": name, "label": spec.label, "multi": spec.multi,
+                    "requires_angle": spec.requires_angle,
+                    "durations": {a: list(profile.theme_durations(spec, a)) for a in config.ASPECTS}})
+    return out
+
+
+@app.get("/api/team")
+def team_overview():
+    data = team_views.overview()
+    data["themes"] = _team_themes(data["category"])
+    return data
+
+
+@app.post("/api/team/roles/{name}/run")
+def team_run_role(name: str):
+    """手动让某个角色立刻干一次活。后台跑,页面轮询看结果。"""
+    from . import team
+
+    try:
+        team.role(name)
+    except KeyError as exc:
+        raise HTTPException(404, "没有这个角色") from exc
+    threading.Thread(target=team.run_role, args=(name, "manual"), name=f"team-manual-{name}",
+                     daemon=True).start()
+    return {"ok": True}
+
+
+class TeamPause(BaseModel):
+    paused: bool
+
+
+@app.post("/api/team/pause")
+def team_pause(payload: TeamPause):
+    from . import team
+
+    team.set_paused(payload.paused)
+    return {"paused": team.paused()}
+
+
+class PlanPatch(BaseModel):
+    subject: str | None = None
+    angle: str | None = None
+    theme: str | None = None
+    aspect: str | None = None
+    duration: int | None = None
+    hook: str | None = None
+    slot_at: float | None = None
+    note: str | None = None
+
+
+class PlanReject(BaseModel):
+    note: str = ""
+
+
+def _plan_call(fn, *args):
+    try:
+        return team_plan.view(fn(*args))
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/team/plan/{item_id}/approve")
+def team_plan_approve(item_id: str):
+    return _plan_call(team_plan.approve, item_id)
+
+
+@app.post("/api/team/plan/{item_id}/reject")
+def team_plan_reject(item_id: str, payload: PlanReject):
+    return _plan_call(team_plan.reject, item_id, payload.note)
+
+
+@app.patch("/api/team/plan/{item_id}")
+def team_plan_patch(item_id: str, payload: PlanPatch):
+    return _plan_call(team_plan.patch, item_id, payload.model_dump(exclude_none=True))
+
+
+@app.post("/api/team/plan/approve-all")
+def team_plan_approve_all():
+    return {"approved": team_plan.approve_all(config.TEAM_CATEGORY)}
+
+
+@app.post("/api/team/plan/{item_id}/start")
+def team_plan_start(item_id: str):
+    """不等开工时间,马上做。没批的先批。"""
+    from .team import producer
+
+    item = db.get_plan_item(item_id)
+    if not item:
+        raise HTTPException(404, "选题不存在")
+    if item["status"] == "proposed":
+        team_plan.approve(item_id)
+    project_id = producer.start(item_id)
+    if not project_id:
+        item = db.get_plan_item(item_id) or {}
+        raise HTTPException(400, item.get("note") or "这条选题已经开工或不能开工")
+    return {"project_id": project_id}
 
 
 @app.get("/api/publish/platforms")

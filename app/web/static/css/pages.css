@@ -769,3 +769,22 @@
 .look-card .cs-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .look-card.is-portrait .cs-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .look-card.is-locked .cs-tile:not(.is-on) { opacity: .45; cursor: not-allowed; }
+
+/* ---------- AI 团队 ---------- */
+.page-team #pending-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.page-team #pending-list > .empty { grid-column: 1 / -1; }
+.plan-card { border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-1); min-width: 0; }
+.plan-card-head { display: flex; gap: 10px; align-items: flex-start; }
+.plan-subject { font-weight: 700; font-size: 15px; }
+.plan-angle { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+.plan-heat { font-size: 11px; letter-spacing: -2px; white-space: nowrap; }
+.plan-meta { flex-wrap: wrap; }
+.plan-evidence { margin: 6px 0 0; padding-left: 18px; color: var(--text-2); }
+.plan-evidence li { margin: 2px 0; }
+.plan-actions { margin-top: auto; padding-top: 4px; }
+.plan-when { min-width: 120px; }
+.team-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+.team-grid > .card { margin: 0; }
+.role-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); }
+.role-row:first-child { border-top: 0; padding-top: 0; }
+@media (max-width: 900px) { .team-grid { grid-template-columns: 1fr; } }
