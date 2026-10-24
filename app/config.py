@@ -310,6 +310,12 @@ BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
 #: 统一风格封面:MiniMax 生成的浅色影棚底 + 官图抠出的真车 + 大字标题。生图/抠图不成自动退回老封面;COVER_ART=0 关
 COVER_ART = os.getenv("COVER_ART", "1") not in ("0", "false", "False")
+#: 素材池里**没有白底棚拍官图**时(抠不出车),用生图模型按车名生成一台车再抠图,
+#: 凑进同一套版式。⚠️ 生成的车型可能与实车有出入,所以封面会带 AI 披露;
+#: 质检门(能抠图 / 干净 / 与官方图同款)全不过就退回老封面。COVER_AI_CAR=0 关 → 行为同今天
+COVER_AI_CAR = os.getenv("COVER_AI_CAR", "1") not in ("0", "false", "False")
+#: 一次生图出几个候选,逐个过质检门,取第一个合格的(接口 n 最多 9)
+COVER_AI_CAR_CANDIDATES = max(1, int(os.getenv("COVER_AI_CAR_CANDIDATES", "4") or 4))
 #: 封面角落的账号署名(如「柒哥&车」),每张封面同一个位置,主页一排看过去认得出是同一个号;空 = 不署名
 COVER_BRAND = os.getenv("COVER_BRAND", "").strip()
 #: Connector 调用的默认超时

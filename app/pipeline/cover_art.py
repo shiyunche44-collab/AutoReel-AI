@@ -7,15 +7,19 @@
   B 版换下一个色调,A/B 一眼分得开。
 - 底图只生成**空影棚**(不出车不出字),每个色调 × 画幅只生一次,缓存在 `data/_cache/cover_theme/`,
   所有项目共用。生图失败用同色调的代码渐变垫底,底图永远拿得到。
-- 车用素材池里的白底官图抠出来(`motion_assets.cutout`),车型不会画错。抠不出来(不是白底图、
-  非车品类)返回 None,调用方退回 `narration.make_cover` 的老封面。封面不能拦住成片。
+- 车用素材池里的白底官图抠出来(`motion_assets.cutout`),车型不会画错。**抠不出来**(不是白底图、
+  非车品类)时,`ai_car` 用生图模型按车名生成一台纯白底的车再抠图 —— 车型可能有出入,所以过三道
+  质检门(能抠图 / 干净 / 与官方图同款),并且封面会带一句 AI 披露。两条路都不成才退回
+  `narration.make_cover` 的老封面。封面不能拦住成片。
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -238,6 +242,601 @@ def pick_car(subject: str, exclude: Sequence[str | Path] = ()) -> tuple[Any, Pat
         if c is not None:
             return c, Path(item.path)
     return None
+
+
+# --------------------------------------------------------------------------
+# 车:素材池抠不出白底官图时的兜底 —— 生图生成一台车
+# --------------------------------------------------------------------------
+#: 素材池里没有白底棚拍官图很常见:官方图库给的都是带背景的实拍 / 定妆照,
+#: 抠图算法的前提不成立,封面就只能退回老模板 —— 于是同一个号的两条片子封面长得不一样。
+#: 这里用生图模型按车名生成一台**纯白底**的车,再抠图合进同一套版式。
+#:
+#: 车型对不对是这套方案最大的风险,靠三道门挡:
+#:   G1 能抠图 —— 纯白底、车不贴边、面积正常(直接用现有 motion_assets.cutout);
+#:   G2 干净   —— 视觉模型确认图里没有文字 / 车标 / 水印 / 第二辆车;
+#:   G3 同款   —— 生成图与官方参照图拼成一张,视觉模型判"同一款车"才放行。
+#: 拿不到结论一律判负 —— 宁可退回老封面,也不能把一台陌生的车推上封面。
+#: 用了 AI 车时封面会带一句披露(见 explainer.compose)。
+
+#: 生图提示词。机位固定「前 45°、车头朝右」,和白底官图那条路出来的封面是同一个机位,
+#: 主页一排看过去像同一条产线出来的。
+#:
+#: `{look}` 是从官方参照图里提取的造型特征(前脸、灯带、轮毂、比例)。单靠"BYD Tang"几个字
+#: 生图模型认不准 —— 实测它会画成一台起亚 Sportage,还带 KIA 车标。**把形状说清楚**才画得
+#: 像;车标必须留白 —— 封面上出现别家车标,比画得不够像严重得多。
+CAR_PROMPT = (
+    "Studio product photograph of {model}, {color} {body}, the exact same car model as the "
+    "official manufacturer photo of this vehicle. Exterior design: {look}. "
+    "Front three-quarter view with the nose pointing to the right, the whole vehicle visible in "
+    "frame with generous empty margin on every side, centered on a pure white seamless studio "
+    "background, soft even lighting, no ground shadow, no props, photorealistic, 8k. "
+    "Shot like an unbranded design prototype: the front nose is completely smooth and blank with "
+    "no emblem and no marque badge, the body carries no lettering and no model name, and the "
+    "license plate is a plain blank white rectangle with no text and no numbers. "
+    "It is a clean production car: no roof box, no roof rails, no roof cargo, no accessories; "
+    "only a low flat sensor pod integrated flush into the roof. "
+    "No text, no letters, no numbers, no logo, no badge, no watermark, no people, no second car."
+)
+
+#: 图生图提示词(有官方参照图时用这个)。
+#:
+#: 有参照图时**以图为准**:车型、车身线条、灯带、轮毂全由参照图决定,文字只负责约束
+#: 背景和机位。只给车名的话生图模型会画成"长得像那一类"的车 —— 实测给"BYD Tang"
+#: 生出来的是一台起亚 Sportage。
+CAR_REF_PROMPT = (
+    "Studio product photograph of the exact same car shown in the reference image: reproduce "
+    "that identical vehicle, keeping its precise body shape, proportions, front fascia, "
+    "connected LED light bar, grille, wheel design, roof line and roof sensor pod, in the same "
+    "body colour. Front three-quarter view with the nose pointing to the right, the whole "
+    "vehicle visible in frame with generous empty margin on every side, centered on a pure "
+    "white seamless studio background, soft even lighting, no ground shadow, no props, "
+    "photorealistic, 8k. "
+    "Shot like an unbranded design prototype: the front nose is completely smooth and blank with "
+    "no emblem and no marque badge, the body carries no lettering and no model name, and the "
+    "license plate is a plain blank white rectangle with no text and no numbers. "
+    "It is a clean production car: no roof box, no roof rails, no roof cargo, no accessories; "
+    "only a low flat sensor pod integrated flush into the roof. "
+    "No text, no letters, no numbers, no logo, no badge, no watermark, no people, no second car."
+)
+
+#: 生图模式的尝试顺序。
+#:
+#: `ref` = 以官方参照图做**图生图**(车型由图决定,最可能对);`t2i` = 纯文字生图
+#: (车型靠提示词硬凑,大概率过不了同款门)。前者只有 Connector 后端支持,且
+#: `mcode-tools` 只在 MiniMax Code 运行时里存在 —— 拿不到就退回后者,再不行退老封面。
+CAR_MODES = ("ref", "t2i")
+
+#: 封面版式固定的车头朝向。第一支(小米YU7)的官方官图 `img_ca4c52a242` 就是车头朝右,
+#: 后面所有项目的封面都跟它一致 —— 主页一排看过去是同一条产线。
+COVER_CAR_FACING = "right"
+
+#: 中文颜色词 → 英文(参照图 desc 里写的是中文,提示词用英文更稳)
+COLOR_WORDS: dict[str, str] = {
+    "白": "white", "银": "silver", "灰": "grey", "黑": "black", "红": "red", "蓝": "blue",
+    "绿": "green", "金": "gold", "棕": "brown", "黄": "yellow", "米": "beige",
+}
+#: 车身类型(desc / 视觉模型都可能写中文)
+BODY_WORDS: dict[str, str] = {
+    "SUV": "SUV", "suv": "SUV", "跨界": "crossover SUV", "轿车": "sedan", "旅行": "wagon",
+    "MPV": "MPV", "mpv": "MPV", "两厢": "hatchback", "掀背": "hatchback", "皮卡": "pickup truck",
+}
+#: desc 里带这些词 = 影棚 / 定妆照,形体与配色最干净,当参照图最合适
+STUDIO_HINTS = ("白底", "定妆", "影棚", "产品图", "纯色背景", "棚拍")
+
+#: 问参照图:车型 / 颜色 / 车身类型 / 造型特征 / 车头朝向
+REF_DESC_PROMPT = (
+    "Look at this official car photo. Answer with exactly five lines and nothing else:\n"
+    "MODEL: <make and model in English, e.g. BYD Tang>\n"
+    "COLOR: <body color in English, e.g. silver white>\n"
+    "BODY: <one of SUV / sedan / MPV / hatchback / wagon / pickup truck>\n"
+    "LOOK: <one short English phrase (max 25 words) describing the distinctive exterior design: "
+    "front face, light bar, grille, wheels, roof, body proportions>\n"
+    "FACING: <left if the front of the car points to the left side of the image, "
+    "right if it points to the right side>"
+)
+
+#: 参照图描述的缓存版本:改了问法就升版本,旧答案自然作废
+REF_DESC_VERSION = 3
+
+#: 质检门判据版本。改了任何一道门的问法就升版本,旧缓存里的结论自动作废重跑。
+GATES_VERSION = 2
+
+#: G2:图里有没有**不该出现**的东西(有就答 YES)
+#:
+#: ⚠️ 问法要精确,两头都会出事:
+#: - 问得太宽("有没有 logo/badge")→ 视觉模型把**原厂**轮毂中心盖的徽章、空白车牌框
+#:   都算成 logo,四张干净候选全被误杀(实测)。
+#: - 问得太窄("ignore the vehicle's own badges")→ 连**别家车标**一起放过了,带着
+#:   一汽标的起亚 Sportage 判成干净(实测)。
+#:
+#: 所以这道门只问四件硬伤,**不碰车标**:
+#:   ① 可读文字 / 有字的车牌(汽车之家水印、车名字样);
+#:   ② 水印 / 文案 / 第二辆车 / 道具;
+#:   ③ 车顶行李箱、行李架、拖车钩这类**加装** —— 官方图库里那台车没有,加上就是另一台车。
+#: 车标属于哪家公司由 G3(同款门)兜:跟官方参照图一比,别家车标自然露馅。
+CAR_CLEAN_PROMPT = (
+    "Look at this studio photo of a car on a plain white background. Answer YES if any of the "
+    "following is visible: (1) readable words, letters or numbers anywhere, including a licence "
+    "plate that has characters on it; (2) a watermark, caption or website name anywhere in the "
+    "image; (3) a second vehicle, a person or any prop in the scene; (4) add-on equipment fitted "
+    "to the car such as a roof box, roof rails, a roof rack, luggage on the roof or a tow bar. "
+    "Answer NO if none of these is present. Answer with only YES or NO."
+)
+
+#: G3:生成的车和官方参照是不是同一款(是就答 YES)
+#:
+#: 这道门同时兜住"别家车标":实测带 KIA 标 / 一汽标的候选,跟官方参照图一比全部判否 ——
+#: 车标不对意味着车就不对,不用再单独设一道车标门(那道门实测不可靠:问"车标是谁家的"
+#: 它把原厂轮毂徽章读成别家厂牌,问"是不是别家标"它把干净候选也判成别家,两头都错)。
+CAR_SAME_PROMPT = (
+    "Do the two images show the same car make and model? Answer with only YES or NO."
+)
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _cars_root() -> Path:
+    return config.DATA_DIR / "_cache" / "cover_theme" / "cars"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.stem}.part{path.suffix}")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
+def _studio_hint(desc: str) -> bool:
+    return any(w in (desc or "") for w in STUDIO_HINTS)
+
+
+def _desc_color(desc: str) -> str:
+    """从 desc 里取车身颜色。
+
+    ⚠️ 先把「白底 / 影棚 / 定妆照」这类**背景**词去掉:「白底定妆照」里的白说的是背景,
+    不是车身颜色 —— 当成车色就等于让模型画一台白车。"""
+    text = desc or ""
+    for hint in STUDIO_HINTS:
+        text = text.replace(hint, " ")
+    for zh, en in COLOR_WORDS.items():
+        if zh in text:
+            return en
+    return ""
+
+
+def _desc_body(desc: str) -> str:
+    for zh, en in BODY_WORDS.items():
+        if zh in (desc or ""):
+            return en
+    return ""
+
+
+def pick_reference(subject: str, exclude: Sequence[str | Path] = ()) -> tuple[Path, str] | None:
+    """挑一张**只用来比对和写提示词**、绝不上封面的官方图。
+
+    参照图必须认得出就是这台车(`target == "yes"`),否则拿它比"同款"就是拿错车比。
+    官方图库的照片会带别家的角标 / 车牌标识 —— 参照图只在本地比对,不会进封面。"""
+    from . import library
+
+    if not subject:
+        return None
+    try:
+        lib = library.Library.load(subject)
+    except Exception:  # noqa: BLE001
+        return None
+    vocab = library.vocab_of(lib)
+    hero = vocab.primary_views or set(vocab.views)
+    used = {str(Path(p)) for p in exclude}
+    cands = [i for i in lib.items
+             if i.kind == "still" and i.usable and not i.small_still and Path(i.path).is_file()
+             and i.problem not in ("cropped", "unclear", "poster")
+             and i.view in hero and i.target == "yes"
+             and str(Path(i.path)) not in used]
+    if not cands:
+        return None
+    cands.sort(key=lambda i: (not _studio_hint(i.desc), -Path(i.path).stat().st_size, i.id))
+    best = cands[0]
+    return Path(best.path), str(best.desc or "")
+
+
+def _ask_ref_attributes(ref: Path) -> dict[str, str]:
+    """问视觉模型:参照图里是什么车、什么颜色、什么车身类型、造型上有什么特点、车标是谁家的。"""
+    from ..providers import cli, images
+
+    try:
+        url = cli.upload_temp_url(ref)
+        text = images.describe([url], REF_DESC_PROMPT)
+    except Exception as exc:  # noqa: BLE001
+        log.info("参照图描述不可用:%s", exc)
+        return {}
+    attrs: dict[str, str] = {}
+    for key, tag in (("model", "MODEL"), ("color", "COLOR"), ("body", "BODY"),
+                     ("look", "LOOK"), ("facing", "FACING")):
+        m = re.search(rf"{tag}\s*[:：]\s*(.+)", text or "", re.IGNORECASE)
+        if m:
+            attrs[key] = m.group(1).strip().strip("。.")
+    return attrs
+
+
+def ref_attributes(ref: Path, desc: str = "") -> dict[str, str]:
+    """参照图的车型 / 颜色 / 车身类型 / 造型特征。视觉模型优先,desc 里的中文兜底。
+
+    结果按参照图缓存 —— 同一个车型反复重出封面不再重复问视觉模型。"""
+    path = _cars_root() / "_refs" / f"{_hash(str(ref))[:16]}_v{REF_DESC_VERSION}.json"
+    attrs = _read_json(path)
+    if not attrs:
+        attrs = _ask_ref_attributes(ref)
+        _write_json(path, attrs)
+    if not attrs.get("color"):
+        attrs["color"] = _desc_color(desc)
+    if not attrs.get("body"):
+        attrs["body"] = _desc_body(desc)
+    return attrs
+
+
+def car_prompt(subject: str, attrs: dict[str, str]) -> str:
+    """生成那台车的提示词。
+
+    车型用视觉模型认出来的英文名(带中文原名兜底),颜色、车身形态同理 —— 官方图库里
+    同一个车型有多个颜色版本,写错颜色等于换了一台车。造型特征(`look`)同样来自参照图:
+    只给车型名字,生图模型会画成一台"长得像那一类"的车;把前脸、灯带、轮毂说清楚才像。"""
+    model = (attrs.get("model") or "").strip() or subject
+    if subject and subject not in model:
+        model = f"{model} ({subject})"
+    color = (attrs.get("color") or "").strip() or "silver"
+    body = (attrs.get("body") or "").strip() or "SUV"
+    look = (attrs.get("look") or "").strip() or (
+        "a modern Chinese car with clean body surfaces, hidden door handles and large alloy wheels")
+    return CAR_PROMPT.format(model=model, color=color, body=body, look=look)
+
+
+def _white_normalized(src: Path, dest: Path) -> Path | None:
+    """把背景刷成纯白,让抠图的门能过。
+
+    生图要的"纯白无缝背景"常常差几档(暖灰 / 米白 / 地面渐变),`motion_assets.cutout`
+    的门(边缘均值 ≥228、标准差 ≤18)就卡住。这里只动**和四边连通的片背景**:按边缘亮度
+    定阈值、从四边洪水填充出背景、把背景刷成纯白 —— 车身像素不在背景蒙版里,不受影响。
+    背景连不上四边(占比太小)就不刷,让这一版候选直接淘汰。"""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    try:
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+    except OSError:
+        return None
+    g = np.asarray(im.convert("L"), dtype=np.int32)
+    h, w = g.shape
+    b = max(4, min(h, w) // 40)
+    ring = np.concatenate([g[:b].ravel(), g[-b:].ravel(), g[:, :b].ravel(), g[:, -b:].ravel()])
+    thr = max(150, int(float(np.percentile(ring, 55)) * 0.86))
+    r, gg, bb = (np.asarray(im)[..., k].astype(np.int32) for k in range(3))
+    luma = (r * 299 + gg * 587 + bb * 114) // 1000
+    chroma = np.maximum(np.maximum(r, gg), bb) - np.minimum(np.minimum(r, gg), bb)
+    cand = (luma >= thr) & (chroma <= 30)
+    m = Image.fromarray(np.where(cand, 255, 0).astype(np.uint8), "L").copy()
+    seeds = [(x, 0) for x in range(0, w, 8)] + [(x, h - 1) for x in range(0, w, 8)] + \
+            [(0, y) for y in range(0, h, 8)] + [(w - 1, y) for y in range(0, h, 8)]
+    for s in seeds:
+        if m.getpixel(s) == 255:
+            ImageDraw.floodfill(m, s, 128, thresh=0)
+    bg = np.asarray(m) == 128
+    if bg.mean() < 0.25:  # 背景没连上四边 → 不乱刷
+        return None
+    out = np.asarray(im).copy()
+    out[bg] = 255
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(out).save(dest, quality=95)
+    return dest
+
+
+def _flat_on_white(cut: Any, dest: Path) -> Path | None:
+    """抠好的车放到白底上,给视觉模型看(透明 PNG 直接看是黑底)。
+
+    顺手裁到车身范围:原始抠图 PNG 是整张白底画布,车只占中间一小块,
+    拼成对比图之后车太小,视觉模型看不清前脸就判不出同款。"""
+    from PIL import Image
+
+    try:
+        with Image.open(cut.png) as im:
+            im = im.convert("RGBA")
+    except OSError:
+        return None
+    box = im.getchannel("A").point(lambda v: 255 if v > 24 else 0).getbbox()
+    if box:
+        pad = int((box[2] - box[0]) * 0.04)
+        im = im.crop((max(0, box[0] - pad), max(0, box[1] - pad),
+                      min(im.width, box[2] + pad), min(im.height, box[3] + pad)))
+    canvas = Image.new("RGB", im.size, (255, 255, 255))
+    canvas.paste(im, (0, 0), im)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, quality=92)
+    return dest
+
+
+def _compare_pair(flat: Path, ref: Path, dest: Path, *, ref_facing: str = "right") -> Path | None:
+    """生成图(白底) + 官方参照图拼成一张,让视觉模型一次看完两张。
+
+    **两张摆成同朝向**才比:一张车头朝左、一张朝右,视觉模型会顺着"角度不一样"判否,
+    比的其实不是车型。这里按参照图自己的朝向决定要不要镜像它,而不是写死翻转 ——
+    官方定妆照有朝左的也有朝右的,写死翻会把本来同向的两张弄成反的。"""
+    from PIL import Image
+
+    try:
+        with Image.open(flat) as im:
+            a = im.convert("RGB")
+        with Image.open(ref) as im:
+            b = im.convert("RGB")
+    except OSError:
+        return None
+    # 参照图朝左 → 镜像成朝右,和生成图对齐
+    if str(ref_facing).strip().lower().startswith("l"):
+        b = b.transpose(Image.FLIP_LEFT_RIGHT)
+    height = 600
+
+    def fit(x: Any) -> Any:
+        k = height / x.height
+        return x.resize((max(1, int(x.width * k)), height), Image.LANCZOS)
+
+    a, b = fit(a), fit(b)
+    canvas = Image.new("RGB", (a.width + b.width + 12, height), (255, 255, 255))
+    canvas.paste(a, (0, 0))
+    canvas.paste(b, (a.width + 12, 0))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, quality=90)
+    return dest
+
+
+def _vlm_answer(path: Path | None, prompt: str) -> str:
+    """问视觉模型一个是非题。返回 "YES" / "NO" / ""(拿不到答案)。
+
+    这个视觉模型是中文的,回答可能是「是」「否」「没有」而不是 YES/NO —— 只认英文会把
+    一张干净的图误杀成 "unknown"。两种都认。
+
+    拿不到答案**不放行**:封面只有一帧,推错一台车的代价远大于退回老模板。"""
+    from ..providers import cli, images
+
+    if path is None:
+        return ""
+    try:
+        url = cli.upload_temp_url(path)
+        answer = images.describe([url], prompt)
+    except Exception as exc:  # noqa: BLE001
+        log.info("封面质检(视觉模型)不可用:%s", exc)
+        return ""
+    text = (answer or "").strip()
+    if not text:
+        return ""
+    head = text.upper()
+    if head.startswith("YES"):
+        return "YES"
+    if head.startswith("NO"):
+        return "NO"
+    if text.startswith(("是", "有", "确认")):
+        return "YES"
+    if text.startswith(("否", "没有", "不")):
+        return "NO"
+    log.info("封面质检:看不懂的回答 %r", text[:60])
+    return ""
+
+
+def _car_trace(meta: dict[str, Any]) -> dict[str, Any]:
+    """写进 render.json 的溯源信息:这台车是生出来的,参照的是哪张官方图、出了几个候选。
+
+    `car_seed` 只有单张生成时才有值 —— 多候选时种子交给服务端随机(传了反而 n 张长得一样)。
+    `car_mode` 记的是走的哪条生图路:`ref` = 以官方参照图做图生图,`t2i` = 纯文字生图。"""
+    return {"car_source": "ai_generated",
+            "car_mode": str(meta.get("mode") or ""),
+            "car_reference": str(meta.get("reference") or ""),
+            "car_seed": int(meta.get("seed") or 0),
+            "car_candidates": int(meta.get("candidates_requested") or 0),
+            "car_prompt_hash": _hash(str(meta.get("prompt") or ""))[:12]}
+
+
+def _car_modes() -> tuple[str, ...]:
+    """生图模式的尝试顺序。图生图优先,文字生图兜底。
+
+    图生图只有 Connector 后端有(直连的 `subject_reference` 只认人像),而
+    `mcode-tools` 只在 MiniMax Code 运行时里存在 —— CLI 不在就只剩文字生图那条路。"""
+    from ..providers import cli
+
+    if cli.connector_available():
+        return CAR_MODES
+    return ("t2i",)
+
+
+def _generate_with_reference(prompt: str, ref: Path, *, n: int,
+                             aspect_ratio: str = "16:9") -> list[Any]:
+    """以官方参照图做图生图,返回候选图 URL 列表。
+
+    参照图必须先上传成**公网可达**的临时地址 —— 生图服务在远端,拿不到本机文件。
+    直连后端的 `upload_temp_url` 给的是 data URI,只对同一次直连请求里的图片理解有效,
+    所以这里强制走 Connector 的上传。
+    """
+    from ..providers import cli, images
+
+    if not cli.connector_available():
+        log.info("封面:图生图要 mcode-tools,当前不可用")
+        return []
+    try:
+        ref_url = cli.upload_temp_url(ref, backend="mcode")
+    except Exception as exc:  # noqa: BLE001
+        log.info("封面:参照图上传失败:%s", exc)
+        return []
+    return images.generate_many(prompt, input_urls=[ref_url], aspect_ratio=aspect_ratio,
+                                n=n, output_file="car.png", backend="mcode")
+
+
+def _ai_car_pass(subject: str, ref: Path, attrs: dict[str, str], prompt: str,
+                  mode: str) -> tuple[Any, Path, dict[str, Any]] | None:
+    """按一种生图模式出候选、过三道质检门。返回 (Cutout, 图路径, 溯源) 或 None。
+
+    每种模式各有一份缓存:图生图被判否不该连累文字生图,反过来也一样。"""
+    from ..providers import images
+    from . import library, motion_assets
+
+    n_cand = config.COVER_AI_CAR_CANDIDATES
+    seed = int(_hash(f"{subject}|{prompt}")[:8], 16) % (2 ** 31 - 1)
+    h = _hash(prompt)[:12]
+    # 文字生图沿用旧的缓存目录名(老缓存继续有效),图生图单独一个后缀
+    dirname = f"{h}_{n_cand}" if mode == "t2i" else f"{h}_ref_{n_cand}"
+    d = _cars_root() / library.slug(subject) / dirname
+    meta_path = d / "meta.json"
+    meta = _read_json(meta_path)
+    # 老缓存没有 mode 字段(那时只有文字生图一条路),当作 t2i
+    if meta.get("prompt") != prompt or (meta.get("mode") or "t2i") != mode:
+        meta = {}
+    # 质检门改了判据,旧结论作废 —— 否则"上次全否"的缓存会把新判据永远挡住。
+    if meta and meta.get("gates_version") != GATES_VERSION:
+        meta = {}
+    chosen = str(meta.get("chosen") or "")
+    if chosen:
+        cand = d / chosen
+        cut = motion_assets.cutout(cand, item_id="ai")
+        if cut is not None:
+            log.info("封面:%s 用缓存的生图车(%s %s)", subject, mode, cand.name)
+            return cut, cand, _car_trace(meta)
+        meta = {}
+    if meta.get("status") == "rejected":
+        log.info("封面:%s %s 生图的车没通过质检", subject, mode)
+        return None
+
+    d.mkdir(parents=True, exist_ok=True)
+    if mode == "ref":
+        refs = _generate_with_reference(prompt, ref, n=n_cand)
+    else:
+        # ⚠️ **多候选时不要传 seed**:接口文档写明"传 seed 则 n 张内容相近, 不传则逐张随机"。
+        # 传了 seed,n=4 会生成四张几乎一样的车,多候选就白费了 —— 实测踩过这个坑。
+        # 幂等不靠 seed,靠上面按提示词哈希建的缓存目录。
+        refs = images.generate_many(prompt, aspect_ratio="16:9", n=n_cand,
+                                    seed=seed if n_cand <= 1 else None, output_file="car.png")
+    if not refs:
+        log.warning("封面:%s %s 生图失败", subject, mode)
+        _write_json(meta_path, {"status": "error", "prompt": prompt, "mode": mode,
+                                "gates_version": GATES_VERSION,
+                                "seed": 0, "candidates_requested": n_cand})
+        return None
+
+    records: list[dict[str, Any]] = []
+    picked_meta: dict[str, Any] = {}
+    for i, ref_img in enumerate(refs):
+        raw = d / f"cand{i}.jpg"
+        try:
+            images.download(ref_img.url, raw)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("封面:%s 生图候选下载失败:%s", subject, exc)
+            continue
+        cut = motion_assets.cutout(raw, item_id="ai")
+        used = raw
+        if cut is None:
+            # 底色差几档就刷成纯白再抠一次
+            norm = _white_normalized(raw, d / f"cand{i}_norm.jpg")
+            if norm is not None:
+                cut = motion_assets.cutout(norm, item_id="ai")
+                used = norm
+        rec: dict[str, Any] = {"file": used.name, "gates": {}}
+        if cut is None:
+            rec["gates"]["G1_cutout"] = "fail"
+            records.append(rec)
+            continue
+        rec["gates"]["G1_cutout"] = "pass"
+        # G4 朝向:封面版式固定"车头朝右"(第一支的官方官图就是朝右的)。
+        # 生图模型不一定听"nose pointing to the right"——实测同一提示词两张里就有一张朝左。
+        # 朝左的车放上封面,和第一支并排一眼就看出不是一条产线出来的,直接淘汰。
+        facing = cut.facing
+        rec["gates"]["G4_facing"] = facing
+        if facing != COVER_CAR_FACING:
+            records.append(rec)
+            continue
+        flat = _flat_on_white(cut, d / f"cand{i}_flat.jpg")
+        clean = _vlm_answer(flat, CAR_CLEAN_PROMPT)
+        rec["gates"]["G2_clean"] = clean or "unknown"
+        pair = _compare_pair(flat, ref, d / f"cand{i}_cmp.jpg",
+                             ref_facing=str(attrs.get("facing") or "right")) if flat else None
+        same = _vlm_answer(pair, CAR_SAME_PROMPT)
+        rec["gates"]["G3_same_model"] = same or "unknown"
+        records.append(rec)
+        if clean == "NO" and same == "YES":
+            picked_meta = {"status": "ok", "prompt": prompt, "mode": mode,
+                           "gates_version": GATES_VERSION,
+                           "seed": seed if n_cand <= 1 else 0,
+                           "chosen": used.name, "reference": str(ref), "attrs": attrs,
+                           "candidates_requested": n_cand, "candidates": records}
+            break
+    if not picked_meta:
+        picked_meta = {"status": "rejected", "prompt": prompt, "mode": mode,
+                       "gates_version": GATES_VERSION,
+                       "seed": seed if n_cand <= 1 else 0,
+                       "reference": str(ref), "attrs": attrs, "candidates_requested": n_cand,
+                       "candidates": records}
+        log.info("封面:%s %s 生图的 %d 个候选都没通过质检", subject, mode, len(records))
+    _write_json(meta_path, picked_meta)
+    if picked_meta.get("status") != "ok":
+        return None
+    cand = d / str(picked_meta["chosen"])
+    cut = motion_assets.cutout(cand, item_id="ai")
+    if cut is None:
+        return None
+    return cut, cand, _car_trace(picked_meta)
+
+
+def ai_car(subject: str, exclude: Sequence[str | Path] = ()) -> tuple[Any, Path, dict[str, Any]] | None:
+    """素材池里没有白底官图时:生成一台车,过三道质检门后返回 (Cutout, 原图, 溯源)。
+
+    两种生图路依次试:**图生图**(拿官方参照图去生,车型最可能对)→ **文字生图**。
+    都拿不到能过门的车 → 返回 None,调用方退回老封面。封面不拦住成片。"""
+    if not config.COVER_ART or not config.COVER_AI_CAR or not subject:
+        return None
+    from . import library
+
+    picked = pick_reference(subject, exclude)
+    if picked is None:
+        log.info("封面:%s 没有认得出是这台车的参照官图,不用生图兜底", subject)
+        return None
+    ref, desc = picked
+    attrs = ref_attributes(ref, desc)
+    for mode in _car_modes():
+        prompt = CAR_REF_PROMPT if mode == "ref" else car_prompt(subject, attrs)
+        got = _ai_car_pass(subject, ref, attrs, prompt, mode)
+        if got is not None:
+            return got
+    return None
+
+
+@dataclass(frozen=True)
+class CarVisual:
+    """封面里那台车从哪来。"""
+    cut: Any                  # motion_assets.Cutout
+    still: Path               # 原图(官方白底官图 / 生图候选)
+    source: str               # "official_cutout" | "ai_generated"
+    trace: dict[str, Any] = field(default_factory=dict)
+
+
+def pick_visual(subject: str, exclude: Sequence[str | Path] = ()) -> CarVisual | None:
+    """封面里那台车:先要素材池的白底官图(和第一支完全一致),抠不出来就生图生成一台。"""
+    car = (pick_car(subject, exclude) if exclude else None) or pick_car(subject)
+    if car is not None:
+        cut, still = car
+        if cut is not None:
+            return CarVisual(cut=cut, still=Path(still), source="official_cutout",
+                             trace={"car_source": "official_cutout"})
+    ai = ai_car(subject, exclude)
+    if ai is None:
+        return None
+    cut, still, trace = ai
+    return CarVisual(cut=cut, still=still, source="ai_generated", trace=trace)
 
 
 def find_plates(im: Any) -> list[tuple[int, int, int, int]]:
@@ -691,17 +1290,20 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
     """出一版封面,同时按 3:4 和 4:3 各重排一张(小红书 3:4;抖音网页版要横 4:3 + 竖 3:4)。
     成功返回 {"path", "tone", "source", "still"},否则 None。
 
+    车从哪来:素材池的白底官图(抠图)→ 抠不出来就生图生成一台(`ai_car`,过三道质检门)
+    → 都没有才退回老封面。两种来源走的是同一套版式,主页一排看过去是同一种封面。
+
     B 版:有带数字的钩子就钩子当大字、标题当副标;`exclude` 传 A 版用过的官图,尽量换一张车图。"""
     from .narration import cover_3x4_path, cover_4x3_path
 
     if not config.COVER_ART or not title:
         return None
     try:
-        car = (pick_car(subject, exclude) if exclude else None) or pick_car(subject)
-        if car is None:
+        visual = pick_visual(subject, exclude)
+        if visual is None:
             log.info("封面:%s 没有能抠的白底官图,退回老封面", subject)
             return None
-        cut, still = car
+        cut, still = visual.cut, visual.still
         hook = usable_hook(hook) if variant == "b" else ""
         main, sub = (hook, title) if hook else split_title(title, short_name(kicker))
         tone = tone_of(project_id, variant)
@@ -715,7 +1317,7 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         for path, (im, _) in rendered:
             _save(im, path)
         return {"path": str(dest), "tone": tone.name, "source": rendered[0][1][1],
-                "still": str(still), "main": main, "sub": sub}
+                "still": str(still), "main": main, "sub": sub, **visual.trace}
     except Exception as exc:  # noqa: BLE001
         log.warning("统一风格封面失败,退回老封面:%s", exc)
         return None
@@ -767,12 +1369,19 @@ def rebuild(project_id: str) -> dict[str, Any]:
     hook = packaging.cover_hook(pkg.titles if pkg else [], price=price,
                                 thesis=str(project.get("thesis") or ""))
     if hook and a:
+        # B 版换一张参照图(AI 车用的是官方参照图,真车用的是官图本身)
         out["b"] = build(project_id, config.project_dir(project_id) / aspect.cover_name(project, "b"),
                          size=size, title=b_title(pkg, title_a, hook), subject=subject,
-                         kicker=meta.get("kicker", ""), variant="b", hook=hook, exclude=[a["still"]])
+                         kicker=meta.get("kicker", ""), variant="b", hook=hook,
+                         exclude=[a.get("car_reference") or a["still"]])
     if a:
         rendered["cover_style"] = "art"
         rendered["cover_art"] = {k: v for k, v in (("a", a), ("b", out.get("b"))) if v}
+        rendered["cover_car"] = a.get("car_source", "official_cutout")
+        note = str(rendered.get("source_note") or "")
+        if a.get("car_source") == "ai_generated" and "AI 生成" not in note:
+            # 封面那台车是生图出来的:说清楚,别让人以为是官方实拍
+            rendered["source_note"] = (note + ";封面车型图为 AI 生成示意,以官方图为准").strip(";")
         db.write_json(project_id, "render.json", rendered)
     return out
 

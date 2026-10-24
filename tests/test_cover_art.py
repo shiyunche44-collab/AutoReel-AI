@@ -1,6 +1,8 @@
-"""统一风格封面:浅色影棚底图缓存 / 质检、真车抠图、出图尺寸、标题拆主副行。全程不联网。"""
+"""统一风格封面:浅色影棚底图缓存 / 质检、真车抠图、生图兜底那台车、出图尺寸、标题拆主副行。全程不联网。"""
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -167,3 +169,236 @@ def test_scrub_plate_removes_third_party_logo():
     blank = Image.new("RGBA", (800, 400), (150, 20, 40, 255))
     ImageDraw.Draw(blank).rectangle((340, 260, 460, 300), fill=(240, 242, 244, 255))
     assert cover_art.find_plates(blank) == []
+
+
+# --------------------------------------------------------------------------
+# 生图兜底那台车(素材池里没有白底官图时)
+# --------------------------------------------------------------------------
+def _ai_env(monkeypatch, tmp_path, *, clean="NO", same="YES"):
+    """把生图那条路的外部依赖全换成本地假货。返回调用计数,用来断言"只生一次"。"""
+    car = _studio_car(tmp_path / "ai_car.png")
+    calls: dict[str, object] = {"generate": 0, "prompt": "", "seed": 0}
+
+    def fake_generate_many(prompt, *, n=1, seed=None, aspect_ratio=None,
+                           output_file="gen.png", **kw):
+        calls["generate"] = int(calls["generate"]) + 1
+        calls["prompt"] = prompt
+        calls["seed"] = seed
+        calls["kw"] = kw
+        return [images.ImageRef(url=f"fake://cand{i}", origin="generate") for i in range(n)]
+
+    def fake_download(url, dest, **kw):
+        shutil.copyfile(car, dest)
+        return Path(dest)
+
+    def fake_vlm(path, prompt):
+        # 同款门问的是"两张图是不是同一台车",题干里有"two images"
+        return same if "two images" in prompt else clean
+
+    monkeypatch.setattr(images, "generate_many", fake_generate_many)
+    monkeypatch.setattr(images, "download", fake_download)
+    monkeypatch.setattr(cover_art, "_vlm_answer", fake_vlm)
+    monkeypatch.setattr(cover_art, "pick_reference",
+                        lambda subject, exclude=(): (car, "白色比亚迪唐右前45度白底定妆照"))
+    monkeypatch.setattr(cover_art, "_ask_ref_attributes",
+                        lambda ref: {"model": "BYD Tang", "color": "silver", "body": "SUV"})
+    # 生图模式固定成"只走文字生图":图生图那条路要 mcode-tools CLI,在场,
+    # 跑测试的机器不一定有 —— 模式表由 cover_art._car_modes 决定,这里钉死它。
+    monkeypatch.setattr(cover_art, "_car_modes", lambda: ("t2i",))
+    return calls
+
+
+def test_ai_car_used_when_no_white_bg(art, tmp_path, monkeypatch):
+    """素材池抠不出车 → 生图那台车顶上,出来的封面和老模板完全不是一个样。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    dest = tmp_path / "cover_a.jpg"
+    got = cover_art.build("p1", dest, size=(1920, 1080), title="23.99万起", subject="比亚迪大唐",
+                          kicker="比亚迪大唐 · 23.99万元起")
+    assert got and Path(got["path"]) == dest
+    assert got["car_source"] == "ai_generated"
+    assert got["car_reference"].endswith("ai_car.png")
+    assert calls["generate"] == 1
+    with Image.open(dest) as im:
+        assert im.size == (1920, 1080)
+        # 车画在下半部(和真车抠图那条路同一个位置)
+        w, h = im.size
+        x = int(w * 0.75)
+        assert min(im.getpixel((x, y))[1] for y in range(int(h * 0.6), int(h * 0.86), 8)) < 120
+    assert (tmp_path / "cover_a_3x4.jpg").is_file()
+    assert (tmp_path / "cover_a_4x3.jpg").is_file()
+
+
+def test_ai_car_rejected_when_model_differs(art, tmp_path, monkeypatch):
+    """同款门判否 → 这一台不能用。四张全否就退回老封面(封面不能拦住成片)。"""
+    calls = _ai_env(monkeypatch, tmp_path, same="NO")
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐") is None
+    # 判否过一次就别再烧钱了
+    assert cover_art.build("p1", tmp_path / "b.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐") is None
+    assert calls["generate"] == 1
+
+
+def test_ai_car_cached_not_regenerated(art, tmp_path, monkeypatch):
+    """同一台车重出封面不再生图(缓存命中)。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    first = cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                             subject="比亚迪大唐")
+    second = cover_art.build("p1", tmp_path / "b.jpg", size=(1920, 1080), title="t",
+                              subject="比亚迪大唐")
+    assert first and second
+    assert calls["generate"] == 1
+
+
+def test_car_prompt_has_model_and_color():
+    """提示词要带车型和颜色:写错颜色等于换了一台车。"""
+    prompt = cover_art.car_prompt("比亚迪大唐", {"model": "BYD Tang", "color": "silver",
+                                                  "body": "SUV"})
+    assert "BYD Tang" in prompt and "比亚迪大唐" in prompt
+    assert "silver" in prompt and "SUV" in prompt
+    assert len(prompt) <= 1500
+    assert "汽车之家" not in prompt and "AUTOHOME" not in prompt
+
+
+def test_ref_attributes_fall_back_to_desc(art, monkeypatch):
+    """视觉模型不可用时,用参照图 desc 里的中文颜色兜底。"""
+    monkeypatch.setattr(cover_art, "_ask_ref_attributes", lambda ref: {})
+    attrs = cover_art.ref_attributes(Path("x.jpg"), "白色比亚迪唐右前45度白底定妆照")
+    assert attrs["color"] == "white"
+
+
+def test_official_cutout_wins_over_ai(art, tmp_path, monkeypatch):
+    """有白底官图就抠图,不去生图(车型不会画错)。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    got = cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t", subject="小米YU7")
+    assert got and got["car_source"] == "official_cutout"
+    assert calls["generate"] == 0
+
+
+def test_cover_ai_car_switch_off(art, tmp_path, monkeypatch):
+    """COVER_AI_CAR=0 → 不生图,行为同今天(抠不到就退回老封面)。"""
+    monkeypatch.setattr(config, "COVER_AI_CAR", False)
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐") is None
+    assert calls["generate"] == 0
+
+
+def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
+    """图生图:把官方参照图传进生图接口,并且强制走 Connector 后端(直连不支持参考图)。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    monkeypatch.setattr(cover_art, "_car_modes", lambda: ("ref",))
+    monkeypatch.setattr("app.providers.cli.connector_available", lambda: True)
+    uploaded = {}
+
+    def fake_upload(path, **kw):
+        uploaded["path"] = str(path)
+        uploaded["backend"] = kw.get("backend")
+        return "https://example.invalid/ref.jpg"
+
+    monkeypatch.setattr("app.providers.cli.upload_temp_url", fake_upload)
+    got = cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                          subject="比亚迪大唐")
+    assert got and got["car_source"] == "ai_generated"
+    assert got["car_mode"] == "ref"
+    # 参照图确实上传了,而且走的是 mcode(直连给的是 data URI,远端生图服务拿不到)
+    assert uploaded["backend"] == "mcode"
+    assert uploaded["path"].endswith("ai_car.png")
+    # 生图请求带了参考图
+    assert calls["kw"].get("input_urls") == ["https://example.invalid/ref.jpg"]
+    assert calls["kw"].get("backend") == "mcode"
+
+
+def test_car_facing_must_match_cover_direction(art, tmp_path, monkeypatch):
+    """车头朝向不对(朝左)→ 淘汰。封面版式固定朝右,朝左的车并排放一眼就露馅。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    real_cutout = motion_assets.cutout
+
+    def left_facing(path, item_id=""):
+        cut = real_cutout(path, item_id=item_id)
+        if cut is None:
+            return None
+        return motion_assets.Cutout(**{**cut.geometry(), "facing": "left"})
+
+    monkeypatch.setattr(motion_assets, "cutout", left_facing)
+    assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐") is None
+    assert calls["generate"] == 1
+
+
+def test_clean_gate_does_not_kill_factory_badges(art, tmp_path, monkeypatch):
+    """G2 只拦硬伤(可读文字/水印/第二辆车/车顶加装),不拦原厂车标与轮毂徽章。
+
+    问法写太宽("有没有 logo/badge")会把原厂轮毂中心盖的徽章算成 logo,
+    干净候选全被误杀 —— 实测踩过,这里钉住:题干里不能出现"logo/badge"这类问法。"""
+    prompt = cover_art.CAR_CLEAN_PROMPT.lower()
+    for banned in ("logo", "badge", "emblem"):
+        assert banned not in prompt, f"G2 问法里出现了 {banned}:会把原厂徽章误杀"
+    assert "roof box" in prompt  # 车顶行李箱这类加装必须拦
+
+
+def test_clean_gate_catches_text_and_roof_accessories(art, tmp_path, monkeypatch):
+    """有可读文字 / 车顶行李箱的候选判否。"""
+    calls = _ai_env(monkeypatch, tmp_path, clean="YES")
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐") is None
+    assert calls["generate"] == 1
+
+
+def test_gates_version_invalidates_stale_cache(art, tmp_path, monkeypatch):
+    """改了质检门判据,旧缓存里的"全否"结论不能继续挡住 —— 得重跑。"""
+    calls = _ai_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐")
+    # 把缓存里的门版本改成旧版 → 下次必须重新生图
+    for meta_path in (tmp_path / "_cache" / "cover_theme" / "cars").rglob("meta.json"):
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["gates_version"] = cover_art.GATES_VERSION - 1
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    calls["generate"] = 0
+    assert cover_art.build("p1", tmp_path / "b.jpg", size=(1920, 1080), title="t",
+                           subject="比亚迪大唐")
+    assert calls["generate"] == 1
+
+
+def test_compare_pair_flips_ref_only_when_ref_faces_left(tmp_path):
+    """比对图要把两车摆成同朝向:参照图朝左才镜像,朝右就保持原样。"""
+    from PIL import Image
+
+    d = tmp_path
+    flat = d / "flat.jpg"
+    ref = d / "ref.jpg"
+    # 左图:深色块在左边;右图:深色块在右边
+    Image.new("RGB", (100, 50), (255, 255, 255)).save(flat)
+    Image.new("RGB", (100, 50), (255, 255, 255)).save(ref)
+    a = Image.open(flat).convert("RGB")
+    a.paste((0, 0, 0), (0, 0, 50, 50))
+    a.save(flat)
+    b = Image.open(ref).convert("RGB")
+    b.paste((0, 0, 0), (50, 0, 100, 50))
+    b.save(ref)
+
+    out = cover_art._compare_pair(flat, ref, d / "cmp_r.jpg", ref_facing="right")
+    with Image.open(out) as im:
+        w = im.width
+        fw = (w - 12) // 2                      # 每半张的宽(中间留 12px 缝)
+        assert im.getpixel((int(fw * 0.25), 300))[0] < 128          # 生成图:左深
+        assert im.getpixel((int(fw * 1.75), 300))[0] < 128          # 参照图:右深(没翻)
+        assert im.getpixel((int(fw * 1.25), 300))[0] > 200          # 参照图左侧是白的
+
+    out = cover_art._compare_pair(flat, ref, d / "cmp_l.jpg", ref_facing="left")
+    with Image.open(out) as im:
+        w = im.width
+        fw = (w - 12) // 2
+        assert im.getpixel((int(fw * 0.25), 300))[0] < 128
+        assert im.getpixel((int(fw * 1.25), 300))[0] < 128          # 参照图翻成左深
+        assert im.getpixel((int(fw * 1.75), 300))[0] > 200
+

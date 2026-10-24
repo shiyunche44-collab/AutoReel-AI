@@ -215,14 +215,20 @@ def music_batch(args: dict, timeout: float) -> dict:
 def generate_image(args: dict, timeout: float) -> dict:
     items = []
     for req in args.get("requests") or []:
+        want = max(1, int(req.get("n") or 1))
         body = {"model": config.IMAGE_MODEL, "prompt": req["prompt"][:1500],
-                "response_format": "url", "n": 1}
+                "response_format": "url", "n": want}
         if req.get("aspect_ratio"):
             body["aspect_ratio"] = req["aspect_ratio"]
+        if req.get("seed") is not None:
+            body["seed"] = int(req["seed"])
         data = request("POST", "/v1/image_generation", tool="generate_image",
                        json_body=body, timeout=timeout, retries=0)
         urls = (data.get("data") or {}).get("image_urls") or []
-        items.append({"node_id": "url:" + urls[0] if urls else None})
+        # 一次调用可能出多张(接口 n 最多 9):每张都算一个 success_item,
+        # 上层逐张过质检门后挑一张 —— 封面那台"AI 车"就是这么挑出来的。
+        for u in urls[:want]:
+            items.append({"node_id": "url:" + str(u)})
     return {"success_items": items}
 
 

@@ -2075,11 +2075,16 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     cover = Path(art["path"]) if art else render_mod.build_cover(
         result.output_path, title, dest_a, subtitle=meta["subtitle"], size=size,
         still=still, kicker=meta["kicker"])
+    source_note = ("画面素材:品牌官方宣传片与官方图片,仅作"
+                   f"{profile.vocab.subject_label}展示")
+    if art and art.get("car_source") == "ai_generated":
+        # 封面那台车是生图出来的:说清楚,别让人以为是官方实拍
+        source_note += ";封面车型图为 AI 生成示意,以官方图为准"
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
                "cover_meta": meta, "cover_still": str(still) if still else None,
                "cover_style": "art" if art else "legacy",
-               "source_note": "画面素材:品牌官方宣传片与官方图片,仅作"
-               f"{profile.vocab.subject_label}展示"}
+               "cover_car": (art or {}).get("car_source", "legacy"),
+               "source_note": source_note}
     if art:
         payload["cover_art"] = {"a": art}
     db.write_json(project_id, "render.json", payload)
@@ -2122,10 +2127,12 @@ def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: 
         made = cover_art.build(project_id, dest, size=size,
                                title=cover_art.b_title(pkg, title_a or caption, hook),
                                subject=subject, kicker=meta.get("kicker", ""), variant="b",
-                               hook=hook, exclude=[art["still"]]) if art else None
+                               hook=hook,
+                               exclude=[art.get("car_reference") or art["still"]]) if art else None
         if made:
             return {"path": made["path"], "hook": cover_art.usable_hook(hook), "style": "art",
-                    "tone": made["tone"], "source": made["source"], "still": made["still"]}
+                    "tone": made["tone"], "source": made["source"], "still": made["still"],
+                    "car_source": made.get("car_source", "official_cutout")}
         cover = render_mod.build_cover(video_path, caption, dest, subtitle=meta.get("subtitle", ""),
                                        size=size, still=still, kicker=meta.get("kicker", ""),
                                        layout="hook", hook=hook)

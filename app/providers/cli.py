@@ -78,6 +78,22 @@ def is_direct() -> bool:
     return config.CONNECTOR_BACKEND == "direct"
 
 
+def _use_direct(backend: str = "") -> bool:
+    """这次调用走哪条路:"" = 跟全局配置;"mcode" / "direct" = 点名要。"""
+    if not backend:
+        return is_direct()
+    return backend == "direct"
+
+
+def connector_available() -> bool:
+    """mcode-tools CLI 在不在。只有 MiniMax Code 运行时才有 —— 服务跑在别处时是 False。"""
+    try:
+        cli_path()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def source_label(tool: str) -> str:
     """一次调用实际用的数据源名,写进事实的 source_tool。直连时与工具名可能不同。"""
     if is_direct():
@@ -170,18 +186,21 @@ def call(
     timeout: int | None = None,
     retries: int = 2,
     retry_delay: float = 3.0,
+    backend: str = "",
 ) -> Any:
     """调用一个 Connector 工具并返回其 JSON 结果。
 
     参数通过临时文件传递(`--args-file`),调用后立即删除。
     `args` 必须是单个 JSON 对象 —— Connector 不接受数组/标量作为顶层参数。
-    """
+
+    `backend` 点名要走哪条路:"mcode" 强制走 CLI(即使全局配的是直连),
+    "direct" 强制走直连,留空则跟全局配置走。"""
     payload = args if args is not None else {}
     if not isinstance(payload, dict):
         raise ValueError("Connector 参数必须是单个 JSON 对象")
 
     timeout = timeout or config.CONNECTOR_TIMEOUT_DEFAULT
-    if is_direct():
+    if _use_direct(backend):
         from . import direct  # 延迟导入:direct 依赖本模块的异常类
 
         started = time.monotonic()
@@ -266,9 +285,12 @@ def _unwrap(tool: str, result: Any) -> Any:
 # --------------------------------------------------------------------------
 # 资源 URL 与下载
 # --------------------------------------------------------------------------
-def get_asset_url(node_id: str, *, timeout: int = 60) -> str:
-    """把 Drive node_id 换成一个可下载的短时链接。"""
-    if is_direct():
+def get_asset_url(node_id: str, *, timeout: int = 60, backend: str = "") -> str:
+    """把 Drive node_id 换成一个可下载的短时链接。
+
+    `backend` 用于"点名"走哪条路 —— 混用两条路时资源标识不通用(直连的 node_id 是
+    `url:...`,Connector 的 node_id 是 Drive 节点号),必须用跟生成时同一条路换地址。"""
+    if _use_direct(backend):
         from . import direct
 
         return direct.get_asset_url(node_id)
@@ -282,12 +304,15 @@ def get_asset_url(node_id: str, *, timeout: int = 60) -> str:
 
 
 def upload_temp_url(local_path: str | Path, *, mime_type: str | None = None,
-                    timeout: int = 300) -> str:
-    """把本地文件上传为临时 URL(生成接口只接受 URL,不接受本地路径)。"""
+                    timeout: int = 300, backend: str = "") -> str:
+    """把本地文件上传为临时 URL(生成接口只接受 URL,不接受本地路径)。
+
+    `backend="mcode"` 强制走 CLI 上传:图生图时需要一个**公网可达**的地址给生图服务,
+    而直连后端返回的是 data URI,只对同一次直连请求里的图片理解有效。"""
     path = Path(local_path)
     if not path.is_file():
         raise ConnectorError("upload_temp_url", f"文件不存在: {path}")
-    if is_direct():
+    if _use_direct(backend):
         from . import direct
 
         return direct.upload_temp_url(path)
