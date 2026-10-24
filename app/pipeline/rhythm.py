@@ -46,6 +46,9 @@ SAME_RUN_BLOCK = 4
 def _overlay_signature(spec: ShotSpec) -> tuple:
     """叠加内容指纹:同样的版式 + 同样的行/词 = 同一屏画面。"""
     ov = spec.overlay if isinstance(spec.overlay, dict) else {}
+    # card 版式的内容在 spec.card 里,不在 overlay —— 不看它,两张不同的卡会被当成同一屏
+    if not ov and isinstance(spec.card, dict):
+        ov = spec.card
     rows = ov.get("rows") or []
     lines = ov.get("lines") or []
     return (spec.layout, spec.chapter or spec.section,

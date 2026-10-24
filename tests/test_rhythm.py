@@ -94,6 +94,13 @@ def test_same_layout_with_same_rows_is_not_a_change():
     assert rhythm.max_change_gap(specs) == pytest.approx(10.0)
 
 
+def test_cards_with_different_rows_are_a_change():
+    """card 版式的数据在 spec.card 里:两张不同版本的卡是两屏画面。"""
+    specs = [_spec(0, "card", duration=7.0, card={"kind": "spec", "rows": [{"fact_id": "f_1"}]}),
+             _spec(1, "card", duration=7.0, card={"kind": "spec", "rows": [{"fact_id": "f_2"}]})]
+    assert rhythm.max_change_gap(specs) == pytest.approx(7.0)
+
+
 def test_concept_animation_counts_as_always_changing():
     specs = [_spec(0, "concept", duration=20.0, overlay={"kind": "concept", "rows": []}),
              _spec(1, "stat", duration=4.0)]
