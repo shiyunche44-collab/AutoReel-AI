@@ -30,6 +30,16 @@ CREATOR_UPLOAD = "https://creator.douyin.com/creator-micro/content/upload"
 MAX_UPLOAD = 100 * 1024 * 1024
 #: 单片建议 20MB
 PART_SIZE = 20 * 1024 * 1024
+#: 网页版标题框上限(页面上写着 0/30)
+TITLE_MAX = 30
+#: 网页版等视频传完(页面出现「重新上传」)的时限
+UPLOAD_WAIT_MS = 10 * 60 * 1000
+
+#: 网页版封面两个位:(位上的提示字, 弹窗里切到这一步的按钮/页签)
+COVER_SLOTS = (("横封面4:3", "设置横封面"), ("竖封面3:4", "设置竖封面"))
+#: 封面弹窗里「上传封面」那个隐藏的 file input(按钮本身被上传层盖住,点不到)
+COVER_INPUT = ("div:has(> .semi-upload):has-text('上传封面') > .semi-upload "
+               "> input.semi-upload-hidden-input")
 
 
 def _int(value: Any) -> int | None:
@@ -39,6 +49,83 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def cover_files(cover: Path | None) -> list[tuple[str, str, Path]]:
+    """网页版两个封面位各传哪张图:[(位上的提示字, 弹窗步骤名, 图)]。
+
+    优先用按 4:3 / 3:4 **重新排版**的那张(`cover_art.build` 出的);没有就退回主封面,
+    但只在主封面横竖和这个位一致时 —— 竖封面塞进 4:3 位,平台一裁就只剩中间一条。
+    两张都没有的位跳过,平台自己从视频里截帧。"""
+    from ...pipeline.narration import cover_3x4_path, cover_4x3_path
+
+    if not cover or not Path(cover).is_file():
+        return []
+    cover = Path(cover)
+    landscape = True
+    try:
+        from PIL import Image
+
+        with Image.open(cover) as im:
+            landscape = im.width >= im.height
+    except OSError:
+        pass
+    out: list[tuple[str, str, Path]] = []
+    for (tip, step), exact, same_way in zip(COVER_SLOTS, (cover_4x3_path(cover), cover_3x4_path(cover)),
+                                            (landscape, not landscape)):
+        if exact.is_file():
+            out.append((tip, step, exact))
+        elif same_way:
+            out.append((tip, step, cover))
+    return out
+
+
+def _cover_srcs(page: Any) -> list[str]:
+    """两个封面位上当前那张图的地址。传成功后会换成新地址 —— 拿它判断有没有设上。"""
+    return page.eval_on_selector_all(
+        "[class*=coverControl]", "els => els.map(e => (e.querySelector('img') || {}).src || '')")
+
+
+def set_covers(session: Any, cover: Path | None) -> str:
+    """在发布页的封面弹窗里把横、竖封面传上去。成功返回空串;没设上返回一句说明。
+
+    设不上**不拦发布**:平台会自己截帧当封面,片子照样能发;说明写进发布结果给人看。"""
+    files = cover_files(cover)
+    if not files:
+        return "没有封面文件,用平台自动截帧"
+    page = session.page
+    dialog = None
+    try:
+        dialog = page.locator("[role=dialog]")
+        before = _cover_srcs(page)
+        page.locator("[class*=coverControl]", has_text=files[0][0]) \
+            .locator("[class*=cover-]").first.click()
+        dialog.first.wait_for(timeout=10000)
+        for i, (_tip, step, path) in enumerate(files):
+            if i:
+                button = dialog.get_by_role("button", name=step)
+                (button if button.count() else dialog.get_by_text(step, exact=True)).first.click()
+                page.wait_for_timeout(1500)
+            dialog.locator(COVER_INPUT).first.set_input_files(str(path))
+            page.wait_for_timeout(4000)
+        dialog.get_by_role("button", name="完成").first.click()
+        dialog.first.wait_for(state="hidden", timeout=15000)
+        after = _cover_srcs(page)
+    except Exception as exc:  # noqa: BLE001 - 封面设不上不该拦住发布
+        try:
+            if dialog is not None and dialog.count():
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(1000)
+        except Exception:  # noqa: BLE001
+            pass
+        return f"封面没设上({type(exc).__name__}),用平台自动截帧"
+    slots = [tip for tip, _step in COVER_SLOTS]
+    unchanged = [tip for tip, _s, _p in files
+                 if len(before) == len(after) == len(slots)
+                 and before[slots.index(tip)] == after[slots.index(tip)]]
+    if unchanged:
+        return f"封面可能没换上:{'、'.join(unchanged)}"
+    return ""
 
 
 def _config(key: str) -> str:
@@ -209,11 +296,12 @@ class DouyinAdapter:
 
     # -- 网页版兜底 ------------------------------------------------------
     def _publish_browser(self, req: PublishRequest, account: Account) -> PublishResult:
-        from . import browser
+        from .. import browser
 
         video = Path(req.video_path)
         if not video.is_file():
             raise PublishError(f"成片不存在:{video.name}", retryable=False)
+        cover_note = ""
         try:
             with browser.BrowserSession("douyin") as session:
                 session.goto(CREATOR_UPLOAD, wait_ms=3000)
@@ -221,12 +309,14 @@ class DouyinAdapter:
                     raise PublishError("创作者平台发布页没找到上传入口(页面改版了?)",
                                        retryable=False)
                 session.upload_file("input[type=file]", video)
-                session.page.wait_for_timeout(8000)
+                if not session.wait_text("重新上传", timeout=UPLOAD_WAIT_MS):
+                    raise PublishError("视频上传没在时限内完成", retryable=True)
                 for selector in ("input[name=title]", "input[placeholder*='标题']",
                                  "input[class*='title']"):
                     if session.exists(selector, timeout=1500):
-                        session.fill(selector, (req.title or "")[:55])
+                        session.fill(selector, (req.title or "")[:TITLE_MAX])
                         break
+                cover_note = set_covers(session, req.cover_path)
                 for selector in ("button:has-text('发布')", "button:has-text('提交')",
                                  "text=发布"):
                     if session.exists(selector, timeout=1500):
@@ -244,8 +334,11 @@ class DouyinAdapter:
         if "发布成功" not in body and "投稿成功" not in body:
             raise PublishError("网页版发布后没找到成功提示,可能是页面改版或需要验证码",
                                retryable=True)
+        message = "网页版已提交(未拿到作品 id)"
+        if cover_note:
+            message += f";{cover_note}"
         return PublishResult(ok=True, state="submitted", remote_id="",
-                             remote_url=CREATOR_UPLOAD, message="网页版已提交(未拿到作品 id)")
+                             remote_url=CREATOR_UPLOAD, message=message)
 
     # -- 数据 ------------------------------------------------------------
     def fetch_metrics(self, ref: PlatformRef, account: Account) -> MetricSnapshot:

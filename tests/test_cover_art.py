@@ -97,9 +97,11 @@ def test_build_sizes(art, tmp_path, size, variant, hook):
         w, h = size
         x = int(w * (0.75 if w > h else 0.5))
         assert min(im.getpixel((x, y))[1] for y in range(int(h * 0.6), int(h * 0.86), 8)) < 120
-    if size[1] > size[0]:
-        with Image.open(dest.with_name(f"{dest.stem}_3x4{dest.suffix}")) as im:
-            assert im.size == (1080, 1440)
+    # 横竖项目都按 3:4 和 4:3 各重排一张(小红书 / 抖音网页版的两个封面位)
+    with Image.open(dest.with_name(f"{dest.stem}_3x4{dest.suffix}")) as im:
+        assert im.size == (1080, 1440)
+    with Image.open(dest.with_name(f"{dest.stem}_4x3{dest.suffix}")) as im:
+        assert im.size == (1440, 1080)
 
 
 def test_build_none_without_car(art, tmp_path):

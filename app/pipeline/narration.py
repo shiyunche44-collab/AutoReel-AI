@@ -940,6 +940,16 @@ def cover_3x4_path(cover: str | Path) -> Path:
     return cover.with_name(f"{cover.stem}{COVER_3X4_SUFFIX}{cover.suffix}")
 
 
+#: 抖音网页版要一张横封面 4:3(和一张竖封面 3:4,用 `cover_3x4_path`)
+COVER_4X3_SUFFIX = "_4x3"
+
+
+def cover_4x3_path(cover: str | Path) -> Path:
+    """封面旁边那张 4:3 重排版的路径(给抖音横封面)。"""
+    cover = Path(cover)
+    return cover.with_name(f"{cover.stem}{COVER_4X3_SUFFIX}{cover.suffix}")
+
+
 def _portrait_cover(image: Any, from_video: bool, title: str, dest: Path, subtitle: str,
                     size: tuple[int, int], kicker: str, layout: str = "title",
                     hook: str = "") -> Path | None:

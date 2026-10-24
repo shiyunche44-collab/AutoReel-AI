@@ -688,10 +688,11 @@ def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str 
 def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: str, subject: str,
           kicker: str = "", variant: str = "a", hook: str = "",
           exclude: Sequence[str | Path] = ()) -> dict[str, Any] | None:
-    """出一版封面(竖屏同时出 3:4)。成功返回 {"path", "tone", "source", "still"},否则 None。
+    """出一版封面,同时按 3:4 和 4:3 各重排一张(小红书 3:4;抖音网页版要横 4:3 + 竖 3:4)。
+    成功返回 {"path", "tone", "source", "still"},否则 None。
 
     B 版:有带数字的钩子就钩子当大字、标题当副标;`exclude` 传 A 版用过的官图,尽量换一张车图。"""
-    from .narration import cover_3x4_path
+    from .narration import cover_3x4_path, cover_4x3_path
 
     if not config.COVER_ART or not title:
         return None
@@ -704,9 +705,10 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         hook = usable_hook(hook) if variant == "b" else ""
         main, sub = (hook, title) if hook else split_title(title, short_name(kicker))
         tone = tone_of(project_id, variant)
-        jobs = [(Path(dest), size)]
-        if size[1] > size[0]:
-            jobs.append((cover_3x4_path(dest), (size[0], size[0] * 4 // 3)))
+        short = min(size)
+        jobs = [(Path(dest), size),
+                (cover_3x4_path(dest), (short, short * 4 // 3)),
+                (cover_4x3_path(dest), (short * 4 // 3, short))]
         name = short_name(kicker)
         rendered = [(path, compose(cut, tone, sz, main=main, sub=sub, name=name, brand=config.COVER_BRAND))
                     for path, sz in jobs]
