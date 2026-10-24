@@ -1227,6 +1227,8 @@ class CutApprove(BaseModel):
     account_ids: list[str]
     title: str = ""
     publish_at: float | None = None
+    #: 分发官的衍生品发到哪些账号:{"note": [...], "clip1": [...]}
+    pieces: dict[str, list[str]] = {}
 
 
 @app.post("/api/team/plan/{item_id}/publish")
@@ -1236,10 +1238,23 @@ def team_cut_approve(item_id: str, payload: CutApprove):
 
     try:
         out = publisher.approve_cut(item_id, payload.account_ids, title=payload.title,
-                                    publish_at=payload.publish_at)
+                                    publish_at=payload.publish_at, pieces=payload.pieces)
     except team_plan.PlanError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {**out, "item": team_plan.view(out["item"])}
+
+
+@app.get("/api/projects/{project_id}/repurpose/{name}")
+def repurpose_file(project_id: str, name: str):
+    """分发官的衍生品预览:笔记图片 note_NN.jpg、切片 clipN.mp4。"""
+    from .pipeline import repurpose
+
+    if name not in repurpose.preview_names():
+        raise HTTPException(400, "不支持的文件")
+    path = repurpose.folder(project_id) / name
+    if not path.is_file():
+        raise HTTPException(404, "衍生品还没出")
+    return FileResponse(path, media_type="video/mp4" if name.endswith(".mp4") else "image/jpeg")
 
 
 @app.post("/api/team/plan/{item_id}/reject-cut")

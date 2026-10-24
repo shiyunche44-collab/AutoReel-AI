@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS publications (
     description   TEXT NOT NULL DEFAULT '',
     tags          TEXT NOT NULL DEFAULT '[]',
     variant       TEXT NOT NULL DEFAULT '{}',      -- 发的是哪版包装:{"title_kind","title_source","cover"}
+    piece         TEXT NOT NULL DEFAULT '',        -- 空 = 主片;note / clip1 / clip2 = 分发官的衍生品
     state         TEXT NOT NULL DEFAULT 'pending', -- pending|uploading|submitted|published|failed
     remote_id     TEXT NOT NULL DEFAULT '',
     remote_url    TEXT NOT NULL DEFAULT '',
@@ -135,9 +136,8 @@ CREATE TABLE IF NOT EXISTS publications (
     created_at    REAL NOT NULL,
     updated_at    REAL NOT NULL
 );
--- 幂等基石:同一项目 + 同一账号 + 同一画幅只发一次
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pub_unique
-    ON publications(project_id, account_id, aspect);
+-- 幂等基石(同一项目 + 同一账号 + 同一画幅 + 同一件只发一次)在 `_migrate` 里建:
+-- 它要用 piece 列,老库得先补列
 CREATE INDEX IF NOT EXISTS idx_pub_state ON publications(state);
 CREATE INDEX IF NOT EXISTS idx_pub_project ON publications(project_id);
 
@@ -423,6 +423,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "scheduled_at" not in _column_names(conn, "publications"):
         # 定时发布:到这个时刻才领。空 = 建好就发(原来的行为)。
         conn.execute("ALTER TABLE publications ADD COLUMN scheduled_at REAL")
+    if "piece" not in _column_names(conn, "publications"):
+        # 一稿多发:主片之外的图文笔记 / 竖版切片。老记录都是主片。
+        conn.execute("ALTER TABLE publications ADD COLUMN piece TEXT NOT NULL DEFAULT ''")
+    conn.execute("DROP INDEX IF EXISTS idx_pub_unique")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pub_piece "
+                 "ON publications(project_id, account_id, aspect, piece)")
     snap_cols = _column_names(conn, "metric_snapshots")
     for col, ddl in (("avg_watch_sec", "REAL"), ("bounce_2s", "REAL"),
                      ("followers_gained", "INTEGER"), ("hours_since_publish", "REAL")):
@@ -966,7 +972,7 @@ def create_publication(row: dict[str, Any]) -> None:
     now = time.time()
     row = {
         "aspect": "16:9", "artifact": "", "title": "", "description": "",
-        "tags": "[]", "variant": "{}", "state": "pending", "remote_id": "", "remote_url": "",
+        "tags": "[]", "variant": "{}", "piece": "", "state": "pending", "remote_id": "", "remote_url": "",
         "upload_id": "", "error": "", "attempts": 0, "published_at": None, "scheduled_at": None,
         **row,
     }
@@ -976,10 +982,10 @@ def create_publication(row: dict[str, Any]) -> None:
         conn.execute(
             """INSERT INTO publications
                (id, project_id, account_id, platform, aspect, artifact, title, description,
-                tags, variant, state, remote_id, remote_url, upload_id, error, attempts,
+                tags, variant, piece, state, remote_id, remote_url, upload_id, error, attempts,
                 published_at, scheduled_at, created_at, updated_at)
                VALUES (:id, :project_id, :account_id, :platform, :aspect, :artifact, :title,
-                       :description, :tags, :variant, :state, :remote_id, :remote_url, :upload_id, :error,
+                       :description, :tags, :variant, :piece, :state, :remote_id, :remote_url, :upload_id, :error,
                        :attempts, :published_at, :scheduled_at, :created_at, :updated_at)""",
             row,
         )
@@ -1025,13 +1031,15 @@ def update_publication(pub_id: str, **fields: Any) -> None:
         )
 
 
-def find_publication(project_id: str, account_id: str, aspect: str) -> dict[str, Any] | None:
-    """幂等查询:同一项目 + 同一账号 + 同一画幅只应有一条记录。"""
+def find_publication(project_id: str, account_id: str, aspect: str,
+                     piece: str = "") -> dict[str, Any] | None:
+    """幂等查询:同一项目 + 同一账号 + 同一画幅 + 同一件只应有一条记录。"""
     init_db()
     with connect() as conn:
         cur = conn.execute(
-            "SELECT * FROM publications WHERE project_id = ? AND account_id = ? AND aspect = ?",
-            (project_id, account_id, aspect),
+            "SELECT * FROM publications WHERE project_id = ? AND account_id = ? AND aspect = ?"
+            " AND piece = ?",
+            (project_id, account_id, aspect, piece),
         )
         row = cur.fetchone()
     return dict(row) if row else None

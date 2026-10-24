@@ -464,6 +464,29 @@ def render_frames(card: dict[str, Any], subject: str, out_dir: Path,
     return frames
 
 
+#: 图文笔记的画布(小红书 3:4)
+NOTE_SIZE = (1080, 1440)
+
+
+def note_geo(size: tuple[int, int] = NOTE_SIZE, rows: int = 5) -> Geo:
+    """图文笔记没有平台按钮和字幕要躲:面板高度跟着行数走,上下居中,四边留一圈白。"""
+    w, h = size
+    need = 168 + 190 * max(1, rows) + 80  # 车型 + 标题 + 每行 + 来源行
+    tall = min(int(h * 0.76), need)
+    top = (h - tall) // 2
+    return Geo(w, h, top=top, bottom=top + tall, left=int(w * 0.10), right=int(w * 0.90))
+
+
+def still(card: dict[str, Any], subject: str, dest: str | Path, *,
+          background: Path | None = None, size: tuple[int, int] = NOTE_SIZE) -> Path:
+    """整张卡的静态图(所有行都在),给图文笔记用。"""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    g = note_geo(size, len(card["rows"]) + (1 if card.get("kind") == "compare" else 0))
+    _frame(card, subject, len(card["rows"]), _background(background, g), g).save(dest, quality=92)
+    return dest
+
+
 def render(card: dict[str, Any], subject: str, dest: str | Path, *,
            seconds: float | None = None, background: Path | None = None,
            size: tuple[int, int] | None = None) -> Path:

@@ -207,6 +207,53 @@ def enqueue(project_id: str, *, account_ids: list[str],
     return {"created": created, "skipped": skipped, "warnings": warnings}
 
 
+def enqueue_piece(project_id: str, account_id: str, piece: str, *, aspect: str, artifact: str,
+                  title: str, description: str = "", tags: list[str] | None = None,
+                  scheduled_at: float | None = None) -> dict[str, Any] | None:
+    """分发官的衍生品(图文笔记 / 竖版切片)建一条发布任务。已有就返回 None(幂等)。
+
+    `artifact` 是相对项目目录的文件名;笔记的图片清单发布时从 `repurpose.json` 读。
+    文案已经在分发官那里按平台写好、查过禁用词,这里只按平台上限截长度。"""
+    account = accounts_mod.get_account(account_id)
+    if not account or not account.enabled:
+        return None
+    if db.find_publication(project_id, account_id, aspect, piece):
+        return None
+    from ..models import new_id
+
+    rule = rule_for(account.platform)
+    pub_id = new_id("pub_")
+    now = time.time()
+    db.create_publication({
+        "id": pub_id, "project_id": project_id, "account_id": account_id,
+        "platform": account.platform, "aspect": aspect, "artifact": artifact, "piece": piece,
+        "title": md.clamp_title(title, rule.title_max, rule.title_soft),
+        "description": description[:rule.desc_max],
+        "tags": json.dumps(list(tags or []), ensure_ascii=False),
+        "state": PENDING, "scheduled_at": scheduled_at, "created_at": now, "updated_at": now,
+    })
+    db.add_event(project_id, f"publish:{account.platform}", reason=f"排队发布{piece}到{rule.label}")
+    return db.get_publication(pub_id)
+
+
+def piece_path(row: dict[str, Any]) -> Path:
+    """这条任务要传的文件:主片按画幅,衍生品按 artifact。"""
+    if row.get("piece"):
+        return config.project_dir(row["project_id"]) / str(row.get("artifact") or "")
+    return artifact_path(row["project_id"], row.get("aspect") or LANDSCAPE)
+
+
+def _piece_extra(row: dict[str, Any]) -> tuple[dict[str, Any], Path | None]:
+    """衍生品的额外参数:笔记给图片清单(第一张当封面)。"""
+    if row.get("piece") != "note":
+        return {}, None
+    manifest = db.read_json(row["project_id"], "repurpose.json", {}) or {}
+    root = config.project_dir(row["project_id"])
+    images = [root / name for name in ((manifest.get("note") or {}).get("images") or [])]
+    images = [p for p in images if p.is_file()]
+    return {"images": images}, (images[0] if images else None)
+
+
 def _packaging_choice(project_id: str, override: str, original: str) -> dict[str, str]:
     """发布用哪个标题、哪版封面。标题优先级:用户在发布时手改的 > 包装里选中的 > 原标题。
     返回 {"title": 选中的包装标题或空, "kind": 写法, "source": override|picked|original, "cover": a|b}。"""
@@ -282,6 +329,8 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
         if key in account.meta:
             extra[key] = account.meta[key]
     pub_id = row["id"]
+    piece_extra, piece_cover = _piece_extra(row)
+    extra.update(piece_extra)
 
     def _save_session(session: str) -> None:
         """上传会话落库 —— 进程重启后能接着传,不用从头再来。"""
@@ -295,9 +344,9 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
         account_id=account.id,
         platform=row["platform"],
         aspect=aspect,
-        video_path=artifact_path(project_id, aspect),
-        cover_path=_cover_for(project_id, aspect, account.platform,
-                              _variant_of(row).get("cover", "a")),
+        video_path=piece_path(row),
+        cover_path=piece_cover if row.get("piece") else _cover_for(
+            project_id, aspect, account.platform, _variant_of(row).get("cover", "a")),
         title=row.get("title") or "",
         description=row.get("description") or "",
         tags=_tags_of(row),
@@ -309,7 +358,11 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
 
 def _ensure_artifact(row: dict[str, Any]) -> None:
     """成片必须已经在了。画幅建项目时就定了,这里不再补渲另一个画幅。"""
-    path = artifact_path(row["project_id"], row.get("aspect") or LANDSCAPE)
+    path = piece_path(row)
+    if row.get("piece") == "note":
+        if not _piece_extra(row)[0].get("images"):
+            raise PublishError("图文笔记的图片不在了", retryable=False)
+        return
     if not path.is_file():
         raise PublishError(f"成片不存在:{path.name}", retryable=False)
 

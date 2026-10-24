@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import Skip, compliance
+from . import Skip, compliance, repurpose
 from .plan import PlanError
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
@@ -96,12 +96,14 @@ def review_view(item: dict[str, Any]) -> dict[str, Any]:
         "video_url": f"/api/projects/{pid}/download",
         "cover_url": f"/api/projects/{pid}/cover",
         "publish_at": next_publish_time(item["slot_at"]),
+        "pieces": repurpose.view(item),
     }
 
 
 def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
-                publish_at: float | None = None) -> dict[str, Any]:
-    """成片闸通过:建发布任务,定时发。"""
+                publish_at: float | None = None,
+                pieces: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    """成片闸通过:建发布任务,定时发。`pieces` = 分发官的衍生品发到哪些账号 {note/clip1: [账号]}。"""
     from ..publish import service as publish_service
 
     item = db.get_plan_item(item_id)
@@ -120,6 +122,8 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
     if sheet["red"]:
         raise PlanError("审核单有红项,不能发:" + compliance.red_summary(sheet))
     at = next_publish_time(float(publish_at or item["slot_at"]))
+    # 衍生品有问题就整单不过,别主片排上了它没排
+    repurpose.approve(item, pieces or {}, at, dry_run=True)
     if not db.cas_plan_status(item_id, ("review",), "scheduled", publish_at=at):
         raise PlanError("这条选题刚被别处处理过")
     from ..publish import accounts as accounts_mod
@@ -141,12 +145,13 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
         raise PlanError("选的账号都不可用")
     for row in out["created"]:
         db.update_publication(row["id"], scheduled_at=at)
+    extras = repurpose.approve(item, pieces or {}, at)
     db.set_team_setting("publish_accounts", list(account_ids))
     when = dt.datetime.fromtimestamp(at).strftime("%m-%d %H:%M")
     db.add_event(item["project_id"], "team", reason=f"成片审核通过,定时 {when} 发布")
     return {"item": db.get_plan_item(item_id), "created": len(out["created"]),
             "skipped": len(out["skipped"]), "warnings": out.get("warnings") or [],
-            "publish_at": at}
+            "publish_at": at, "pieces": extras}
 
 
 def reject_cut(item_id: str, note: str = "") -> dict[str, Any]:
@@ -161,7 +166,8 @@ def sync() -> int:
     """已排发布的选题跟着发布任务走:都发出去 → 已发布;有失败且没有在途的 → 失败。"""
     changed = 0
     for item in db.list_plan_items(statuses=("scheduled",), limit=200):
-        pubs = db.list_publications(project_id=item["project_id"])
+        # 只看主片:衍生品晚几天发、失败了也不该让选题算「发布失败」
+        pubs = [p for p in db.list_publications(project_id=item["project_id"]) if repurpose.is_main(p)]
         if not pubs:
             continue
         states = {p["state"] for p in pubs}

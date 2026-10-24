@@ -195,7 +195,9 @@ def monitor(now: float | None = None) -> list[str]:
 
     now = time.time() if now is None else now
     seen = set(db.get_team_setting(_SEEN_KEY, []) or [])
-    pubs = [p for p in db.list_publications(limit=500) if p["state"] in ("published", "submitted")]
+    # 衍生品(切片 / 笔记)播放天然低,不进基线也不判限流
+    pubs = [p for p in db.list_publications(limit=500)
+            if p["state"] in ("published", "submitted") and not p.get("piece")]
     by_account: dict[str, list[dict[str, Any]]] = {}
     for p in sorted(pubs, key=lambda p: p.get("published_at") or p.get("updated_at") or 0):
         by_account.setdefault(p["account_id"], []).append(p)

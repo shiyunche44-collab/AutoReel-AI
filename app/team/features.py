@@ -125,7 +125,7 @@ def rows(since: float | None = None) -> list[dict[str, Any]]:
     """有 24 小时结果的作品:[{pub_id, account_id, title, published_at, features, outcome}]。"""
     out = []
     for pub in db.list_publications(limit=1000):
-        if pub["platform"] not in PLATFORMS or pub["state"] != "published":
+        if pub["platform"] not in PLATFORMS or pub["state"] != "published" or pub.get("piece"):
             continue
         if since is not None and (pub.get("published_at") or 0) < since:
             continue

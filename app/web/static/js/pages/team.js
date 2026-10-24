@@ -199,8 +199,49 @@ function healthBanner(row) {
     btn);
 }
 
+// 分发官的衍生品:图文笔记 + 竖版切片,各自勾发到哪些账号
+function pieceView(p) {
+  const red = (p.problems || []).length > 0;
+  const boxes = (p.accounts || []).map((a) => {
+    const box = h('input', { type: 'checkbox', value: a.id, checked: a.default, disabled: a.paused || red });
+    return { box, el: h('label', { class: 'chip-check' }, box, `${a.platform_label} · ${a.name}`) };
+  });
+  const media = p.kind === 'note'
+    ? h('div', { class: 'piece-strip' }, p.images.map((src) => h('a', { href: src, target: '_blank' },
+      h('img', { src, loading: 'lazy', alt: '' }))))
+    : h('video', { class: 'piece-clip', src: p.url, controls: true, preload: 'none' });
+  const text = p.kind === 'note'
+    ? h('details', { class: 'piece-body' }, h('summary', {}, p.title),
+      h('pre', {}, p.body), p.tags?.length ? h('div', { class: 'subtle small' }, p.tags.map((t) => `#${t}`).join(' ')) : null)
+    : h('div', {}, h('div', {}, p.title), h('div', { class: 'subtle small' }, p.why));
+  const el = h('div', { class: `piece${red ? ' is-red' : ''}` },
+    h('div', { class: 'piece-head' }, h('strong', {}, p.label),
+      red ? h('span', { class: 'text-danger small' }, icon('x', 'i-sm'), p.problems.join(';')) : null),
+    media, text,
+    boxes.length
+      ? h('div', { class: 'row wrap-row' }, boxes.map((b) => b.el))
+      : h('span', { class: 'subtle small' }, p.kind === 'note' ? '没有小红书账号,先去分发台添加' : '没有竖屏平台账号'));
+  return { el, ids: () => boxes.filter((b) => b.box.checked).map((b) => b.box.value) };
+}
+
+function piecesView(info) {
+  if (!info) return { el: null, picks: () => ({}) };
+  if (!info.ready) {
+    return { el: h('div', { class: 'subtle small' }, icon('clock', 'i-sm'), '分发官还在出图文笔记和切片,出好了这里会显示'), picks: () => ({}) };
+  }
+  const views = info.pieces.map((p) => ({ id: p.id, ...pieceView(p) }));
+  const el = h('div', { class: 'field pieces' },
+    h('span', { class: 'field-label' }, '一稿多发(和主片一起通过)'),
+    ...views.map((v) => v.el),
+    ...(info.errors || []).map((e) => h('div', { class: 'text-warning small' }, e)),
+    views.length ? null : h('span', { class: 'subtle small' }, '这条没出成衍生品'));
+  const picks = () => Object.fromEntries(views.map((v) => [v.id, v.ids()]).filter(([, ids]) => ids.length));
+  return { el, picks };
+}
+
 function reviewCard(item) {
   const rv = item.review || {};
+  const pieces = piecesView(rv.pieces);
   const accounts = DATA.accounts || [];
   const title = h('input', { class: 'input', value: rv.title || '', maxlength: '60', list: `titles-${item.id}` });
   const titles = h('datalist', { id: `titles-${item.id}` }, (rv.titles || []).map((t) => h('option', { value: t })));
@@ -227,8 +268,10 @@ function reviewCard(item) {
     try {
       const res = await api.post(`/api/team/plan/${item.id}/publish`, {
         account_ids: ids, title: title.value.trim(), publish_at: new Date(at.value).getTime() / 1000,
+        pieces: pieces.picks(),
       });
-      toast(`已排 ${when(res.publish_at)} 发布(${res.created} 个账号)`);
+      const extra = res.pieces?.length ? `;另排 ${res.pieces.join('、')}` : '';
+      toast(`已排 ${when(res.publish_at)} 发布(${res.created} 个账号)${extra}`);
       (res.warnings || []).forEach((w) => toast(w, { type: 'warning' }));
       await load();
     } catch (err) {
@@ -259,6 +302,7 @@ function reviewCard(item) {
         accounts.length
           ? h('div', { class: 'row wrap-row' }, boxes.map((b) => b.el))
           : h('span', { class: 'subtle small' }, '还没有可用账号,先去', h('a', { href: '/publish' }, '分发台'), '添加')),
+      pieces.el,
       h('div', { class: 'row plan-actions' }, pass, back, h('span', { class: 'grow' }),
         h('a', { class: 'btn btn-sm btn-ghost', href: `/project/${item.project_id}` }, icon('external', 'i-sm'), '项目'))),
   );
