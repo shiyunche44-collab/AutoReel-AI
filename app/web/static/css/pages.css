@@ -830,3 +830,20 @@
 .comment-card .card-head { flex-wrap: wrap; gap: 8px; }
 .comment-card .card-head h2 { white-space: nowrap; }
 .comment-card .card-head .row { flex-wrap: wrap; }
+/* 快反 / 行业日历 / 对标账号 */
+.plan-card.is-rapid { border-color: var(--danger, #d64545); box-shadow: inset 3px 0 0 var(--danger, #d64545); }
+.rapid-badge { margin-right: 6px; vertical-align: middle; }
+.event-form { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; }
+.event-form input, .event-form select { min-width: 0; }
+.event-form input[name=car], .event-form input[name=note] { width: 120px; }
+.event-form .input[data-grow] { flex: 1 1 180px; }
+.event-form .input, .event-form .select { height: 32px; width: auto; flex: 0 1 auto; }
+.event-form input[type=date] { width: 150px; }
+.event-form .select { width: 96px; }
+#bench-list .rowline, #event-list .rowline, #bench-hits .rowline { flex-wrap: wrap; row-gap: 4px; }
+#bench-list .rowline > .grow, #event-list .rowline > .grow { flex: 1 1 180px; min-width: 0; }
+#bench-hits .rowline > .grow { flex: 1 1 200px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rowline.is-off { opacity: .55; }
+.bench-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.bench-open { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { .bench-compare { grid-template-columns: 1fr; } }

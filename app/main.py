@@ -1344,6 +1344,75 @@ def team_comment_auto_thanks(payload: AutoThanks):
     return {"enabled": payload.enabled}
 
 
+class BenchAdd(BaseModel):
+    target: str
+    note: str = ""
+
+
+class BenchToggle(BaseModel):
+    enabled: bool
+
+
+class EventAdd(BaseModel):
+    day: str
+    title: str
+    kind: str = "other"
+    car: str = ""
+
+
+@app.post("/api/team/benchmark/accounts")
+def team_bench_add(payload: BenchAdd):
+    """加对标账号:主页链接直接记;分享短链会开一次无头浏览器解析(顺便抓一屏作品)。"""
+    from .team import benchmark
+
+    try:
+        return benchmark.add_account(payload.target, payload.note)
+    except benchmark.BenchError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/team/benchmark/accounts/{sec_uid}/toggle")
+def team_bench_toggle(sec_uid: str, payload: BenchToggle):
+    from .team import benchmark
+
+    try:
+        benchmark.set_enabled(sec_uid, payload.enabled)
+    except benchmark.BenchError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"enabled": payload.enabled}
+
+
+@app.delete("/api/team/benchmark/accounts/{sec_uid}")
+def team_bench_remove(sec_uid: str):
+    from .team import benchmark
+
+    benchmark.remove_account(sec_uid)
+    return {"ok": True}
+
+
+@app.post("/api/team/events")
+def team_event_add(payload: EventAdd):
+    """手动记一个行业事件(上市 / 发布会 / 车展 / OTA / 降价)。"""
+    from .team import events
+
+    try:
+        return events.add_manual(config.TEAM_CATEGORY, payload.day, payload.title,
+                                 payload.kind, payload.car)
+    except events.EventError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/team/events/{event_id}/dismiss")
+def team_event_dismiss(event_id: str):
+    from .team import events
+
+    try:
+        events.dismiss(event_id)
+    except events.EventError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
 @app.post("/api/team/plan/{item_id}/start")
 def team_plan_start(item_id: str):
     """不等开工时间,马上做。没批的先批。"""

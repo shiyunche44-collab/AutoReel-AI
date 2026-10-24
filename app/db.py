@@ -279,6 +279,52 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_state ON comments(reply_state, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_pub ON comments(publication_id);
+
+CREATE TABLE IF NOT EXISTS benchmark_accounts (
+    id              TEXT PRIMARY KEY,       -- 抖音 sec_uid
+    url             TEXT NOT NULL DEFAULT '',
+    nickname        TEXT NOT NULL DEFAULT '',
+    note            TEXT NOT NULL DEFAULT '',
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    median_likes    REAL NOT NULL DEFAULT 0,
+    last_fetched_at REAL,
+    last_error      TEXT NOT NULL DEFAULT '',
+    created_at      REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_posts (
+    id          TEXT PRIMARY KEY,           -- aweme_id
+    account_id  TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    car         TEXT NOT NULL DEFAULT '',
+    duration    REAL NOT NULL DEFAULT 0,    -- 秒
+    posted_at   REAL NOT NULL,
+    views       INTEGER NOT NULL DEFAULT 0,
+    likes       INTEGER NOT NULL DEFAULT 0,
+    comments    INTEGER NOT NULL DEFAULT 0,
+    shares      INTEGER NOT NULL DEFAULT 0,
+    collects    INTEGER NOT NULL DEFAULT 0,
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    burst       REAL NOT NULL DEFAULT 0,    -- 点赞 / 该账号点赞中位数
+    fetched_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_posts ON benchmark_posts(account_id, posted_at);
+
+CREATE TABLE IF NOT EXISTS industry_events (
+    id           TEXT PRIMARY KEY,
+    category     TEXT NOT NULL,
+    day          TEXT NOT NULL,             -- YYYY-MM-DD
+    kind         TEXT NOT NULL DEFAULT 'other', -- launch / event / show / ota / price / other
+    car          TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL,
+    source       TEXT NOT NULL DEFAULT 'manual', -- news / manual
+    url          TEXT NOT NULL DEFAULT '',
+    status       TEXT NOT NULL DEFAULT 'active', -- active / dismissed
+    plan_item_id TEXT NOT NULL DEFAULT '',  -- 当天快反出的选题
+    created_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_day ON industry_events(category, day);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_key ON industry_events(category, day, title);
 """
 
 
@@ -1476,3 +1522,153 @@ def prune_idle_runs(role: str) -> None:
             "DELETE FROM team_runs WHERE role = ? AND status = 'idle' AND id < "
             "(SELECT MAX(id) FROM team_runs WHERE role = ? AND status = 'idle')",
             (role, role))
+
+
+# --------------------------------------------------------------------------
+# 对标账号 / 对标作品 / 行业日历
+# --------------------------------------------------------------------------
+_BENCH_FIELDS = {"url", "nickname", "note", "enabled", "median_likes", "last_fetched_at",
+                 "last_error"}
+
+
+def add_benchmark_account(sec_uid: str, url: str = "", note: str = "") -> bool:
+    """加一个对标账号。已经有了返回 False。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO benchmark_accounts (id, url, note, created_at) VALUES (?,?,?,?)",
+            (sec_uid, url, note, time.time()))
+    return bool(cur.rowcount)
+
+
+def list_benchmark_accounts(*, enabled_only: bool = False) -> list[dict[str, Any]]:
+    init_db()
+    sql = "SELECT * FROM benchmark_accounts"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql + " ORDER BY created_at").fetchall()]
+
+
+def get_benchmark_account(sec_uid: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM benchmark_accounts WHERE id = ?", (sec_uid,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_benchmark_account(sec_uid: str, **fields: Any) -> None:
+    bad = set(fields) - _BENCH_FIELDS
+    if bad:
+        raise ValueError(f"不能改的对标账号字段:{sorted(bad)}")
+    if not fields:
+        return
+    init_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE benchmark_accounts SET {sets} WHERE id = ?",
+                     (*fields.values(), sec_uid))
+
+
+def delete_benchmark_account(sec_uid: str) -> None:
+    """删账号连带它的作品(对标数据是抓来的,随时能再抓,不是用户资产)。"""
+    init_db()
+    with transaction() as conn:
+        conn.execute("DELETE FROM benchmark_posts WHERE account_id = ?", (sec_uid,))
+        conn.execute("DELETE FROM benchmark_accounts WHERE id = ?", (sec_uid,))
+
+
+def upsert_benchmark_posts(rows: list[dict[str, Any]]) -> int:
+    """作品入库,已有的刷新数据。返回新增条数。"""
+    init_db()
+    now = time.time()
+    n = 0
+    cols = ("id", "account_id", "title", "car", "duration", "posted_at", "views", "likes",
+            "comments", "shares", "collects", "pinned", "burst")
+    with transaction() as conn:
+        for r in rows:
+            exists = conn.execute("SELECT 1 FROM benchmark_posts WHERE id = ?", (r["id"],)).fetchone()
+            vals = [r.get(c, 0 if c not in ("id", "account_id", "title", "car") else "") for c in cols]
+            conn.execute(
+                f"INSERT OR REPLACE INTO benchmark_posts ({', '.join(cols)}, fetched_at)"
+                f" VALUES ({','.join('?' * len(cols))}, ?)", (*vals, now))
+            n += 0 if exists else 1
+    return n
+
+
+def list_benchmark_posts(*, account_id: str | None = None, since: float | None = None,
+                         min_burst: float | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """新发的在前。"""
+    init_db()
+    where, args = [], []
+    if account_id:
+        where.append("account_id = ?")
+        args.append(account_id)
+    if since is not None:
+        where.append("posted_at >= ?")
+        args.append(since)
+    if min_burst is not None:
+        where.append("burst >= ?")
+        args.append(min_burst)
+    sql = "SELECT * FROM benchmark_posts"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY posted_at DESC LIMIT ?"
+    args.append(limit)
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def add_industry_event(row: dict[str, Any]) -> bool:
+    """同品类同一天同标题的只记一次。返回是否新增。"""
+    init_db()
+    row = {"kind": "other", "car": "", "source": "manual", "url": "", "status": "active",
+           "plan_item_id": "", **row}
+    row.setdefault("created_at", time.time())
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO industry_events (id, category, day, kind, car, title, source,"
+            " url, status, plan_item_id, created_at) VALUES (:id, :category, :day, :kind, :car,"
+            " :title, :source, :url, :status, :plan_item_id, :created_at)", row)
+    return bool(cur.rowcount)
+
+
+def get_industry_event(event_id: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM industry_events WHERE id = ?", (event_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_industry_events(category: str, *, day_from: str = "", day_to: str = "",
+                         statuses: tuple[str, ...] = ("active",),
+                         limit: int = 200) -> list[dict[str, Any]]:
+    """按日期排。day_from / day_to 是闭区间的 YYYY-MM-DD。"""
+    init_db()
+    where, args = ["category = ?"], [category]
+    if day_from:
+        where.append("day >= ?")
+        args.append(day_from)
+    if day_to:
+        where.append("day <= ?")
+        args.append(day_to)
+    if statuses:
+        where.append(f"status IN ({','.join('?' * len(statuses))})")
+        args.extend(statuses)
+    sql = "SELECT * FROM industry_events WHERE " + " AND ".join(where) + \
+        " ORDER BY day, created_at LIMIT ?"
+    args.append(limit)
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def update_industry_event(event_id: str, **fields: Any) -> None:
+    bad = set(fields) - {"status", "plan_item_id", "day", "kind", "car", "title"}
+    if bad:
+        raise ValueError(f"不能改的日历字段:{sorted(bad)}")
+    if not fields:
+        return
+    init_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE industry_events SET {sets} WHERE id = ?", (*fields.values(), event_id))

@@ -49,10 +49,13 @@ function pendingCard(item) {
   const act = (label, cls, fn, ic) =>
     h('button', { class: `btn btn-sm ${cls}`, type: 'button', onclick: (e) => withLoading(e.currentTarget, fn) },
       ic ? icon(ic, 'i-sm') : null, label);
-  return h('article', { class: 'plan-card' },
+  const rapid = item.kind === 'rapid';
+  return h('article', { class: `plan-card${rapid ? ' is-rapid' : ''}` },
     h('div', { class: 'plan-card-head' },
       h('div', { class: 'grow' },
-        h('div', { class: 'plan-subject' }, subjectLine(item)),
+        h('div', { class: 'plan-subject' },
+          rapid ? h('span', { class: 'badge tone-danger rapid-badge' }, icon('zap', 'i-sm'), '快反') : null,
+          subjectLine(item)),
         h('div', { class: 'plan-angle' }, item.angle || '(没有角度)')),
       h('div', { class: 'plan-heat', title: '热度 1-5' }, '🔥'.repeat(Math.max(1, Math.min(5, item.heat || 3))))),
     h('div', { class: 'row plan-meta' },
@@ -60,6 +63,7 @@ function pendingCard(item) {
       badge(themeLabel(item.theme), 'neutral'),
       badge(`${aspectLabel(item.aspect)} ${item.duration}s`, 'neutral')),
     item.rationale ? h('p', { class: 'muted small' }, item.rationale) : null,
+    rapid && item.note ? h('p', { class: 'small text-danger' }, icon('alert-triangle', 'i-sm'), ' ', item.note) : null,
     item.hook ? h('p', { class: 'small' }, '开场:', h('strong', {}, item.hook)) : null,
     evidence.length
       ? h('details', { class: 'small' }, h('summary', { class: 'subtle' }, `热点依据 ${evidence.length} 条`),
@@ -278,7 +282,8 @@ function planRow(item) {
   return h('div', { class: 'plan-row' },
     h('div', { class: 'rowline' },
       h('span', { class: 'num subtle plan-when' }, when(item.slot_at)),
-      h('span', { class: 'grow' }, h('strong', {}, subjectLine(item)), ' ',
+      h('span', { class: 'grow' }, item.kind === 'rapid' ? badge('快反', 'danger') : null, ' ',
+        h('strong', {}, subjectLine(item)), ' ',
         h('span', { class: 'subtle small' }, item.angle || '')),
       h('span', { class: 'subtle small' }, tail || `${themeLabel(item.theme)} · ${aspectLabel(item.aspect)} ${item.duration}s`),
       item.note ? h('span', { class: 'subtle small', title: item.note }, icon('info', 'i-sm')) : null,
@@ -354,7 +359,88 @@ function reportView(r) {
     out.push(h('div', { class: 'subtle small' }, '下周实验'),
       h('div', { class: 'row wrap-row' }, ...r.experiments.map((e) => badge(`${e.label} · ${e.why}`, 'brand'))));
   }
+  const b = r.benchmark;
+  if (b && b.theirs && b.theirs.length) {
+    const col = (title, rows) => h('div', { class: 'bench-col' },
+      h('div', { class: 'subtle small' }, title),
+      ...rows.map((x) => h('div', { class: 'small bench-open', title: x.title }, h('strong', {}, x.opening || '—'), x.tag)));
+    out.push(h('div', { class: 'subtle small' }, '标题开头:对标爆款 vs 我们最好的'
+      + (b.their_avg_duration ? `(对标爆款平均 ${Math.round(b.their_avg_duration)} 秒)` : '')),
+    h('div', { class: 'bench-compare' },
+      col('对标', b.theirs.map((x) => ({ ...x, tag: h('span', { class: 'subtle' }, ` ${x.account} ×${x.burst}`) }))),
+      col('我们', (b.ours || []).map((x) => ({ ...x, tag: x.lift != null ? h('span', { class: 'subtle' }, ` ${x.lift}×`) : null })))));
+  }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 行业日历 + 对标账号
+// ---------------------------------------------------------------------------
+function eventRow(e) {
+  const days = e.in_days === 0 ? badge('今天', 'danger') : badge(`${e.in_days} 天后`, e.in_days <= 7 ? 'warning' : 'neutral');
+  return h('div', { class: 'rowline' },
+    h('span', { class: 'num subtle' }, e.day.slice(5)), days, badge(e.kind_label, 'brand'),
+    h('span', { class: 'grow small' }, e.car && !e.title.includes(e.car) ? h('strong', {}, `${e.car} `) : null, e.title),
+    e.plan_item_id ? badge('已出快反', 'success') : null,
+    e.url ? h('a', { class: 'subtle', href: e.url, target: '_blank', rel: 'noopener', title: '来源' }, icon('external', 'i-sm'))
+      : h('span', { class: 'subtle small' }, e.source === 'manual' ? '手填' : ''),
+    h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: '不算这个事件',
+      onclick: (ev) => withLoading(ev.currentTarget, () => call(`/api/team/events/${e.id}/dismiss`, '已去掉')),
+    }, icon('x', 'i-sm')));
+}
+
+function benchRow(a) {
+  const name = a.nickname || a.note || `${a.id.slice(0, 14)}…`;
+  const state = a.last_error
+    ? h('span', { class: 'small text-danger', title: a.last_error }, icon('alert-circle', 'i-sm'), ' 上次失败')
+    : h('span', { class: 'subtle small' }, a.last_fetched_at ? `${relTime(a.last_fetched_at)}看过` : '还没看');
+  return h('div', { class: `rowline${a.enabled ? '' : ' is-off'}` },
+    h('a', { class: 'grow', href: a.url || `https://www.douyin.com/user/${a.id}`, target: '_blank', rel: 'noopener' }, name),
+    a.note && a.nickname ? h('span', { class: 'subtle small' }, a.note) : null,
+    h('span', { class: 'subtle small num' }, `${a.posts} 条 · 中位赞 ${Math.round(a.median_likes || 0)}`),
+    a.hits ? badge(`爆款 ${a.hits}`, 'warning') : null,
+    state,
+    h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: a.enabled ? '暂停看这个号' : '恢复看这个号',
+      onclick: (ev) => withLoading(ev.currentTarget, () =>
+        call(`/api/team/benchmark/accounts/${a.id}/toggle`, a.enabled ? '已暂停' : '已恢复', { enabled: !a.enabled })),
+    }, icon(a.enabled ? 'pause' : 'play', 'i-sm')),
+    h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: '删掉(连同抓到的作品)',
+      onclick: (ev) => withLoading(ev.currentTarget, async () => {
+        const yes = await confirmDialog({ title: `删掉对标账号「${name}」?`, body: '抓到的作品数据一起删,之后可以再加。', confirmText: '删掉', tone: 'danger' });
+        if (!yes) return;
+        await api.del(`/api/team/benchmark/accounts/${a.id}`).catch((err) => toast(err.message, { type: 'danger' }));
+        await load();
+      }),
+    }, icon('trash', 'i-sm')));
+}
+
+function benchHit(p) {
+  return h('div', { class: 'rowline' },
+    badge(`×${p.burst}`, 'warning'),
+    h('a', { class: 'grow small', href: `https://www.douyin.com/video/${p.id}`, target: '_blank', rel: 'noopener', title: p.title },
+      p.title.slice(0, 40) || p.id),
+    p.car ? badge(p.car, 'brand') : null,
+    h('span', { class: 'subtle small num' }, `${p.account} · 赞 ${p.likes} · ${Math.round(p.duration)}s`));
+}
+
+function renderSide() {
+  const kinds = DATA.event_kinds || {};
+  const sel = $('#event-form select');
+  if (!sel.options.length) sel.replaceChildren(...Object.entries(kinds).map(([k, v]) => h('option', { value: k }, v)));
+  const evs = DATA.events || [];
+  $('#event-list').replaceChildren(
+    ...(evs.length ? evs.map(eventRow) : [empty('未来 30 天还没有事件。行业日历每批新闻后自动挑,也可以手填。')]));
+  const bench = DATA.bench || { accounts: [], hits: [] };
+  $('#bench-count').textContent = String(bench.accounts.length);
+  $('#bench-list').replaceChildren(
+    ...(bench.accounts.length ? bench.accounts.map(benchRow) : [empty('还没有对标账号。贴 10–20 个同类号的主页链接,每天看一遍。')]));
+  $('#bench-hits').replaceChildren(
+    ...(bench.hits.length
+      ? [h('div', { class: 'subtle small' }, `近 14 天对标爆款(点赞 ≥ 该号中位数 ${bench.burst_ratio} 倍)`), ...bench.hits.map(benchHit)]
+      : []));
 }
 
 function learningRow(l) {
@@ -459,7 +545,9 @@ function empty(text) {
 }
 
 function render() {
-  const pending = DATA.plan.filter((i) => i.status === 'proposed');
+  // 快反不等周单:排在待批最前面
+  const pending = DATA.plan.filter((i) => i.status === 'proposed')
+    .sort((a, b) => (b.kind === 'rapid') - (a.kind === 'rapid'));
   const rest = DATA.plan.filter((i) => i.status !== 'proposed');
   $('#pending-count').textContent = String(pending.length);
   $('#btn-approve-all').disabled = !pending.length;
@@ -483,6 +571,7 @@ function render() {
   const s = DATA.settings;
   $('#plan-hint').textContent =
     `每天 ${s.daily_slots} 条,发布 ${s.slot_times.join('、')},提前 ${s.lead_hours} 小时开工,同车 ${s.cooldown_days} 天冷却`;
+  renderSide();
   $('#role-list').replaceChildren(...DATA.roles.map(roleRow));
   $('#rising-list').replaceChildren(
     ...(DATA.rising.length ? DATA.rising.map(risingRow) : [empty('需要至少两批热点才能比名次')]));
@@ -546,6 +635,21 @@ $('#auto-thanks').addEventListener('change', async (e) => {
   await call('/api/team/comments/auto-thanks', on ? '感谢类自动回已打开' : '已关闭,全部回复都等你批', { enabled: on });
 });
 
+function formSubmit(sel, url, ok) {
+  const form = $(sel);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    withLoading(form.querySelector('button[type=submit]'), async () => {
+      const res = await api.post(url, body).catch((err) => toast(err.message, { type: 'danger' }));
+      if (res) { toast(ok); form.reset(); }
+      await load();
+    });
+  });
+}
+formSubmit('#event-form', '/api/team/events', '记上了');
+formSubmit('#bench-form', '/api/team/benchmark/accounts', '加上了,对标分析员下一轮会看它');
+
 $('#btn-pause').addEventListener('click', (e) =>
   withLoading(e.currentTarget, async () => {
     await call('/api/team/pause', DATA.paused ? '团队已恢复' : '团队已暂停', { paused: !DATA.paused });
@@ -555,7 +659,7 @@ load();
 setInterval(() => {
   // 正在填成片审核表单 / 看片时别刷新,不然输入和播放进度都会丢
   const busy = document.querySelector('.modal-backdrop')
-    || document.activeElement?.closest?.('.review-card, .comment-row')
+    || document.activeElement?.closest?.('.review-card, .comment-row, .event-form')
     || [...document.querySelectorAll('.review-card video')].some((v) => !v.paused);
   if (!document.hidden && !busy) load();
 }, 15000);

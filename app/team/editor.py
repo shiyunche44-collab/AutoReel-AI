@@ -101,10 +101,12 @@ def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
     return [x[2] for x in out]
 
 
-def _rationale(idea: Any, boosted: bool, weight: float = 1.0) -> str:
+def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, ...] = ()) -> str:
     why = (idea.why_hot or "").strip()
     if boosted:
         why = (why + ";" if why else "") + "榜单名次在上升"
+    for note in extra:
+        why = (why + ";" if why else "") + note
     if abs(weight - 1) >= 0.05:
         note = f"打法手册加权 ×{weight:.2f}" if weight > 1 else f"打法手册降权 ×{weight:.2f}"
         why = (why + ";" if why else "") + note
@@ -131,18 +133,22 @@ def run(category: str | None = None, *, llm: Any = None,
     items = scout.fresh_items(category)
     if not items:
         raise TeamError("没有热点可用")
-    from . import engagement, playbook
+    from . import benchmark, engagement, events, playbook
 
     learnings = db.list_learnings()
     weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject")}
-    # 打法手册 + 观众在评论里问的(运营官回灌)
+    # 打法手册 + 观众在评论里问的(运营官回灌)+ 行业日历 + 对标爆款
     hints = "\n\n".join(t for t in (playbook.prompt_text(learnings),
-                                     engagement.audience_text(now.timestamp(), mark=True)) if t)
+                                     engagement.audience_text(now.timestamp(), mark=True),
+                                     events.prompt_text(category, now.date()),
+                                     benchmark.prompt_text(now.timestamp())) if t)
     ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
                            playbook=hints)
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
+    event_cars = events.lead_cars(category, now.date())
+    bench_cars = benchmark.hot_cars(now.timestamp())
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
-    ranked = rank_ideas(ideas, cooled, rising_cars, weights)
+    ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars, weights)
     if not ranked:
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
@@ -155,14 +161,21 @@ def run(category: str | None = None, *, llm: Any = None,
         used.add(key)
         aspect, duration = choose_format(profile, idea.theme)
         names = [idea.subject] if not idea.subjects else list(idea.subjects)
+        keys = [_norm(n) for n in names]
+        extra = tuple(f"{event_cars[k]['in_days']} 天后{event_cars[k]['kind_label']}:"
+                      f"{event_cars[k]['title']}" for k in dict.fromkeys(keys) if k in event_cars)
+        if any(k in bench_cars for k in keys):
+            extra += ("对标号同车型出了爆款",)
+        evidence = list(idea.evidence) + [x for n in names
+                                          for x in benchmark.evidence_for(n, now.timestamp())]
         db.create_plan_item({
             "id": new_id("pl_"), "category": category, "slot_at": slot,
             "kind": "multi" if idea.subjects else "single",
             "subject": idea.subject, "subjects": list(idea.subjects),
             "angle": idea.angle, "theme": idea.theme, "aspect": aspect, "duration": duration,
-            "hook": idea.hook, "search_terms": idea.search_terms, "evidence": idea.evidence,
-            "rationale": _rationale(idea, any(_norm(n) in rising_cars for n in names),
-                                    learned_weight(idea, weights)),
+            "hook": idea.hook, "search_terms": idea.search_terms, "evidence": evidence[:12],
+            "rationale": _rationale(idea, any(k in rising_cars for k in keys),
+                                    learned_weight(idea, weights), extra),
             "heat": idea.heat,
         })
         made += 1

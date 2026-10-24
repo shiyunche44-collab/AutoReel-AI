@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import db
-from . import Skip, features, playbook, stats
+from . import Skip, benchmark, features, playbook, stats
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
     week = [r for r in rows if r["published_at"] >= now - WEEK_DAYS * 86400]
     rates = [r["outcome"]["completion_rate"] for r in rows
              if r["outcome"].get("completion_rate") is not None]
+    top = [_work(r) for r in lifted[:3]]
     return {
         "window_days": WINDOW_DAYS,
         "totals": {
@@ -80,10 +81,12 @@ def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
             "median_views": statistics.median([r["outcome"]["views"] for r in rows]) if rows else 0,
             "completion_rate": round(statistics.fmean(rates), 4) if rates else None,
         },
-        "top": [_work(r) for r in lifted[:3]],
+        "top": top,
         "bottom": [_work(r) for r in lifted[-3:][::-1]] if len(lifted) > 3 else [],
         "learnings": [playbook.describe(r) for r in learnings[:10]],
         "experiments": experiments(rows),
+        # 对标爆款的标题开头 vs 我们最好的几条(对标分析员的数据)
+        "benchmark": benchmark.title_compare(top, now),
     }
 
 
@@ -99,6 +102,9 @@ def _facts(report: dict[str, Any]) -> str:
               for w in report["bottom"]]
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
     lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
+    bench = report.get("benchmark") or {}
+    lines += [f"对标爆款:《{b['title']}》{b['account']},是该号平常的 {b['burst']:g} 倍"
+              for b in bench.get("theirs", [])[:3]]
     return "\n".join(lines)
 
 

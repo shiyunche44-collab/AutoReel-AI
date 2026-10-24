@@ -64,6 +64,36 @@
   <div class="card-body" id="plan-list"></div>
 </section>
 
+<div class="team-grid is-even">
+  <section class="card">
+    <div class="card-head">
+      <h2>{{ m.icon("calendar", "i-sm") }}行业日历</h2>
+      <span class="subtle small" title="3–7 天后的事件写进主编提示词、命中的车加热度;当天带车型的触发快反">提前 3–7 天进选题单</span>
+    </div>
+    <form class="event-form" id="event-form">
+      <input class="input" type="date" name="day" required aria-label="日期">
+      <select class="select" name="kind" aria-label="类型"></select>
+      <input class="input" type="text" name="car" placeholder="车型(可空)" maxlength="40">
+      <input class="input" type="text" name="title" placeholder="发生什么,如 小米YU7 上市" maxlength="40" required data-grow>
+      <button class="btn btn-sm btn-ghost" type="submit">{{ m.icon("plus", "i-sm") }}记一笔</button>
+    </form>
+    <div class="card-body" id="event-list"></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <h2>{{ m.icon("monitor", "i-sm") }}对标账号 <span class="count" id="bench-count">0</span></h2>
+      <button class="btn btn-sm btn-ghost" type="button" data-run="benchmark">{{ m.icon("refresh", "i-sm") }}现在看一遍</button>
+    </div>
+    <form class="event-form" id="bench-form">
+      <input class="input" type="text" name="target" placeholder="贴抖音主页链接或分享链接" required data-grow>
+      <input class="input" type="text" name="note" placeholder="备注(可空)" maxlength="60">
+      <button class="btn btn-sm btn-ghost" type="submit">{{ m.icon("plus", "i-sm") }}加</button>
+    </form>
+    <div class="card-body" id="bench-list"></div>
+    <div class="card-body" id="bench-hits"></div>
+  </section>
+</div>
+
 <div class="team-grid">
   <section class="card">
     <div class="card-head"><h2>{{ m.icon("layers", "i-sm") }}角色</h2></div>

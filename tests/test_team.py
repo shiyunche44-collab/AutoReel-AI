@@ -284,8 +284,8 @@ def test_tick_respects_pause(fresh_db, monkeypatch):
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == []
     team.set_paused(False)
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == [
-        "scout", "editor", "asset", "producer", "publisher", "analyst", "compliance", "engagement",
-        "coach"]
+        "scout", "events", "benchmark", "rapid", "editor", "asset", "producer", "publisher", "analyst",
+        "compliance", "engagement", "coach"]
 
 
 # --------------------------------------------------------------------------

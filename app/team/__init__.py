@@ -104,13 +104,23 @@ class Role:
 
 
 def roles() -> list[Role]:
-    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员之后是分析师,合规看分析师的数据,
+    """按执行顺序排:情报、行业日历、对标、快反先于主编,主编先于素材官和制片,发布员之后是分析师,合规看分析师的数据,
     运营官看评论,复盘官最后(每周一次,读整周的数据)。"""
-    from . import analyst, asset, coach, compliance, editor, engagement, producer, publisher, scout
+    from . import (analyst, asset, benchmark, coach, compliance, editor, engagement, events,
+                   producer, publisher, rapid, scout)
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
              Cadence("daily", ("08:00", "18:00")), scout.run),
+        Role("events", "行业日历", "从每批新闻里挑出有日子的上市 / 发布会 / 车展 / OTA / 降价,"
+             "提前 3–7 天交给主编,当天交给快反",
+             Cadence("daily", ("08:20", "18:20")), events.run),
+        Role("benchmark", "对标分析员", "每天看一遍对标账号主页,记每条作品数据和爆款倍数"
+             "(点赞 / 该号中位数),爆款车型和角度给主编当证据",
+             Cadence("daily", ("07:30",)), benchmark.run),
+        Role("rapid", "快反", "榜单急升进前 5 或事件当天,不等周单单出一条竖版 60–90 秒选题等你批;"
+             "素材不够会写明",
+             Cadence("interval", minutes=60), rapid.run),
         Role("editor", "主编", "读最新热点,给未来几天的空档排选题(去重、冷却、按热度),等你批",
              Cadence("daily", ("09:00",)), editor.run),
         Role("asset", "素材官", "选题一批准就给它的车提前建 / 补素材池,确认本车视频不够才建",
