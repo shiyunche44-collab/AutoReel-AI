@@ -233,6 +233,28 @@ CREATE TABLE IF NOT EXISTS account_health (
     paused_at  REAL,
     updated_at REAL NOT NULL
 );
+
+-- 打法手册(复盘官每周写):某个特征取某个值时,某个指标相对账号基线的倍数
+CREATE TABLE IF NOT EXISTS learnings (
+    id         TEXT PRIMARY KEY,           -- dimension:value:metric,同一条结论每周覆盖
+    week       TEXT NOT NULL,              -- 2026-W43
+    dimension  TEXT NOT NULL,              -- opening / ending / title_kind / theme / subject ...
+    value      TEXT NOT NULL,
+    metric     TEXT NOT NULL,              -- views / completion_rate
+    effect     REAL NOT NULL,              -- 收缩后的倍数,1 = 和基线持平
+    n          INTEGER NOT NULL,
+    confidence TEXT NOT NULL,              -- medium / high
+    evidence   TEXT NOT NULL DEFAULT '[]', -- 支撑的发布记录 id
+    status     TEXT NOT NULL DEFAULT 'active', -- active / stale(本周没再算出来) / off(你停用的)
+    updated_at REAL NOT NULL
+);
+
+-- 复盘官周报
+CREATE TABLE IF NOT EXISTS team_reports (
+    week       TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -1251,6 +1273,67 @@ def resume_account(account_id: str) -> bool:
         cur = conn.execute("UPDATE account_health SET paused = 0, updated_at = ? WHERE account_id = ?"
                            " AND paused = 1", (time.time(), account_id))
         return cur.rowcount > 0
+
+
+def replace_learnings(week: str, rows: list[dict[str, Any]]) -> None:
+    """写本周的结论。上周有、本周没算出来的标 stale(不再生效);你停用过的保持停用。"""
+    init_db()
+    now = time.time()
+    with transaction() as conn:
+        off = {r[0] for r in conn.execute("SELECT id FROM learnings WHERE status = 'off'")}
+        conn.execute("UPDATE learnings SET status = 'stale', updated_at = ? WHERE status = 'active'",
+                     (now,))
+        for r in rows:
+            conn.execute(
+                "INSERT INTO learnings (id, week, dimension, value, metric, effect, n, confidence,"
+                " evidence, status, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET week = excluded.week, effect = excluded.effect,"
+                " n = excluded.n, confidence = excluded.confidence, evidence = excluded.evidence,"
+                " status = excluded.status, updated_at = excluded.updated_at",
+                (r["id"], week, r["dimension"], r["value"], r["metric"], r["effect"], r["n"],
+                 r["confidence"], json.dumps(r.get("evidence") or [], ensure_ascii=False),
+                 "off" if r["id"] in off else "active", now))
+
+
+def list_learnings(statuses: tuple[str, ...] = ("active",)) -> list[dict[str, Any]]:
+    init_db()
+    marks = ",".join("?" * len(statuses))
+    with connect() as conn:
+        rows = conn.execute(f"SELECT * FROM learnings WHERE status IN ({marks})"
+                            " ORDER BY dimension, effect DESC", statuses).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["evidence"] = json.loads(d.get("evidence") or "[]")
+        out.append(d)
+    return out
+
+
+def set_learning_status(learning_id: str, status: str) -> bool:
+    """你在 /team 停用 / 恢复一条结论。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("UPDATE learnings SET status = ?, updated_at = ? WHERE id = ?",
+                           (status, time.time(), learning_id))
+        return cur.rowcount > 0
+
+
+def save_report(week: str, data: dict[str, Any]) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT INTO team_reports (week, data, created_at) VALUES (?, ?, ?)"
+                     " ON CONFLICT(week) DO UPDATE SET data = excluded.data,"
+                     " created_at = excluded.created_at",
+                     (week, json.dumps(data, ensure_ascii=False), time.time()))
+
+
+def latest_report() -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM team_reports ORDER BY week DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    return {"week": row["week"], "created_at": row["created_at"], **json.loads(row["data"])}
 
 
 def get_team_setting(key: str, default: Any = None) -> Any:

@@ -47,6 +47,9 @@ def _loop() -> None:
 
 def start() -> None:
     global _thread
+    from . import playbook
+
+    playbook.install()  # 打法手册回灌到变体 / 标题顺序(只在服务里挂,测试不受影响)
     with _lock:
         if _thread and _thread.is_alive():
             return

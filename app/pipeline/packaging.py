@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -232,8 +232,11 @@ def _as_dict(item: Any) -> Mapping[str, Any]:
 
 def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
                  thesis: str = "", price: str = "",
-                 avoid: Sequence[str] = TITLE_AVOID) -> tuple[list[TitleOption], bool]:
-    """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。"""
+                 avoid: Sequence[str] = TITLE_AVOID,
+                 order: Sequence[str] = KINDS) -> tuple[list[TitleOption], bool]:
+    """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。
+
+    `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。"""
     terms = tuple(terms)
     chosen: dict[str, TitleOption] = {}
     for item in raw if isinstance(raw, list) else []:
@@ -248,7 +251,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
     used_llm = bool(chosen)
     out: list[TitleOption] = []
     seen: set[str] = set()
-    for kind in KINDS:
+    for kind in order:
         opt = chosen.get(kind)
         if opt is None or opt.text in seen:
             text = fallback_title(kind, subject, thesis=thesis, price=price, allowed=allowed,
@@ -288,12 +291,12 @@ def build_replies(raw: Any, *, allowed: set[str], terms: Iterable[str] = ()) -> 
 
 def assemble(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
              thesis: str = "", price: str = "", now: float = 0.0,
-             avoid: Sequence[str] = TITLE_AVOID) -> Packaging:
+             avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS) -> Packaging:
     """LLM 原始输出 → 合规的 Packaging。`raw` 可以是 None 或残缺的字典,都能出结果。"""
     d = _as_dict(raw)
     terms = tuple(terms)
     titles, t_llm = build_titles(d.get("titles"), subject, allowed=allowed, terms=terms,
-                                 thesis=thesis, price=price, avoid=avoid)
+                                 thesis=thesis, price=price, avoid=avoid, order=order)
     comment, c_llm = build_comment(d.get("comment"), subject, allowed=allowed, terms=terms)
     replies = build_replies(d.get("replies"), allowed=allowed, terms=terms)
     return Packaging(titles=titles, comment=comment, replies=replies,
@@ -410,6 +413,37 @@ def _user_prompt(inp: Mapping[str, Any]) -> str:
             + "\n\n全片旁白:\n" + script)
 
 
+#: 复盘官的打法手册:`learned("title_kind")` → {写法: 权重}。由 `team.playbook.install` 挂上;
+#: 没挂 / 没结论时标题顺序固定是 KINDS
+learned: Callable[[str], Mapping[str, float]] | None = None
+#: 有手册时也留这么多比例不按效果排(探索)
+EXPLORE = 0.3
+
+
+def title_order(project_id: str) -> tuple[str, ...]:
+    """三种标题写法的顺序。有手册时按权重抽出第一条(默认发布的那条),30% 随机;
+    种子来自项目 ID,同一个项目重算结果不变。"""
+    import hashlib
+    import random
+
+    if learned is None:
+        return KINDS
+    try:
+        weights = learned("title_kind") or {}
+    except Exception:  # noqa: BLE001 - 手册坏了不能挡住包装
+        return KINDS
+    if not weights:
+        return KINDS
+    digest = hashlib.sha256(f"title:{project_id}".encode()).hexdigest()
+    rng = random.Random(int(digest[:16], 16))
+    if rng.random() < EXPLORE:
+        first = rng.choice(KINDS)
+    else:
+        first = rng.choices(KINDS, [max(float(weights.get(k, 1.0)), 0.01) for k in KINDS])[0]
+    rest = sorted((k for k in KINDS if k != first), key=lambda k: -float(weights.get(k, 1.0)))
+    return (first, *rest)
+
+
 def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | None = None) -> Packaging:
     """生成包装并返回(不落盘)。LLM 缺失、出错、输出残缺都能拿到合规结果(模板兜底)。"""
     import logging
@@ -430,7 +464,7 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
             logging.getLogger(__name__).warning("包装生成失败,改用模板:%s", exc)
     return assemble(raw, inp["subject"], allowed=inp["allowed"], terms=inp["terms"],
                     thesis=inp["thesis"], price=inp["price"], avoid=inp["avoid"],
-                    now=time.time() if now is None else now)
+                    now=time.time() if now is None else now, order=title_order(project_id))
 
 
 def load(project_id: str) -> Packaging | None:

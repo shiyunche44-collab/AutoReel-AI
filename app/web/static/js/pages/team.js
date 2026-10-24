@@ -1,4 +1,4 @@
-/* AI 团队:待批选题、成片待审、排期、角色、榜单上升、团队动态。每 15 秒刷新一次。 */
+/* AI 团队:待批选题、成片待审、排期、角色、榜单上升、周报、打法手册、团队动态。每 15 秒刷新一次。 */
 import { $, h, icon, relTime, withLoading } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { initChrome } from '../ui/chrome.js';
@@ -319,6 +319,61 @@ function runRow(x) {
     badge(RUN_LABEL[x.status] || x.status, RUN_TONE[x.status]));
 }
 
+// ---------------------------------------------------------------------------
+// 复盘官:周报 + 打法手册
+// ---------------------------------------------------------------------------
+function pct(x) {
+  return x == null ? '—' : `${(x * 100).toFixed(1)}%`;
+}
+
+function workLine(w) {
+  return h('div', { class: 'report-work' },
+    h('a', { href: `/project/${w.project_id}` }, w.title || w.project_id),
+    h('div', { class: 'row' },
+      h('span', { class: 'subtle small num grow' }, `${w.views ?? '—'} 播放 · 完播 ${pct(w.completion_rate)}`),
+      w.lift != null ? badge(`${w.lift}×`, w.lift >= 1 ? 'success' : 'neutral') : null));
+}
+
+function reportView(r) {
+  if (!r) return [empty('复盘官每周日 20:00 出周报(要有发布满 24 小时的作品)')];
+  const t = r.totals;
+  const out = [
+    h('div', { class: 'report-stats' },
+      ...[['本周新发', t.week_works], ['24h 播放', t.week_views], ['涨粉', t.week_followers],
+        ['播放中位数', t.median_views], ['平均完播', pct(t.completion_rate)]]
+        .map(([k, v]) => h('div', {}, h('div', { class: 'subtle small' }, k), h('strong', { class: 'num' }, String(v ?? '—'))))),
+  ];
+  if (r.summary) out.push(h('p', { class: 'report-text' }, r.summary));
+  if (r.next && r.next.length) {
+    out.push(h('div', { class: 'subtle small' }, '下周怎么做'),
+      h('ul', { class: 'report-next' }, ...r.next.map((x) => h('li', {}, x))));
+  }
+  if (r.top && r.top.length) out.push(h('div', { class: 'subtle small' }, '最好'), ...r.top.map(workLine));
+  if (r.bottom && r.bottom.length) out.push(h('div', { class: 'subtle small' }, '最差'), ...r.bottom.map(workLine));
+  if (r.experiments && r.experiments.length) {
+    out.push(h('div', { class: 'subtle small' }, '下周实验'),
+      h('div', { class: 'row wrap-row' }, ...r.experiments.map((e) => badge(`${e.label} · ${e.why}`, 'brand'))));
+  }
+  return out;
+}
+
+function learningRow(l) {
+  const off = l.status === 'off';
+  const btn = h('button', {
+    class: 'btn btn-sm btn-ghost', type: 'button',
+    title: off ? '恢复后重新回灌' : '觉得这条是巧合(比如那周是热点带的)就停用,停用的不回灌',
+    onclick: (e) => withLoading(e.currentTarget, () => call(
+      `/api/team/learnings/${encodeURIComponent(l.id)}/status`, off ? '已恢复' : '已停用',
+      { status: off ? 'active' : 'off' })),
+  }, icon(off ? 'play' : 'pause', 'i-sm'), off ? '恢复' : '停用');
+  const ev = (l.evidence || []).map((x) => `《${x.title}》${x.lift}×`).join('\n');
+  return h('div', { class: `rowline${off ? ' is-off' : ''}` },
+    badge(l.effect >= 1 ? '多做' : '少做', l.effect >= 1 ? 'success' : 'warning'),
+    h('span', { class: 'grow small', title: ev }, l.text),
+    off ? badge('已停用', 'neutral') : null,
+    btn);
+}
+
 function empty(text) {
   return h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, text));
 }
@@ -344,6 +399,12 @@ function render() {
     ...(DATA.rising.length ? DATA.rising.map(risingRow) : [empty('需要至少两批热点才能比名次')]));
   $('#trend-at').textContent = DATA.trends_at ? `最近一批 ${relTime(DATA.trends_at)} · ${DATA.trends_n} 条` : '';
   $('#run-list').replaceChildren(...(DATA.runs.length ? DATA.runs.map(runRow) : [empty('还没有动态')]));
+  $('#report-body').replaceChildren(...reportView(DATA.report));
+  $('#report-at').textContent = DATA.report
+    ? `${DATA.report.week} · ${relTime(DATA.report.created_at)}${DATA.report.source === 'template' ? ' · 模板' : ''}` : '';
+  const book = DATA.playbook || [];
+  $('#playbook-list').replaceChildren(
+    ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]));
 
   const state = $('#team-state');
   const off = !DATA.enabled;

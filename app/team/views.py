@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import compliance, next_slot, paused, publisher, roles, scout
+from . import compliance, next_slot, paused, playbook, publisher, roles, scout
 from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
@@ -51,6 +51,9 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "trends_at": latest["captured_at"] if latest else None,
         "trends_n": latest["n"] if latest else 0,
         "runs": [x for x in db.list_team_runs(limit=40) if x["status"] != "idle"][:20],
+        "playbook": [{**r, "text": playbook.describe(r)}
+                     for r in db.list_learnings(("active", "off"))],
+        "report": db.latest_report(),
         "settings": {
             "daily_slots": config.TEAM_DAILY_SLOTS, "plan_days": config.TEAM_PLAN_DAYS,
             "slot_times": list(config.TEAM_SLOT_TIMES), "lead_hours": config.TEAM_LEAD_HOURS,

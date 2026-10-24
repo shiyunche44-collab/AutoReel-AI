@@ -104,8 +104,9 @@ class Role:
 
 
 def roles() -> list[Role]:
-    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员之后是分析师,合规看分析师的数据。"""
-    from . import analyst, asset, compliance, editor, producer, publisher, scout
+    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员之后是分析师,合规看分析师的数据,
+    复盘官最后(每周一次,读整周的数据)。"""
+    from . import analyst, asset, coach, compliance, editor, producer, publisher, scout
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
@@ -125,6 +126,9 @@ def roles() -> list[Role]:
         Role("compliance", "合规审核官", "发布前给成片出审核单(红项不让发);发布后盯 24 小时播放和审核状态,"
              "疑似限流就暂停该账号自动发布",
              Cadence("interval", minutes=60), compliance.run),
+        Role("coach", "复盘官", "每周看近 30 天作品的 24 小时数据,按开头 / 结尾 / 标题写法 / 车型等算效果,"
+             "更新打法手册(回灌主编选题、变体和标题顺序),出周报",
+             Cadence("weekly", ("20:00",), weekday=6), coach.run),
     ]
 
 

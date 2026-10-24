@@ -238,8 +238,11 @@ def suggest(
     profile: CategoryProfile,
     llm,
     n: int = 8,
+    playbook: str = "",
 ) -> list[TopicIdea]:
-    """由热点生成选题。无热点或无 LLM 时返回空列表。"""
+    """由热点生成选题。无热点或无 LLM 时返回空列表。
+
+    `playbook` 是复盘官的「已验证打法 / 应避免」(`team.playbook.prompt_text`),附在热点后面。"""
     items = list(items)
     if not items or llm is None:
         return []
@@ -276,7 +279,7 @@ def suggest(
             theme_desc=theme_desc,
             roundup_rule=roundup_rule,
         ),
-        "实时热点:\n" + format_trends(trends),
+        "实时热点:\n" + format_trends(trends) + (f"\n\n{playbook}" if playbook else ""),
         required_keys=["topics"],
         temperature=0.8,
     )

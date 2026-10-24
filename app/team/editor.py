@@ -79,23 +79,35 @@ def choose_format(profile: CategoryProfile, theme_name: str,
     return aspect, min(durations, key=lambda d: (abs(d - want), d))
 
 
-def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str]) -> list[Any]:
-    """去掉冷却中的,上升车型热度 +1,按热度排。"""
+def learned_weight(idea: Any, weights: dict[str, dict[str, float]] | None) -> float:
+    """打法手册给这个选题的权重:片型权重 × 车型权重(没结论的 = 1)。"""
+    if not weights:
+        return 1.0
+    return (weights.get("theme", {}).get(idea.theme, 1.0)
+            * weights.get("subject", {}).get(idea.subject, 1.0))
+
+
+def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
+               weights: dict[str, dict[str, float]] | None = None) -> list[Any]:
+    """去掉冷却中的,上升车型热度 +1,乘上打法手册的权重,按分排。"""
     out = []
     for idea in ideas:
         names = [idea.subject] if not idea.subjects else list(idea.subjects)
         if any(_norm(n) in cooled for n in names):
             continue
         boost = 1 if any(_norm(n) in rising_cars for n in names) else 0
-        out.append((min(5, idea.heat + boost), boost, idea))
+        out.append((min(5, idea.heat + boost) * learned_weight(idea, weights), boost, idea))
     out.sort(key=lambda x: (-x[0], -x[1]))
     return [x[2] for x in out]
 
 
-def _rationale(idea: Any, boosted: bool) -> str:
+def _rationale(idea: Any, boosted: bool, weight: float = 1.0) -> str:
     why = (idea.why_hot or "").strip()
     if boosted:
         why = (why + ";" if why else "") + "榜单名次在上升"
+    if abs(weight - 1) >= 0.05:
+        note = f"打法手册加权 ×{weight:.2f}" if weight > 1 else f"打法手册降权 ×{weight:.2f}"
+        why = (why + ";" if why else "") + note
     return why[:200]
 
 
@@ -119,10 +131,15 @@ def run(category: str | None = None, *, llm: Any = None,
     items = scout.fresh_items(category)
     if not items:
         raise TeamError("没有热点可用")
-    ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2))
+    from . import playbook
+
+    learnings = db.list_learnings()
+    weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject")}
+    ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
+                           playbook=playbook.prompt_text(learnings))
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
-    ranked = rank_ideas(ideas, cooled, rising_cars)
+    ranked = rank_ideas(ideas, cooled, rising_cars, weights)
     if not ranked:
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
@@ -141,7 +158,8 @@ def run(category: str | None = None, *, llm: Any = None,
             "subject": idea.subject, "subjects": list(idea.subjects),
             "angle": idea.angle, "theme": idea.theme, "aspect": aspect, "duration": duration,
             "hook": idea.hook, "search_terms": idea.search_terms, "evidence": idea.evidence,
-            "rationale": _rationale(idea, any(_norm(n) in rising_cars for n in names)),
+            "rationale": _rationale(idea, any(_norm(n) in rising_cars for n in names),
+                                    learned_weight(idea, weights)),
             "heat": idea.heat,
         })
         made += 1

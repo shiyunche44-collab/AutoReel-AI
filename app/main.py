@@ -1267,6 +1267,20 @@ def team_account_resume(account_id: str):
     return {"ok": True}
 
 
+class LearningStatus(BaseModel):
+    status: str
+
+
+@app.post("/api/team/learnings/{learning_id:path}/status")
+def team_learning_status(learning_id: str, payload: LearningStatus):
+    """打法手册:你觉得某条结论不对(比如那周是热点带的),停用它;停用的不回灌。"""
+    if payload.status not in ("active", "off"):
+        raise HTTPException(400, "status 只能是 active 或 off")
+    if not db.set_learning_status(learning_id, payload.status):
+        raise HTTPException(404, "没有这条结论")
+    return {"ok": True}
+
+
 @app.post("/api/team/plan/{item_id}/start")
 def team_plan_start(item_id: str):
     """不等开工时间,马上做。没批的先批。"""

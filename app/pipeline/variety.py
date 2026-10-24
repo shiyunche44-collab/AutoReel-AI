@@ -17,7 +17,7 @@ import hashlib
 import json
 import random
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 #: 没声明 openings / endings 的片型用这一对:就是变体出现之前写死在提示词里的那套
 DEFAULT_OPENING = "conflict"
@@ -169,11 +169,32 @@ def _rng(project_id: str) -> random.Random:
     return random.Random(int(digest[:16], 16))
 
 
-def _choose(rng: random.Random, allowed: tuple[str, ...], used: Iterable[str]) -> str:
-    """在允许集合里挑一个,优先挑最近没用过的;全用过就挑最久没用的那些里的一个。"""
+#: 复盘官的打法手册:`learned("opening")` → {写法: 权重}。启动时由 `team.playbook.install` 挂上,
+#: 没挂 / 没结论时挑法和以前逐字一样(不多抽一次随机数)
+learned: Callable[[str], Mapping[str, float]] | None = None
+#: 有手册时也留这么多比例随便挑(探索),不然效果差的写法永远没机会翻身
+EXPLORE = 0.3
+
+
+def _weights(dimension: str) -> Mapping[str, float] | None:
+    if learned is None:
+        return None
+    try:
+        return learned(dimension) or None
+    except Exception:  # noqa: BLE001 - 手册坏了不能挡住建项目
+        return None
+
+
+def _choose(rng: random.Random, allowed: tuple[str, ...], used: Iterable[str],
+            weights: Mapping[str, float] | None = None) -> str:
+    """在允许集合里挑一个,优先挑最近没用过的;全用过就挑最久没用的那些里的一个。
+
+    有手册权重时,70% 按权重挑、30% 均匀挑(探索)。"""
     recent = list(used)
     fresh = [x for x in allowed if x not in recent]
     if fresh:
+        if weights and rng.random() >= EXPLORE:
+            return rng.choices(fresh, [max(float(weights.get(x, 1.0)), 0.01) for x in fresh])[0]
         return rng.choice(fresh)
     # 全用过:离现在最远的那个(recent 越靠前越新)
     return max(allowed, key=lambda x: recent.index(x))
@@ -191,8 +212,10 @@ def pick(theme, project_id: str, recent: Iterable[Mapping[str, Any]] = (),
         raise ValueError(f"这个片型的开头可选:{'、'.join(OPENINGS[o].label for o in openings)}")
     if ending and ending not in endings:
         raise ValueError(f"这个片型的结尾可选:{'、'.join(ENDINGS[e].label for e in endings)}")
-    chosen_opening = opening or _choose(rng, openings, (v.get("opening") for v in recent))
-    chosen_ending = ending or _choose(rng, endings, (v.get("ending") for v in recent))
+    chosen_opening = opening or _choose(rng, openings, (v.get("opening") for v in recent),
+                                        _weights("opening"))
+    chosen_ending = ending or _choose(rng, endings, (v.get("ending") for v in recent),
+                                      _weights("ending"))
     return {
         "opening": chosen_opening,
         "ending": chosen_ending,

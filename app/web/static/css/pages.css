@@ -809,3 +809,10 @@
 .plan-row > .rowline { border-top: 0; }
 .plan-hold { color: var(--warning); padding: 0 0 8px 132px; word-break: break-all; }
 @media (max-width: 700px) { .review-card { flex-direction: column; } .plan-hold { padding-left: 0; } }
+.team-grid.is-even { grid-template-columns: 1fr 1fr; }
+@media (max-width: 900px) { .team-grid.is-even { grid-template-columns: 1fr; } }
+.report-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.report-work { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--border); }
+.report-text { margin: 8px 0; line-height: 1.6; }
+.report-next { margin: 4px 0 10px; padding-left: 18px; }
+.rowline.is-off { opacity: .55; }
