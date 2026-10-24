@@ -6,10 +6,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from app.publish import browser
-from app.publish.base import Account, PublishRequest
+from app.publish.base import Account, PublishError, PublishRequest
 from app.publish.platforms import douyin
 from app.publish.platforms.douyin import DouyinAdapter, cover_files, set_covers
 
@@ -58,7 +59,7 @@ class FakeSession:
     calls: list = []
 
     def __init__(self, key, **kw):
-        self.page = type("P", (), {"wait_for_timeout": lambda self, ms: None})()
+        self.page = type("P", (), {"wait_for_timeout": lambda self, ms: None, "url": ""})()
 
     def __enter__(self):
         return self
@@ -71,7 +72,7 @@ class FakeSession:
 
     def exists(self, selector, **kw):
         return selector in ("input[type=file]", "input[placeholder*='标题']",
-                            "button:has-text('发布')")
+                            "button:has-text('发布')", "button:text-is('发布')")
 
     def upload_file(self, selector, path, **kw):
         FakeSession.calls.append(("upload", Path(path).name))
@@ -110,3 +111,63 @@ def test_publish_browser_sets_cover_before_clicking_publish(tmp_path, monkeypatc
     names = [c[0] for c in FakeSession.calls]
     assert names == ["goto", "upload", "fill", "cover", "click"]
     assert FakeSession.calls[2] == ("fill", "一" * douyin.TITLE_MAX)
+    # 左栏「作品发布」也含"发布"两字,必须按文字精确点真正的发布按钮
+    assert FakeSession.calls[-1] == ("click", "button:text-is('发布')")
+
+
+def test_publish_browser_reports_expired_login(tmp_path, monkeypatch):
+    """落到扫码登录页 = 登录失效,要明说,别报成"页面改版"。"""
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+
+    class LoggedOut(FakeSession):
+        def exists(self, selector, **kw):
+            return False
+
+        def page_text(self):
+            return "抖音创作者中心 扫码登录 验证码登录"
+
+    monkeypatch.setattr(browser, "BrowserSession", LoggedOut)
+    req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
+                         title="标题")
+    with pytest.raises(PublishError) as err:
+        DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
+                                             auth_kind="browser"))
+    assert "登录已失效" in err.value.message and err.value.credential
+
+
+def test_publish_browser_reports_sms_verification(tmp_path, monkeypatch):
+    """点发布后弹短信验证码 = 要本人操作,不能当成"没成功提示"去重试。"""
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+
+    class Sms(FakeSession):
+        def page_text(self):
+            return "接收短信验证码 请输入验证码"
+
+    monkeypatch.setattr(browser, "BrowserSession", Sms)
+    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
+                         title="标题")
+    with pytest.raises(PublishError) as err:
+        DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
+                                             auth_kind="browser"))
+    assert "短信验证" in err.value.message and not err.value.retryable
+
+
+def test_douyin_uses_fixed_profile_but_explicit_storage_does_not():
+    assert browser.BrowserSession("douyin").uses_profile
+    assert not browser.BrowserSession("douyin", storage="x.json").uses_profile
+    assert not browser.BrowserSession("xiaohongshu").uses_profile
+
+
+def test_stable_user_agent_is_the_headed_chrome_one(tmp_path):
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"")
+    (tmp_path / "154.0.7000.1").mkdir()
+    (tmp_path / "155.0.8059.86").mkdir()
+    (tmp_path / "Locales").mkdir()
+    ua = browser.stable_user_agent(exe)
+    assert "Chrome/155.0.0.0 " in ua and "Headless" not in ua
+    assert browser.stable_user_agent(None) == ""
+    assert browser.stable_user_agent(tmp_path / "nowhere" / "chrome.exe") == ""

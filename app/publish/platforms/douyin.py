@@ -34,6 +34,9 @@ PART_SIZE = 20 * 1024 * 1024
 TITLE_MAX = 30
 #: 网页版等视频传完(页面出现「重新上传」)的时限
 UPLOAD_WAIT_MS = 10 * 60 * 1000
+#: 点「发布」后页面先挂「正在发布」(实测 20 秒以上),跳到作品管理才算发完 —— 提前关浏览器等于撤稿
+PUBLISH_WAIT_MS = 3 * 60 * 1000
+PUBLISH_DONE_TEXTS = ("发布成功", "投稿成功")
 
 #: 网页版封面两个位:(位上的提示字, 弹窗里切到这一步的按钮/页签)
 COVER_SLOTS = (("横封面4:3", "设置横封面"), ("竖封面3:4", "设置竖封面"))
@@ -306,6 +309,9 @@ class DouyinAdapter:
             with browser.BrowserSession("douyin") as session:
                 session.goto(CREATOR_UPLOAD, wait_ms=3000)
                 if not session.exists("input[type=file]"):
+                    if "扫码登录" in session.page_text():
+                        raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
+                                           retryable=False, credential=True)
                     raise PublishError("创作者平台发布页没找到上传入口(页面改版了?)",
                                        retryable=False)
                 session.upload_file("input[type=file]", video)
@@ -317,21 +323,34 @@ class DouyinAdapter:
                         session.fill(selector, (req.title or "")[:TITLE_MAX])
                         break
                 cover_note = set_covers(session, req.cover_path)
-                for selector in ("button:has-text('发布')", "button:has-text('提交')",
-                                 "text=发布"):
+                # 按文字精确匹配:左栏有个「作品发布」按钮,模糊匹配会先命中它,点了等于没发
+                for selector in ("button:text-is('发布')", "button:text-is('提交')"):
                     if session.exists(selector, timeout=1500):
                         session.click(selector)
                         break
-                session.page.wait_for_timeout(6000)
+                else:
+                    raise PublishError("发布页没找到「发布」按钮(页面改版了?)", retryable=False)
+                body = ""
+                for _ in range(PUBLISH_WAIT_MS // 3000):
+                    session.page.wait_for_timeout(3000)
+                    body = session.page_text()
+                    if any(t in body for t in PUBLISH_DONE_TEXTS):
+                        break
+                    if "接收短信验证码" in body:  # 平台要本人验证,只能人来;重试只会反复发短信
+                        raise PublishError("抖音要求短信验证(本人操作):在分发台点「登录」,"
+                                           "在打开的窗口里手动发一次稿并输入验证码",
+                                           retryable=False, credential=True)
+                    if "content/manage" in (session.page.url or ""):  # 发完会跳到作品管理
+                        body += "\n发布成功"
+                        break
                 session.save_state()
-                body = session.page_text()
         except browser.BrowserUnavailable as exc:
             raise PublishError(str(exc), retryable=False) from exc
         except PublishError:
             raise
         except Exception as exc:  # noqa: BLE001
             raise PublishError(f"网页版发布失败:{type(exc).__name__}: {exc}", retryable=True) from exc
-        if "发布成功" not in body and "投稿成功" not in body:
+        if not any(t in body for t in PUBLISH_DONE_TEXTS):
             raise PublishError("网页版发布后没找到成功提示,可能是页面改版或需要验证码",
                                retryable=True)
         message = "网页版已提交(未拿到作品 id)"

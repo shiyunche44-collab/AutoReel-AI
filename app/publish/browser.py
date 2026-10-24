@@ -70,6 +70,45 @@ def state_path(key: str) -> Path:
     return path
 
 
+#: 用固定浏览器配置目录的平台。抖音会把"换了设备"的会话踢掉:扫码用有头 Chrome、
+#: 发布用无头浏览器 + 另一个 UA、IndexedDB 里的设备号每次丢,登录撑不过一小时。
+#: 这些平台扫码和发布共用同一个配置目录、同一个本机 Chrome、同一个 UA,
+#: `storage_state` 那份 JSON 只是镜像(给 `douyin_logged_in` 这类只看 cookie 的地方用)。
+PROFILE_KEYS = frozenset({"douyin"})
+
+
+def profile_dir(key: str) -> Path:
+    """某个平台的固定浏览器配置目录。"""
+    path = config.DATA_DIR / "_browser" / "profiles" / key
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def chrome_major(executable: str | Path | None) -> str:
+    """本机 Chrome / Edge 的主版本号:安装目录旁边那个 `155.0.8059.86` 文件夹。找不到返回空串。"""
+    if not executable:
+        return ""
+    versions = []
+    try:
+        for p in Path(executable).parent.iterdir():
+            parts = p.name.split(".")
+            if p.is_dir() and len(parts) == 4 and all(x.isdigit() for x in parts):
+                versions.append(tuple(int(x) for x in parts))
+    except OSError:
+        return ""
+    return str(max(versions)[0]) if versions else ""
+
+
+def stable_user_agent(executable: str | Path | None) -> str:
+    """有头、无头都报同一个 UA —— 就是有头 Chrome 自己报的那种(版本号只留主版本)。
+    无头 Chrome 默认报 HeadlessChrome + 完整版本号,在平台眼里是另一台设备。"""
+    major = chrome_major(executable)
+    if not major:
+        return ""
+    return ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+
+
 class BrowserSession:
     """一次浏览器会话。
 
@@ -92,13 +131,29 @@ class BrowserSession:
         self._context = None
         self.page = None
 
+    @property
+    def uses_profile(self) -> bool:
+        return self.key in PROFILE_KEYS and self.storage is None
+
+    def is_alive(self) -> bool:
+        """窗口还开着(登录窗口用来判断人是不是关窗了)。"""
+        if self.page is None or self.page.is_closed():
+            return False
+        return self._browser.is_connected() if self._browser else bool(self._context.pages)
+
     # -- 生命周期 --------------------------------------------------------
     def __enter__(self) -> "BrowserSession":
         sync_playwright = _import_playwright()
         self._pw = sync_playwright().start()
+        if self.uses_profile:
+            return self._enter_profile()
         executable = config.BROWSER_PATH
         if not self.headless:
             executable = headed_browser(executable)
+        elif not (executable and Path(executable).is_file()):
+            # 配置的浏览器不在了(如 motion/.browser 被清掉):退回本机 Chrome / Edge,
+            # 不然 playwright 去找它自己下载的那份,没装就直接起不来
+            executable = headed_browser(None)
         launch: dict[str, Any] = {"headless": self.headless}
         if executable and Path(executable).is_file():
             launch["executable_path"] = executable
@@ -122,6 +177,29 @@ class BrowserSession:
             ctx_kwargs["storage_state"] = state
         self._context = self._browser.new_context(**ctx_kwargs)
         self.page = self._context.new_page()
+        return self
+
+    def _enter_profile(self) -> "BrowserSession":
+        """固定配置目录:扫码和发布永远是同一个本机 Chrome、同一份配置、同一个 UA。"""
+        executable = headed_browser(None) or config.BROWSER_PATH
+        kwargs: dict[str, Any] = {"headless": self.headless,
+                                  "viewport": {"width": 1440, "height": 900},
+                                  "locale": "zh-CN"}
+        if executable and Path(executable).is_file():
+            kwargs["executable_path"] = executable
+        ua = stable_user_agent(executable)
+        if ua:
+            kwargs["user_agent"] = ua
+        try:
+            self._context = self._pw.chromium.launch_persistent_context(
+                str(profile_dir(self.key)), **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            self._pw.stop()
+            self._pw = None
+            raise BrowserUnavailable(
+                f"启动浏览器失败:{exc}。配置目录同一时间只能被一个浏览器用 ——"
+                "扫码窗口还开着的话先关掉。") from exc
+        self.page = self._context.pages[0] if self._context.pages else self._context.new_page()
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -211,7 +289,7 @@ def login(key: str, url: str, *, headless: bool = False, timeout: int = 300,
         while time.time() < deadline:
             try:
                 # 轻量探活:窗口被关掉时页面会变成 closed,或者这里直接抛
-                if session.page.is_closed() or not session._browser.is_connected():
+                if not session.is_alive():
                     break
                 session.page.title()
                 if done_cookie and any(c.get("name") == done_cookie and c.get("value")
