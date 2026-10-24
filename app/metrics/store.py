@@ -33,10 +33,18 @@ def record(publication: dict[str, Any]) -> bool:
     return True
 
 
+#: 这些平台由 AI 团队的分析师按 1h / 24h / 72h / 7d 抓(创作者中心),这里不再每半小时抓
+TEAM_PLATFORMS = ("douyin",)
+
+
 def record_all(limit: int = 200) -> dict[str, int]:
     """把该抓的都抓一遍。返回 {成功数, 失败数}。"""
+    from .. import config
+
     ok = failed = 0
     for publication in db.publications_for_metrics(limit=limit):
+        if config.TEAM_ENABLED and publication.get("platform") in TEAM_PLATFORMS:
+            continue
         if record(publication):
             ok += 1
         else:
@@ -74,7 +82,9 @@ def trend(publication_id: str, limit: int = 200) -> list[dict[str, Any]]:
         metrics = {k: row.get(k) for k in collector.FIELDS}
         out.append({
             "captured_at": row.get("captured_at"),
+            "hours_since_publish": row.get("hours_since_publish"),
             **metrics,
+            **{k: row.get(k) for k in collector.DEEP_FIELDS},
             "engagement_rate": engagement_rate(metrics),
         })
     return out
@@ -95,6 +105,8 @@ def overview() -> dict[str, Any]:
         snap = db.latest_snapshot(row["id"])
         metrics = {k: (snap.get(k) if snap else None) for k in collector.FIELDS}
         view["metrics"] = metrics
+        # 完播率这些只有抖音创作者中心给,单独放,不进下面按平台 / 画幅的合计
+        view["deep"] = {k: (snap.get(k) if snap else None) for k in collector.DEEP_FIELDS}
         view["engagement_rate"] = engagement_rate(metrics)
         view["captured_at"] = snap.get("captured_at") if snap else None
         view["snapshots"] = len(db.list_snapshots(row["id"], limit=1000))

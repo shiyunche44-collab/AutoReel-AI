@@ -1,7 +1,8 @@
 """平台数据抓取。
 
 **解析是纯函数,抓取是薄壳。** 各平台的返回结构解析拆成纯函数
-(`parse_bilibili_stat` / `parse_youtube_statistics` / `parse_douyin_statistics`),
+(`parse_bilibili_stat` / `parse_youtube_statistics` / `parse_douyin_statistics` /
+`parse_douyin_creator`),
 用样例 JSON 就能单测,不用联网、不用账号。
 
 **缺失即 None。** 平台没给的指标留 None,不用 0 顶替 —— 0 和"没权限"在看板上
@@ -18,6 +19,8 @@ from ..publish.registry import adapter_for
 #: 各平台指标的字段名(看板按这几个字段读)
 FIELDS = ("views", "likes", "comments", "favorites", "shares", "coins",
           "danmaku", "followers")
+#: 深度指标(目前只有抖音创作者中心给):完播率、平均播放秒数、2 秒跳出、涨粉
+DEEP_FIELDS = ("completion_rate", "avg_watch_sec", "bounce_2s", "followers_gained", "watch_minutes")
 
 
 def _int(value: Any) -> int | None:
@@ -99,6 +102,55 @@ def parse_douyin_statistics(payload: dict[str, Any]) -> dict[str, Any]:
         "coins": None,
         "danmaku": None,
     }
+
+
+def _float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_douyin_creator(work: dict[str, Any]) -> dict[str, Any]:
+    """抖音创作者中心作品管理接口(`janus/douyin/creator/pc/work_list`)里的一条 → 指标字典。
+
+    `work` 是 `items[]` 里的一条:`metrics` 下全是字符串,比率是 0–1 的小数。
+    这里的播放(`view_count`)和页面「作品管理」上显示的是同一个数。
+    粉丝总数在同一次返回的 `aweme_list[].author` 里,调用方合进来放在 `work["aweme"]`。
+    """
+    m = (work or {}).get("metrics") or {}
+    if not m:
+        return {}
+    views = _int(m.get("view_count"))
+    avg = _float(m.get("avg_view_second"))
+    author = ((work.get("aweme") or {}).get("author") or {})
+    return {
+        "views": views,
+        "likes": _int(m.get("like_count")),
+        "comments": _int(m.get("comment_count")),
+        "favorites": _int(m.get("favorite_count")),
+        "shares": _int(m.get("share_count")),
+        "coins": None,
+        "danmaku": _int(m.get("danmaku_count")),
+        "followers": _int(author.get("follower_count")),
+        "completion_rate": _float(m.get("completion_rate")),
+        "avg_watch_sec": avg,
+        "bounce_2s": _float(m.get("bounce_rate_2s")),
+        "followers_gained": _int(m.get("subscribe_count")),
+        "watch_minutes": round(avg * views / 60, 2) if avg is not None and views is not None else None,
+    }
+
+
+def douyin_work_state(work: dict[str, Any]) -> str:
+    """作品在平台上的状态:published / reviewing / removed(删除、违规、仅自己可见)。"""
+    st = ((work or {}).get("aweme") or {}).get("status") or {}
+    if st.get("is_delete") or st.get("is_prohibited") or st.get("self_see"):
+        return "removed"
+    if st.get("in_reviewing"):
+        return "reviewing"
+    return "published"
 
 
 #: 页面文字里各指标可能出现的标签(按优先级)

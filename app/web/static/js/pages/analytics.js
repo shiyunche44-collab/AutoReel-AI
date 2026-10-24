@@ -149,6 +149,14 @@ function rate(value) {
   return value === null || value === undefined ? '—' : `${(value * 100).toFixed(2)}%`;
 }
 
+function pct(value) {
+  return value === null || value === undefined ? '—' : `${(value * 100).toFixed(1)}%`;
+}
+
+function secs(value) {
+  return value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}s`;
+}
+
 function renderAspects() {
   const tbody = $('#aspect-table tbody');
   if (!tbody) return;
@@ -179,12 +187,13 @@ function renderWorks() {
   const tbody = $('#work-table tbody');
   tbody.innerHTML = '';
   if (!items.length) {
-    tbody.appendChild(h('tr', {}, h('td', { colspan: 10, class: 'subtle' }, '还没有发布过的作品')));
+    tbody.appendChild(h('tr', {}, h('td', { colspan: 13, class: 'subtle' }, '还没有发布过的作品')));
     return;
   }
   const maxViews = Math.max(1, ...items.map((i) => Number(i.metrics?.views) || 0));
   for (const item of items) {
     const views = Number(item.metrics?.views) || 0;
+    const deep = item.deep || {};
     const bar = h('div', { class: 'spark' }, h('span', { style: `width:${Math.max(2, (views / maxViews) * 100)}%` }));
     const tr = h(
       'tr',
@@ -198,11 +207,15 @@ function renderWorks() {
         item.title,
       ),
       h('td', { class: 'num' }, num(item.metrics?.views)),
+      h('td', { class: 'num' }, pct(deep.completion_rate)),
+      h('td', { class: 'num' }, secs(deep.avg_watch_sec)),
+      h('td', { class: 'num' }, pct(deep.bounce_2s)),
       h('td', { class: 'num' }, num(item.metrics?.likes)),
       h('td', { class: 'num' }, num(item.metrics?.comments)),
       h('td', { class: 'num' }, num(item.metrics?.favorites)),
       h('td', { class: 'num' }, num(item.metrics?.shares)),
-      h('td', { class: 'num' }, num(item.metrics?.followers)),
+      // 抖音给的是这条作品带来的涨粉;别的平台只有账号粉丝总数
+      h('td', { class: 'num' }, num(deep.followers_gained ?? item.metrics?.followers)),
       h(
         'td',
         { class: 'num' },

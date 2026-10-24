@@ -104,8 +104,8 @@ class Role:
 
 
 def roles() -> list[Role]:
-    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员最后。"""
-    from . import asset, compliance, editor, producer, publisher, scout
+    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员之后是分析师,合规看分析师的数据。"""
+    from . import analyst, asset, compliance, editor, producer, publisher, scout
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
@@ -119,6 +119,9 @@ def roles() -> list[Role]:
              Cadence("interval", minutes=5), producer.run),
         Role("publisher", "发布员", "成片审核通过后按排期定时发布,跟踪发布结果",
              Cadence("interval", minutes=5), publisher.run),
+        Role("analyst", "分析师", "从抖音创作者中心对上发出去的作品,发布后 1h / 24h / 72h / 7d 各抓一次"
+             "播放、完播率、2 秒跳出、涨粉",
+             Cadence("interval", minutes=30), analyst.run),
         Role("compliance", "合规审核官", "发布前给成片出审核单(红项不让发);发布后盯 24 小时播放和审核状态,"
              "疑似限流就暂停该账号自动发布",
              Cadence("interval", minutes=60), compliance.run),

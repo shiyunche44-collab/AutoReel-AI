@@ -26,6 +26,9 @@ from ..registry import PORTRAIT
 OPEN = "https://open.douyin.com"
 #: 创作者平台发布页(网页版兜底)
 CREATOR_UPLOAD = "https://creator.douyin.com/creator-micro/content/upload"
+#: 作品管理页:页面自己会请求 `WORK_LIST_API`,每条作品带播放、完播率、2 秒跳出、涨粉
+CREATOR_MANAGE = "https://creator.douyin.com/creator-micro/content/manage"
+WORK_LIST_API = "/janus/douyin/creator/pc/work_list"
 #: 平台文档给的单文件上限
 MAX_UPLOAD = 100 * 1024 * 1024
 #: 单片建议 20MB
@@ -363,7 +366,8 @@ class DouyinAdapter:
     def fetch_metrics(self, ref: PlatformRef, account: Account) -> MetricSnapshot:
         if not self._official_ready(account):
             raise PublishError(
-                "没有开放平台凭据,抓不了作品数据(需要 video.data 能力)",
+                "没有开放平台凭据,抓不了作品数据(需要 video.data 能力);"
+                "网页版发的作品由 AI 团队分析师从创作者中心抓",
                 retryable=False, credential=True)
         token = self._access_token(account)
         open_id = self._open_id(account)
@@ -381,3 +385,57 @@ class DouyinAdapter:
         from ...metrics.collector import parse_douyin_statistics
 
         return MetricSnapshot(**parse_douyin_statistics(data), raw={"data": data.get("data")})
+
+
+def fetch_creator_works(*, since: float | None = None, max_scrolls: int = 4) -> list[dict[str, Any]]:
+    """无头打开创作者中心「作品管理」,截页面自己请求的作品列表接口,只读、不点按钮。
+
+    返回 `work_list` 的 `items[]`(带 `metrics`),每条再挂上同一次返回里
+    `aweme_list` 对应那条(`work["aweme"]`:标题、审核状态、作者粉丝数)。
+    第一页 12 条;给了 `since`(时间戳)且最老一条还比它新,就往下滚着加载,最多
+    `max_scrolls` 次。登录失效抛 `PublishError(credential=True)`,不重试。
+    """
+    from .. import browser
+
+    pages: list[dict[str, Any]] = []
+
+    def on_response(resp: Any) -> None:
+        if WORK_LIST_API not in resp.url:
+            return
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001
+            return
+        if isinstance(body, dict) and body.get("items") is not None:
+            pages.append(body)
+
+    try:
+        with browser.BrowserSession("douyin", headless=True, lock_timeout=60) as session:
+            session.page.on("response", on_response)
+            session.goto(CREATOR_MANAGE, wait_ms=6000)
+            if "扫码登录" in session.page_text():
+                raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
+                                   retryable=False, credential=True)
+            for _ in range(max_scrolls):
+                if not pages or not pages[-1].get("has_more") or since is None:
+                    break
+                oldest = min((_int(i.get("create_time")) or 0) for i in pages[-1]["items"])                     if pages[-1]["items"] else 0
+                if oldest <= since:
+                    break
+                got = len(pages)
+                session.page.mouse.wheel(0, 6000)
+                session.page.wait_for_timeout(3000)
+                if len(pages) == got:
+                    break
+    except browser.BrowserUnavailable as exc:
+        raise PublishError(str(exc), retryable=False) from exc
+    if not pages:
+        raise PublishError("作品管理页没请求作品列表接口(页面改版了?)", retryable=False)
+    works: dict[str, dict[str, Any]] = {}
+    for body in pages:
+        awemes = {str(a.get("aweme_id")): a for a in body.get("aweme_list") or []}
+        for item in body.get("items") or []:
+            wid = str(item.get("id") or "")
+            if wid:
+                works[wid] = {**item, "id": wid, "aweme": awemes.get(wid) or {}}
+    return list(works.values())

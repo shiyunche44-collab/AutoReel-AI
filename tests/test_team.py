@@ -1,5 +1,5 @@
 """AI 团队:节奏、情报员、主编、选题闸、素材官、制片(含自动过闸)、发布员(成片闸 + 定时发布)、
-合规审核官(审核单 + 限流监测)。"""
+合规审核官(审核单 + 限流监测)。分析师见 test_analyst.py。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -284,7 +284,7 @@ def test_tick_respects_pause(fresh_db, monkeypatch):
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == []
     team.set_paused(False)
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == [
-        "scout", "editor", "asset", "producer", "publisher", "compliance"]
+        "scout", "editor", "asset", "producer", "publisher", "analyst", "compliance"]
 
 
 # --------------------------------------------------------------------------

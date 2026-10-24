@@ -154,8 +154,12 @@ CREATE TABLE IF NOT EXISTS metric_snapshots (
     coins           INTEGER,
     danmaku         INTEGER,
     followers       INTEGER,
-    watch_minutes   REAL,      -- 预留: 深度指标(本期不填)
-    completion_rate REAL,      -- 预留: 完播率(本期不填)
+    watch_minutes   REAL,      -- 总播放时长(分钟),抖音创作者中心 = 平均播放秒数 × 播放 / 60
+    completion_rate REAL,      -- 完播率 0–1
+    avg_watch_sec   REAL,      -- 平均播放秒数
+    bounce_2s       REAL,      -- 2 秒跳出率 0–1
+    followers_gained INTEGER,  -- 这条作品带来的涨粉
+    hours_since_publish REAL,  -- 抓的时候发布了多少小时(分析师按 1h/24h/72h/7d 抓)
     raw             TEXT NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metric_uniq
@@ -327,6 +331,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "scheduled_at" not in _column_names(conn, "publications"):
         # 定时发布:到这个时刻才领。空 = 建好就发(原来的行为)。
         conn.execute("ALTER TABLE publications ADD COLUMN scheduled_at REAL")
+    snap_cols = _column_names(conn, "metric_snapshots")
+    for col, ddl in (("avg_watch_sec", "REAL"), ("bounce_2s", "REAL"),
+                     ("followers_gained", "INTEGER"), ("hours_since_publish", "REAL")):
+        if col not in snap_cols:  # 分析师从抖音创作者中心抓的深度指标
+            conn.execute(f"ALTER TABLE metric_snapshots ADD COLUMN {col} {ddl}")
     plan_cols = _column_names(conn, "plan_items")
     for col, ddl in (("hold", "TEXT NOT NULL DEFAULT ''"),        # 自动流程停下等人的原因
                      ("hold_state", "TEXT NOT NULL DEFAULT ''"),  # 停下时项目在哪个状态
@@ -988,14 +997,17 @@ def add_snapshot(publication_id: str, platform: str, captured_at: float,
         conn.execute(
             """INSERT OR IGNORE INTO metric_snapshots
                (publication_id, platform, captured_at, views, likes, comments, favorites,
-                shares, coins, danmaku, followers, watch_minutes, completion_rate, raw)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                shares, coins, danmaku, followers, watch_minutes, completion_rate,
+                avg_watch_sec, bounce_2s, followers_gained, hours_since_publish, raw)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 publication_id, platform, captured_at,
                 metrics.get("views"), metrics.get("likes"), metrics.get("comments"),
                 metrics.get("favorites"), metrics.get("shares"), metrics.get("coins"),
                 metrics.get("danmaku"), metrics.get("followers"),
                 metrics.get("watch_minutes"), metrics.get("completion_rate"),
+                metrics.get("avg_watch_sec"), metrics.get("bounce_2s"),
+                metrics.get("followers_gained"), metrics.get("hours_since_publish"),
                 json.dumps(raw or {}, ensure_ascii=False),
             ),
         )

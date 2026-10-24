@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,14 @@ def state_path(key: str) -> Path:
 #: 这些平台扫码和发布共用同一个配置目录、同一个本机 Chrome、同一个 UA,
 #: `storage_state` 那份 JSON 只是镜像(给 `douyin_logged_in` 这类只看 cookie 的地方用)。
 PROFILE_KEYS = frozenset({"douyin"})
+#: 配置目录同一时间只能被一个浏览器打开:发布、扫码、分析师抓数据在进程内排队
+_PROFILE_LOCKS: dict[str, threading.Lock] = {}
+_PROFILE_LOCKS_GUARD = threading.Lock()
+
+
+def _profile_lock(key: str) -> threading.Lock:
+    with _PROFILE_LOCKS_GUARD:
+        return _PROFILE_LOCKS.setdefault(key, threading.Lock())
 
 
 def profile_dir(key: str) -> Path:
@@ -122,10 +131,13 @@ class BrowserSession:
     """
 
     def __init__(self, key: str, *, headless: bool | None = None,
-                 storage: str | None = None) -> None:
+                 storage: str | None = None, lock_timeout: float = 600) -> None:
         self.key = key
         self.headless = config.BROWSER_HEADLESS if headless is None else headless
         self.storage = storage
+        #: 配置目录被别的会话占着时最多等多久(秒);抓数据这类不急的传小一点
+        self.lock_timeout = lock_timeout
+        self._lock: threading.Lock | None = None
         self._pw = None
         self._browser = None
         self._context = None
@@ -181,6 +193,12 @@ class BrowserSession:
 
     def _enter_profile(self) -> "BrowserSession":
         """固定配置目录:扫码和发布永远是同一个本机 Chrome、同一份配置、同一个 UA。"""
+        lock = _profile_lock(self.key)
+        if not lock.acquire(timeout=self.lock_timeout):
+            self._pw.stop()
+            self._pw = None
+            raise BrowserUnavailable("浏览器配置目录正被发布 / 扫码 / 抓数据占着,稍后再来")
+        self._lock = lock
         executable = headed_browser(None) or config.BROWSER_PATH
         kwargs: dict[str, Any] = {"headless": self.headless,
                                   "viewport": {"width": 1440, "height": 900},
@@ -196,6 +214,8 @@ class BrowserSession:
         except Exception as exc:  # noqa: BLE001
             self._pw.stop()
             self._pw = None
+            self._lock = None
+            lock.release()
             raise BrowserUnavailable(
                 f"启动浏览器失败:{exc}。配置目录同一时间只能被一个浏览器用 ——"
                 "扫码窗口还开着的话先关掉。") from exc
@@ -215,6 +235,9 @@ class BrowserSession:
             self._browser = None
             self._context = None
             self.page = None
+            if self._lock:
+                self._lock.release()
+                self._lock = None
 
     # -- 操作 ------------------------------------------------------------
     def goto(self, url: str, *, wait_ms: int = 2500) -> None:
