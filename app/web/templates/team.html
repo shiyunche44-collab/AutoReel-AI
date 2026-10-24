@@ -20,6 +20,8 @@
   </div>
 </section>
 
+<div id="health-list"></div>
+
 <section class="card">
   <div class="card-head">
     <h2>{{ m.icon("inbox", "i-sm") }}待我批的选题 <span class="count" id="pending-count">0</span></h2>
@@ -34,7 +36,7 @@
 <section class="card">
   <div class="card-head">
     <h2>{{ m.icon("film", "i-sm") }}成片待审 <span class="count" id="review-count">0</span></h2>
-    <span class="subtle small">通过后按排期定时发布;排期已过就顺延到下一个发布时段</span>
+    <span class="subtle small">合规审核单有红项不能通过;通过后按排期定时发布,排期已过顺延到下一个发布时段</span>
   </div>
   <div class="card-body" id="review-list"></div>
 </section>

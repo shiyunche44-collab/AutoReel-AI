@@ -4,6 +4,7 @@
 什么都没有** —— 不靠一个审核状态字段去拦已经建好的发布任务,而是根本不建,
 误发的路径就不存在。
 
+通过前合规审核官出一份审核单(`compliance.checklist`),有红项不能通过。
 通过时按账号建发布任务(`publish.service.enqueue`,同项目同账号幂等),
 写上 `scheduled_at`;发布线程到点才领(`db.claim_publications`)。发布时刻
 默认是选题排期的时刻,已经过了就顺延到下一个发布时段。
@@ -15,7 +16,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import Skip
+from . import Skip, compliance
 from .plan import PlanError
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
@@ -50,15 +51,18 @@ def accounts() -> list[dict[str, Any]]:
     out = []
     for a in accounts_mod.list_accounts(only_enabled=True):
         view = accounts_mod.account_view(a)
+        health = db.get_account_health(a.id) or {}
+        paused = bool(health.get("paused"))
         default = a.id in saved if isinstance(saved, list) else a.platform == "douyin"
         out.append({"id": a.id, "platform": a.platform, "platform_label": view["platform_label"],
-                    "name": a.name, "default": default})
+                    "name": a.name, "default": default and not paused, "paused": paused,
+                    "paused_reason": health.get("reason", "") if paused else ""})
     return out
 
 
-def review_view(item: dict[str, Any]) -> dict[str, Any]:
-    """成片闸卡片要的:成片、封面、候选标题、发布时刻、账号。"""
-    from ..pipeline import aspect, packaging
+def _titles(item: dict[str, Any]) -> tuple[str, list[str]]:
+    """(默认发布标题, 候选标题):包装里选中的那条,没有就用片名。"""
+    from ..pipeline import packaging
 
     pid = item["project_id"]
     project = db.get_project(pid) or {}
@@ -72,11 +76,22 @@ def review_view(item: dict[str, Any]) -> dict[str, Any]:
         picked = packaging.publish_choice(pid).get("title") or ""
     except Exception:  # noqa: BLE001
         picked = ""
+    return picked or (titles[0] if titles else project.get("title") or item["subject"]), titles
+
+
+def review_view(item: dict[str, Any]) -> dict[str, Any]:
+    """成片闸卡片要的:成片、封面、候选标题、审核单、发布时刻。"""
+    from ..pipeline import aspect
+
+    pid = item["project_id"]
+    project = db.get_project(pid) or {}
+    title, titles = _titles(item)
     video = aspect.output_path(pid)
     return {
         "project_title": project.get("title") or item["subject"],
-        "title": picked or (titles[0] if titles else project.get("title") or item["subject"]),
+        "title": title,
         "titles": titles,
+        "checklist": compliance.checklist(pid, title),
         "has_video": video.is_file(),
         "video_url": f"/api/projects/{pid}/download",
         "cover_url": f"/api/projects/{pid}/cover",
@@ -96,6 +111,14 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
         raise PlanError("这条选题不在成片待审")
     if not account_ids:
         raise PlanError("至少选一个发布账号")
+    stopped = [aid for aid in account_ids if (db.get_account_health(aid) or {}).get("paused")]
+    if stopped:
+        raise PlanError("选的账号里有被合规审核官暂停的,先去恢复或换一个账号")
+    # 审核单按最终要发的标题再查一遍:页面上改过标题,红项可能是新的
+    final = title.strip() or _titles(item)[0]
+    sheet = compliance.checklist(item["project_id"], final)
+    if sheet["red"]:
+        raise PlanError("审核单有红项,不能发:" + compliance.red_summary(sheet))
     at = next_publish_time(float(publish_at or item["slot_at"]))
     if not db.cas_plan_status(item_id, ("review",), "scheduled", publish_at=at):
         raise PlanError("这条选题刚被别处处理过")

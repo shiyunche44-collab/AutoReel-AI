@@ -162,6 +162,39 @@ function localInput(ts) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+const CHECK_TONE = { ok: 'success', warn: 'warning', red: 'danger' };
+const CHECK_ICON = { ok: 'check', warn: 'alert-circle', red: 'x' };
+
+function checklistView(sheet) {
+  if (!sheet) return null;
+  const head = sheet.red
+    ? `合规审核单 · ${sheet.red} 项红`
+    : sheet.warn ? `合规审核单 · ${sheet.warn} 项提醒` : '合规审核单 · 全部通过';
+  return h('div', { class: 'checklist' },
+    h('div', { class: `checklist-head text-${sheet.red ? 'danger' : sheet.warn ? 'warning' : 'success'}` },
+      icon('shield', 'i-sm'), head),
+    ...sheet.items.map((c) => h('div', { class: `check-row is-${c.level}` },
+      h('span', { class: `check-mark text-${CHECK_TONE[c.level]}` }, icon(CHECK_ICON[c.level], 'i-sm')),
+      h('span', { class: 'check-label' }, c.label),
+      h('span', { class: 'subtle small check-detail' }, c.detail || ''))));
+}
+
+function healthBanner(row) {
+  const btn = h('button', { class: 'btn btn-sm', type: 'button' }, icon('play', 'i-sm'), '恢复自动发布');
+  btn.addEventListener('click', async () => {
+    const yes = await confirmDialog({
+      title: `恢复「${row.name}」自动发布?`,
+      body: '先去抖音创作者中心确认作品状态正常(没被限流、没下架)。恢复后排着的发布会按时发出。',
+      confirmText: '恢复',
+    });
+    if (yes) await call(`/api/team/accounts/${row.account_id}/resume`, '已恢复自动发布');
+  });
+  return h('div', { class: 'callout tone-danger health-banner' }, icon('alert-circle'),
+    h('div', { class: 'grow' }, h('strong', {}, `「${row.name}」已暂停自动发布`), ` · ${row.reason}`,
+      h('div', { class: 'subtle small' }, `合规审核官 ${relTime(row.paused_at)}判定`)),
+    btn);
+}
+
 function reviewCard(item) {
   const rv = item.review || {};
   const accounts = DATA.accounts || [];
@@ -169,10 +202,18 @@ function reviewCard(item) {
   const titles = h('datalist', { id: `titles-${item.id}` }, (rv.titles || []).map((t) => h('option', { value: t })));
   const at = h('input', { class: 'input', type: 'datetime-local', value: localInput(rv.publish_at || item.slot_at) });
   const boxes = accounts.map((a) => {
-    const box = h('input', { type: 'checkbox', value: a.id, checked: a.default });
-    return { box, el: h('label', { class: 'chip-check' }, box, `${a.platform_label} · ${a.name}`) };
+    const box = h('input', { type: 'checkbox', value: a.id, checked: a.default, disabled: a.paused });
+    return {
+      box,
+      el: h('label', { class: `chip-check${a.paused ? ' is-paused' : ''}`, title: a.paused_reason || '' },
+        box, `${a.platform_label} · ${a.name}`, a.paused ? '(已暂停)' : ''),
+    };
   });
-  const pass = h('button', { class: 'btn btn-sm btn-primary', type: 'button' }, icon('check', 'i-sm'), '通过,定时发布');
+  const red = rv.checklist?.red || 0;
+  const pass = h('button', {
+    class: 'btn btn-sm btn-primary', type: 'button', disabled: red > 0,
+    title: red ? '审核单有红项:去项目页改好再来' : '',
+  }, icon('check', 'i-sm'), '通过,定时发布');
   pass.addEventListener('click', () => withLoading(pass, async () => {
     const ids = boxes.filter((b) => b.box.checked).map((b) => b.box.value);
     if (!ids.length) {
@@ -207,6 +248,7 @@ function reviewCard(item) {
       h('div', {},
         h('div', { class: 'plan-subject' }, subjectLine(item)),
         h('div', { class: 'plan-angle' }, item.angle || rv.project_title || '')),
+      checklistView(rv.checklist),
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, '发布标题'), title, titles),
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, '发布时间'), at),
       h('div', { class: 'field' }, h('span', { class: 'field-label' }, '发到'),
@@ -288,6 +330,7 @@ function render() {
   $('#btn-approve-all').disabled = !pending.length;
   $('#pending-list').replaceChildren(
     ...(pending.length ? pending.map(pendingCard) : [empty('没有待批的选题。主编每天 09:00 补空档。')]));
+  $('#health-list').replaceChildren(...(DATA.health || []).map(healthBanner));
   const reviews = rest.filter((i) => i.status === 'review');
   $('#review-count').textContent = String(reviews.length);
   $('#review-list').replaceChildren(

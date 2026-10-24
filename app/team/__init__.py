@@ -7,7 +7,7 @@
 **运行记录走 `team_runs` 表**,页面上的「团队动态」就是它。同一角色同一时刻
 只跑一份(`db.start_team_run` 在库里抢占),两个服务连同一个库也不会重复跑。
 
-**人只把两道闸**:选题单和成片发布前(发布员)。中间的脚本 / 审片门禁由
+**人只把两道闸**:选题单和成片发布前(发布员 + 合规审核单)。中间的脚本 / 审片门禁由
 制片替人过,机器检查拦下了才停下等人。
 """
 from __future__ import annotations
@@ -105,7 +105,7 @@ class Role:
 
 def roles() -> list[Role]:
     """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员最后。"""
-    from . import asset, editor, producer, publisher, scout
+    from . import asset, compliance, editor, producer, publisher, scout
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
@@ -119,6 +119,9 @@ def roles() -> list[Role]:
              Cadence("interval", minutes=5), producer.run),
         Role("publisher", "发布员", "成片审核通过后按排期定时发布,跟踪发布结果",
              Cadence("interval", minutes=5), publisher.run),
+        Role("compliance", "合规审核官", "发布前给成片出审核单(红项不让发);发布后盯 24 小时播放和审核状态,"
+             "疑似限流就暂停该账号自动发布",
+             Cadence("interval", minutes=60), compliance.run),
     ]
 
 

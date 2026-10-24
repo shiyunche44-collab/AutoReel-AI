@@ -369,6 +369,14 @@ TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
 TEAM_AUTO_GATES = os.getenv("TEAM_AUTO_GATES", "1") not in ("0", "false", "False")
 #: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)
 TEAM_ASSET_PREBUILD = os.getenv("TEAM_ASSET_PREBUILD", "1") not in ("0", "false", "False")
+#: 合规审核官:成片里第三方视频占比到这个数提醒,到上限不让发
+TEAM_THIRD_PARTY_WARN = float(os.getenv("TEAM_THIRD_PARTY_WARN", "0.25"))
+TEAM_THIRD_PARTY_MAX = float(os.getenv("TEAM_THIRD_PARTY_MAX", "0.5"))
+#: 限流监测:24 小时播放低于账号中位数的这个比例 → 疑似限流;基线至少要这么多条作品
+TEAM_THROTTLE_RATIO = float(os.getenv("TEAM_THROTTLE_RATIO", "0.2"))
+TEAM_THROTTLE_MIN_BASELINE = int(os.getenv("TEAM_THROTTLE_MIN_BASELINE", "3"))
+#: 平台审核超过这么多小时还没过 → 审核异常
+TEAM_REVIEW_STUCK_HOURS = float(os.getenv("TEAM_REVIEW_STUCK_HOURS", "24"))
 #: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
 #: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

@@ -2,6 +2,7 @@
 
 .text-danger { color: var(--danger); }
 .text-warning { color: var(--warning); }
+.text-success { color: var(--success); }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .wrap-row { flex-wrap: wrap; }
 .stack-sm { display: flex; flex-direction: column; gap: 8px; }
@@ -796,6 +797,13 @@
 .review-form { flex: 1; min-width: 0; }
 .chip-check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; padding: 4px 10px;
   border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.checklist { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.checklist-head { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.check-row { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; align-items: baseline; padding: 3px 0; font-size: 13px; }
+.check-detail { grid-column: 2; word-break: break-all; }
+.check-row.is-red .check-label { font-weight: 600; }
+.chip-check.is-paused { opacity: .55; cursor: not-allowed; }
+.health-banner { align-items: center; margin-bottom: 12px; }
 .plan-row { border-top: 1px solid var(--border); }
 .plan-row:first-child { border-top: 0; }
 .plan-row > .rowline { border-top: 0; }

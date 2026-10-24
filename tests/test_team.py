@@ -1,4 +1,5 @@
-"""AI 团队:节奏、情报员、主编、选题闸、素材官、制片(含自动过闸)、发布员(成片闸 + 定时发布)。"""
+"""AI 团队:节奏、情报员、主编、选题闸、素材官、制片(含自动过闸)、发布员(成片闸 + 定时发布)、
+合规审核官(审核单 + 限流监测)。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -283,7 +284,7 @@ def test_tick_respects_pause(fresh_db, monkeypatch):
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == []
     team.set_paused(False)
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == [
-        "scout", "editor", "asset", "producer", "publisher"]
+        "scout", "editor", "asset", "producer", "publisher", "compliance"]
 
 
 # --------------------------------------------------------------------------
@@ -406,6 +407,14 @@ def _fake_enqueue(db, monkeypatch):
         return {"created": rows, "skipped": [], "warnings": []}
 
     monkeypatch.setattr(service, "enqueue", enqueue)
+    _sheet(monkeypatch)
+
+
+def _sheet(monkeypatch, red=0):
+    from app.team import compliance
+
+    items = [{"key": "words", "label": "脚本用语", "level": "red" if red else "ok", "detail": "「最强」"}]
+    monkeypatch.setattr(compliance, "checklist", lambda pid, title: {"items": items, "red": red, "warn": 0})
 
 
 def test_cut_gate_schedules_publications(fresh_db, monkeypatch):
@@ -474,3 +483,125 @@ def test_asset_run_skips_when_off(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "TEAM_ASSET_PREBUILD", False)
     with pytest.raises(Skip):
         asset.run()
+
+
+# --------------------------------------------------------------------------
+# 合规审核官:发布前审核单
+# --------------------------------------------------------------------------
+def test_checklist_flags_script_title_and_footage(fresh_db, monkeypatch):
+    from app.pipeline import explainer
+    from app.team import compliance
+
+    _project(fresh_db, state="DONE")
+    fresh_db.write_json("p_x", "script.json", [
+        {"idx": 0, "text": "这是同级最强的一台车"},
+        {"idx": 1, "text": "零百加速只要 3.6 秒"}])
+    monkeypatch.setattr(explainer, "footage_mix", lambda pid, specs: {
+        "seconds": 200, "third_party_ratio": 0.3, "third_party_edge_seconds": 0})
+    sheet = compliance.checklist("p_x", "小米YU7 真实续航到底有多少")
+    by = {i["key"]: i for i in sheet["items"]}
+    assert by["words"]["level"] == "red" and "最强" in by["words"]["detail"]
+    assert by["sources"]["level"] == "red" and "第 2 段" in by["sources"]["detail"]
+    assert by["title"]["level"] == "ok"
+    assert by["footage"]["level"] == "warn"
+    assert sheet["red"] == 2
+    bad = compliance.checklist("p_x", "全网第一的 SUV 只要 9 万")
+    title = {i["key"]: i for i in bad["items"]}["title"]
+    assert title["level"] == "red" and "第一" in title["detail"]
+
+
+def test_footage_edge_is_red(fresh_db, monkeypatch):
+    from app.pipeline import explainer
+    from app.team import compliance
+
+    monkeypatch.setattr(explainer, "footage_mix", lambda pid, specs: {
+        "seconds": 200, "third_party_ratio": 0.1, "third_party_edge_seconds": 4})
+    assert compliance._footage_entry("p_x")["level"] == "red"
+    monkeypatch.setattr(explainer, "footage_mix", lambda pid, specs: {})
+    assert compliance._footage_entry("p_x")["level"] == "ok"
+
+
+def test_cut_gate_blocked_by_red_items(fresh_db, monkeypatch):
+    from app.team import plan, publisher
+
+    _fake_enqueue(fresh_db, monkeypatch)
+    _sheet(monkeypatch, red=1)
+    _item(fresh_db, status="review", project_id="p_x")
+    with pytest.raises(plan.PlanError, match="红项"):
+        publisher.approve_cut("pl_1", ["acc1"], title="随便")
+    assert fresh_db.get_plan_item("pl_1")["status"] == "review"
+    assert fresh_db.list_publications() == []
+
+
+def test_cut_gate_refuses_paused_account(fresh_db, monkeypatch):
+    from app.team import plan, publisher
+
+    _fake_enqueue(fresh_db, monkeypatch)
+    _item(fresh_db, status="review", project_id="p_x")
+    fresh_db.pause_account("acc1", "疑似限流")
+    with pytest.raises(plan.PlanError, match="暂停"):
+        publisher.approve_cut("pl_1", ["acc1"])
+
+
+# --------------------------------------------------------------------------
+# 合规审核官:限流监测
+# --------------------------------------------------------------------------
+def test_paused_account_not_claimed(fresh_db):
+    for pid, acc in (("pub_a", "acc1"), ("pub_b", "acc2")):
+        fresh_db.create_publication({"id": pid, "project_id": "p_x", "account_id": acc, "platform": "douyin"})
+    fresh_db.pause_account("acc1", "疑似限流")
+    assert [r["id"] for r in fresh_db.claim_publications()] == ["pub_b"]
+    assert fresh_db.resume_account("acc1") and not fresh_db.resume_account("acc1")
+    assert {r["id"] for r in fresh_db.claim_publications()} == {"pub_a", "pub_b"}
+
+
+def _published(db, pid, acc, at, views, *, state="published"):
+    db.create_publication({"id": pid, "project_id": f"p_{pid}", "account_id": acc, "platform": "douyin",
+                           "state": state, "title": pid, "published_at": at if state == "published" else None})
+    if views is not None:
+        db.add_snapshot(pid, "douyin", at + 24 * 3600, {"views": views})
+
+
+def test_verdict_rules(fresh_db, monkeypatch):
+    from app import config
+    from app.team import compliance
+
+    now = time.time()
+    day = 86400
+    for k, v in enumerate((1000, 1200, 800)):
+        _published(fresh_db, f"old{k}", "acc1", now - (10 - k) * day, v)
+    old = [fresh_db.get_publication(f"old{k}") for k in range(3)]
+    _published(fresh_db, "low", "acc1", now - 2 * day, 100)
+    _published(fresh_db, "fine", "acc1", now - 2 * day, 900)
+    assert compliance.verdict(fresh_db.get_publication("low"), old, now)[0] == "pause"
+    assert compliance.verdict(fresh_db.get_publication("fine"), old, now) == ("pass", "")
+    assert compliance.verdict(fresh_db.get_publication("low"), old[:2], now) == ("pass", "")  # 样本不够
+    _published(fresh_db, "fresh", "acc1", now - 3600, None)
+    assert compliance.verdict(fresh_db.get_publication("fresh"), old, now) == ("wait", "")
+    _published(fresh_db, "stuck", "acc1", now, None, state="submitted")
+    stuck = fresh_db.get_publication("stuck")
+    assert compliance.verdict(stuck, old, now)[0] == "wait"
+    later = now + (config.TEAM_REVIEW_STUCK_HOURS + 1) * 3600
+    what, why = compliance.verdict(stuck, old, later)
+    assert what == "pause" and "审核" in why
+
+
+def test_monitor_pauses_once_and_resume_sticks(fresh_db):
+    from app.team import Skip, compliance
+
+    now = time.time()
+    day = 86400
+    for k, v in enumerate((1000, 1200, 800)):
+        _published(fresh_db, f"old{k}", "acc1", now - (10 - k) * day, v)
+    _published(fresh_db, "low", "acc1", now - 2 * day, 50)
+    _published(fresh_db, "other", "acc2", now - 2 * day, 50)  # 别的账号没基线,不判
+    out = compliance.monitor(now)
+    assert len(out) == 1 and "low" in out[0]
+    assert fresh_db.get_account_health("acc1")["paused"] == 1
+    assert fresh_db.get_account_health("acc2") is None
+    assert [h["account_id"] for h in compliance.health()] == ["acc1"]
+    fresh_db.resume_account("acc1")
+    assert compliance.monitor(now) == []  # 同一条不再判
+    assert not fresh_db.get_account_health("acc1")["paused"]
+    with pytest.raises(Skip):
+        compliance.run()

@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import next_slot, paused, publisher, roles, scout
+from . import compliance, next_slot, paused, publisher, roles, scout
 from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
@@ -46,6 +46,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "reviews": sum(1 for i in items if i["status"] == "review"),
         "held": sum(1 for i in items if i["status"] == "producing" and i.get("hold")),
         "accounts": publisher.accounts(),
+        "health": compliance.health(),
         "rising": scout.rising(category),
         "trends_at": latest["captured_at"] if latest else None,
         "trends_n": latest["n"] if latest else 0,

@@ -1259,6 +1259,14 @@ def team_retry_gate(item_id: str):
     return team_plan.view(producer.retry_gate(item_id))
 
 
+@app.post("/api/team/accounts/{account_id}/resume")
+def team_account_resume(account_id: str):
+    """合规审核官暂停的账号:你看过作品状态后手动恢复自动发布。"""
+    if not db.resume_account(account_id):
+        raise HTTPException(400, "这个账号没有被暂停")
+    return {"ok": True}
+
+
 @app.post("/api/team/plan/{item_id}/start")
 def team_plan_start(item_id: str):
     """不等开工时间,马上做。没批的先批。"""

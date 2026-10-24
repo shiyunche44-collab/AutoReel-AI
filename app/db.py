@@ -220,6 +220,15 @@ CREATE TABLE IF NOT EXISTS team_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 账号健康(合规审核官):疑似限流 / 审核卡住时暂停这个账号的自动发布,人工恢复
+CREATE TABLE IF NOT EXISTS account_health (
+    account_id TEXT PRIMARY KEY,
+    paused     INTEGER NOT NULL DEFAULT 0,
+    reason     TEXT NOT NULL DEFAULT '',
+    paused_at  REAL,
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -928,7 +937,7 @@ def find_publication(project_id: str, account_id: str, aspect: str) -> dict[str,
 
 
 def claim_publications(limit: int = 3, now: float | None = None) -> list[dict[str, Any]]:
-    """取出待推进的发布任务。定时发布的没到点不领。
+    """取出待推进的发布任务。定时发布的没到点不领,被合规审核官暂停的账号不领。
 
     **同一账号一次只给一条** —— 单账号高频上传会触发平台风控,这是硬要求。
     """
@@ -938,6 +947,7 @@ def claim_publications(limit: int = 3, now: float | None = None) -> list[dict[st
             """SELECT * FROM publications
                WHERE state IN ('pending', 'uploading')
                  AND (scheduled_at IS NULL OR scheduled_at <= ?)
+                 AND account_id NOT IN (SELECT account_id FROM account_health WHERE paused = 1)
                ORDER BY created_at
                LIMIT ?""",
             (time.time() if now is None else now, limit * 4),
@@ -1194,6 +1204,41 @@ def last_team_run(role: str, *, scheduled_only: bool = False) -> dict[str, Any] 
     with connect() as conn:
         row = conn.execute(sql + " ORDER BY id DESC LIMIT 1", (role,)).fetchone()
     return dict(row) if row else None
+
+
+def get_account_health(account_id: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM account_health WHERE account_id = ?",
+                           (account_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_account_health() -> list[dict[str, Any]]:
+    init_db()
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM account_health ORDER BY updated_at DESC").fetchall()]
+
+
+def pause_account(account_id: str, reason: str) -> None:
+    """暂停一个账号的自动发布:发布线程不再领它的任务(已排的留着,恢复后照发)。"""
+    init_db()
+    now = time.time()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO account_health (account_id, paused, reason, paused_at, updated_at)"
+            " VALUES (?, 1, ?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET paused = 1,"
+            " reason = excluded.reason, paused_at = excluded.paused_at, updated_at = excluded.updated_at",
+            (account_id, reason[:300], now, now))
+
+
+def resume_account(account_id: str) -> bool:
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("UPDATE account_health SET paused = 0, updated_at = ? WHERE account_id = ?"
+                           " AND paused = 1", (time.time(), account_id))
+        return cur.rowcount > 0
 
 
 def get_team_setting(key: str, default: Any = None) -> Any:
