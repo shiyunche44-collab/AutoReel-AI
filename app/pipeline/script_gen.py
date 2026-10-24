@@ -334,8 +334,8 @@ def generate(
     roundup = bool(subjects)
     angle = (angle or "").strip()
     vocab = profile.vocab
-    budget = (narration_budget_chars(duration, PORTRAIT_CHARS_PER_SECOND) if portrait
-              else narration_budget_chars(duration))
+    budget = narration_budget_chars(
+        duration, PORTRAIT_CHARS_PER_SECOND if portrait else LANDSCAPE_CHARS_PER_SECOND)
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)
@@ -455,8 +455,13 @@ def generate(
 
 #: 竖屏按实测 TTS 语速算字数预算。默认的 5.8 字/秒比实际快:四个成片实测
 #: 4.58–4.82 字/秒(YU7 90 秒竖屏 479 字念了 104.5 秒)。竖屏 60/90 秒是平台档位,
-#: 必须按真实语速算;横屏仍用 5.8(改它会改横屏提示词,另议)
+#: 必须按真实语速算
 PORTRAIT_CHARS_PER_SECOND = 4.7
+
+#: 横屏同样按成片实测算(字数 ÷ 成片秒数,含拍间停顿):p_c113015a437b 592 字
+#: 念了 108.5 秒 = 5.46 字/秒,逐句中位 5.64。横屏一拍最多 28 字、拍数少,停顿占比
+#: 比竖屏小,所以比竖屏快。原来的 5.8 偏快约 6%,再叠 1.25 倍放行就能超时长三成
+LANDSCAPE_CHARS_PER_SECOND = 5.5
 
 #: 竖屏脚本念出来超过目标字数这么多倍,就让 LLM 压一遍。实测 90 秒竖屏目标 522 字,
 #: 提示词里写明「硬上限」、段落砍到 6 段后仍写到 870 字 —— 光靠提示词压不住。
@@ -465,8 +470,9 @@ PORTRAIT_LENGTH_TOLERANCE = 1.1
 
 #: 横屏同理但更宽松。实测 240 秒目标(预算 1392 字)写出 2272 字、成片 442 秒,
 #: 超了 85%;「时长只是目标」不等于可以翻倍。横屏段落数由计划定死(对齐计划时
-#: 缺段会被复制占位),所以压缩时必须保持段数,只缩每段,不许删段
-LANDSCAPE_LENGTH_TOLERANCE = 1.25
+#: 缺段会被复制占位),所以压缩时必须保持段数,只缩每段,不许删段。
+#: 1.25 放行时 120 秒目标最多能写到约 160 秒;1.15 把上限压到约 140 秒
+LANDSCAPE_LENGTH_TOLERANCE = 1.15
 
 SHORTEN_SYSTEM = """你是短视频解说的剪辑编导。下面这份脚本念出来太长,把它压到 {chars} 字以内(空白不算字)。
 

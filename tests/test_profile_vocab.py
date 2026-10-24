@@ -237,7 +237,8 @@ def test_portrait_script_prompt_adds_short_video_rules(monkeypatch):
                         duration=60, llm=llm, theme=theme, portrait=True)
     assert f"全片约 {int(60 * script_gen.PORTRAIT_CHARS_PER_SECOND)} 字" in llm.calls[-1][0]
     # 语速对齐后,两边只差竖屏规则这一段
-    monkeypatch.setattr(script_gen, "PORTRAIT_CHARS_PER_SECOND", 5.8)
+    monkeypatch.setattr(script_gen, "PORTRAIT_CHARS_PER_SECOND",
+                        script_gen.LANDSCAPE_CHARS_PER_SECOND)
     script_gen.generate(subject="小米YU7", profile=profile, facts=_facts(), plan=plan,
                         duration=60, llm=llm, theme=theme, portrait=True)
     portrait_system = llm.calls[-1][0]
