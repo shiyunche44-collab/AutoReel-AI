@@ -31,6 +31,14 @@
     <span class="kpi-sub">官方来源 {{ stats.official_sources }} 个</span></div>
   <div class="kpi"><span class="kpi-label">{{ m.icon("link", "i-sm") }}来源</span><span class="kpi-value">{{ stats.sources_done }}<small>/ {{ stats.sources }} 已下载</small></span>
     <span class="kpi-sub">{% if stats.sources_failed %}<span class="text-danger">{{ stats.sources_failed }} 个失败</span>{% else %}&nbsp;{% endif %}</span></div>
+  <div class="kpi" title="视频段按短边分档;低清(短边 < 720)不当背景,码率偏低的同档里排后面"><span class="kpi-label">{{ m.icon("film", "i-sm") }}清晰度</span><span class="kpi-value">{{ stats.video_res["1080p+"] }}<small>段 1080p+</small></span>
+    <span class="kpi-sub">720p {{ stats.video_res["720p"] }} · 低清 {{ stats.video_res["低清"] }} · 码率偏低 {{ stats.low_bitrate }}</span></div>
+  <div class="kpi" title="静态角标检测:带角标的源按角标位置裁切;裁不掉的第三方源、搬运官方画面的第三方段不用"><span class="kpi-label">{{ m.icon("shield", "i-sm") }}角标检测</span><span class="kpi-value">{{ stats.logo_sources }}<small>/ {{ stats.logo_checked }} 个源带角标</small></span>
+    <span class="kpi-sub">弃用 {{ stats.logo_dropped }} 段 · 搬运官方 {{ stats.dup_official }} 段</span></div>
+  {% if stats.video_by_coverage %}
+  <div class="kpi" title="品类必备视角各有多少秒确认视频;不到 8 秒算缺"><span class="kpi-label">{{ m.icon("layers", "i-sm") }}视角覆盖</span><span class="kpi-value">{{ stats.video_by_coverage | length - stats.missing_coverage | length }}<small>/ {{ stats.video_by_coverage | length }} 个视角有视频</small></span>
+    <span class="kpi-sub">{% for k, v in stats.video_by_coverage.items() %}{{ k }} {{ v | int }}s{% if not loop.last %} · {% endif %}{% endfor %}</span></div>
+  {% endif %}
   <div class="kpi"><span class="kpi-label">{{ m.icon("sparkles", "i-sm") }}视觉调用</span><span class="kpi-value">{{ stats.vlm_calls }}<small>次</small></span>
     <span class="kpi-sub">{% if stats.untagged %}{{ stats.untagged }} 个待打标签{% else %}&nbsp;{% endif %}</span></div>
 </div>

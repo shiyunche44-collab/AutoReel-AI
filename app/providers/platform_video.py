@@ -724,11 +724,13 @@ def probe(url: str) -> dict[str, Any]:
         raise PlatformError(f"解析失败({url[:60]}):{str(exc)[:200]}") from exc
 
 
-#: 只要视频流:成片的声音是旁白 + BGM,原片音轨用不上,省一半流量。
-#: 1080p 封顶,mp4 优先(Windows 上省一次转码)。
+#: 只要视频流:成片的声音是旁白 + BGM,原片音轨用不上,省一半流量。1080p 封顶。
 _MIN_SEGMENT_BYTES = 20_000
 
-FORMAT = "bv*[height<=1080][ext=mp4]/bv*[height<=1080]/b[height<=1080]/bv*/b"
+FORMAT = "bv*[height<=1080]/b[height<=1080]/bv*/b"
+#: 同分辨率里挑码率最高的流。yt-dlp 默认偏好 AV1,B 站同一条 1080p 的 AV1 只有
+#: 1.7M、AVC 有 5.2M(小米官方号实测),按默认挑出来的片子发糊;AVC 解码也最省心
+FORMAT_SORT = ["res:1080", "br", "vcodec"]
 
 
 def download_segment(url: str, dest: str | Path, *, start: float, seconds: float,
@@ -752,6 +754,7 @@ def download_segment(url: str, dest: str | Path, *, start: float, seconds: float
     opts = _base_opts()
     opts.update({
         "format": FORMAT,
+        "format_sort": FORMAT_SORT,
         "outtmpl": str(stem) + ".%(ext)s",
         # 多切 1 秒余量:关键帧对齐会让实际起点前后漂一点
         "download_ranges": download_range_func(None, [(max(0.0, start), start + seconds + 1)]),

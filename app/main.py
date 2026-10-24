@@ -40,7 +40,7 @@ from .models import (
     ScriptSegment,
     ShotPatch,
 )
-from .pipeline import aspect, concept_styles, library, orchestrator
+from .pipeline import aspect, concept_styles, explainer, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
@@ -491,10 +491,9 @@ def project_page(request: Request, project_id: str):
                         and r["confirmed_video_seconds"] < thin_at]
     else:
         lib = library.Library.load(detail.subject).stats()
-        footage_thin = ([{"name": detail.subject, "seconds": lib["confirmed_video_seconds"]}]
-                        if not library.is_building(detail.subject)
-                        and lib["confirmed_video_seconds"] < library.CONFIRMED_VIDEO_TARGET
-                        else [])
+        gaps = [] if library.is_building(detail.subject) else library.footage_gaps(lib)
+        footage_thin = ([{"name": detail.subject, "seconds": lib["confirmed_video_seconds"],
+                          "reasons": gaps}] if gaps else [])
     estimate["library_vlm_calls"] = lib["vlm_calls"]
     estimate["library"] = costs.estimate_library(lib["vlm_calls"])
     wall_clock = {"render_minutes": _explainer_minutes(beats, detail.aspect)}
@@ -509,6 +508,8 @@ def project_page(request: Request, project_id: str):
             "facts_report": facts_report,
             "roster": roster,
             "footage_thin": footage_thin,
+            "footage": None if detail.subjects else lib,
+            "footage_mix": explainer.footage_mix(project_id, orchestrator._specs(project_id)),
             "render": db.read_json(project_id, "render.json", {}) or {},
             "events": db.get_events(project_id, limit=40),
             "wall_clock": wall_clock,
@@ -568,13 +569,16 @@ def library_index(request: Request):
             lib = _load_pool(d.name)
         except HTTPException:
             continue
+        st = lib.stats()
         pools.append({"slug": d.name, "subject": lib.subject, "category": lib.category,
                       "updated_at": lib.updated_at, "cover": _pool_cover(lib),
-                      "building": library.is_building(lib.subject), "stats": lib.stats()})
+                      "building": library.is_building(lib.subject), "stats": st,
+                      "gaps": library.footage_gaps(st)})
     pools.sort(key=lambda p: -p["updated_at"])
     return templates.TemplateResponse(request, "library.html", {
-        "request": request, "pools": pools, "confirmed_target": library.CONFIRMED_VIDEO_TARGET,
-        "dcd_logged_in": official.dongchedi_logged_in()})
+        "request": request, "pools": pools,
+        "dcd_logged_in": official.dongchedi_logged_in(),
+        "douyin_logged_in": official.douyin_logged_in()})
 
 
 @app.post("/api/sources/login/dongchedi")
@@ -591,6 +595,23 @@ def source_login_dongchedi():
 
     threading.Thread(target=_run, name="login-dongchedi", daemon=True).start()
     return {"ok": True, "message": "浏览器已打开,登录懂车帝后窗口会自动关闭"}
+
+
+@app.post("/api/sources/login/douyin")
+def source_login_douyin():
+    """打开浏览器登录抖音网页版(拉官方号投稿要登录)。登录成功自动存好关窗;后台线程跑。
+    碰到验证码由人在窗口里自己过,程序不碰。"""
+    def _run() -> None:
+        try:
+            publish_browser.login(official.DOUYIN_LOGIN_KEY, "https://www.douyin.com/",
+                                  timeout=900, done_cookie=official.DOUYIN_LOGIN_COOKIE)
+        except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
+            pass
+
+    import threading
+
+    threading.Thread(target=_run, name="login-douyin", daemon=True).start()
+    return {"ok": True, "message": "浏览器已打开,登录抖音后窗口会自动关闭"}
 
 
 @app.get("/library/{slug}", response_class=HTMLResponse)
@@ -806,6 +827,14 @@ def advance_project(project_id: str):
         # 同一个项目正被后台调度器推进,这一轮就让给它
         raise HTTPException(409, "该项目正在推进中,请稍后重试")
     return out
+
+
+@app.post("/api/projects/{project_id}/library/rebuild")
+def rebuild_project_library(project_id: str):
+    try:
+        return orchestrator.rebuild_library(project_id)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/gate")

@@ -1497,8 +1497,8 @@ def concept_card(overlay: dict) -> dict:
 
 
 def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
-                used: dict[str, int], recent: list[str], card_bg: Path | None
-                ) -> tuple[Path, list[library.Piece]]:
+                used: dict[str, int], recent: list[str], card_bg: Path | None,
+                role: str = "body") -> tuple[Path, list[library.Piece]]:
     """broll / panel / highlight / stat 的背景。分屏样式铺 2–3 条不同的背景再并排。
 
     `detail` 把这一拍的旁白交给素材池:讲刹车时别配一个门把手特写
@@ -1510,7 +1510,7 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
         clips, pieces = [], []
         for k in range(count):
             got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
-                               detail=detail)
+                               detail=detail, role=role)
             if not got:
                 break
             pieces += got
@@ -1521,7 +1521,7 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
         if clips:
             return clips[0], pieces
     pieces = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
-                          detail=detail)
+                          detail=detail, role=role)
     if not pieces and card_bg:
         pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
     return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
@@ -1544,8 +1544,9 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
                     ) -> tuple[Path, list[library.Piece]]:
     """黄金三秒的背景:前几秒每 1 秒一刀硬切(不 xfade),之后接正常背景铺满这一拍。
 
-    整拍只用确认是这台车的素材(`confirmed`):前三秒观众只确认"是不是我要看的那台车",
-    配错车或挂着别人的台标就划走了。确认过的一条都没有才退回普通取法。"""
+    整拍只用确认是这台车的一方素材(`role="hook"`):前三秒观众只确认"是不是我要看的那台车",
+    配错车或挂着别人的台标就划走了。一条都没有就抛错,`render_beat` 退回 highlight 版式,
+    不退回第三方视频。"""
     n = 3 if seconds >= 3.5 else 2 if seconds >= 2.0 else 1
     work.mkdir(parents=True, exist_ok=True)
     cuts: list[library.Piece] = []
@@ -1555,8 +1556,7 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
         # 这一刀实测是黑场(源片淡入、片名卡)就换一段重取:三秒里有一秒黑屏,
         # 观众看到的就是"一块黑底上弹出大字"
         for attempt in range(HOOK_CUT_RETRIES):
-            got = (library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent, confirmed=True)
-                   or library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent))
+            got = library.fill(subject, HOOK_CUT, hint=hint, used=used, recent=recent, role="hook")
             if not got:
                 break
             p = replace(got[0], length=HOOK_CUT)
@@ -1581,8 +1581,7 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
         rest = 0.0
     pieces = list(cuts)
     if rest > 0:
-        more = (library.fill(subject, rest, hint=hint, used=used, recent=recent, confirmed=True)
-                or library.fill(subject, rest, hint=hint, used=used, recent=recent))
+        more = library.fill(subject, rest, hint=hint, used=used, recent=recent, role="hook")
         parts.append(background_clip(more, rest, size, work / "rest", motion_seed=seed + 9))
         pieces += more
     dest = work / "hook_bg.mp4"
@@ -1595,7 +1594,8 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
 
 
 def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
-                   used: dict[str, int], recent: list[str], style: str | None = None
+                   used: dict[str, int], recent: list[str], style: str | None = None,
+                   role: str = "body"
                    ) -> tuple[Path | None, motion_assets.Cutout | None, list[library.Piece]]:
     """concept 拍的素材:(实拍底, 车图, 用到的片段)。正式渲染和选风格预览共用,保证预览看到的就是成片的样子。
     产品镜(studio)用模板自带的影棚底,不铺实拍;通用模版自带底;其余压在一段实拍上。"""
@@ -1604,9 +1604,10 @@ def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int
     pieces: list[library.Piece] = []
     if motion.scene_background(scene, style) == "footage":
         # 一个长镜头放慢铺满;库里没有够长的才退回多段拼接
-        take = library.long_take(subject, seconds, hint=CONCEPT_FOOTAGE_HINT, used=used, recent=recent)
+        take = library.long_take(subject, seconds, hint=CONCEPT_FOOTAGE_HINT, used=used, recent=recent,
+                                 role=role)
         got = [take] if take else library.fill(subject, seconds, hint=CONCEPT_FOOTAGE_HINT,
-                                               used=used, recent=recent)
+                                               used=used, recent=recent, role=role)
         if got:
             try:
                 fsize = footage_size(size)
@@ -1649,7 +1650,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 sting: tuple[int, str] | None = None,
                 style: str | None = None, headline: str = "",
                 notes: list[str] | None = None,
-                ranges: dict[str, str] | None = None) -> tuple[Path, list[dict]]:
+                ranges: dict[str, str] | None = None,
+                role: str = "body") -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
@@ -1657,6 +1659,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     `headline` 是竖屏标题区常驻的两行大标题(横屏不用)。
     `notes` 给了就往里记降级说明(竖屏模版没适配 → 换模版 / 退回数据卡),调用方写进项目事件。
     `ranges` 是品类的概念动画量程(`vocab.concept_ranges`),动画里表示数量的图形按它画。
+    `role` 是这一拍在片子里的位置(`beat_role`),决定背景能不能用第三方视频(见 `library.fill`)。
 
     竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
     放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
@@ -1684,7 +1687,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
                                chapters=chapters, chapter_idx=chapter_idx, used=used,
                                card_bg=card_bg, recent=recent, sting=sting, style=style,
-                               headline=headline, ranges=ranges)
+                               headline=headline, ranges=ranges, role=role)
     elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
@@ -1697,7 +1700,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             if use_style is None:
                 raise motion.MotionError(why)
             bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
-                                                    used, recent, use_style)
+                                                    used, recent, use_style, role=role)
             base = motion.render(scene, motion.scene_data(spec.overlay, subject, ranges), seconds, size,
                                  work / "concept.mp4", background=bg_clip, photo=photo, style=use_style)
             clear_title = motion.get_style(use_style).path is not None
@@ -1708,7 +1711,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
     else:
-        base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg)
+        base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg,
+                                   role=role)
         base = _framed(base, size, work)
 
     # 竖屏标题区:大标题让位时只留章节进度
@@ -1767,9 +1771,41 @@ def sting_for(specs: Sequence[ShotSpec], where: Sequence[int],
     return ch + 1, chapters[ch][0]
 
 
+def beat_role(where: Sequence[int], pos: int, n_chapters: int) -> str:
+    """第 `pos` 拍在片子里的位置(`library.ROLES`):开头章 = hook,最后一章 = ending(结论段),
+    其余 = body。只有一章的片子全按 hook 算 —— 宁严勿松,不让第三方画面进开场。"""
+    ch = where[pos]
+    if ch == 0:
+        return "hook"
+    return "ending" if ch == n_chapters - 1 else "body"
+
+
 # --------------------------------------------------------------------------
 # 接入流水线
 # --------------------------------------------------------------------------
+def footage_mix(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
+    """已渲染各拍的背景构成(读 beats/NNN.json):总秒数、静图占比、第三方视频占比,
+    以及开场 / 结论段里的第三方秒数(应当是 0)。一拍都没渲过返回空字典。"""
+    chapters, where = chapters_of(specs)
+    total = still = third = edge = 0.0
+    for pos, s in enumerate(specs):
+        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
+        role = beat_role(where, pos, len(chapters))
+        for p in pieces:
+            n = float(p.get("length") or 0.0)
+            total += n
+            if p.get("kind") == "still":
+                still += n
+            if p.get("third_party"):
+                third += n
+                if role != "body":
+                    edge += n
+    if not total:
+        return {}
+    return {"seconds": round(total, 1), "still_ratio": round(still / total, 3),
+            "third_party_ratio": round(third / total, 3), "third_party_edge_seconds": round(edge, 1)}
+
+
 def beats_dir(project_id: str) -> Path:
     d = config.project_dir(project_id) / "beats"
     d.mkdir(parents=True, exist_ok=True)
@@ -1880,7 +1916,8 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        recent=recent,
                                        sting=sting_for(specs, where, chapters, s.idx),
                                        style=style, headline=headline, notes=notes,
-                                       ranges=profile.vocab.concept_ranges)
+                                       ranges=profile.vocab.concept_ranges,
+                                       role=beat_role(where, pos, len(chapters)))
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])

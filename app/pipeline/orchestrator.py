@@ -584,7 +584,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     return {"state": str(state), "action": "无可执行步骤"}
 
 
-def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
+def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -> None:
     """后台增量构建这个主体的素材池(见 `library.py`)。所有品类都建:平台搜片 +
     profile 声明的静图来源,官方渠道配置只是额外补充。已经在建就什么都不做。
     失败只记事件,不影响主流程。
@@ -610,7 +610,7 @@ def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
         costs.commit_project(project_id, reserved, costs.estimate_library(delta))
 
     try:
-        if library.build_async(subject, profile=profile, llm=llm, on_done=_done):
+        if library.build_async(subject, profile=profile, llm=llm, on_done=_done, **kwargs):
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
         else:
             costs.release_project(project_id, reserved)
@@ -619,18 +619,36 @@ def _start_library(project_id: str, subject: str, profile, llm=None) -> None:
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
 
 
-def _start_library_many(project_id: str, names: list[str], profile, llm=None) -> None:
+def _start_library_many(project_id: str, names: list[str], profile, llm=None, **kwargs) -> None:
     """横评:车单上每台车一个轻量素材池,一个后台线程按车依次建(见 `library.build_many_async`)。"""
     if not config.USE_LIBRARY:
         return
     try:
         started = library.build_many_async(names, profile=profile, llm=llm,
                                            enough_seconds=library.ROUNDUP_ENOUGH_SECONDS,
-                                           max_sources=library.ROUNDUP_MAX_SOURCES)
+                                           max_sources=library.ROUNDUP_MAX_SOURCES, **kwargs)
         if started:
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({'、'.join(started)})")
     except Exception as exc:  # noqa: BLE001
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
+
+
+def rebuild_library(project_id: str) -> dict[str, Any]:
+    """门禁 A「先补素材」:马上重找一轮源、下载打标签(后台跑,和分镜阶段建池同一条路)。
+    已经在建就什么都不做;距上次找源不到半小时只补下载 / 打标签,不重新找源。"""
+    project = db.get_project(project_id)
+    if not project:
+        raise PipelineError("项目不存在")
+    profile, theme = _theme_of(project)
+    names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+    targets = names or [project["subject"]]
+    if any(library.is_building(n) for n in targets):
+        return {"started": False, "reason": "素材池正在构建"}
+    if names:
+        _start_library_many(project_id, names, profile, _llm(), rediscover=True)
+    else:
+        _start_library(project_id, project["subject"], profile, _llm(), rediscover=True)
+    return {"started": any(library.is_building(n) for n in targets)}
 
 
 def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:

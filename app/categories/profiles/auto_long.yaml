@@ -562,6 +562,13 @@ official_sites:
     aliases: [特斯拉, Tesla, Model 3, Model Y, Model S, Model X, Cybertruck]
     sites: [tesla.cn, tesla.com]
     media: [tesla.com/presskit]
+    # 媒体图库(tesla.cn/tesla-gallery 背后的 Cloudinary 标签列表),原图 4000 宽;2026-10 核对
+    press:
+      - "Model Y=https://digitalassets.tesla.com/tesla-contents/image/list/tesla-gallery-new-model-y.json"
+      - "Model Y L=https://digitalassets.tesla.com/tesla-contents/image/list/tesla-gallery-model-y-l.json"
+      - "Model 3=https://digitalassets.tesla.com/tesla-contents/image/list/tesla-gallery-model-3-2024.json"
+      - "Model 3 Performance=https://digitalassets.tesla.com/tesla-contents/image/list/tesla-gallery-model-3-performance.json"
+      - "Cybertruck=https://digitalassets.tesla.com/tesla-contents/image/list/tesla-gallery-cybertruck.json"
   lixiang:
     aliases: [理想, Li Auto, LiAuto]
     sites: [lixiang.com]
@@ -579,6 +586,10 @@ official_sites:
     aliases: [小米汽车, 小米SU7, 小米YU7, Xiaomi SU7, Xiaomi YU7, Xiaomi EV]
     sites: [xiaomiev.com]
     media: []
+    # 没有公开的媒体中心;车型页上的大图就是官方宣传图(2560 宽);2026-10 核对
+    press:
+      - "YU7=https://www.xiaomiev.com/yu7"
+      - "SU7=https://www.xiaomiev.com/su7"
   aito:
     aliases: [问界, AITO, 赛力斯, 鸿蒙智行, 智界, 享界, 尊界]
     sites: [aito.auto, seres.cn]
@@ -651,7 +662,7 @@ voice_id: male-qn-jingying
 # 易车(yiche)代码已接入但暂未启用:对脚本回验证码,且被「操作过于频繁」限制过。
 # 能正常打开后:python -m scripts.browser_unblock https://car.yiche.com/ 过一次验证码,
 # 再把 yiche 加回下面这行(没过时会跳过、不记成抓过,下次补上)
-galleries: [autohome, official_site, dongchedi]
+galleries: [autohome, official_site, press, dongchedi]
 
 # 热点选题口径(字段说明见 app/categories.TrendSpec)。品牌兜底词另外并上 official_sites 别名
 trends:
@@ -708,6 +719,12 @@ vocab:
     interior: [interior, screen, seat, detail]
     driving: [driving, aerial, exterior_side]
   hint_of_angle: {interior: interior, screen_spec: interior, detail: interior}
+  coverage_views:
+    正面: [exterior_front]
+    侧面: [exterior_side]
+    尾部: [rear]
+    内饰: [interior, screen, seat]
+    行驶: [driving, aerial]
   default_hint: exterior
   angle_of_view:
     exterior_front: exterior_45

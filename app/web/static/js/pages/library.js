@@ -6,18 +6,17 @@ import { api } from '../api.js';
 
 initChrome();
 
-/* 懂车帝图库要登录:弹出浏览器,登录成功后窗口自动关 */
-const dcdLogin = $('#dcd-login');
-if (dcdLogin) {
-  dcdLogin.addEventListener('click', async () => {
+/* 懂车帝图库、抖音官方号投稿要登录:弹出浏览器,登录成功后窗口自动关 */
+$$('[data-login]').forEach((btn) =>
+  btn.addEventListener('click', async () => {
     try {
-      const r = await api.post('/api/sources/login/dongchedi');
+      const r = await api.post(`/api/sources/login/${btn.dataset.login}`);
       toast(r.message, { type: 'brand', duration: 8000 });
     } catch (err) {
       toast(err.message, { type: 'danger' });
     }
-  });
-}
+  }),
+);
 
 $$('.rel-time').forEach((el) => {
   el.textContent = relTime(el.dataset.ts);

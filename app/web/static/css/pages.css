@@ -1,6 +1,7 @@
 /* 页面专属布局。 */
 
 .text-danger { color: var(--danger); }
+.text-warning { color: var(--warning); }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .wrap-row { flex-wrap: wrap; }
 .stack-sm { display: flex; flex-direction: column; gap: 8px; }

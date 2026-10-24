@@ -215,6 +215,9 @@ class Vocab:
         "lifestyle": "in_use", "result": "in_use",
     })
     default_hint: str = "product"
+    #: 门禁 A 的素材覆盖检查:必备视角名 → 算进它的素材视角。每组要有一定秒数的确认视频,
+    #: 缺得多就提示先补素材(见 `library.footage_gaps`)。空 = 不查视角
+    coverage_views: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: 素材视角 → 镜头 angle。图片只有视角在这里的才当背景
     angle_of_view: dict[str, str] = field(default_factory=lambda: {
         "product_hero": "product_hero", "detail": "detail", "packaging": "product_hero",
@@ -389,7 +392,7 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         default = getattr(Vocab(), key)
         if isinstance(default, tuple):
             kwargs[key] = tuple(str(x) for x in (value or ()))
-        elif isinstance(default, dict) and key == "hint_groups":
+        elif isinstance(default, dict) and key in ("hint_groups", "coverage_views"):
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict) and key == "detail_types":
             # 细节类型 → 各种说法(说法本身是词表,所以是元组)
@@ -1009,7 +1012,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         official_sites={
             str(brand): {
                 key: tuple(str(x) for x in (spec or {}).get(key) or ())
-                for key in ("aliases", "sites", "media", "tiktok", "company")
+                for key in ("aliases", "sites", "media", "tiktok", "company", "press")
             }
             for brand, spec in (raw.get("official_sites") or {}).items()
         },
@@ -1179,6 +1182,10 @@ def _validate(profile: CategoryProfile) -> None:
     bad = [x for x in v.angle_of_view if x not in all_views]
     if bad:
         raise ProfileError(f"品类 {profile.name}: angle_of_view 引用了未知视角 {bad}")
+    for group, views in v.coverage_views.items():
+        bad = [x for x in views if x not in all_views]
+        if bad:
+            raise ProfileError(f"品类 {profile.name}: coverage_views.{group} 引用了未知视角 {bad}")
     bad = [x for x in (*v.hint_of_angle.values(), v.default_hint) if x not in v.hint_groups]
     if bad:
         raise ProfileError(f"品类 {profile.name}: hint_of_angle / default_hint 引用了未知偏好 {bad}")

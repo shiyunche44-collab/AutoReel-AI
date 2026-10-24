@@ -89,7 +89,7 @@ def test_fill_avoids_same_view_as_previous_cut(tmp_path, monkeypatch):
 
     def item(id_, start, view):
         return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view=view,
-                            target="yes", start=start, end=start + 3, source="s")
+                            target="yes", start=start, end=start + 3, source="s", official=True)
 
     lib.items = [item("front1", 0, "exterior_front"), item("front2", 3, "exterior_front"),
                  item("rear1", 6, "rear")]
@@ -446,24 +446,22 @@ def _filter_pool(tmp_path, monkeypatch, clean_len):
     lib = library.Library(subject="测试车")
 
     def item(id_, start, length, **kw):
+        # 第三方源都测过台标(logo_crop=0):这里只测主持人 / 水印这两条硬规则
         return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view="driving",
-                            target="yes", start=start, end=start + length, source="s_" + id_, **kw)
+                            target="yes", start=start, end=start + length, source="s_" + id_,
+                            logo_crop=0.0, **kw)
 
     lib.items = [item("clean", 0, clean_len), item("host", 100, 5, desc="博主出镜讲解车内空间"),
                  item("wm", 200, 5, problem="text_overlay")]
     lib.save()
 
 
-def test_fill_excludes_host_and_third_party_watermark_when_clean_pool_is_enough(tmp_path, monkeypatch):
-    _filter_pool(tmp_path, monkeypatch, clean_len=library.HARD_FILTER_MIN_SECONDS + 5)
+@pytest.mark.parametrize("clean_len", [65.0, 3.0])
+def test_fill_never_takes_host_or_third_party_watermark(tmp_path, monkeypatch, clean_len):
+    """池子再小也不放宽:铺不满就拿官图补,不用博主的画面。"""
+    _filter_pool(tmp_path, monkeypatch, clean_len=clean_len)
     ids = {p.item_id for p in library.fill("测试车", 20.0)}
     assert ids == {"clean"}
-
-
-def test_fill_keeps_dirty_clips_as_fallback_when_clean_pool_is_small(tmp_path, monkeypatch):
-    _filter_pool(tmp_path, monkeypatch, clean_len=3)
-    ids = {p.item_id for p in library.fill("测试车", 12.0)}
-    assert ids & {"host", "wm"}
 
 
 def test_audio_graph_ducks_bgm_under_narration_without_amix_normalize():
@@ -480,7 +478,8 @@ def test_fill_drops_whole_source_when_it_is_a_host_vlog(tmp_path, monkeypatch):
 
     def item(id_, src, start, length, desc=""):
         return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view="driving",
-                            target="yes", start=start, end=start + length, source=src, desc=desc)
+                            target="yes", start=start, end=start + length, source=src, desc=desc,
+                            logo_crop=0.0)
 
     lib.items = [item("c1", "clean", 0, 70)] + \
         [item("vlog_host", "vlog", 0, 5, "博主出镜讲解")] + \
@@ -600,7 +599,8 @@ def test_long_take_prefers_long_confirmed_moving_shot(tmp_path, monkeypatch):
 
     def item(id_, start, length, view, target="yes"):
         return library.Item(id=id_, kind="video", path=str(vid), tagged=True, view=view,
-                            target=target, start=start, end=start + length, source="s_" + id_)
+                            target=target, start=start, end=start + length, source="s_" + id_,
+                            official=True)
 
     lib.items = [item("short", 10, 2.0, "driving"), item("static", 20, 9.0, "exterior_45"),
                  item("drive", 40, 6.0, "driving"), item("other_car", 60, 12.0, "driving", "unknown")]
@@ -675,3 +675,25 @@ def test_supports_portrait_reads_header_meta(tmp_path, monkeypatch):
     assert motion.supports_portrait(None, "battery")
     assert not motion.supports_portrait(None, "accel")
     assert not motion.supports_portrait(None)
+
+
+def test_long_take_keeps_third_party_out_of_hook_and_behind_official(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    vid = tmp_path / "v.mp4"
+    vid.write_bytes(b"x")
+    lib = library.Library(subject="测试车")
+    lib.items = [
+        library.Item(id="tp", kind="video", path=str(vid), tagged=True, view="driving",
+                     target="yes", start=10, end=22, source="s_tp", logo_crop=0.0),
+        library.Item(id="raw", kind="video", path=str(vid), tagged=True, view="driving",
+                     target="yes", start=30, end=42, source="s_raw"),
+        library.Item(id="off", kind="video", path=str(vid), tagged=True, view="exterior_45",
+                     target="yes", start=50, end=58, source="s_off", official=True)]
+    lib.save()
+    assert library.long_take("测试车", 8.0).item_id == "off"            # 一方视频优先
+    assert library.long_take("测试车", 8.0, used={"off": 1}).item_id == "off"
+    lib.items[2].end = 52                                                # 官方片不够长
+    lib.save()
+    take = library.long_take("测试车", 8.0)
+    assert take.item_id == "tp" and take.third_party                     # 没测台标的 raw 不进
+    assert library.long_take("测试车", 8.0, role="ending") is None

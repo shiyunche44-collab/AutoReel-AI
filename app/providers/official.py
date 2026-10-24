@@ -440,6 +440,88 @@ def site_assets(subject: str, spec: dict[str, tuple[str, ...]], *,
     return got
 
 
+#: 媒体中心图:只收长边够大的(入池后按实际尺寸再筛一遍,见 `Gallery.min_long_side`)
+PRESS_MIN_LONG_SIDE = 1920
+#: 下载用的宽度:原图 4000 宽、单张好几 MB,2560 足够当 4K 以下成片的背景
+PRESS_FETCH_WIDTH = 2560
+#: 车型页一页最多收几张(页上混着大量小图标,下载后按尺寸剔)
+PRESS_PAGE_LIMIT = 60
+_CLOUDINARY_LIST_RE = re.compile(r"^(https://[^?#]+?)/image/list/([^/?#]+)\.json$")
+
+
+def press_entries(subject: str, spec: dict[str, tuple[str, ...]]) -> list[str]:
+    """YAML `press` 里写的是「车型=地址」,只取型号和这台车完全一致的。
+
+    型号比整串:"Model Y" 不取 "Model Y L" 的图库,反之亦然。"""
+    keyword = re.sub(r"[\s-]+", "", model_keyword(subject, spec.get("aliases", ())).lower())
+    out = []
+    for entry in spec.get("press", ()):
+        model, sep, url = entry.partition("=")
+        if sep and url.strip() and re.sub(r"[\s-]+", "", model.lower()) == keyword:
+            out.append(url.strip())
+    return out
+
+
+def parse_cloudinary_list(body: str, list_url: str) -> list[tuple[str, int, int]]:
+    """Cloudinary 按标签列资源的 JSON(`.../image/list/<tag>.json`)→ [(图地址, 宽, 高)]。
+
+    特斯拉媒体图库(tesla.cn/tesla-gallery)就是这个:每个车型一个标签,原图 4000 宽。"""
+    m = _CLOUDINARY_LIST_RE.match(list_url)
+    try:
+        resources = json.loads(body).get("resources") or []
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        return []
+    if not m:
+        return []
+    out = []
+    for r in resources:
+        pid, fmt = r.get("public_id"), r.get("format") or "jpg"
+        w, h = int(r.get("width") or 0), int(r.get("height") or 0)
+        if not pid or max(w, h) < PRESS_MIN_LONG_SIDE:
+            continue
+        version = f"v{r['version']}/" if r.get("version") else ""
+        out.append((f"{m.group(1)}/image/upload/w_{PRESS_FETCH_WIDTH},q_auto:good/"
+                    f"{version}{pid}.{fmt}", w, h))
+    return out
+
+
+def press_images(subject: str, spec: dict[str, tuple[str, ...]], *,
+                 errors: list[str] | None = None) -> list[ImageRef]:
+    """车企媒体中心 / 车型页的高清官图。地址在 YAML `official_sites.<品牌>.press` 里人工核对。
+
+    - Cloudinary 标签列表(特斯拉):JSON 里带尺寸,不够大的直接不要;
+    - 普通网页(小米车型页):抽图、去手机版和别的车型的图,尺寸要下载后才知道,入池时再筛。"""
+    keyword = model_keyword(subject, spec.get("aliases", ()))
+    siblings = [s for s in sibling_models(spec.get("aliases", ()), keyword)
+                if not _is_brand(s, spec)]
+    out: list[ImageRef] = []
+    for url in press_entries(subject, spec):
+        license = f"厂商媒体用途:{url}"
+        try:
+            if _CLOUDINARY_LIST_RE.match(url):
+                body = webassets._http_text(url, referer=f"https://{platform_video.domain_of(url)}/")
+                found = parse_cloudinary_list(body, url)
+                if not found:
+                    raise ValueError("图库列表是空的")
+                out += [ImageRef(url=u, origin="official:press", license=license, width=w,
+                                 source_page=url) for u, w, _ in found]
+                continue
+            body = clips.fetch_page(url)
+            if not body:
+                raise ValueError("页面打不开")
+            imgs = [i for i in extract_images(body, url)
+                    if not (_MOBILE_TOKENS & set(url_tokens(i)))
+                    and not any(url_names(i, s) for s in siblings)]
+            # 宣传照是 jpg;png 多是功能图标、抠图浮层(小米 YU7 页 51 张 png 几乎全是 32px 图标)
+            imgs.sort(key=lambda i: urllib.parse.urlsplit(i).path.lower().endswith(".png"))
+            out += [ImageRef(url=i, origin="official:press", license=license, source_page=url)
+                    for i in imgs[:PRESS_PAGE_LIMIT]]
+        except Exception as exc:  # noqa: BLE001 - 一个地址坏了只少这一份
+            if errors is not None:
+                errors.append(f"媒体中心抓图失败({url[:80]}):{str(exc)[:100]}")
+    return _dedupe(out)
+
+
 # --------------------------------------------------------------------------
 # 3. 汽车之家 / 懂车帝官图库
 # --------------------------------------------------------------------------
@@ -665,6 +747,19 @@ def dongchedi_cookies() -> dict[str, str]:
 
 def dongchedi_logged_in() -> bool:
     return bool(dongchedi_cookies().get(DCD_LOGIN_COOKIE))
+
+
+#: 抖音登录态:和发布用同一个 key(同一个账号),官方号投稿列表要登录才拉得到
+DOUYIN_LOGIN_KEY = "douyin"
+DOUYIN_LOGIN_COOKIE = "sessionid"
+
+
+def douyin_logged_in() -> bool:
+    from ..publish import browser as publish_browser
+
+    state = publish_browser.read_state(DOUYIN_LOGIN_KEY)
+    return any(c.get("name") == DOUYIN_LOGIN_COOKIE and c.get("value")
+               and "douyin.com" in str(c.get("domain", "")) for c in state.get("cookies") or [])
 
 
 def parse_dongchedi_gallery(body: str, series: str) -> list[str]:
@@ -901,6 +996,8 @@ class Gallery:
     """一个静图来源。`fetch(subject, spec, errors)` 返回 ImageRef;`referer` 下载时带上。"""
     fetch: Callable[..., list[ImageRef]]
     referer: str = ""
+    #: 入池后按实际尺寸再筛:长边不到这个数的删掉(页面上抽的图下载前不知道尺寸)
+    min_long_side: int = 0
 
 
 #: profile 的 `galleries` 里可以写的名字
@@ -920,6 +1017,9 @@ GALLERIES: dict[str, Gallery] = {
         subject, spec, errors=errors)[1]),
     "product_images": Gallery(lambda subject, spec, errors: product_images(
         subject, spec, errors=errors)),
+    # 车企媒体中心 / 车型页高清官图(YAML `press` 里人工核对的地址)
+    "press": Gallery(lambda subject, spec, errors: press_images(subject, spec, errors=errors),
+                     min_long_side=PRESS_MIN_LONG_SIDE),
 }
 
 

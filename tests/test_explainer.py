@@ -249,15 +249,17 @@ def pool(tmp_path, monkeypatch):
     still = tmp_path / "s.jpg"
     still.write_bytes(b"x")
 
+    # 视频默认官方来源(这组用例测的是排序);unknown1 是测过台标、干净的第三方片
     def item(id_, start, end, view="exterior_45", target="yes", problem="", kind="video",
-             path=vid):
+             path=vid, official=True, logo_crop=-1.0):
         return library.Item(id=id_, kind=kind, path=str(path), tagged=True, view=view,
-                            target=target, problem=problem, start=start, end=end)
+                            target=target, problem=problem, start=start, end=end,
+                            official=official and kind == "video", logo_crop=logo_crop)
 
     lib.items = [
         item("clean1", 0, 3), item("clean2", 3, 5.5), item("int1", 6, 9, view="interior"),
         item("sub1", 10, 20, problem="subtitle"),
-        item("unknown1", 20, 25, target="unknown"),
+        item("unknown1", 20, 25, target="unknown", official=False, logo_crop=0.0),
         item("tiny", 25, 25.6),
         item("still1", 0, 0, kind="still", path=still),
     ]
@@ -308,8 +310,8 @@ def test_fill_ranks_presenter_footage_after_cropped_subtitles(pool):
     used = {"clean1": 1, "clean2": 1, "int1": 1, "unknown1": 1, "still1": 1}
     pieces = library.fill("测试车", 4.0, used=used)
     assert pieces[0].item_id == "sub1"
-    host_piece = next(p for p in library.fill("测试车", 30.0, used={}) if p.item_id == "host1")
-    assert host_piece.crop_bottom == 0.0               # 主持人裁不掉,不裁
+    # 主持人出镜裁不掉:池子再小也不进背景
+    assert "host1" not in {p.item_id for p in library.fill("测试车", 30.0, used={})}
 
 
 def test_fit_filter_crops_subtitle_band_and_fills_frame():
@@ -358,33 +360,50 @@ def test_fill_skips_black_title_cards(pool, tmp_path):
     assert "clean1" not in ids and ids
 
 
-def test_fill_confirmed_only_takes_official_or_recognised_footage(pool):
+def test_fill_hook_and_ending_never_take_third_party_video(pool):
     lib = library.Library.load("测试车")
     lib.items.append(library.Item(id="logo1", kind="video", path=lib.items[0].path, tagged=True,
                                   view="exterior_45", target="yes", problem="text_overlay",
                                   start=40, end=50))
+    lib.items.append(library.Item(id="tp_yes", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="yes", logo_crop=0.0,
+                                  start=60, end=70))
     lib.items.append(library.Item(id="off1", kind="video", path=lib.items[0].path, tagged=True,
                                   view="exterior_45", target="unknown", official=True,
                                   start=50, end=60))
     lib.save()
-    ids = {p.item_id for p in library.fill("测试车", 60.0, used={}, confirmed=True)}
-    assert "unknown1" not in ids                       # 没认出是这台车:开场不用
-    assert "logo1" not in ids                          # 第三方台标:池子再小也不用
-    assert "off1" in ids                               # 官方来源:认不认出都能用
-    loose = {p.item_id for p in library.fill("测试车", 60.0, used={})}
-    assert "unknown1" in loose                         # 普通拍照旧只是降权
+    for role in ("hook", "ending"):
+        pieces = library.fill("测试车", 60.0, used={}, role=role)
+        ids = {p.item_id for p in pieces}
+        assert not ids & {"unknown1", "logo1", "tp_yes"}   # 第三方:认出是这台车也不用
+        assert "off1" in ids                               # 官方来源:认不认出都能用
+        assert not any(p.third_party for p in pieces)
+    body = {p.item_id for p in library.fill("测试车", 60.0, used={})}
+    assert "tp_yes" in body and "logo1" not in body        # 正文铺不满才兜底;台标水印照样不要
+    with pytest.raises(ValueError):
+        library.fill("测试车", 3.0, role="intro")
 
 
 def test_fill_edge_crops_third_party_video_only(pool):
-    lib = library.Library.load("测试车")
-    lib.items.append(library.Item(id="off1", kind="video", path=lib.items[0].path, tagged=True,
-                                  view="exterior_45", target="yes", official=True,
-                                  start=50, end=60))
-    lib.save()
     pieces = {p.item_id: p for p in library.fill("测试车", 60.0, used={})}
-    assert pieces["clean1"].crop_edge == library.EDGE_CROP
-    assert pieces["off1"].crop_edge == 0.0
+    assert pieces["unknown1"].crop_edge == library.THIRD_PARTY_SAFE_CROP
+    assert pieces["unknown1"].third_party
+    assert pieces["clean1"].crop_edge == 0.0 and not pieces["clean1"].third_party
     assert pieces["still1"].crop_edge == 0.0
+
+
+def test_fill_third_party_waits_for_logo_check_and_fresh_first_party(pool):
+    lib = library.Library.load("测试车")
+    lib.items.append(library.Item(id="tp_raw", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="yes", start=60, end=70))
+    lib.save()
+    # 没测过台标的第三方源:池子再小也不进
+    assert "tp_raw" not in {p.item_id for p in library.fill("测试车", 60.0, used={})}
+    # 没用过的一方素材够铺这一拍:测过台标的第三方也不进
+    assert "unknown1" not in {p.item_id for p in library.fill("测试车", 3.0, used={})}
+    # 一方素材都用过了:第三方排在用过的一方素材前面
+    used = {i: 1 for i in ("clean1", "clean2", "int1", "sub1", "still1")}
+    assert library.fill("测试车", 3.0, used=used)[0].item_id == "unknown1"
 
 
 def test_fit_filter_edge_crop_runs_before_fit():
@@ -480,3 +499,10 @@ def test_enforce_broll_cap_skips_foreign_comparison_facts_outside_comparison():
         seg.fact_refs = ["f_r"]
     out = explainer.enforce_broll_cap(specs, segs, [rival], profile)
     assert all(s.layout == "broll" for s in out)
+
+
+def test_beat_role_follows_chapter_position():
+    where = [0, 0, 1, 1, 2]
+    assert [explainer.beat_role(where, n, 3) for n in range(5)] == \
+        ["hook", "hook", "body", "body", "ending"]
+    assert explainer.beat_role([0, 0], 1, 1) == "hook"     # 只有一章:宁严勿松

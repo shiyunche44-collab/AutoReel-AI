@@ -12,6 +12,20 @@ import { initLookPicker } from './look-pick.js';
 
 initChrome();
 
+// 门禁 A「先补素材」:后台重建素材池(重新找源 + 下载打标签)
+const rebuildBtn = $('#rebuild-library');
+if (rebuildBtn) {
+  rebuildBtn.addEventListener('click', () => withLoading(rebuildBtn, async () => {
+    try {
+      const r = await api.post(`/api/projects/${DATA.pid}/library/rebuild`);
+      toast(r.started ? '素材池已开始后台重建,完成后刷新本页查看' : (r.reason || '没有启动重建'),
+        { type: r.started ? 'success' : 'warning' });
+    } catch (err) {
+      toast(err.message, { type: 'danger' });
+    }
+  }));
+}
+
 const DATA = readJSON('page-data', {});
 const PID = DATA.pid;
 const RESTORE_KEY = `aimovice.restore.${PID}`;

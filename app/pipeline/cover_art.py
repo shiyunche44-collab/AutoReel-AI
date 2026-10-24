@@ -228,7 +228,8 @@ def pick_car(subject: str, exclude: Sequence[str | Path] = ()) -> tuple[Any, Pat
     hero = vocab.primary_views or set(vocab.views)
     used = {str(Path(p)) for p in exclude}
     cands = [i for i in lib.items
-             if i.kind == "still" and i.usable and Path(i.path).is_file() and i.view in hero
+             if i.kind == "still" and i.usable and not i.small_still and Path(i.path).is_file()
+             and i.view in hero
              and i.problem not in ("cropped", "unclear", "poster") and str(Path(i.path)) not in used]
     cands.sort(key=lambda i: (not library.is_studio_shot(i.path), VIEW_RANK.get(i.view, 9),
                               not i.official, i.target != "yes", -Path(i.path).stat().st_size, i.id))

@@ -444,3 +444,24 @@ def test_gallery_that_needs_login_is_retried_later(data_dir, monkeypatch):
     errors: list[str] = []
     assert lib_mod.ingest_gallery(lib, errors) == 0
     assert lib.galleries_done == [] and "要登录" in errors[0]
+
+
+def test_third_party_copy_of_official_footage_is_marked(tmp_path):
+    """第三方源里和官方段同一画面的段:标成重复、不可用、不进打标签队列。"""
+    f_off = _frame(tmp_path / "off.png", 1)
+    f_copy = _frame(tmp_path / "copy.png", 1)
+    f_own = _frame(tmp_path / "own.png", 5)
+    lib = Library(subject="x")
+    lib.items = [
+        Item(id="o1", kind="video", path="o.mp4", frame=f_off, source="so", official=True,
+             start=0, end=3),
+        Item(id="t1", kind="video", path="t.mp4", frame=f_copy, source="st", start=0, end=3,
+             tagged=True, view="exterior_45", target="yes"),
+        Item(id="t2", kind="video", path="t.mp4", frame=f_own, source="st", start=3, end=6),
+    ]
+    assert lib_mod.mark_official_duplicates(lib) == 1
+    o1, t1, t2 = lib.items
+    assert t1.dup_of == "o1" and t1.skipped == "dup_official" and not t1.usable
+    assert not t2.dup_of and not o1.dup_of
+    assert t2 in lib_mod._tag_queue(lib) and t1 not in lib_mod._tag_queue(lib)
+    assert lib_mod.mark_official_duplicates(lib) == 0   # 幂等

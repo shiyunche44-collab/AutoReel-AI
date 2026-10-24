@@ -110,7 +110,7 @@ def _fake_library(monkeypatch, tmp_path, kinds):
     for n, kind in enumerate(kinds):
         p = _pattern(tmp_path / f"s{n}.jpg", kind)
         items.append(SimpleNamespace(id=f"i{n}", kind="still", usable=True, path=str(p), problem="",
-                                     view="front", target="yes", frame=""))
+                                     view="front", target="yes", frame="", small_still=False))
     lib = SimpleNamespace(items=items)
     monkeypatch.setattr(library.Library, "load", classmethod(lambda cls, subject: lib))
     monkeypatch.setattr(library, "vocab_of", lambda l: SimpleNamespace(primary_views={"front"}, views={"front"}))
@@ -133,7 +133,7 @@ def test_cover_still_exclude_skips_near_duplicates(monkeypatch, tmp_path):
     dup = tmp_path / "dup.jpg"
     Image.open(items[0].path).resize((320, 180)).save(dup, "JPEG")  # 同一张图的缩小版
     items.append(SimpleNamespace(id="i9", kind="still", usable=True, path=str(dup), problem="",
-                                 view="front", target="yes", frame=""))
+                                 view="front", target="yes", frame="", small_still=False))
     got = library.cover_still("x", exclude=[items[0].path])
     assert got is not None and Path(got) == Path(items[1].path)
 

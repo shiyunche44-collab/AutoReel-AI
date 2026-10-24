@@ -52,7 +52,7 @@ from .. import config
 from ..categories import CategoryProfile, Vocab, load_profile
 from ..providers import clips as clips_mod
 from ..providers import images, official, platform_video
-from . import vision_verdict
+from . import logo_detect, media_check, vision_verdict
 
 LIB_ROOT_NAME = "library"
 
@@ -128,6 +128,8 @@ THIRD_PARTY_WITH_OFFICIAL = 3
 #: 「确认是这台车」的视频秒数低于它,不等满 7 天就重新找源(每次至少隔这么久)
 CONFIRMED_VIDEO_TARGET = 180.0
 REDISCOVER_THIN_SECONDS = 6 * 3600
+#: 人工「重建素材池」两次找源之间至少隔这么久
+REDISCOVER_MIN_GAP = 30 * 60
 #: 多车横评:每台车最多拉几个平台视频源
 ROUNDUP_MAX_SOURCES = 3
 STILL_SECONDS = 4.0
@@ -156,6 +158,9 @@ class Source:
     #: pending / done / failed
     status: str = "pending"
     error: str = ""
+    #: 静态角标检测(logo_detect):checked = 下过结论;boxes = 归一化 [x0, y0, x1, y1]
+    logo_checked: bool = False
+    logo_boxes: list[list[float]] = field(default_factory=list)
 
 
 @dataclass
@@ -186,17 +191,49 @@ class Item:
     target: str = "unknown"
     desc: str = ""
     problem: str = ""
-    #: 不打标签的原因(source_rejected = 所在源的样本废段太多)
+    #: 不打标签 / 不用的原因:source_rejected = 所在源的样本废段太多;
+    #: frame_dark / frame_flat = 本地体检取的帧全黑 / 没内容(见 media_check.frame_verdict);
+    #: logo_uncroppable = 第三方源的角标裁不掉;dup_official = 搬运的官方画面
     skipped: str = ""
+    #: 技术参数(视频按所在的窗文件,图按原图);0 / 空 = 还没读过(老池子回填前)
+    width: int = 0
+    height: int = 0
+    fps: float = 0.0
+    #: 视频流码率,kbps
+    bitrate: int = 0
+    vcodec: str = ""
+    #: 本地体检的边缘方差中位数;-1 = 没体检过
+    sharp: float = -1.0
+    #: 按所在源检测到的角标,当背景时四边要收的比例(同 Piece.crop_edge);-1 = 没检测过
+    logo_crop: float = -1.0
+    #: 第三方段和某条官方段是同一画面时,那条官方段的 id(见 mark_official_duplicates)
+    dup_of: str = ""
 
     @property
     def length(self) -> float:
         return max(0.0, self.end - self.start)
 
     @property
+    def low_res(self) -> bool:
+        """视频短边不到 720:放到 1080p 成片里糊成一片,不当背景。"""
+        return self.kind == "video" and media_check.is_low_res_video(self.width, self.height)
+
+    @property
+    def low_bitrate(self) -> bool:
+        """码率低于该分辨率 / 编码的下限:只排序靠后,不拦。"""
+        return self.kind == "video" and media_check.is_low_bitrate(
+            self.width, self.height, self.bitrate, self.vcodec)
+
+    @property
+    def small_still(self) -> bool:
+        """静图长边不到 1280:不当全屏背景。"""
+        return self.kind == "still" and media_check.is_small_still(self.width, self.height)
+
+    @property
     def usable(self) -> bool:
         return self.tagged and self.target != "no" and self.problem not in BLOCKING \
-            and self.view not in ("people", "text", "other", "")
+            and self.view not in ("people", "text", "other", "") and not self.low_res \
+            and not self.skipped
 
 
 @dataclass
@@ -309,6 +346,8 @@ class Library:
         for i in self.items:
             if i.usable:
                 views[i.view] = views.get(i.view, 0) + 1
+        sized = [i for i in videos if i.width and i.height]
+        cover = coverage_seconds(self)
         return {
             "sources": len(self.sources),
             "sources_done": sum(1 for s in self.sources if s.status == "done"),
@@ -326,6 +365,21 @@ class Library:
             "confirmed_video_seconds": round(confirmed_seconds(self, video_only=True), 1),
             "official_sources": sum(1 for s in self.sources if s.official),
             "usable_by_view": dict(sorted(views.items(), key=lambda kv: -kv[1])),
+            "video_by_coverage": cover,
+            "missing_coverage": [k for k, v in cover.items() if v < COVERAGE_MIN_SECONDS],
+            # 清晰度:视频段按短边分档(没读到尺寸的不计),码率偏低只排序靠后
+            "video_res": {
+                "1080p+": sum(1 for i in sized if min(i.width, i.height) >= 1080),
+                "720p": sum(1 for i in sized if 720 <= min(i.width, i.height) < 1080),
+                "低清": sum(1 for i in sized if i.low_res),
+            },
+            "low_bitrate": sum(1 for i in videos if i.usable and i.low_bitrate),
+            "small_stills": sum(1 for i in stills if i.small_still),
+            # 台标检测:测过的源、带角标的源、裁不掉被整源弃用的段、第三方搬运官方画面的段
+            "logo_checked": sum(1 for s in self.sources if s.logo_checked),
+            "logo_sources": sum(1 for s in self.sources if s.logo_boxes),
+            "logo_dropped": sum(1 for i in videos if i.skipped == "logo_uncroppable"),
+            "dup_official": sum(1 for i in videos if i.skipped == "dup_official"),
         }
 
 
@@ -679,20 +733,26 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
             dur = clips_mod.probe_duration(raw)
             if dur <= 0:
                 continue
+            # 一个窗文件只读一次,切出来的段共用
+            info = media_check.probe_video(raw)
             segs = split_segments(scene_cuts(raw), dur)
             for n, (a, b) in enumerate(segs):
                 item_id = f"{src.id}_{k}_{n:03d}"
-                frame = ""
+                frame, skipped, sharp = "", "", -1.0
                 if b - a >= MIN_TAG_SECONDS:
                     got = extract_frame(raw, (a + b) / 2, frame_dir / f"{item_id}.jpg")
                     frame = str(got) if got else ""
+                    # 送视觉模型之前先本地看三帧:黑场、纯色淡场直接跳过,不花调用
+                    stats = media_check.frame_stats(raw, a, b)
+                    skipped = media_check.frame_verdict(stats)
+                    sharp = media_check.median_sharpness(stats)
                 lib.items.append(Item(
                     id=item_id, kind="video", path=str(raw), frame=frame, source=src.id,
                     url=src.url, platform=src.platform or platform_of(src.url),
                     official=src.official,
                     origin=f"library:{src.platform or platform_of(src.url)}",
                     license=f"{src.platform}:{src.uploader or '未知上传者'}",
-                    start=a, end=b,
+                    start=a, end=b, skipped=skipped, sharp=sharp, **info,
                 ))
                 added += 1
         if not added:
@@ -703,6 +763,34 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
         src.status, src.error = "failed", str(exc)[:200]
         errors.append(f"素材池源失败({src.url}):{str(exc)[:160]}")
         return 0
+
+
+def check_logos(lib: Library, src: Source) -> list[list[float]] | None:
+    """给一个已下载的源做静态角标检测,结果写回源和源里的每一段。
+
+    - 检测到角标、能裁掉:段的 `logo_crop` = 要收的比例;
+    - 裁不掉(台标太大 / 离边太远):第三方的段标成跳过(logo_uncroppable),
+      不再送视觉模型;官方的段照常用(多是品牌自己的免责小字,不裁);
+    - 帧太少下不了结论:不写结果,`_crop_edge` 照旧按来源一刀切。
+    """
+    segs = [i for i in lib.items if i.source == src.id and i.kind == "video"]
+    paths = sorted({i.path for i in segs})
+    boxes = logo_detect.find_logos(logo_detect.sample_frames(paths))
+    src.logo_checked = True
+    for i in segs:  # 重测时先清掉上一次的结论
+        i.logo_crop = -1.0
+        if i.skipped == "logo_uncroppable":
+            i.skipped = ""
+    if boxes is None:
+        src.logo_boxes = []
+        return None
+    src.logo_boxes = boxes
+    crop = logo_detect.crop_for(boxes) if boxes else 0.0
+    for i in segs:
+        i.logo_crop = crop if crop is not None else 0.0
+        if crop is None and not src.official:
+            i.skipped = i.skipped or "logo_uncroppable"
+    return boxes
 
 
 def ingest_gallery(lib: Library, errors: list[str], *,
@@ -730,9 +818,16 @@ def ingest_gallery(lib: Library, errors: list[str], *,
                               official=name != "product_images" or ref.origin.startswith(
                                   "official"),
                               license=ref.license, view=_GALLERY_VIEW.get(ref.angle, ""))
-            if item is not None:
-                have.add(ref.url)
-                added += 1
+            if item is None:
+                continue
+            have.add(ref.url)
+            if gallery.min_long_side and max(item.width, item.height) < gallery.min_long_side:
+                # 页面上的小图标、缩略图:下载了才知道尺寸,不够大的不留
+                lib.items.remove(item)
+                for f in {item.path, item.frame}:
+                    Path(f).unlink(missing_ok=True)
+                continue
+            added += 1
         lib.galleries_done.append(name)
     lib.gallery_at = time.time()
     return added
@@ -756,10 +851,11 @@ def _add_still(lib: Library, url: str, errors: list[str], *, platform: str, refe
         errors.append(f"静图下载失败({url[:60]}):{str(exc)[:100]}")
         return None
     frame = _thumb(dest, lib.dir / "frames" / f"{item_id}.jpg")
+    width, height = media_check.image_size(dest)
     item = Item(
         id=item_id, kind="still", path=str(dest), frame=str(frame or dest), url=url,
         platform=platform, official=official, origin=f"library:{platform}",
-        license=license, view=view,
+        license=license, view=view, width=width, height=height,
     )
     lib.items.append(item)
     return item
@@ -915,6 +1011,41 @@ def confirmed_seconds(lib: Library, *, video_only: bool = False) -> float:
     return total
 
 
+#: 门禁 A「先补素材」的提示线(只提示,不拦):确认视频秒数低于它,
+#: 或品类必备视角里缺这么多个的视频
+FOOTAGE_HINT_SECONDS = 300.0
+FOOTAGE_HINT_MISSING_VIEWS = 2
+#: 一个必备视角至少这么多秒确认视频才算"有"
+COVERAGE_MIN_SECONDS = 8.0
+
+
+def coverage_seconds(lib: Library) -> dict[str, float]:
+    """品类必备视角(`vocab.coverage_views`)各有多少秒确认视频(口径同 `confirmed_seconds`)。"""
+    groups = vocab_of(lib).coverage_views
+    hosts = _host_sources(lib.items)
+    out = {label: 0.0 for label in groups}
+    for i in lib.items:
+        if (i.kind != "video" or not i.usable or not _confirmed(i) or _hard_bad(i, hosts)
+                or i.length < FILL_MIN_PIECE):
+            continue
+        for label, views in groups.items():
+            if i.view in views:
+                out[label] += i.length
+    return {k: round(v, 1) for k, v in out.items()}
+
+
+def footage_gaps(stats: dict[str, Any]) -> list[str]:
+    """按 `Library.stats()` 判素材够不够,返回该提示的原因(空 = 够)。"""
+    reasons = []
+    secs = stats.get("confirmed_video_seconds") or 0.0
+    if secs < FOOTAGE_HINT_SECONDS:
+        reasons.append(f"确认是本车的视频只有 {int(secs)} 秒(建议 ≥ {int(FOOTAGE_HINT_SECONDS)})")
+    missing = stats.get("missing_coverage") or []
+    if len(missing) >= FOOTAGE_HINT_MISSING_VIEWS:
+        reasons.append(f"缺{'、'.join(missing)}的视频")
+    return reasons
+
+
 def reject_sources(lib: Library) -> int:
     """样本打够、废段占比太高的源:剩下没打标签的段标记跳过。返回新跳过的段数。"""
     by_src: dict[str, list[Item]] = {}
@@ -979,6 +1110,34 @@ def inherit_duplicates(lib: Library) -> int:
     return n
 
 
+def mark_official_duplicates(lib: Library) -> int:
+    """第三方视频里和某条官方视频同一画面的段(搬运 / 二剪的官方片):标成跳过,
+    记下是哪条官方段的重复。永远用官方原片 —— 原片更清楚、没有别人的台标,
+    这些段也不再花视觉调用。返回新标的段数。"""
+    heads: list[tuple[str, int]] = []
+    for i in lib.items:
+        if i.kind == "video" and i.official and i.frame:
+            h = _dhash(i.frame)
+            if h is not None:
+                heads.append((i.id, h))
+    if not heads:
+        return 0
+    n = 0
+    for i in lib.items:
+        if i.kind != "video" or i.official or not i.frame or i.dup_of:
+            continue
+        h = _dhash(i.frame)
+        if h is None:
+            continue
+        twin = next((oid for oid, oh in heads if bin(h ^ oh).count("1") <= DUP_BITS), None)
+        if twin is None:
+            continue
+        i.dup_of = twin
+        i.skipped = i.skipped or "dup_official"
+        n += 1
+    return n
+
+
 def apply_tag(item: Item, v: dict[str, Any], views: Sequence[str]) -> None:
     target = str(v.get("target") or "unknown").lower()
     item.target = target if target in ("yes", "no", "unknown") else "unknown"
@@ -998,8 +1157,11 @@ def apply_tag(item: Item, v: dict[str, Any], views: Sequence[str]) -> None:
 def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None,
           budget: float | None = None, max_sources: int = MAX_AUTO_SOURCES,
           errors: list[str] | None = None, log: Any = None,
-          enough_seconds: float | None = None) -> dict[str, Any]:
+          enough_seconds: float | None = None, rediscover: bool = False) -> dict[str, Any]:
     """增量构建素材池。返回统计。全程不抛异常。
+
+    `rediscover`:人工点了「重建素材池」—— 不等 7 天 / 6 小时,马上重新找一轮源
+    (距上次找源不到 `REDISCOVER_MIN_GAP` 的除外,别把平台接口点成高频请求)。
 
     `enough_seconds`:确认是这台车的视频够这么多秒就不再给视频段打标签。默认
     `ENOUGH_USABLE_SECONDS`(背景不挑画面);传 0 不设上限。
@@ -1028,7 +1190,8 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
     try:
         age = time.time() - lib.discovered_at
         thin = confirmed_seconds(lib, video_only=True) < CONFIRMED_VIDEO_TARGET
-        if age > REDISCOVER_SECONDS or (thin and age > REDISCOVER_THIN_SECONDS):
+        if (age > REDISCOVER_SECONDS or (thin and age > REDISCOVER_THIN_SECONDS)
+                or (rediscover and age > REDISCOVER_MIN_GAP)):
             n = discover(lib, aliases, errors, max_sources=max_sources,
                          tiktok_handles=tiktok_handles, spec=spec)
             say(f"发现新源 {n} 个")
@@ -1045,6 +1208,13 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
                 break
             n = ingest_source(lib, src, errors)
             say(f"源 {src.title[:30] or src.url}:{n} 段")
+            lib.save()
+        unchecked = [s for s in lib.sources if s.status == "done" and not s.logo_checked]
+        for src in unchecked:
+            if _late():
+                break
+            check_logos(lib, src)
+        if mark_official_duplicates(lib) or unchecked:
             lib.save()
         todo = _tag_queue(lib)
         if todo and not _late():
@@ -1199,6 +1369,8 @@ class Piece:
     crop_bottom: float = 0.0
     #: 截取时四边一起往里收的比例(第三方视频的角标安全裁切),0 = 不裁
     crop_edge: float = 0.0
+    #: 别家账号的视频(`_third_party`):记进每拍的 beats/NNN.json,统计兜底用了多少
+    third_party: bool = False
 
 
 #: 一段最长用几秒就换下一段 —— 信息解说的背景是 2–4 秒一刀的节奏,
@@ -1236,22 +1408,50 @@ def is_dark(item: Item) -> bool:
 SUBTITLE_CROP = 0.22
 
 #: 非官方视频段当背景时四边往里收的比例(各收一半)。第三方账号的台标几乎都贴在
-#: 四个角上,VLM 常漏标(Soda 那支源 25 段判成干净)—— 不靠判定,一律收掉这一圈
+#: 四个角上,VLM 常漏标(Soda 那支源 25 段判成干净)—— 角标检测没下结论时,一律收掉这一圈
 EDGE_CROP = 0.14
+#: 第三方视频检测干净时仍留的一小圈保险边(动态水印、检测漏掉的小字)
+THIRD_PARTY_SAFE_CROP = 0.04
 
 
 def _crop_edge(item: Item) -> float:
-    return EDGE_CROP if item.kind == "video" and not item.official else 0.0
+    """当背景时四边往里收的比例。按所在源的角标检测结果裁(B 站会把"上传者名 +
+    bilibili"烧进画面右上角,官方号的片子也有);没检测过的第三方段按 EDGE_CROP。"""
+    if item.kind != "video":
+        return 0.0
+    if item.logo_crop >= 0:
+        return item.logo_crop if item.official else max(item.logo_crop, THIRD_PARTY_SAFE_CROP)
+    return 0.0 if item.official else EDGE_CROP
+
+
+#: 会在图上打自家标识的图库:汽车之家把「汽车之家 AUTOHOME」印在车牌上(位置跟着车走,
+#: 按固定位置裁不掉;封面那边用 cover_art.scrub_plates 抹,背景图上检测太慢也不稳)
+BRANDED_GALLERIES = {"autohome"}
+
+
+def _branded_still(item: Item) -> bool:
+    """同档里排在别的图后面:懂车帝 / 官网的图够用就不用带别家车牌的。"""
+    return item.kind == "still" and item.platform in BRANDED_GALLERIES
 
 
 def _confirmed(item: Item) -> bool:
-    """开场拍只用的素材:官方来源,或认出就是这台车的。"""
+    """开场 / 结论拍只用的素材:官方来源,或认出就是这台车的。"""
     return item.official or item.target == "yes"
 
 
-#: 干净池子(剔掉主持人出镜、第三方水印后)至少这么多秒,才把那两类整个拦在背景之外;
-#: 池子本来就小的话,拦了会铺不满,仍按档位降级使用
-HARD_FILTER_MIN_SECONDS = 60.0
+def _third_party(item: Item) -> bool:
+    """别家账号的视频(博主、媒体、搬运):只当正文拍的最后兜底。"""
+    return item.kind == "video" and not item.official
+
+
+def _third_party_ok(item: Item) -> bool:
+    """第三方视频能进正文候选的前提:源跑过台标检测且能裁掉(`check_logos` 下了结论)。"""
+    return item.logo_crop >= 0
+
+
+#: 一拍在片子里的位置:开场 / 正文 / 结论。开场和结论只用确认是这台车的一方素材,
+#: 第三方视频只在正文里、一方素材铺不满时兜底
+ROLES = ("hook", "body", "ending")
 
 
 #: 非官方来源里主持人出镜的段占比 ≥ 这个,整个源按"评测博主视频"处理,源里的段一律不当背景
@@ -1276,12 +1476,6 @@ def _hard_bad(item: Item, host_sources: set[str] = frozenset()) -> bool:
     if _has_host(item) or (item.kind == "video" and item.source in host_sources):
         return True
     return item.kind == "video" and item.problem == "text_overlay" and not item.official
-
-
-def _drop_hard_bad(pool: list[Item], host_sources: set[str] = frozenset()) -> list[Item]:
-    clean = [i for i in pool if not _hard_bad(i, host_sources)]
-    seconds = sum(i.length if i.kind == "video" else STILL_SECONDS for i in clean)
-    return clean if seconds >= HARD_FILTER_MIN_SECONDS else pool
 
 
 def _croppable(item: Item) -> bool:
@@ -1380,7 +1574,7 @@ def cover_still(subject: str, exclude: Sequence[str | Path] = ()) -> Path | None
     # 主体视角(主背景那一组):整车 / 整体,不做局部特写
     hero = vocab.primary_views or set(vocab.views)
     cands = [i for i in lib.items
-             if i.kind == "still" and i.usable and Path(i.path).is_file()
+             if i.kind == "still" and i.usable and not i.small_still and Path(i.path).is_file()
              and i.problem not in ("cropped", "unclear", "poster")
              and i.view in hero]
     if exclude:
@@ -1485,7 +1679,7 @@ def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
 
 
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
-         recent: list[str] | None = None, detail: str = "", confirmed: bool = False) -> list[Piece]:
+         recent: list[str] | None = None, detail: str = "", role: str = "body") -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -1498,10 +1692,15 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     `recent` 是全片最近用过的 item_id(调用方跨节拍传同一个列表,这里就地追加):
     和最近几刀同簇的、和上一刀同视角的往后排 —— 只是排序,池子不够时照样铺满。
     `detail` 是这一拍在讲的细节(旁白原文),用来避开配错的特写(见 `_detail_conflict`)。
-    `confirmed`(开场拍用):只取官方来源或认出是这台车的素材,台标 / 主持人一律不要,
-    不受 `HARD_FILTER_MIN_SECONDS` 的豁免 —— 前三秒观众只确认一件事:是不是我要看的那台车。
+    `role`(`ROLES`)是这一拍在片子里的位置。主持人出镜、第三方台标水印的段一律不要,池子再小也不放宽。
+    - hook / ending:只取一方素材(官方视频、图库静图)里官方或认出是这台车的,第三方视频一律不要
+      —— 开头观众只确认"是不是我要看的那台车",结尾是片子的落点,都不能挂别人的画面;
+    - body:第三方视频只在**没用过的**一方素材铺不满这一拍时才进候选,且源必须已测过台标、
+      能裁掉(`_third_party_ok`);进了也排在没用过的一方素材后面、用过的前面。
     返回空列表表示池子里什么都没有。
     """
+    if role not in ROLES:
+        raise ValueError(f"未知的 role:{role}")
     seconds = float(seconds)
     used = used if used is not None else {}
     recent = recent if recent is not None else []
@@ -1511,12 +1710,15 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     want_detail = vocab.detail_types_in(detail) if detail else set()
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
-        or (i.kind == "still" and i.view in vocab.angle_of_view)) and not is_dark(i)]
+        or (i.kind == "still" and i.view in vocab.angle_of_view and not i.small_still))
+        and not is_dark(i)]
     hosts = _host_sources(lib.items)
-    if confirmed:
-        pool = [i for i in pool if _confirmed(i) and not _hard_bad(i, hosts)]
+    pool = [i for i in pool if not _hard_bad(i, hosts)]
+    strict = role != "body"
+    if strict:
+        pool = [i for i in pool if _confirmed(i) and not _third_party(i)]
     else:
-        pool = _drop_hard_bad(pool, hosts)
+        pool = [i for i in pool if not _third_party(i) or _third_party_ok(i)]
     # 讲某个部件时,把**别的**部件的特写整类剔掉:特写太抢戏,配错了观众就
     # 以为在讲那个部件。池子剔完不够铺满这一拍时,才退回"降权排序"
     # (宁可配得不对,也不要这一拍没有背景)。
@@ -1534,6 +1736,19 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     def group_used(i: Item) -> int:
         return sum(used.get(m, 0) for m in members.get(group[i.id], [i.id]))
 
+    # 第三方兜底:没用过的一方素材够铺这一拍,第三方就不进候选
+    fallback = _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
+    if not fallback:
+        pool = [i for i in pool if not _third_party(i)]
+
+    def stage(i: Item, n: int) -> int:
+        """没用过的一方素材 → 没用过的第三方 → 用过的(再按档位)。不兜底时全是 0,只看档位。"""
+        if not fallback:
+            return 0
+        if n:
+            return 2
+        return 1 if _third_party(i) else 0
+
     def rank(i: Item, recent_groups: set[str], last_view: str) -> tuple:
         # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
         # 混着 SU7 的赛道活动),背景里出现别的车比画面不对口严重得多
@@ -1544,7 +1759,9 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             # 这一拍讲的正是这个部件,那张特写就是最贴的素材 —— 提档到和干净
             # 视频同档。否则永远选不到它:静图本来比视频低一档。
             tier = 0
-        return (tier, i.target != "yes", group[i.id] in recent_groups,
+        # 码率不够的视频同档里往后排(不降档:AV1 官方片普遍码率低,降档就全让给静图了)
+        return (stage(i, n), tier, i.target != "yes", i.low_bitrate, _branded_still(i),
+                group[i.id] in recent_groups,
                 bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
                 _dirt(i), fit, _detail_conflict(i, want_detail, vocab),
                 not i.official, -i.length)
@@ -1575,7 +1792,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0,
-                         crop_edge=_crop_edge(i)))
+                         crop_edge=_crop_edge(i), third_party=_third_party(i)))
         used[i.id] = used.get(i.id, 0) + 1
         recent.append(i.id)
         del recent[:-RECENT_PIECES]
@@ -1587,12 +1804,12 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         # 复盘要的「每 5–6 秒一次画面变化」就断在这里。优先拿还没用过的干净官图
         # 补:同一批图配不同运镜,读起来像换了镜头,比冻帧强得多。
         rest = seconds - covered
-        spare = [i for i in lib.items if i.kind == "still" and i.usable
+        spare = [i for i in lib.items if i.kind == "still" and i.usable and not i.small_still
                  and Path(i.path).is_file() and not is_dark(i)
                  and i.problem not in ("cropped", "unclear", "poster")
-                 and (not confirmed or _confirmed(i))
+                 and (not strict or _confirmed(i))
                  and not (want_detail and _detail_conflict(i, want_detail, vocab))]
-        spare.sort(key=lambda i: (bool(want) and i.view not in want,
+        spare.sort(key=lambda i: (bool(want) and i.view not in want, _branded_still(i),
                                    used.get(i.id, 0), i.target != "yes", i.id))
         k = 0
         while rest > 0.05 and spare:
@@ -1619,13 +1836,15 @@ LONG_TAKE_VIEWS = ("driving", "aerial")
 
 
 def long_take(subject: str, seconds: float, *, hint: str = "",
-              used: dict[str, int] | None = None, recent: list[str] | None = None) -> Piece | None:
+              used: dict[str, int] | None = None, recent: list[str] | None = None,
+              role: str = "body") -> Piece | None:
     """给概念动画挑**一个**能撑满(或放慢后撑满)整拍的干净长镜头。
 
     和 `fill` 的区别:fill 追求 2–4 秒一刀的节奏,概念动画上面压着大量信息,底在跳切会显得乱。
     排序:是这台车 > 没用过(按近重复簇算)> 不在最近几刀里 > 行驶/航拍 > 干净 > 官方 > 长。
     够长的段从中间截;找不到返回 None,调用方退回 fill 的多段拼接。
-    `used` / `recent` 和 fill 共用,就地更新。
+    `used` / `recent` 和 fill 共用,就地更新。`role` 同 fill:开场 / 结论只用官方或认出的一方视频,
+    正文的第三方视频要测过台标,且排在一方视频后面。
     """
     used = used if used is not None else {}
     recent = recent if recent is not None else []
@@ -1635,7 +1854,12 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     need = seconds / LONG_TAKE_MAX_SLOWDOWN
     pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
             and not is_dark(i) and (not want or i.view in want)]
-    pool = [i for i in _drop_hard_bad(pool, _host_sources(lib.items)) if not _hard_bad(i)]
+    hosts = _host_sources(lib.items)
+    pool = [i for i in pool if not _hard_bad(i, hosts)]
+    if role != "body":
+        pool = [i for i in pool if _confirmed(i) and not _third_party(i)]
+    else:
+        pool = [i for i in pool if not _third_party(i) or _third_party_ok(i)]
 
     def usable_len(i: Item) -> float:
         return i.length - (SOURCE_FADE_IN if i.start < 0.5 else 0.0)
@@ -1645,7 +1869,8 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
         return None
     group = near_dup_groups(pool)
     recent_groups = {group.get(r, r) for r in recent[-RECENT_PIECES:]}
-    i = min(pool, key=lambda x: (x.target != "yes", used.get(group[x.id], 0) + used.get(x.id, 0),
+    i = min(pool, key=lambda x: (_third_party(x), x.target != "yes", x.low_bitrate,
+                                 used.get(group[x.id], 0) + used.get(x.id, 0),
                                  group[x.id] in recent_groups, x.view not in LONG_TAKE_VIEWS,
                                  _dirt(x), not x.official, -x.length))
     skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
@@ -1656,7 +1881,8 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     recent.append(i.id)
     del recent[:-RECENT_PIECES]
     return Piece(item_id=i.id, kind="video", path=i.path, start=round(start, 3), length=round(take, 3),
-                 crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0, crop_edge=_crop_edge(i))
+                 crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0, crop_edge=_crop_edge(i),
+                 third_party=_third_party(i))
 
 
 # --------------------------------------------------------------------------

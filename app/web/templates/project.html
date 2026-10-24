@@ -197,9 +197,16 @@
       {% endif %}
 
       {% if footage_thin %}
-      <div class="callout tone-warning">{{ m.icon("alert-circle") }}<div><strong>确认是本车的视频素材偏少</strong> ·
-        {% for f in footage_thin %}{{ f.name }} 只有 {{ f.seconds | int }} 秒{% if not loop.last %}、{% endif %}{% endfor %}。
-        背景会更多用官图和没认出车型的片段;可以在<a href="/library">素材池</a>里手动贴几条官方视频链接再渲染。</div></div>
+      <div class="callout tone-warning">{{ m.icon("alert-circle") }}<div><strong>建议先补素材</strong> ·
+        {% for f in footage_thin %}{{ f.name }}:{% if f.reasons %}{{ f.reasons | join(";") }}{% else %}确认视频只有 {{ f.seconds | int }} 秒{% endif %}{% if not loop.last %}、{% endif %}{% endfor %}。
+        背景会更多用官图推拉;可以重建素材池重新找一轮源,或在<a href="/library">素材池</a>里手动贴几条官方视频链接。
+        {% if footage and footage.video_by_coverage %}<div class="subtle">各视角确认视频:{% for k, v in footage.video_by_coverage.items() %}{{ k }} {{ v | int }} 秒{% if not loop.last %} · {% endif %}{% endfor %}</div>{% endif %}
+        <div><button class="btn btn-ghost btn-sm" type="button" id="rebuild-library">{{ m.icon("refresh", "i-sm") }}重建素材池</button></div></div></div>
+      {% endif %}
+
+      {% if footage_mix %}
+      <div class="callout {{ 'tone-danger' if footage_mix.third_party_edge_seconds else 'tone-success' }}">{{ m.icon("film") }}<div><strong>已渲染背景构成</strong> ·
+        共 {{ footage_mix.seconds | int }} 秒,静图 {{ (footage_mix.still_ratio * 100) | round | int }}%,第三方视频 {{ (footage_mix.third_party_ratio * 100) | round | int }}%{% if footage_mix.third_party_edge_seconds %};开场 / 结论段用了 {{ footage_mix.third_party_edge_seconds }} 秒第三方视频,建议重拍这几拍{% endif %}。</div></div>
       {% endif %}
 
       {% if facts_report and facts_report.stale_year_note %}

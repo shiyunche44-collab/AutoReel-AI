@@ -17,7 +17,10 @@
   <div class="row">
     {% if dcd_logged_in %}<span class="badge tone-success" title="懂车帝图库(官方图 + 外观 / 内饰大图)已可用"><span class="dot"></span>懂车帝已登录</span>
     {% else %}<span class="badge tone-warning" title="懂车帝图库要登录才能抓"><span class="dot"></span>懂车帝未登录</span>{% endif %}
-    <button class="btn btn-sm btn-ghost" type="button" id="dcd-login">{{ '重新登录懂车帝' if dcd_logged_in else '登录懂车帝' }}</button>
+    <button class="btn btn-sm btn-ghost" type="button" data-login="dongchedi">{{ '重新登录懂车帝' if dcd_logged_in else '登录懂车帝' }}</button>
+    {% if douyin_logged_in %}<span class="badge tone-success" title="抖音官方号投稿可以拉了"><span class="dot"></span>抖音已登录</span>
+    {% else %}<span class="badge tone-warning" title="抖音官方号投稿要登录才能拉"><span class="dot"></span>抖音未登录</span>{% endif %}
+    <button class="btn btn-sm btn-ghost" type="button" data-login="douyin">{{ '重新登录抖音' if douyin_logged_in else '登录抖音' }}</button>
   </div>
 </section>
 
@@ -32,8 +35,8 @@
       {% if p.cover %}<img src="/library/{{ p.slug }}/frame/{{ p.cover }}" alt="" loading="lazy" onerror="this.remove()">{% endif %}
       <span class="pcard-state">
         {% if p.building %}<span class="badge tone-brand is-live"><span class="dot"></span>构建中</span>
-        {% elif st.confirmed_video_seconds >= confirmed_target %}<span class="badge tone-success"><span class="dot"></span>素材充足</span>
-        {% else %}<span class="badge tone-warning" title="确认是这台车的视频只有 {{ st.confirmed_video_seconds | int }} 秒"><span class="dot"></span>本车素材偏少</span>{% endif %}
+        {% elif not p.gaps %}<span class="badge tone-success"><span class="dot"></span>素材充足</span>
+        {% else %}<span class="badge tone-warning" title="{{ p.gaps | join(';') }}"><span class="dot"></span>本车素材偏少</span>{% endif %}
       </span>
       <span class="pcard-dur num">{{ '%d:%02d' % ((st.usable_seconds // 60) | int, (st.usable_seconds % 60) | int) }} 可用</span>
     </div>
@@ -44,6 +47,9 @@
         <span>{{ m.icon("image", "i-sm") }}<b class="num">{{ st.stills_usable }}</b>/{{ st.stills }} 图</span>
         <span>{{ m.icon("link", "i-sm") }}<b class="num">{{ st.sources }}</b> 个来源(官方 {{ st.official_sources }})</span>
         <span title="官方来源或认出是这台车、没有主持人和第三方台标">{{ m.icon("shield", "i-sm") }}确认本车 <b class="num">{{ st.confirmed_video_seconds | int }}</b> 秒</span>
+        <span title="视频段按短边分档;低清(短边 < 720)不当背景">{{ m.icon("film", "i-sm") }}1080p+ <b class="num">{{ st.video_res["1080p+"] }}</b> · 720p {{ st.video_res["720p"] }} · 低清 {{ st.video_res["低清"] }}</span>
+        <span title="静态角标检测:带角标的源按角标位置裁切,裁不掉的第三方源整源弃用">{{ m.icon("shield", "i-sm") }}角标源 <b class="num">{{ st.logo_sources }}</b>/{{ st.logo_checked }} 测过{% if st.logo_dropped %} · 弃用 {{ st.logo_dropped }} 段{% endif %}</span>
+        {% if st.missing_coverage %}<span class="text-warning" title="这些视角的确认视频不到 8 秒">缺视角:{{ st.missing_coverage | join("、") }}</span>{% endif %}
       </div>
       <div class="pcard-foot">
         <span class="subtle">{% if p.category %}{{ p.category }} · {% endif %}视觉调用 {{ st.vlm_calls }} 次</span>
