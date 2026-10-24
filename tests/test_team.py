@@ -1,4 +1,4 @@
-"""AI 团队第一期:节奏、情报员、主编、选题闸、制片。"""
+"""AI 团队:节奏、情报员、主编、选题闸、素材官、制片(含自动过闸)、发布员(成片闸 + 定时发布)。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -232,7 +232,7 @@ def test_producer_starts_due_and_syncs(fresh_db, monkeypatch):
     summary = producer.run()
     assert created == ["小米YU7"]
     item = fresh_db.get_plan_item("pl_1")
-    assert item["project_id"] == "p_x" and item["status"] == "ready"  # 项目已 DONE → 同步成已出片
+    assert item["project_id"] == "p_x" and item["status"] == "review"  # 项目已 DONE → 成片待审
     assert fresh_db.get_plan_item("pl_late")["status"] == "approved"
     assert "开工 1 条" in summary
 
@@ -282,4 +282,195 @@ def test_tick_respects_pause(fresh_db, monkeypatch):
     team.set_paused(True)
     assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == []
     team.set_paused(False)
-    assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == ["scout", "editor", "producer"]
+    assert scheduler.tick(dt.datetime(2026, 10, 24, 9, 30)) == [
+        "scout", "editor", "asset", "producer", "publisher"]
+
+
+# --------------------------------------------------------------------------
+# 制片自动过闸
+# --------------------------------------------------------------------------
+def _project(db, pid="p_x", state="GATE_A"):
+    now = time.time()
+    db.create_project({"id": pid, "title": "t", "subject": "小米YU7", "category": "auto_long",
+                       "theme": "", "duration": 240, "shot_count": 0, "narration_mode": "tts",
+                       "state": state, "state_reason": None, "quota_budget": 40, "spent_cost": 0,
+                       "est_cost": 0, "created_at": now, "updated_at": now})
+
+
+def _gates(monkeypatch, fail=None):
+    from app.pipeline import orchestrator
+
+    calls = []
+
+    def fake_confirm(pid, req):
+        calls.append(req.gate)
+        if fail:
+            raise orchestrator.PipelineError(fail)
+        return {"state": "DRAFT_RENDERING"}
+
+    monkeypatch.setattr(orchestrator, "confirm_gate", fake_confirm)
+    return calls
+
+
+def test_auto_gate_a_passes(fresh_db, monkeypatch):
+    from app.team import producer
+
+    _project(fresh_db)
+    _item(fresh_db, status="producing", project_id="p_x")
+    calls = _gates(monkeypatch)
+    producer.sync(background=False)
+    assert calls == ["A"]
+    assert not fresh_db.get_plan_item("pl_1")["hold"]
+
+
+def test_auto_gate_blocked_holds_until_state_moves(fresh_db, monkeypatch):
+    from app.team import producer
+
+    _project(fresh_db)
+    _item(fresh_db, status="producing", project_id="p_x")
+    calls = _gates(monkeypatch, fail="门禁 A 未放行:脚本还有 2 处必须修的问题")
+    producer.sync(background=False)
+    item = fresh_db.get_plan_item("pl_1")
+    assert "2 处必须修" in item["hold"] and item["hold_state"] == "GATE_A"
+    producer.sync(background=False)
+    assert calls == ["A"]  # 拦下后不反复试
+    # 人在项目页处理过,项目往前走了 → hold 自动清掉
+    fresh_db.update_project("p_x", state="DRAFT_RENDERING")
+    producer.sync(background=False)
+    assert fresh_db.get_plan_item("pl_1")["hold"] == ""
+    # 手动重试也能清
+    fresh_db.update_project("p_x", state="GATE_A")
+    producer.sync(background=False)
+    assert producer.retry_gate("pl_1")["hold"] == ""
+
+
+def test_auto_gate_b_needs_every_beat(fresh_db, monkeypatch):
+    from app.team import producer
+
+    _project(fresh_db, state="GATE_B")
+    _item(fresh_db, status="producing", project_id="p_x")
+    calls = _gates(monkeypatch)
+    monkeypatch.setattr(fresh_db, "read_json", lambda pid, name, default=None:
+                        [{"idx": 0, "duration": 5}, {"idx": 1, "duration": 4}, {"idx": 2, "duration": 0}])
+    monkeypatch.setattr(fresh_db, "get_shots", lambda pid, stage=None:
+                        [{"idx": 0, "status": "succeeded"}, {"idx": 1, "status": "failed"}])
+    producer.sync(background=False)
+    assert calls == [] and "第 2 拍" in fresh_db.get_plan_item("pl_1")["hold"]
+
+
+def test_auto_gates_switch(fresh_db, monkeypatch):
+    from app import config
+    from app.team import producer
+
+    monkeypatch.setattr(config, "TEAM_AUTO_GATES", False)
+    _project(fresh_db)
+    _item(fresh_db, status="producing", project_id="p_x")
+    calls = _gates(monkeypatch)
+    producer.sync(background=False)
+    assert calls == []
+
+
+# --------------------------------------------------------------------------
+# 发布员:成片闸 + 定时发布
+# --------------------------------------------------------------------------
+def test_next_publish_time_rolls_forward():
+    from app.team.publisher import next_publish_time
+
+    now = dt.datetime(2026, 10, 24, 20, 0).timestamp()
+    future = now + 3600
+    assert next_publish_time(future, now) == future
+    late = next_publish_time(now - 3600, now, ("18:30",))
+    assert dt.datetime.fromtimestamp(late) == dt.datetime(2026, 10, 25, 18, 30)
+    soon = next_publish_time(now - 3600, now, ("12:00", "20:30"))
+    assert dt.datetime.fromtimestamp(soon) == dt.datetime(2026, 10, 24, 20, 30)
+
+
+def test_claim_respects_scheduled_at(fresh_db):
+    now = time.time()
+    for pid, acc, at in (("pub_a", "acc1", None), ("pub_b", "acc2", now + 3600)):
+        fresh_db.create_publication({"id": pid, "project_id": "p_x", "account_id": acc,
+                                     "platform": "douyin", "scheduled_at": at})
+    assert [r["id"] for r in fresh_db.claim_publications()] == ["pub_a"]
+    assert {r["id"] for r in fresh_db.claim_publications(now=now + 7200)} == {"pub_a", "pub_b"}
+
+
+def _fake_enqueue(db, monkeypatch):
+    from app.publish import service
+
+    def enqueue(project_id, *, account_ids, overrides=None, force=False):
+        rows = []
+        for aid in account_ids:
+            db.create_publication({"id": f"pub_{aid}", "project_id": project_id, "account_id": aid,
+                                   "platform": "douyin"})
+            rows.append(db.get_publication(f"pub_{aid}"))
+        return {"created": rows, "skipped": [], "warnings": []}
+
+    monkeypatch.setattr(service, "enqueue", enqueue)
+
+
+def test_cut_gate_schedules_publications(fresh_db, monkeypatch):
+    from app.team import plan, publisher
+
+    _fake_enqueue(fresh_db, monkeypatch)
+    slot = time.time() + 86400
+    _item(fresh_db, status="review", project_id="p_x", slot_at=slot)
+    with pytest.raises(plan.PlanError):
+        publisher.approve_cut("pl_1", [])
+    out = publisher.approve_cut("pl_1", ["acc1"])
+    assert out["item"]["status"] == "scheduled" and out["publish_at"] == slot
+    assert fresh_db.get_publication("pub_acc1")["scheduled_at"] == slot
+    assert fresh_db.claim_publications() == []  # 没到点不领
+    assert fresh_db.get_team_setting("publish_accounts") == ["acc1"]
+    with pytest.raises(plan.PlanError):
+        publisher.approve_cut("pl_1", ["acc1"])  # 已经排了
+
+
+def test_cut_gate_reject(fresh_db):
+    from app.team import plan, publisher
+
+    _item(fresh_db, status="review", project_id="p_x")
+    assert publisher.reject_cut("pl_1", "开头太长")["status"] == "rejected"
+    with pytest.raises(plan.PlanError):
+        publisher.reject_cut("pl_1")
+
+
+def test_publisher_sync(fresh_db):
+    from app.team import publisher
+
+    _item(fresh_db, status="scheduled", project_id="p_x")
+    _item(fresh_db, id="pl_2", status="scheduled", project_id="p_y")
+    fresh_db.create_publication({"id": "a", "project_id": "p_x", "account_id": "1",
+                                 "platform": "douyin", "state": "published"})
+    fresh_db.create_publication({"id": "b", "project_id": "p_y", "account_id": "1",
+                                 "platform": "douyin", "state": "failed", "error": "登录失效"})
+    assert publisher.sync() == 2
+    assert fresh_db.get_plan_item("pl_1")["status"] == "published"
+    item = fresh_db.get_plan_item("pl_2")
+    assert item["status"] == "failed" and "登录失效" in item["note"]
+
+
+# --------------------------------------------------------------------------
+# 素材官
+# --------------------------------------------------------------------------
+def test_asset_wants_thin_pools_only(monkeypatch):
+    from app.pipeline import library
+    from app.team import asset
+
+    thin = {"小米YU7": True, "理想i8": False, "问界M8": True, "乐道L90": True}
+    monkeypatch.setattr(asset, "_thin", lambda name, target: thin[name])
+    monkeypatch.setattr(library, "is_building", lambda name: name == "乐道L90")
+    items = [{"subject": "小米YU7", "subjects": [], "category": "auto_long"},
+             {"subject": "SUV 横评", "subjects": ["理想i8", "问界M8", "乐道L90", "小米YU7"],
+              "category": "auto_long"}]
+    got = asset.wanted(items)
+    assert [(n, t) for n, _, t in got] == [("小米YU7", library.CONFIRMED_VIDEO_TARGET),
+                                           ("问界M8", library.ROUNDUP_ENOUGH_SECONDS)]
+
+
+def test_asset_run_skips_when_off(fresh_db, monkeypatch):
+    from app import config
+    from app.team import Skip, asset
+
+    monkeypatch.setattr(config, "TEAM_ASSET_PREBUILD", False)
+    with pytest.raises(Skip):
+        asset.run()

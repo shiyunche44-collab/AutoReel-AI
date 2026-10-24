@@ -1,4 +1,4 @@
-/* AI 团队:待批选题、排期、角色、榜单上升、团队动态。每 15 秒刷新一次。 */
+/* AI 团队:待批选题、成片待审、排期、角色、榜单上升、团队动态。每 15 秒刷新一次。 */
 import { $, h, icon, relTime, withLoading } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { initChrome } from '../ui/chrome.js';
@@ -8,8 +8,8 @@ import { api } from '../api.js';
 initChrome();
 
 const STATUS_TONE = {
-  proposed: 'warning', approved: 'brand', producing: 'brand', ready: 'success',
-  rejected: 'neutral', expired: 'neutral', failed: 'danger',
+  proposed: 'warning', approved: 'brand', producing: 'brand', review: 'warning',
+  scheduled: 'brand', published: 'success', rejected: 'neutral', expired: 'neutral', failed: 'danger',
 };
 const RUN_TONE = { ok: 'success', failed: 'danger', skipped: 'neutral', running: 'brand', idle: 'neutral' };
 const RUN_LABEL = { ok: '完成', failed: '失败', skipped: '跳过', running: '运行中', idle: '空闲' };
@@ -154,20 +154,95 @@ function editItem(item) {
 }
 
 // ---------------------------------------------------------------------------
+// 成片待审
+// ---------------------------------------------------------------------------
+function localInput(ts) {
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function reviewCard(item) {
+  const rv = item.review || {};
+  const accounts = DATA.accounts || [];
+  const title = h('input', { class: 'input', value: rv.title || '', maxlength: '60', list: `titles-${item.id}` });
+  const titles = h('datalist', { id: `titles-${item.id}` }, (rv.titles || []).map((t) => h('option', { value: t })));
+  const at = h('input', { class: 'input', type: 'datetime-local', value: localInput(rv.publish_at || item.slot_at) });
+  const boxes = accounts.map((a) => {
+    const box = h('input', { type: 'checkbox', value: a.id, checked: a.default });
+    return { box, el: h('label', { class: 'chip-check' }, box, `${a.platform_label} · ${a.name}`) };
+  });
+  const pass = h('button', { class: 'btn btn-sm btn-primary', type: 'button' }, icon('check', 'i-sm'), '通过,定时发布');
+  pass.addEventListener('click', () => withLoading(pass, async () => {
+    const ids = boxes.filter((b) => b.box.checked).map((b) => b.box.value);
+    if (!ids.length) {
+      toast('至少选一个发布账号', { type: 'danger' });
+      return;
+    }
+    try {
+      const res = await api.post(`/api/team/plan/${item.id}/publish`, {
+        account_ids: ids, title: title.value.trim(), publish_at: new Date(at.value).getTime() / 1000,
+      });
+      toast(`已排 ${when(res.publish_at)} 发布(${res.created} 个账号)`);
+      (res.warnings || []).forEach((w) => toast(w, { type: 'warning' }));
+      await load();
+    } catch (err) {
+      toast(err.message, { type: 'danger', title: '没排上' });
+    }
+  }));
+  const back = h('button', { class: 'btn btn-sm btn-ghost', type: 'button' }, icon('x', 'i-sm'), '打回');
+  back.addEventListener('click', async () => {
+    const yes = await confirmDialog({
+      title: '打回这条成片?', body: '这条不发了。要重做就去项目页改,或者让主编另排。', confirmText: '打回', tone: 'danger',
+    });
+    if (yes) await call(`/api/team/plan/${item.id}/reject-cut`, '已打回', { note: '' });
+  });
+  const portrait = item.aspect === '9:16';
+  return h('article', { class: `plan-card review-card${portrait ? ' is-portrait' : ''}` },
+    h('div', { class: 'review-media' },
+      rv.has_video
+        ? h('video', { src: rv.video_url, poster: rv.cover_url, controls: true, preload: 'none' })
+        : empty('成片文件不在了')),
+    h('div', { class: 'review-form stack-sm' },
+      h('div', {},
+        h('div', { class: 'plan-subject' }, subjectLine(item)),
+        h('div', { class: 'plan-angle' }, item.angle || rv.project_title || '')),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, '发布标题'), title, titles),
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, '发布时间'), at),
+      h('div', { class: 'field' }, h('span', { class: 'field-label' }, '发到'),
+        accounts.length
+          ? h('div', { class: 'row wrap-row' }, boxes.map((b) => b.el))
+          : h('span', { class: 'subtle small' }, '还没有可用账号,先去', h('a', { href: '/publish' }, '分发台'), '添加')),
+      h('div', { class: 'row plan-actions' }, pass, back, h('span', { class: 'grow' }),
+        h('a', { class: 'btn btn-sm btn-ghost', href: `/project/${item.project_id}` }, icon('external', 'i-sm'), '项目'))),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 排期 / 角色 / 上升 / 动态
 // ---------------------------------------------------------------------------
 function planRow(item) {
   const link = item.project_id
     ? h('a', { class: 'btn btn-sm btn-ghost', href: `/project/${item.project_id}` }, icon('external', 'i-sm'), '项目')
     : null;
-  return h('div', { class: 'rowline' },
-    h('span', { class: 'num subtle plan-when' }, when(item.slot_at)),
-    h('span', { class: 'grow' }, h('strong', {}, subjectLine(item)), ' ',
-      h('span', { class: 'subtle small' }, item.angle || '')),
-    h('span', { class: 'subtle small' }, `${themeLabel(item.theme)} · ${aspectLabel(item.aspect)} ${item.duration}s`),
-    item.note ? h('span', { class: 'subtle small', title: item.note }, icon('info', 'i-sm')) : null,
-    badge(item.status_label, STATUS_TONE[item.status]),
-    link);
+  const held = item.status === 'producing' && item.hold;
+  const retry = held
+    ? h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: '在项目页改好后点这里,制片下一轮重新过闸',
+      onclick: (e) => withLoading(e.currentTarget, () => call(`/api/team/plan/${item.id}/retry-gate`, '下一轮重新过闸')),
+    }, icon('refresh', 'i-sm'), '重试')
+    : null;
+  const tail = item.status === 'scheduled' && item.publish_at ? `发布 ${when(item.publish_at)}` : '';
+  return h('div', { class: 'plan-row' },
+    h('div', { class: 'rowline' },
+      h('span', { class: 'num subtle plan-when' }, when(item.slot_at)),
+      h('span', { class: 'grow' }, h('strong', {}, subjectLine(item)), ' ',
+        h('span', { class: 'subtle small' }, item.angle || '')),
+      h('span', { class: 'subtle small' }, tail || `${themeLabel(item.theme)} · ${aspectLabel(item.aspect)} ${item.duration}s`),
+      item.note ? h('span', { class: 'subtle small', title: item.note }, icon('info', 'i-sm')) : null,
+      held ? badge('等你处理', 'warning') : badge(item.status_label, STATUS_TONE[item.status]),
+      retry, link),
+    held ? h('div', { class: 'plan-hold small' }, item.hold) : null);
 }
 
 function roleRow(r) {
@@ -213,6 +288,10 @@ function render() {
   $('#btn-approve-all').disabled = !pending.length;
   $('#pending-list').replaceChildren(
     ...(pending.length ? pending.map(pendingCard) : [empty('没有待批的选题。主编每天 09:00 补空档。')]));
+  const reviews = rest.filter((i) => i.status === 'review');
+  $('#review-count').textContent = String(reviews.length);
+  $('#review-list').replaceChildren(
+    ...(reviews.length ? reviews.map(reviewCard) : [empty('没有待审的成片')]));
   $('#plan-list').replaceChildren(...(rest.length ? rest.map(planRow) : [empty('还没有排上的选题')]));
   const s = DATA.settings;
   $('#plan-hint').textContent =
@@ -263,5 +342,9 @@ $('#btn-pause').addEventListener('click', (e) =>
 
 load();
 setInterval(() => {
-  if (!document.hidden && !document.querySelector('.modal-backdrop')) load();
+  // 正在填成片审核表单 / 看片时别刷新,不然输入和播放进度都会丢
+  const busy = document.querySelector('.modal-backdrop')
+    || document.activeElement?.closest?.('.review-card')
+    || [...document.querySelectorAll('.review-card video')].some((v) => !v.paused);
+  if (!document.hidden && !busy) load();
 }, 15000);

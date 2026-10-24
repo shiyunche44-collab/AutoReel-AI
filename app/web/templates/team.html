@@ -12,7 +12,7 @@
 <section class="page-head">
   <div>
     <h1 class="page-title">AI 团队</h1>
-    <p class="muted">情报员抓热点、主编排选题、制片按排期开工。你只批选题单;成片审核在第二期接上。</p>
+    <p class="muted">情报员抓热点、主编排选题、素材官提前建池、制片按排期开工并替你过脚本和审片门禁、发布员定时发。你只把两道闸:批选题单,审成片。</p>
   </div>
   <div class="row">
     <span class="badge tone-neutral" id="team-state">—</span>
@@ -29,6 +29,14 @@
     </div>
   </div>
   <div class="card-body" id="pending-list"></div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ m.icon("film", "i-sm") }}成片待审 <span class="count" id="review-count">0</span></h2>
+    <span class="subtle small">通过后按排期定时发布;排期已过就顺延到下一个发布时段</span>
+  </div>
+  <div class="card-body" id="review-list"></div>
 </section>
 
 <section class="card">

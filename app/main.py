@@ -1190,9 +1190,19 @@ def _plan_call(fn, *args):
         raise HTTPException(400, str(exc)) from exc
 
 
+def _wake_asset() -> None:
+    """选题刚批:素材官马上看一眼要不要提前建池,不等下一个半小时。"""
+    from . import team
+
+    threading.Thread(target=team.run_role, args=("asset", "approve"), name="team-asset-wake",
+                     daemon=True).start()
+
+
 @app.post("/api/team/plan/{item_id}/approve")
 def team_plan_approve(item_id: str):
-    return _plan_call(team_plan.approve, item_id)
+    out = _plan_call(team_plan.approve, item_id)
+    _wake_asset()
+    return out
 
 
 @app.post("/api/team/plan/{item_id}/reject")
@@ -1207,7 +1217,46 @@ def team_plan_patch(item_id: str, payload: PlanPatch):
 
 @app.post("/api/team/plan/approve-all")
 def team_plan_approve_all():
-    return {"approved": team_plan.approve_all(config.TEAM_CATEGORY)}
+    n = team_plan.approve_all(config.TEAM_CATEGORY)
+    if n:
+        _wake_asset()
+    return {"approved": n}
+
+
+class CutApprove(BaseModel):
+    account_ids: list[str]
+    title: str = ""
+    publish_at: float | None = None
+
+
+@app.post("/api/team/plan/{item_id}/publish")
+def team_cut_approve(item_id: str, payload: CutApprove):
+    """成片闸通过:按账号建发布任务,定时发。"""
+    from .team import publisher
+
+    try:
+        out = publisher.approve_cut(item_id, payload.account_ids, title=payload.title,
+                                    publish_at=payload.publish_at)
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**out, "item": team_plan.view(out["item"])}
+
+
+@app.post("/api/team/plan/{item_id}/reject-cut")
+def team_cut_reject(item_id: str, payload: PlanReject):
+    from .team import publisher
+
+    return _plan_call(publisher.reject_cut, item_id, payload.note)
+
+
+@app.post("/api/team/plan/{item_id}/retry-gate")
+def team_retry_gate(item_id: str):
+    """门禁被机器拦下、你已经在项目页改好:清掉拦截,制片下一轮重新过闸。"""
+    from .team import producer
+
+    if not db.get_plan_item(item_id):
+        raise HTTPException(404, "选题不存在")
+    return team_plan.view(producer.retry_gate(item_id))
 
 
 @app.post("/api/team/plan/{item_id}/start")

@@ -315,6 +315,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "variant" not in _column_names(conn, "publications"):
         # 发布时用的标题写法 / 封面版本,数据回流后按它比 A/B。老记录是空对象。
         conn.execute("ALTER TABLE publications ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
+    if "scheduled_at" not in _column_names(conn, "publications"):
+        # 定时发布:到这个时刻才领。空 = 建好就发(原来的行为)。
+        conn.execute("ALTER TABLE publications ADD COLUMN scheduled_at REAL")
+    plan_cols = _column_names(conn, "plan_items")
+    for col, ddl in (("hold", "TEXT NOT NULL DEFAULT ''"),        # 自动流程停下等人的原因
+                     ("hold_state", "TEXT NOT NULL DEFAULT ''"),  # 停下时项目在哪个状态
+                     ("publish_at", "REAL")):                     # 成片闸通过后排定的发布时刻
+        if col not in plan_cols:
+            conn.execute(f"ALTER TABLE plan_items ADD COLUMN {col} {ddl}")
+    # 第一期的「已出片」现在叫「成片待审」
+    conn.execute("UPDATE plan_items SET status = 'review' WHERE status = 'ready'")
 
 
 def init_db() -> None:
@@ -846,7 +857,7 @@ def create_publication(row: dict[str, Any]) -> None:
     row = {
         "aspect": "16:9", "artifact": "", "title": "", "description": "",
         "tags": "[]", "variant": "{}", "state": "pending", "remote_id": "", "remote_url": "",
-        "upload_id": "", "error": "", "attempts": 0, "published_at": None,
+        "upload_id": "", "error": "", "attempts": 0, "published_at": None, "scheduled_at": None,
         **row,
     }
     row.setdefault("created_at", now)
@@ -856,10 +867,10 @@ def create_publication(row: dict[str, Any]) -> None:
             """INSERT INTO publications
                (id, project_id, account_id, platform, aspect, artifact, title, description,
                 tags, variant, state, remote_id, remote_url, upload_id, error, attempts,
-                published_at, created_at, updated_at)
+                published_at, scheduled_at, created_at, updated_at)
                VALUES (:id, :project_id, :account_id, :platform, :aspect, :artifact, :title,
                        :description, :tags, :variant, :state, :remote_id, :remote_url, :upload_id, :error,
-                       :attempts, :published_at, :created_at, :updated_at)""",
+                       :attempts, :published_at, :scheduled_at, :created_at, :updated_at)""",
             row,
         )
 
@@ -916,8 +927,8 @@ def find_publication(project_id: str, account_id: str, aspect: str) -> dict[str,
     return dict(row) if row else None
 
 
-def claim_publications(limit: int = 3) -> list[dict[str, Any]]:
-    """取出待推进的发布任务。
+def claim_publications(limit: int = 3, now: float | None = None) -> list[dict[str, Any]]:
+    """取出待推进的发布任务。定时发布的没到点不领。
 
     **同一账号一次只给一条** —— 单账号高频上传会触发平台风控,这是硬要求。
     """
@@ -926,9 +937,10 @@ def claim_publications(limit: int = 3) -> list[dict[str, Any]]:
         rows = conn.execute(
             """SELECT * FROM publications
                WHERE state IN ('pending', 'uploading')
+                 AND (scheduled_at IS NULL OR scheduled_at <= ?)
                ORDER BY created_at
                LIMIT ?""",
-            (limit * 4,),
+            (time.time() if now is None else now, limit * 4),
         ).fetchall()
     out: list[dict[str, Any]] = []
     busy: set[str] = set()

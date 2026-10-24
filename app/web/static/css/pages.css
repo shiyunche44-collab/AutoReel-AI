@@ -788,3 +788,16 @@
 .role-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); }
 .role-row:first-child { border-top: 0; padding-top: 0; }
 @media (max-width: 900px) { .team-grid { grid-template-columns: 1fr; } }
+.review-card { flex-direction: row; gap: 16px; }
+.review-card + .review-card { margin-top: 12px; }
+.review-media { flex: 0 0 46%; min-width: 0; }
+.review-card.is-portrait .review-media { flex-basis: 240px; }
+.review-media video { width: 100%; border-radius: 8px; background: #000; display: block; }
+.review-form { flex: 1; min-width: 0; }
+.chip-check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.plan-row { border-top: 1px solid var(--border); }
+.plan-row:first-child { border-top: 0; }
+.plan-row > .rowline { border-top: 0; }
+.plan-hold { color: var(--warning); padding: 0 0 8px 132px; word-break: break-all; }
+@media (max-width: 700px) { .review-card { flex-direction: column; } .plan-hold { padding-left: 0; } }

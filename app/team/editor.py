@@ -22,7 +22,7 @@ from . import Skip, TeamError, scout
 #: 离发布不到这么多小时的空档不排了(来不及出片 + 审核)
 MIN_PREP_HOURS = 8
 #: 这些状态的选题占着空档
-HOLDING = ("proposed", "approved", "producing", "ready")
+HOLDING = ("proposed", "approved", "producing", "review", "scheduled", "published")
 
 
 def _norm(text: str) -> str:

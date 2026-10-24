@@ -365,6 +365,10 @@ TEAM_ASPECT = os.getenv("TEAM_ASPECT", "16:9")
 TEAM_DURATION = int(os.getenv("TEAM_DURATION", "240"))
 #: 同一车型多少天内不重复做
 TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
+#: 制片自动过门禁 A / B(只在机器检查零拦截时放行;拦下就停下等人)
+TEAM_AUTO_GATES = os.getenv("TEAM_AUTO_GATES", "1") not in ("0", "false", "False")
+#: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)
+TEAM_ASSET_PREBUILD = os.getenv("TEAM_ASSET_PREBUILD", "1") not in ("0", "false", "False")
 #: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
 #: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

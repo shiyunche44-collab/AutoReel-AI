@@ -7,7 +7,8 @@
 **运行记录走 `team_runs` 表**,页面上的「团队动态」就是它。同一角色同一时刻
 只跑一份(`db.start_team_run` 在库里抢占),两个服务连同一个库也不会重复跑。
 
-**人只把两道闸**:选题单(这里)和成片发布前(第二期)。
+**人只把两道闸**:选题单和成片发布前(发布员)。中间的脚本 / 审片门禁由
+制片替人过,机器检查拦下了才停下等人。
 """
 from __future__ import annotations
 
@@ -103,16 +104,21 @@ class Role:
 
 
 def roles() -> list[Role]:
-    """按执行顺序排:情报先于主编,主编先于制片。"""
-    from . import editor, producer, scout
+    """按执行顺序排:情报先于主编,主编先于素材官和制片,发布员最后。"""
+    from . import asset, editor, producer, publisher, scout
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
              Cadence("daily", ("08:00", "18:00")), scout.run),
         Role("editor", "主编", "读最新热点,给未来几天的空档排选题(去重、冷却、按热度),等你批",
              Cadence("daily", ("09:00",)), editor.run),
-        Role("producer", "制片", "已批选题到开工时间就建项目,推进到脚本门禁;跟踪出片进度",
+        Role("asset", "素材官", "选题一批准就给它的车提前建 / 补素材池,确认本车视频不够才建",
+             Cadence("interval", minutes=30), asset.run),
+        Role("producer", "制片", "已批选题到开工时间就建项目;脚本、审片门禁机器检查全过就替你确认,"
+             "拦下就停下等你",
              Cadence("interval", minutes=5), producer.run),
+        Role("publisher", "发布员", "成片审核通过后按排期定时发布,跟踪发布结果",
+             Cadence("interval", minutes=5), publisher.run),
     ]
 
 

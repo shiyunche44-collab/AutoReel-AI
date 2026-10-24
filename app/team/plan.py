@@ -9,7 +9,8 @@ from ..models import ProjectCreate, SubjectEntry
 
 STATUS_LABEL = {
     "proposed": "待批", "approved": "已批", "rejected": "已驳回", "expired": "过期未批",
-    "producing": "制作中", "ready": "已出片", "failed": "失败",
+    "producing": "制作中", "review": "成片待审", "scheduled": "已排发布", "published": "已发布",
+    "failed": "失败",
 }
 #: 用户还能改的状态
 EDITABLE = ("proposed", "approved")
@@ -96,4 +97,8 @@ def view(item: dict[str, Any]) -> dict[str, Any]:
     if item.get("project_id"):
         project = db.get_project(item["project_id"])
         out["project_state"] = project.get("state") if project else ""
+    if item["status"] == "review":
+        from .publisher import review_view
+
+        out["review"] = review_view(item)
     return out
