@@ -184,7 +184,7 @@ def create_project(payload: ProjectCreate) -> str:
     # 而不是等跑到 FACTS_RESOLVED 才发现配置有问题。
     names = [s["name"] for s in subjects]
     plan = profile.slots_for(payload.duration, theme_name, names or None,
-                             portrait=payload.aspect == config.PORTRAIT, variant=variant)
+                             portrait=project_aspect == config.PORTRAIT, variant=variant)
     expected_shots = profile.shots_for(payload.duration)
     # 车多时长短会自动精简每车段落(见 roundup_blocks);配置自检保证车单上限精简后
     # 放得进最短时长,这里只是兜底,不让结论段被截掉

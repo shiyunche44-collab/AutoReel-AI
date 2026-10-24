@@ -368,3 +368,42 @@ def test_fit_length_keeps_original_when_result_is_bad():
     ]
     for reply in bad:
         assert script_gen.fit_length(long, 50, _ShortenLLM(reply)) is long
+
+
+def test_fit_length_keeps_shortening_until_within_tolerance():
+    from app.pipeline import script_gen
+
+    long = _segs(("开场", "甲" * 40), ("三电", "乙" * 60), ("结论", "丙" * 40))
+
+    class _Steps:
+        """每遍只删一点,像真 LLM 那样:140 → 110 → 100 → 90 字。"""
+        def __init__(self):
+            self.calls, self.users = 0, []
+
+        def structured(self, system, user, **kw):
+            self.calls += 1
+            self.users.append(user)
+            n = 40 - 5 * self.calls
+            return {"segments": [{"section": "开场", "text": "甲" * n},
+                                 {"section": "三电", "text": "乙" * 40},
+                                 {"section": "结论", "text": "丙" * n}]}
+
+    llm = _Steps()
+    out = script_gen.fit_length(long, 90, llm)          # 容差 1.1 → 99 字以内才停
+    assert llm.calls == 3 and script_gen.spoken_chars(out) == 90
+    assert "至少删掉 55 字" in llm.users[0]
+    # 第二遍坏了:停在第一遍的结果,不回到原稿
+    class _Then:
+        def __init__(self):
+            self.calls = 0
+
+        def structured(self, system, user, **kw):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("超时")
+            return {"segments": [{"section": "开场", "text": "甲" * 30},
+                                 {"section": "三电", "text": "乙" * 50},
+                                 {"section": "结论", "text": "丙" * 30}]}
+
+    out = script_gen.fit_length(long, 50, _Then())
+    assert script_gen.spoken_chars(out) == 110

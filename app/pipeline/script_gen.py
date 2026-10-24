@@ -489,26 +489,54 @@ def spoken_chars(segments: Sequence[ScriptSegment]) -> int:
     return sum(len(re.sub(r"\s+", "", s.text or "")) for s in segments)
 
 
+#: 压缩最多跑几遍。实测 LLM 一遍只删一成多(p_41e696af3941:527 → 466 字,目标 423),
+#: 一遍压完还超容差就接着压,不然竖屏 90 秒稿照样念到 110 秒以上
+FIT_PASSES = 4
+
+
 def fit_length(segments: list[ScriptSegment], budget: int, llm,
                tolerance: float = PORTRAIT_LENGTH_TOLERANCE,
                keep_count: bool = False) -> list[ScriptSegment]:
-    """超出目标字数 `tolerance` 倍时让 LLM 删一遍。压坏了(空、没变短、丢了开场或结论)就用原稿。"""
-    have = spoken_chars(segments)
-    if not segments or budget <= 0 or have <= budget * tolerance:
+    """超出目标字数 `tolerance` 倍时让 LLM 删,一遍不够就再删(最多 `FIT_PASSES` 遍)。
+
+    某一遍压坏了(空、没变短、丢了开场或结论)就丢掉那一遍、接着下一遍,全都坏了就用原稿。"""
+    if not segments or budget <= 0:
         return segments
+    misses = 0
+    for _ in range(FIT_PASSES):
+        if spoken_chars(segments) <= budget * tolerance:
+            break
+        shorter = _shorten_once(segments, budget, llm, keep_count, misses)
+        if shorter is None:
+            misses += 1
+            continue    # 这一遍没压好,下一遍重来(温度 0.3,换次采样常能过)
+        segments = shorter
+    return segments
+
+
+def _shorten_once(segments: list[ScriptSegment], budget: int, llm,
+                  keep_count: bool, misses: int = 0) -> list[ScriptSegment] | None:
+    """让 LLM 压一遍;结果不可用返回 None。"""
+    have = spoken_chars(segments)
     draft = json.dumps({"segments": [{"section": s.section, "text": s.text, "fact_refs": s.fact_refs}
                                      for s in segments]}, ensure_ascii=False)
-    system = SHORTEN_SYSTEM.format(chars=budget)
+    # 瞄着预算再低一点压:LLM 离目标只差一点时容易原样返回,压到刚好又总差几个字
+    aim = int(budget * (0.9 if misses else 0.95))
+    system = SHORTEN_SYSTEM.format(chars=aim)
     if keep_count:
         system += (f"\n- 本稿必须保持恰好 {len(segments)} 段、顺序不变:不许删段或合并,"
                    "每段都只缩短(压到只剩最硬的一个数字加一句观点)。")
+    if misses:
+        system += (f"\n- 上 {misses} 遍你几乎没删(或删坏了):这遍每段都砍掉约三分之一,宁可少说一个参数;"
+                   + ("" if keep_count else "同一 section 里相邻的短句可以合并成一句。"))
     try:
+        # 明说要删多少字:只给目标字数时 LLM 习惯性只删一点
         data = llm.structured(system,
-                              f"目标 {budget} 字,现在 {have} 字。\n{draft}",
+                              f"目标 {aim} 字,现在 {have} 字,至少删掉 {have - aim} 字。\n{draft}",
                               required_keys=["segments"], temperature=0.3)
     except Exception as exc:  # noqa: BLE001 —— 压缩是锦上添花,失败不拦脚本
         log.warning("脚本压缩失败,用原稿:%s", exc)
-        return segments
+        return None
     known = {s.section for s in segments}
     # 压缩稿不带 heading(只删不加的提示词里没有它),按段落名从原稿搬回来
     headings = {s.section: s.heading for s in segments if s.heading}
@@ -527,11 +555,11 @@ def fit_length(segments: list[ScriptSegment], budget: int, llm,
                                  heading=headings.get(section, "")))
     if keep_count and len(out) != len(segments):
         log.warning("脚本压缩改变了段数(%d → %d),用原稿", len(segments), len(out))
-        return segments
+        return None
     if not out or spoken_chars(out) >= have or out[0].section != segments[0].section \
             or out[-1].section != segments[-1].section:
-        log.warning("脚本压缩结果不可用(%d 段),用原稿", len(out))
-        return segments
+        log.warning("脚本压缩结果不可用(%d 段,%d → %d 字),用原稿", len(out), have, spoken_chars(out))
+        return None
     log.info("脚本压缩:%d → %d 字(目标 %d)", have, spoken_chars(out), budget)
     return out
 
