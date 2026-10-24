@@ -187,6 +187,40 @@ def test_price_of_ignores_disabled_and_company_scope():
     assert explainer._price_of(facts) == ("", "")
 
 
+def test_price_of_takes_lowest_across_official_wording_and_ranges():
+    """官方口径写「厂商指导价 / 限时先享价」、区间写「9.99 万至 14.19 万元」时,
+    入门价必须取到真正的下限,不能退成某条新闻里的中段价。"""
+    from app.pipeline import explainer
+
+    facts = [
+        {"id": "a", "claim": "秦L EV 2025款 470KM 领先型厂商指导价 11.98 万元",
+         "scope": "product", "confidence": "high", "enabled": True},
+        {"id": "b", "claim": "银河A7 EM限时先享价为8.98万元起",
+         "scope": "product", "confidence": "high", "enabled": True},
+        {"id": "c", "claim": "2027款海豹06 DM-i 共提供 6 款配置,售价区间 9.99 万至 14.19 万元",
+         "scope": "product", "confidence": "high", "enabled": True},
+        {"id": "d", "claim": "秦L EV 云辇型,售价 13.98 万元",
+         "scope": "product", "confidence": "high", "enabled": True},
+    ]
+    assert explainer._price_of(facts) == ("限时8.98万元起", "b")
+
+
+def test_price_of_marks_conditional_price_and_leaves_official_price_plain():
+    """限时/优惠价要带口径前缀,厂商指导价不用 —— 红线:数字要带口径。"""
+    from app.pipeline import explainer
+
+    official = [
+        {"id": "a", "claim": "秦L EV 2025款 470KM 领先型厂商指导价 11.98 万元",
+         "scope": "product", "confidence": "high", "enabled": True},
+    ]
+    assert explainer._price_of(official) == ("11.98万元起", "a")
+    promo = [
+        {"id": "b", "claim": "银河A7 EM限时先享价为8.98万元起", "basis": "限时先享价 · 2026款",
+         "scope": "product", "confidence": "high", "enabled": True},
+    ]
+    assert explainer._price_of(promo) == ("限时8.98万元起", "b")
+
+
 def test_portrait_cover_breaks_title_at_comma_and_relays_3x4(tmp_path):
     """竖屏实跑:「多花15万买GT,值不 / 值?」;3:4 从 9:16 上截,主论点被截掉半行。"""
     from PIL import Image

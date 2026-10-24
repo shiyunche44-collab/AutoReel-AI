@@ -1969,7 +1969,8 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
 
     封面上的价格和脚本里的数字一样,必须来自事实层 —— 不能手写"23.35万"。
     取**最低**的那一条:入门价就是最低售价,封面报最高价是误导。
-    口径(basis)在封面上放不下,只在这里记下,供 render.json 留痕。
+    口径(basis)记在 render.json 里留痕;但**有条件的价**必须带上口径前缀:
+    「限时先享价 8.98 万」写成「8.98万元起」,观众会当成常规售价 —— 红线是数字要带口径。
 
     `facts` 是 facts.json 里的原始字典(不是 Fact 模型):落盘的是 model_dump,
     早期版本的 enabled 存的是字符串,所以取值都做兼容。
@@ -1979,7 +1980,16 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
             return f.get(key, default)
         return getattr(f, key, default)
 
-    best: tuple[float, str, str, str] | None = None  # (值, 文案, fact id, basis)
+    # 事实里说价格的词,不止「售价/价格」:官方口径常写「厂商指导价」「限时先享价」。
+    # 只认前两个词,这些事实会被整条丢掉,入门价就只剩某一条新闻里的中段价。
+    _PRICE_WORDS = ("售价", "价格", "起售", "定价", "官降", "落地",
+                    "指导价", "先享价", "元起")
+    # 「9.99 万至 14.19 万元」这种区间:上限那句匹配不上「数字+元」,下限要单独认
+    _RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*万\s*(?:至|到|[-~—])\s*\d")
+    # 有条件的价:封面得写出来,不然等于报了个假常规价
+    _CONDITIONAL = (("限时", ("限时", "先享价")), ("优惠", ("优惠", "促销", "活动价")))
+
+    best: tuple[float, str, str, str, str] | None = None  # (值, 文案, fact id, basis, claim)
     for f in facts or []:
         if get(f, "enabled", True) in (False, "False", "false", 0, "0"):
             continue
@@ -1988,16 +1998,24 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
         if get(f, "confidence", "") == "low":
             continue
         claim = str(get(f, "claim", "") or "")
-        if not any(w in claim for w in ("售价", "价格", "起售", "定价", "官降", "落地")):
+        if not any(w in claim for w in _PRICE_WORDS):
             continue
+        candidates: list[tuple[float, str]] = []
         for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(万)?元", claim):
             value = float(m.group(1)) * (10000 if m.group(2) else 1)
-            text = f"{m.group(1)}{'万' if m.group(2) else ''}元"
+            candidates.append((value, f"{m.group(1)}{'万' if m.group(2) else ''}元"))
+        for m in _RANGE_RE.finditer(claim):
+            candidates.append((float(m.group(1)) * 10000, f"{m.group(1)}万元"))
+        for value, text in candidates:
             if best is None or value < best[0]:
-                best = (value, text, str(get(f, "id", "")), str(get(f, "basis", "") or ""))
+                best = (value, text, str(get(f, "id", "")), str(get(f, "basis", "") or ""), claim)
     if best is None:
         return "", ""
-    return f"{best[1]}起", best[2]
+    value, text, fact_id, basis, claim = best
+    hay = f"{basis} {claim}"
+    qualifier = next((prefix for prefix, marks in _CONDITIONAL
+                      if any(m in hay for m in marks)), "")
+    return f"{qualifier}{text}起", fact_id
 
 
 def cover_meta(project_id: str, profile: CategoryProfile, total: float) -> dict[str, Any]:
