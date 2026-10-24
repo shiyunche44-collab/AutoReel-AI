@@ -255,6 +255,30 @@ CREATE TABLE IF NOT EXISTS team_reports (
     data       TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+
+-- 运营官抓的评论(只存一级评论,自己的不存)。回复一律你批过才发
+CREATE TABLE IF NOT EXISTS comments (
+    id             TEXT PRIMARY KEY,       -- 平台评论 id
+    publication_id TEXT NOT NULL,
+    account_id     TEXT,
+    remote_id      TEXT,                   -- 作品 id
+    author         TEXT NOT NULL DEFAULT '',
+    text           TEXT NOT NULL DEFAULT '',
+    created_at     REAL NOT NULL,          -- 平台上的评论时刻
+    likes          INTEGER NOT NULL DEFAULT 0,
+    kind           TEXT NOT NULL DEFAULT 'other', -- question / praise / argue / ad / other
+    kind_source    TEXT NOT NULL DEFAULT 'rule',  -- rule / llm / user
+    reply_draft    TEXT NOT NULL DEFAULT '',
+    reply_source   TEXT NOT NULL DEFAULT 'template', -- template / llm / user
+    reply_state    TEXT NOT NULL DEFAULT 'draft',    -- draft / approved / sending / sent / failed / skipped
+    reply_error    TEXT NOT NULL DEFAULT '',
+    replied_at     REAL,
+    topic_state    TEXT NOT NULL DEFAULT '',      -- 问题类:'' 待进选题池 / pooled 已给主编 / dismissed
+    fetched_at     REAL NOT NULL,
+    updated_at     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_state ON comments(reply_state, created_at);
+CREATE INDEX IF NOT EXISTS idx_comments_pub ON comments(publication_id);
 """
 
 
@@ -1334,6 +1358,94 @@ def latest_report() -> dict[str, Any] | None:
     if not row:
         return None
     return {"week": row["week"], "created_at": row["created_at"], **json.loads(row["data"])}
+
+
+#: 评论里允许改的字段(`update_comment`)
+_COMMENT_FIELDS = {"kind", "kind_source", "reply_draft", "reply_source", "reply_state",
+                   "reply_error", "replied_at", "topic_state"}
+
+
+def add_comments(rows: list[dict[str, Any]]) -> int:
+    """新评论入库,已有的只更新点赞数(分类、草稿、审核状态都不动)。返回新增条数。"""
+    init_db()
+    now = time.time()
+    n = 0
+    with transaction() as conn:
+        for r in rows:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO comments (id, publication_id, account_id, remote_id, author,"
+                " text, created_at, likes, kind, kind_source, reply_draft, reply_source,"
+                " reply_state, fetched_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (r["id"], r["publication_id"], r.get("account_id"), r.get("remote_id"),
+                 r.get("author") or "", r.get("text") or "", r["created_at"], r.get("likes") or 0,
+                 r.get("kind") or "other", r.get("kind_source") or "rule",
+                 r.get("reply_draft") or "", r.get("reply_source") or "template",
+                 r.get("reply_state") or "draft", now, now))
+            if cur.rowcount:
+                n += 1
+            else:
+                conn.execute("UPDATE comments SET likes = ? WHERE id = ?",
+                             (r.get("likes") or 0, r["id"]))
+    return n
+
+
+def get_comment(comment_id: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_comments(*, states: tuple[str, ...] = (), kinds: tuple[str, ...] = (),
+                  publication_id: str | None = None, since: float | None = None,
+                  topic_states: tuple[str, ...] | None = None,
+                  limit: int = 200) -> list[dict[str, Any]]:
+    """新评论在前。"""
+    init_db()
+    where, args = [], []
+    for col, vals in (("reply_state", states), ("kind", kinds), ("topic_state", topic_states)):
+        if vals:
+            where.append(f"{col} IN ({','.join('?' * len(vals))})")
+            args.extend(vals)
+    if publication_id:
+        where.append("publication_id = ?")
+        args.append(publication_id)
+    if since is not None:
+        where.append("created_at >= ?")
+        args.append(since)
+    sql = "SELECT * FROM comments" + (" WHERE " + " AND ".join(where) if where else "")
+    with connect() as conn:
+        rows = conn.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_comment(comment_id: str, **fields: Any) -> None:
+    bad = set(fields) - _COMMENT_FIELDS
+    if bad:
+        raise ValueError(f"不能改的评论字段:{sorted(bad)}")
+    if not fields:
+        return
+    init_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE comments SET {sets}, updated_at = ? WHERE id = ?",
+                     (*fields.values(), time.time(), comment_id))
+
+
+def cas_comment_state(comment_id: str, expected: tuple[str, ...], new: str, **fields: Any) -> bool:
+    """回复状态从 expected 之一改成 new;已经被别人改走就返回 False(批量审核和发送并发时不重发)。"""
+    bad = set(fields) - _COMMENT_FIELDS
+    if bad:
+        raise ValueError(f"不能改的评论字段:{sorted(bad)}")
+    init_db()
+    sets = "".join(f", {k} = ?" for k in fields)
+    marks = ",".join("?" * len(expected))
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE comments SET reply_state = ?{sets}, updated_at = ?"
+            f" WHERE id = ? AND reply_state IN ({marks})",
+            (new, *fields.values(), time.time(), comment_id, *expected))
+        return cur.rowcount > 0
 
 
 def get_team_setting(key: str, default: Any = None) -> Any:

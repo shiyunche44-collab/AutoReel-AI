@@ -131,12 +131,15 @@ def run(category: str | None = None, *, llm: Any = None,
     items = scout.fresh_items(category)
     if not items:
         raise TeamError("没有热点可用")
-    from . import playbook
+    from . import engagement, playbook
 
     learnings = db.list_learnings()
     weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject")}
+    # 打法手册 + 观众在评论里问的(运营官回灌)
+    hints = "\n\n".join(t for t in (playbook.prompt_text(learnings),
+                                     engagement.audience_text(now.timestamp(), mark=True)) if t)
     ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
-                           playbook=playbook.prompt_text(learnings))
+                           playbook=hints)
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
     ranked = rank_ideas(ideas, cooled, rising_cars, weights)

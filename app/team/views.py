@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import compliance, next_slot, paused, playbook, publisher, roles, scout
+from . import compliance, engagement, next_slot, paused, playbook, publisher, roles, scout
 from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
@@ -54,9 +54,26 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "playbook": [{**r, "text": playbook.describe(r)}
                      for r in db.list_learnings(("active", "off"))],
         "report": db.latest_report(),
+        "comments": comment_queue(),
+        "engage": {**engagement.stats(),
+                   "auto_thanks": bool(db.get_team_setting(engagement.AUTO_THANKS_KEY, False))},
         "settings": {
             "daily_slots": config.TEAM_DAILY_SLOTS, "plan_days": config.TEAM_PLAN_DAYS,
             "slot_times": list(config.TEAM_SLOT_TIMES), "lead_hours": config.TEAM_LEAD_HOURS,
             "cooldown_days": config.TEAM_COOLDOWN_DAYS, "auto_gates": config.TEAM_AUTO_GATES,
         },
     }
+
+
+def comment_queue(limit: int = 60) -> list[dict[str, Any]]:
+    """评论审核区:待审 / 已批待发 / 发送失败的,新的在前;每条带作品标题。"""
+    rows = db.list_comments(states=("draft", "approved", "sending", "failed"), limit=limit)
+    titles: dict[str, str] = {}
+    out = []
+    for r in rows:
+        if r["publication_id"] not in titles:
+            pub = db.get_publication(r["publication_id"]) or {}
+            titles[r["publication_id"]] = pub.get("title") or ""
+        out.append({**r, "work_title": titles[r["publication_id"]],
+                    "kind_label": engagement.KIND_LABEL.get(r["kind"], r["kind"])})
+    return out

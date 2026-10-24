@@ -374,6 +374,86 @@ function learningRow(l) {
     btn);
 }
 
+// ---------------------------------------------------------------------------
+// 评论待审(运营官)
+// ---------------------------------------------------------------------------
+const KIND_TONE = { question: 'brand', praise: 'success', argue: 'warning', ad: 'danger', other: 'neutral' };
+const KIND_LABEL = { question: '问题', praise: '夸', argue: '杠', ad: '广告', other: '其他' };
+const REPLY_STATE = {
+  draft: ['待审', 'warning'], approved: ['已批,待发', 'brand'], sending: ['发送中', 'brand'],
+  failed: ['发送失败', 'danger'],
+};
+const PICKED = new Set();
+
+function pickedButtons() {
+  $('#btn-approve-picked').disabled = !PICKED.size;
+  $('#btn-skip-picked').disabled = !PICKED.size;
+}
+
+function commentRow(c) {
+  const locked = c.reply_state === 'sending';
+  const pick = h('input', {
+    type: 'checkbox', checked: PICKED.has(c.id), disabled: locked || c.reply_state === 'approved',
+    onchange: (e) => { e.target.checked ? PICKED.add(c.id) : PICKED.delete(c.id); pickedButtons(); },
+  });
+  const kind = h('select', {
+    class: 'select comment-kind', disabled: locked, title: '分错了就改',
+    onchange: (e) => call('/api/team/comments/edit', '已改分类', { id: c.id, kind: e.target.value }),
+  }, Object.entries(KIND_LABEL).map(([k, v]) => h('option', { value: k, selected: k === c.kind }, v)));
+  const reply = h('textarea', {
+    class: 'input comment-reply', rows: '2', maxlength: '80', disabled: locked,
+    placeholder: c.kind === 'ad' ? '广告不回' : '写回复',
+  }, c.reply_draft || '');
+  reply.addEventListener('change', () =>
+    call('/api/team/comments/edit', '回复已改,批准后才发', { id: c.id, reply: reply.value }));
+  const act = (label, cls, fn, ic, title) =>
+    h('button', { class: `btn btn-sm ${cls}`, type: 'button', title, disabled: locked,
+      onclick: (e) => withLoading(e.currentTarget, fn) }, ic ? icon(ic, 'i-sm') : null, label);
+  const decide = (action, ok) => call('/api/team/comments/decide', ok, { ids: [c.id], action });
+  const [stateText, stateTone] = REPLY_STATE[c.reply_state] || [c.reply_state, 'neutral'];
+  const pooled = c.topic_state !== 'dismissed';
+  return h('div', { class: 'comment-row' },
+    pick,
+    h('div', { class: 'grow comment-main' },
+      h('div', { class: 'row comment-meta small' },
+        kind,
+        h('strong', {}, c.author || '(匿名)'),
+        h('span', { class: 'subtle' }, `${relTime(c.created_at)} · 《${c.work_title || ''}》`),
+        c.likes ? h('span', { class: 'subtle' }, `${c.likes} 赞`) : null,
+        badge(stateText, stateTone),
+        c.reply_source === 'llm' ? badge('AI 拟', 'neutral') : c.reply_source === 'user' ? badge('你写的', 'neutral') : null),
+      h('div', { class: 'comment-text' }, c.text || '(只有表情)'),
+      c.reply_error ? h('div', { class: 'small text-danger' }, c.reply_error) : null,
+      reply),
+    h('div', { class: 'comment-actions' },
+      c.reply_state === 'approved'
+        ? act('撤回', 'btn-ghost', () => decide('reset', '已退回草稿'), 'refresh')
+        : act('批准', 'btn-primary', () => decide('approve', '已批准,运营官下一轮发'), 'check'),
+      act('不回', 'btn-ghost', () => decide('skip', '这条不回了'), 'x'),
+      c.kind === 'question'
+        ? act(pooled ? '不进选题池' : '进选题池', 'btn-ghost',
+            () => call('/api/team/comments/topic', pooled ? '不给主编看了' : '主编下一轮会看到', { id: c.id, pooled: !pooled }),
+            pooled ? 'x' : 'plus', '观众问的会附在主编排选题的提示词里')
+        : null));
+}
+
+function engageStats(s) {
+  if (!s) return '';
+  const k = s.kinds || {};
+  const parts = [`近 ${s.days} 天 ${s.total} 条评论(问题 ${k.question || 0} · 夸 ${k.praise || 0} · 杠 ${k.argue || 0} · 广告 ${k.ad || 0})`];
+  parts.push(`回复率 ${pct(s.reply_rate)}`);
+  parts.push(`首小时互动率 ${pct(s.first_hour)}${s.first_hour_n ? `(${s.first_hour_n} 条)` : ''}`);
+  if (s.idle_days != null && s.idle_days >= 3) parts.push(`⚠ 已 ${Math.floor(s.idle_days)} 天没发`);
+  return parts.join(' · ');
+}
+
+async function decidePicked(action, ok) {
+  const ids = [...PICKED];
+  PICKED.clear();
+  pickedButtons();
+  await call('/api/team/comments/decide', ok, { ids, action });
+}
+
 function empty(text) {
   return h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, text));
 }
@@ -390,6 +470,15 @@ function render() {
   $('#review-count').textContent = String(reviews.length);
   $('#review-list').replaceChildren(
     ...(reviews.length ? reviews.map(reviewCard) : [empty('没有待审的成片')]));
+  const comments = DATA.comments || [];
+  const ids = new Set(comments.map((c) => c.id));
+  [...PICKED].forEach((id) => ids.has(id) || PICKED.delete(id));
+  $('#comment-count').textContent = String(comments.filter((c) => c.reply_state === 'draft').length);
+  $('#comment-list').replaceChildren(
+    ...(comments.length ? comments.map(commentRow) : [empty('没有待审的评论。运营官每 2 小时拉一次团队作品的新评论。')]));
+  $('#comment-stats').textContent = engageStats(DATA.engage);
+  $('#auto-thanks').checked = !!(DATA.engage && DATA.engage.auto_thanks);
+  pickedButtons();
   $('#plan-list').replaceChildren(...(rest.length ? rest.map(planRow) : [empty('还没有排上的选题')]));
   const s = DATA.settings;
   $('#plan-hint').textContent =
@@ -439,6 +528,24 @@ $('#btn-approve-all').addEventListener('click', (e) =>
     await load();
   }));
 
+$('#btn-approve-picked').addEventListener('click', (e) =>
+  withLoading(e.currentTarget, () => decidePicked('approve', '已批准,运营官下一轮发(或点「现在拉评论 / 发已批的」)')));
+$('#btn-skip-picked').addEventListener('click', (e) =>
+  withLoading(e.currentTarget, () => decidePicked('skip', '这些不回了')));
+
+$('#auto-thanks').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  if (on) {
+    const yes = await confirmDialog({
+      title: '打开感谢类自动回?',
+      body: '「夸」类评论的模板感谢不再等你批,运营官拉到就以你的名义发出。问题 / 杠 / 其他仍要你批。',
+      confirmText: '打开',
+    });
+    if (!yes) { e.target.checked = false; return; }
+  }
+  await call('/api/team/comments/auto-thanks', on ? '感谢类自动回已打开' : '已关闭,全部回复都等你批', { enabled: on });
+});
+
 $('#btn-pause').addEventListener('click', (e) =>
   withLoading(e.currentTarget, async () => {
     await call('/api/team/pause', DATA.paused ? '团队已恢复' : '团队已暂停', { paused: !DATA.paused });
@@ -448,7 +555,7 @@ load();
 setInterval(() => {
   // 正在填成片审核表单 / 看片时别刷新,不然输入和播放进度都会丢
   const busy = document.querySelector('.modal-backdrop')
-    || document.activeElement?.closest?.('.review-card')
+    || document.activeElement?.closest?.('.review-card, .comment-row')
     || [...document.querySelectorAll('.review-card video')].some((v) => !v.paused);
   if (!document.hidden && !busy) load();
 }, 15000);

@@ -41,6 +41,21 @@
   <div class="card-body" id="review-list"></div>
 </section>
 
+<section class="card comment-card">
+  <div class="card-head">
+    <h2>{{ m.icon("list", "i-sm") }}评论待审 <span class="count" id="comment-count">0</span></h2>
+    <div class="row">
+      <label class="small subtle row" title="开了以后「夸」类评论的模板感谢不等你批就发;默认关">
+        <input type="checkbox" id="auto-thanks"> 感谢类自动回</label>
+      <button class="btn btn-sm btn-ghost" type="button" data-run="engagement">{{ m.icon("refresh", "i-sm") }}现在拉评论 / 发已批的</button>
+      <button class="btn btn-sm btn-ghost" type="button" id="btn-skip-picked" disabled>{{ m.icon("x", "i-sm") }}所选不回</button>
+      <button class="btn btn-sm btn-primary" type="button" id="btn-approve-picked" disabled>{{ m.icon("check", "i-sm") }}批准所选</button>
+    </div>
+  </div>
+  <div class="comment-stats subtle small" id="comment-stats"></div>
+  <div class="card-body" id="comment-list"></div>
+</section>
+
 <section class="card">
   <div class="card-head">
     <h2>{{ m.icon("calendar", "i-sm") }}排期</h2>

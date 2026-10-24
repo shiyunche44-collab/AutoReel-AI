@@ -1281,6 +1281,69 @@ def team_learning_status(learning_id: str, payload: LearningStatus):
     return {"ok": True}
 
 
+# 评论 id 里带「/」「+」,一律放在请求体里传
+class CommentEdit(BaseModel):
+    id: str
+    reply: str | None = None
+    kind: str | None = None
+
+
+class CommentDecide(BaseModel):
+    ids: list[str]
+    action: str
+
+
+class CommentTopic(BaseModel):
+    id: str
+    pooled: bool
+
+
+class AutoThanks(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/team/comments/edit")
+def team_comment_edit(payload: CommentEdit):
+    """改拟好的回复 / 改分类。改完仍要批准才发。"""
+    from .team import engagement
+
+    try:
+        return engagement.edit(payload.id, reply=payload.reply, kind=payload.kind)
+    except engagement.EngageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/team/comments/decide")
+def team_comment_decide(payload: CommentDecide):
+    """批量审核:approve 批准(运营官下一轮发,或你点「现在发」)/ skip 不回 / reset 退回草稿。"""
+    from .team import engagement
+
+    try:
+        return {"changed": engagement.decide(payload.ids, payload.action)}
+    except engagement.EngageError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/team/comments/topic")
+def team_comment_topic(payload: CommentTopic):
+    from .team import engagement
+
+    try:
+        engagement.set_topic(payload.id, payload.pooled)
+    except engagement.EngageError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/team/comments/auto-thanks")
+def team_comment_auto_thanks(payload: AutoThanks):
+    """「夸」类模板感谢的自动档:开了以后这类回复不等你批就发。默认关。"""
+    from .team import engagement
+
+    db.set_team_setting(engagement.AUTO_THANKS_KEY, payload.enabled)
+    return {"enabled": payload.enabled}
+
+
 @app.post("/api/team/plan/{item_id}/start")
 def team_plan_start(item_id: str):
     """不等开工时间,马上做。没批的先批。"""
