@@ -99,6 +99,7 @@ def test_publish_browser_sets_cover_before_clicking_publish(tmp_path, monkeypatc
     cover = _img(tmp_path / "cover.jpg", (1920, 1080))
     FakeSession.calls = []
     monkeypatch.setattr(browser, "BrowserSession", FakeSession)
+    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
     monkeypatch.setattr(douyin, "set_covers",
                         lambda session, path: FakeSession.calls.append(("cover", path.name))
                         or "封面可能没换上:竖封面3:4")
@@ -113,6 +114,24 @@ def test_publish_browser_sets_cover_before_clicking_publish(tmp_path, monkeypatc
     assert FakeSession.calls[2] == ("fill", "一" * douyin.TITLE_MAX)
     # 左栏「作品发布」也含"发布"两字,必须按文字精确点真正的发布按钮
     assert FakeSession.calls[-1] == ("click", "button:text-is('发布')")
+
+
+def test_publish_browser_fills_in_the_real_work_id(tmp_path, monkeypatch):
+    """网页版发布拿不到作品 id —— 要回查作品管理页补上,不然发布记录没有链接。"""
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+    FakeSession.calls = []
+    monkeypatch.setattr(browser, "BrowserSession", FakeSession)
+    monkeypatch.setattr(douyin, "resolve_published_work",
+                        lambda *a, **k: {"aweme_id": "7700", "url": "https://www.douyin.com/video/7700"})
+    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
+                         title="标题")
+    result = DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
+                                                  auth_kind="browser"))
+    assert result.ok and result.remote_id == "7700"
+    assert result.remote_url == "https://www.douyin.com/video/7700"
+    assert "7700" in result.message
 
 
 def test_publish_browser_reports_expired_login(tmp_path, monkeypatch):

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import time
@@ -23,6 +24,8 @@ from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishE
     PublishRequest, PublishResult
 from ..http import UPLOAD_TIMEOUT, new_client, request_json
 from ..registry import PORTRAIT
+
+log = logging.getLogger(__name__)
 
 OPEN = "https://open.douyin.com"
 #: 创作者平台发布页(网页版兜底)
@@ -47,6 +50,16 @@ COVER_SLOTS = (("横封面4:3", "设置横封面"), ("竖封面3:4", "设置竖�
 #: 封面弹窗里「上传封面」那个隐藏的 file input(按钮本身被上传层盖住,点不到)
 COVER_INPUT = ("div:has(> .semi-upload):has-text('上传封面') > .semi-upload "
                "> input.semi-upload-hidden-input")
+#: 「作品描述」框:抖音网页版用的是自研编辑器(contenteditable 的 div),不是 textarea
+DESC_SELECTORS = (
+    "div.zone-container[contenteditable=true]",
+    "div[contenteditable=true][data-placeholder*='简介']",
+    "div[contenteditable=true]",
+)
+#: 发布后回查作品 id:作品入库有延迟,查几轮
+WORK_RESOLVE_ROUNDS = 4
+#: 回查两轮之间隔多久(秒)
+WORK_RESOLVE_GAP = 6
 
 
 def _int(value: Any) -> int | None:
@@ -93,31 +106,70 @@ def _cover_srcs(page: Any) -> list[str]:
         "[class*=coverControl]", "els => els.map(e => (e.querySelector('img') || {}).src || '')")
 
 
-def set_covers(session: Any, cover: Path | None) -> str:
-    """在发布页的封面弹窗里把横、竖封面传上去。成功返回空串;没设上返回一句说明。
 
-    设不上**不拦发布**:平台会自己截帧当封面,片子照样能发;说明写进发布结果给人看。"""
+def set_covers(session: Any, cover: Path | None) -> str:
+    """在发布页的封面弹窗里把竖 / 横封面传上去。成功返回空串;没设上返回一句说明。
+
+    设不上**不拦发布**:平台会自己截帧当封面,片子照样能发;说明写进发布结果给人看。
+
+    实跑踩过的坑(都在这里绕开):
+    - 封面位上写的是「选择封面」几个字,点**文字**才弹编辑器;点外层容器没反应,
+      于是等弹窗超时,封面一直是平台自动截帧。
+    - 填简介时弹出的「#添加话题 / @好友」浮层盖住封面区,会吃掉点击 —— 先按 Esc 关掉。
+    - 弹窗里的上传控件是 `input.semi-upload-hidden-input`(按钮被上传层盖住,点不到)。
+    """
     files = cover_files(cover)
     if not files:
         return "没有封面文件,用平台自动截帧"
     page = session.page
     dialog = None
+    step = "找封面位"
     try:
-        dialog = page.locator("[role=dialog]")
-        before = _cover_srcs(page)
-        page.locator("[class*=coverControl]", has_text=files[0][0]) \
-            .locator("[class*=cover-]").first.click()
-        dialog.first.wait_for(timeout=10000)
-        for i, (_tip, step, path) in enumerate(files):
-            if i:
-                button = dialog.get_by_role("button", name=step)
-                (button if button.count() else dialog.get_by_text(step, exact=True)).first.click()
-                page.wait_for_timeout(1500)
-            dialog.locator(COVER_INPUT).first.set_input_files(str(path))
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        except Exception:  # noqa: BLE001 - 关不掉就靠 force 点击
+            pass
+        for tip, _step, path in files:
+            step = f"找封面位「{tip}」"
+            slot = page.locator("[class*=coverControl]", has_text=tip).first
+            if not slot.count():
+                return f"没找到封面位「{tip}」,用平台自动截帧"
+            step = f"点开「{tip}」的封面弹窗"
+            btn = slot.get_by_text("选择封面", exact=True)
+            if btn.count():
+                btn.first.click(force=True)
+            else:
+                slot.locator("[class*=cover-]").first.click(force=True)
+            step = f"等「{tip}」的弹窗"
+            dialog = page.locator("[role=dialog]:visible").last
+            dialog.wait_for(timeout=15000)
+            before = _dialog_preview(dialog)
+            step = f"在「{tip}」弹窗里找上传控件"
+            upload = None
+            for selector in (COVER_INPUT, "input.semi-upload-hidden-input", "input[type=file]"):
+                cand = dialog.locator(selector)
+                if cand.count():
+                    upload = cand
+                    break
+            if upload is None:
+                return f"封面位「{tip}」里没找到上传控件,用平台自动截帧"
+            step = f"往「{tip}」传封面"
+            upload.first.set_input_files(str(path), timeout=20000)
             page.wait_for_timeout(4000)
-        dialog.get_by_role("button", name="完成").first.click()
-        dialog.first.wait_for(state="hidden", timeout=15000)
-        after = _cover_srcs(page)
+            after = _dialog_preview(dialog)
+            step = f"点「{tip}」弹窗的完成"
+            done = dialog.get_by_role("button", name="完成", exact=True)
+            if done.count():
+                try:
+                    done.first.click(timeout=5000)
+                except Exception:  # noqa: BLE001 - 被浮层挡住就 force 点
+                    done.first.click(force=True)
+            else:
+                page.keyboard.press("Escape")
+            page.wait_for_timeout(1500)
+            if before and after and before == after:
+                return f"封面位「{tip}」传上去没变化,用平台自动截帧"
     except Exception as exc:  # noqa: BLE001 - 封面设不上不该拦住发布
         try:
             if dialog is not None and dialog.count():
@@ -125,21 +177,72 @@ def set_covers(session: Any, cover: Path | None) -> str:
                 page.wait_for_timeout(1000)
         except Exception:  # noqa: BLE001
             pass
-        return f"封面没设上({type(exc).__name__}),用平台自动截帧"
-    slots = [tip for tip, _step in COVER_SLOTS]
-    unchanged = [tip for tip, _s, _p in files
-                 if len(before) == len(after) == len(slots)
-                 and before[slots.index(tip)] == after[slots.index(tip)]]
-    if unchanged:
-        return f"封面可能没换上:{'、'.join(unchanged)}"
+        return f"封面没设上({step}:{type(exc).__name__}),用平台自动截帧"
     return ""
+
+
+def _dialog_preview(dialog: Any) -> str:
+    """弹窗里主预览图的地址 —— 传完新图它会变,拿它判断有没有真的换上。
+
+    弹窗刚打开时可能一张图都还没有,这时**不能等**:等元素会一直等到超时,
+    整个设封面就卡在这一步(实跑踩过)。拿不到就返回空串。
+    """
+    try:
+        loc = dialog.locator("img").first
+        if not loc.count():
+            return ""
+        return loc.get_attribute("src", timeout=2000) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _click_publish(session: Any) -> bool:
+    """点提交按钮。返回是否点到了。
+
+    「发布」这个字页面上有好几处:左栏「作品发布」、时间选项「立即发布」、
+    折叠项「发布设置」—— 按文字模糊匹配会点到这些,点了等于没发。所以只认
+    **完全等于**「发布」/「提交」的按钮。
+    """
+    for selector in ("button:text-is('发布')", "button:text-is('提交')"):
+        try:
+            if session.exists(selector, timeout=1500):
+                session.click(selector)
+                return True
+        except Exception:  # noqa: BLE001 - 换下一种点法
+            continue
+    return False
+
+
+def set_description(session: Any, description: str, hashtags: str = "") -> str:
+    """把简介(免责声明 + 话题)填进「作品描述」框。
+
+    网页版发布页的简介框是自研编辑器:contenteditable 的 div,不是 textarea。
+    只填标题不填简介,等于品类免责声明和话题都没发出去。
+    填不上**不拦发布**:平台照发,只是简介是空的;说明写进发布结果给人看。
+    """
+    text = " ".join(x for x in (description, hashtags) if x).strip()
+    if not text:
+        return ""
+    page = session.page
+    for selector in DESC_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if not loc.count():
+                continue
+            loc.fill(text)
+            page.wait_for_timeout(600)
+            got = (loc.inner_text() or "").strip()
+            if got:
+                return f"简介已填 {len(got)} 字"
+        except Exception:  # noqa: BLE001 - 换下一个选择器
+            continue
+    return "简介没填上(作品描述框找不到,页面改版了?)"
 
 
 def _config(key: str) -> str:
     from ... import config
 
     return str(getattr(config, key, "") or "")
-
 
 class DouyinAdapter:
     """抖音(开放平台优先,网页版兜底)。"""
@@ -309,6 +412,8 @@ class DouyinAdapter:
         if not video.is_file():
             raise PublishError(f"成片不存在:{video.name}", retryable=False)
         cover_note = ""
+        desc_note = ""
+        started_at = time.time()
         try:
             with browser.BrowserSession("douyin") as session:
                 session.goto(CREATOR_UPLOAD, wait_ms=3000)
@@ -326,13 +431,14 @@ class DouyinAdapter:
                     if session.exists(selector, timeout=1500):
                         session.fill(selector, (req.title or "")[:TITLE_MAX])
                         break
+                # 顺序要紧:**先设封面,再填简介**。填简介会弹出「#添加话题 / @好友」
+                # 的浮层,它就盖在封面区上,封面位上的「选择封面」点了没反应(实跑踩过:
+                # 等弹窗等超时,封面一直是平台自动截帧)。
                 cover_note = set_covers(session, req.cover_path)
+                topics = " ".join(f"#{str(t).strip()}" for t in (req.tags or [])[:5] if str(t).strip())
+                desc_note = set_description(session, req.description, hashtags=topics)
                 # 按文字精确匹配:左栏有个「作品发布」按钮,模糊匹配会先命中它,点了等于没发
-                for selector in ("button:text-is('发布')", "button:text-is('提交')"):
-                    if session.exists(selector, timeout=1500):
-                        session.click(selector)
-                        break
-                else:
+                if not _click_publish(session):
                     raise PublishError("发布页没找到「发布」按钮(页面改版了?)", retryable=False)
                 body = ""
                 for _ in range(PUBLISH_WAIT_MS // 3000):
@@ -357,9 +463,19 @@ class DouyinAdapter:
         if not any(t in body for t in PUBLISH_DONE_TEXTS):
             raise PublishError("网页版发布后没找到成功提示,可能是页面改版或需要验证码",
                                retryable=True)
-        message = "网页版已提交(未拿到作品 id)"
-        if cover_note:
-            message += f";{cover_note}"
+        message = "网页版已提交"
+        # 网页版这条路拿不到作品 id(抖音只在作品管理页里显示它)—— 回查一次补上,
+        # 否则项目里的发布记录永远是一条"没有链接"的任务,后面抓数据/对账都无从下手。
+        work = resolve_published_work(req.title or "", since=started_at)
+        if work.get("aweme_id"):
+            message = f"网页版已发布,作品 id {work['aweme_id']}"
+        for note in (desc_note, cover_note):
+            if note:
+                message += f";{note}"
+        if work.get("aweme_id"):
+            return PublishResult(ok=True, state="submitted", remote_id=work["aweme_id"],
+                                 remote_url=work.get("url") or "", message=message,
+                                 raw=work)
         return PublishResult(ok=True, state="submitted", remote_id="",
                              remote_url=CREATOR_UPLOAD, message=message)
 
@@ -440,6 +556,55 @@ def fetch_creator_works(*, since: float | None = None, max_scrolls: int = 4) -> 
             if wid:
                 works[wid] = {**item, "id": wid, "aweme": awemes.get(wid) or {}}
     return list(works.values())
+
+
+def resolve_published_work(title: str, *, since: float | None = None,
+                           rounds: int = WORK_RESOLVE_ROUNDS,
+                           gap: float = WORK_RESOLVE_GAP) -> dict[str, Any]:
+    """回查作品管理页,按标题找出**刚发出去**的那条作品,取它的 `aweme_id`。
+
+    网页版发布这条路,抖音不把作品 id 给你 —— 只在作品管理页里显示。所以发完得
+    自己回去查一遍。作品入库有延迟(刚发那会儿列表里还没有),所以查几轮。
+
+    查不到就返回空 dict,**不报错** —— 作品可能还在审核/入库,发布本身是成功的,
+    不该因为查不到 id 就把一次成功的发布判成失败。
+
+    同标题可能有好几条(重发过的),所以取**最新**的那条,不是列表里第一条。
+    """
+    title = (title or "").strip()
+    if not title:
+        return {}
+    key = title[:12]
+    for attempt in range(max(1, rounds)):
+        try:
+            works = fetch_creator_works(since=since)
+        except PublishError:
+            return {}
+        except Exception as exc:  # noqa: BLE001 - 回查是锦上添花,不该拖垮发布
+            log.warning("回查作品 id 失败:%s: %s", type(exc).__name__, exc)
+            return {}
+        best: tuple[int, str, str] | None = None
+        for w in works:
+            aweme = w.get("aweme") or {}
+            desc = str(aweme.get("desc") or w.get("desc") or "")
+            if not desc or key not in desc:
+                continue
+            created = _int(w.get("create_time")) or _int(aweme.get("create_time")) or 0
+            if since and created and created < since - 120:
+                continue  # 比这次发布还早的,是上一条
+            aid = str(aweme.get("aweme_id") or w.get("id") or "")
+            if not aid:
+                continue
+            if best is None or created > best[0]:
+                best = (created, aid, desc)
+        if best is not None:
+            created, aid, desc = best
+            return {"aweme_id": aid,
+                    "url": f"https://www.douyin.com/video/{aid}",
+                    "title": desc, "create_time": created}
+        if attempt < rounds - 1:
+            time.sleep(gap)
+    return {}
 
 
 # --------------------------------------------------------------------------
