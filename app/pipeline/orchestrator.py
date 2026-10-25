@@ -552,9 +552,19 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     if state == State.GATE_B:
         specs = _specs(project_id)
         # 门禁 B 审的就是成片画面:草稿直接转成片,没有第二遍生成
+        # 每台车都得在片子里露过脸 —— 素材池没建好就渲出来的拍只有卡片,
+        # 观众看到的是「这台车一个镜头都没有」。这种片子不能放行。
+        coverage = explainer.asset_coverage(project_id, specs, names, subject)
+        missing = list(coverage.get("missing") or [])
+        if missing and not force:
+            raise PipelineError(
+                "门禁 B 未放行:这些车在片子里没有任何素材画面:"
+                + "、".join(missing)
+                + " —— 素材池可能还没建好,回「先补素材」等它建完再重渲这几拍,"
+                  "或显式选择「仍然继续」。")
         n = explainer.promote_all(project_id, specs)
         _set_state(project_id, state, State.FINAL_RENDERING, reason=f"{n} 拍转为成片")
-        return {"state": str(State.FINAL_RENDERING), "promoted": n}
+        return {"state": str(State.FINAL_RENDERING), "promoted": n, "coverage": coverage}
 
     if state == State.FINAL_RENDERING:
         done = {r["idx"] for r in db.get_shots(project_id, "final")
@@ -713,9 +723,19 @@ def review_progress(project_id: str) -> dict[str, Any]:
     pending = [i for i in batch if i not in approved]
     batches = [{"index": 0, "shots": batch, "approved": done, "pending": pending,
                 "ready": bool(batch) and not pending}] if batch else []
+    project = db.get_project(project_id) or {}
+    _, theme = _theme_of(project)
+    names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+    # 素材覆盖:哪台车在片子里一个画面都没有 —— 审片时最该先看的一条
+    try:
+        coverage = explainer.asset_coverage(project_id, _specs(project_id), names,
+                                            str(project.get("subject") or ""))
+    except Exception:  # noqa: BLE001 - 读不到就当没这条信息,别拦审片
+        coverage = {}
     return {"total_batches": len(batches), "cursor": int(saved.get("cursor", 0)),
             "approved": sorted(approved), "batches": [batch] if batch else [],
-            "batch_list": batches, "pending_total": len(pending)}
+            "batch_list": batches, "pending_total": len(pending),
+            "coverage": coverage}
 
 
 def _save_review_state(project_id: str, state: dict[str, Any]) -> None:

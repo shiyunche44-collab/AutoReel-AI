@@ -28,6 +28,7 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 import zlib
 from dataclasses import replace
 from pathlib import Path
@@ -1812,6 +1813,11 @@ def beats_dir(project_id: str) -> Path:
     return d
 
 
+#: 一拍的素材池最多等多久(秒)。超时就先出卡片并留痕 —— 素材池建不出来时
+#: 流水线不能永远卡住,但"这台车一个画面都没有"必须让门禁看见。
+POOL_WAIT_SECONDS = 20 * 60
+
+
 def _load_used(project_id: str) -> dict[str, int]:
     return db.read_json(project_id, "beats_used.json", {}) or {}
 
@@ -1893,6 +1899,11 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     headline = str(project.get("title") or "") if aspect.is_portrait(project) else ""
     done, errors = [], []
     notes: list[str] = []
+    waiting: list[str] = []
+    #: 每拍等素材池的起始时间(拍号 → 时间戳):素材池建得太慢时不无限等
+    waits = dict(db.read_json(project_id, "beats_waiting.json", {}) or {})
+    #: 每台车的素材池状态查一次就够(读 library.json 不便宜)
+    pool_cache: dict[str, str] = {}
     for s in todo:
         # 停机信号:在**拍与拍之间**收手。手头这一拍做完就停,剩下的
         # 留到下次 —— 正在渲的 mp4 被砍在中间是坏的。
@@ -1905,6 +1916,25 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
             continue
         pos = next(n for n, x in enumerate(specs) if x.idx == s.idx)
         car = beat_subject(s, subjects, subject)
+        # 这台车的素材池还没建好就**先别渲这一拍**:渲出来只有一张卡片,
+        # 观众看到的是「这台车一个画面都没有」。等下一轮(池子建完自动补上)。
+        status = pool_cache.get(car)
+        if status is None:
+            status = pool_cache[car] = library.pool_status(car)
+        if status == "building":
+            first = float(waits.get(str(s.idx)) or 0.0)
+            if not first:
+                waits[str(s.idx)] = time.time()
+                db.write_json(project_id, "beats_waiting.json", waits)
+            if time.time() - first <= POOL_WAIT_SECONDS:
+                waiting.append(f"第 {s.idx} 拍({car}):等素材池建好")
+                continue
+            notes.append(f"第 {s.idx} 拍({car}):素材池 {int((time.time() - first) // 60)} 分钟还没建好,"
+                         "这拍只能出卡片")
+            waits.pop(str(s.idx), None)
+            db.write_json(project_id, "beats_waiting.json", waits)
+        elif status == "empty":
+            notes.append(f"第 {s.idx} 拍({car}):素材池里没有可用素材,这拍只有卡片")
         if car not in bg_cache:
             bg_cache[car] = card_backgrounds(car)
         bgs = bg_cache[car]
@@ -1932,11 +1962,50 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     for note in notes:
         # 降级要留痕:不然「概念动画全变成数据卡」看起来像正常产出
         db.add_event(project_id, "concept:degraded", reason=note)
+    for note in waiting:
+        # 素材池还没建好,这一拍先不渲:渲了就是没有这台车画面的卡片
+        db.add_event(project_id, "assets:waiting", reason=note)
     rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
     remaining = [s.idx for s in specs if s.duration > 0
                  and rows.get(s.idx, {}).get("status") != "succeeded"]
     return {"rendered": done, "errors": errors, "remaining": remaining,
+            "waiting": waiting,
             "stage_complete": not remaining}
+
+
+def asset_coverage(project_id: str, specs: Sequence[ShotSpec], subjects: Sequence[str],
+                   subject: str = "") -> dict[str, Any]:
+    """每台车在片子里有没有真的露过脸(用到了它素材池里的画面)。
+
+    素材池采集与逐拍渲染是并行的:池子没建好的车,拍出来就是一张纯卡片 ——
+    观众看到的是「这台车一个镜头都没有」。这里按车点出实际用到的素材秒数,
+    门禁 B 据此拦下,不让这种片子进发布队列。
+
+    返回 {"cars": [{"name", "beats", "seconds"}...], "missing": [没露脸的车]}。
+    """
+    cars = [c for c in (subjects or []) if c]
+    if not cars and subject:
+        cars = [subject]
+    if not cars:
+        return {"cars": [], "missing": []}
+    beats_of: dict[str, list[int]] = {c: [] for c in cars}
+    seconds_of: dict[str, float] = {c: 0.0 for c in cars}
+    for s in specs:
+        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
+        for p in pieces:
+            parts = Path(str(p.get("path") or "")).parts
+            for car in cars:
+                if library.slug(car) in parts:
+                    beats_of[car].append(s.idx)
+                    seconds_of[car] += float(p.get("length") or 0.0)
+                    break
+    rows = [{"name": c, "beats": sorted(set(beats_of[c])), "seconds": round(seconds_of[c], 1),
+             "pool": library.Library.dir_for(c).is_dir()}
+            for c in cars]
+    # 只拦「有素材池却一个画面都没用上」的车:没建池子的车(品类不用素材池、
+    # 或采集彻底失败)不在这里硬拦,否则整个品类都会被卡住。
+    return {"cars": rows, "missing": [r["name"] for r in rows if r["pool"] and not r["beats"]],
+            "no_pool": [r["name"] for r in rows if not r["pool"]]}
 
 
 def rerender(project_id: str, idx: int) -> None:

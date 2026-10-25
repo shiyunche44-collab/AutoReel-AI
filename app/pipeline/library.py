@@ -1302,6 +1302,25 @@ def is_building(subject: str) -> bool:
         return slug(subject) in _running
 
 
+def pool_status(subject: str) -> str:
+    """素材池的状态:ready(有可用素材) / building(还在建) / empty(建了但没有可用素材)
+    / none(压根没有这个池子 —— 品类不用素材池,或采集完全失败)。
+
+    渲某台车的拍之前先看这个。素材池采集与逐拍渲染是并行的:池子还在建时
+    就把这一拍渲掉,渲出来就是一张**没有这台车画面**的卡片 —— 观众看到的是
+    「这车一个镜头都没有」。所以 building 要等,empty 要留痕。
+    """
+    if is_building(subject):
+        return "building"
+    if not Library.dir_for(subject).is_dir():
+        return "none"
+    lib = Library.load(subject)
+    for i in lib.items:
+        if i.usable and Path(i.path).is_file():
+            return "ready"
+    return "empty"
+
+
 def _tag_queue(lib: Library) -> list[Item]:
     """待打标签的:图全打;视频每个源最多 MAX_TAGGED_PER_SOURCE 段,长段优先
     (长段更可能是完整的展示镜头,而不是快剪)。
