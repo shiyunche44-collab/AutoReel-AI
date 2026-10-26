@@ -4,16 +4,21 @@
   取几何平均,夹在 0.5–2 之间 —— 再好的写法也只是「多挑一点」,不会让别的写法彻底消失。
   几何平均而不是相乘:指标变多以后相乘会把噪声放大(四个 1.1 相乘就是 1.46)。
 - `prompt_text()` → 给主编选题提示词的一段「已验证 / 应避免」。
-- `install()` 把 `weights` 挂到 `variety.learned` 和 `packaging.learned` 上。只在服务
-  启动时挂(`team.scheduler.start`),测试和脚本里不挂,变体和标题顺序跟以前完全一样。
+- `predict({维度: 取值})` → 一个选题的预测倍数(各维度权重的几何平均)。选题闸卡片显示它,
+  主编排序也用它。
+- `script_hint()` → 写脚本时带上的一段账号经验:开场留人最好 / 最差的真实第一句、
+  最近诊断出的问题。不带数字,≤600 字。
+- `install()` 把这些挂到 `variety` / `packaging` / `script_gen` 上。只在服务
+  启动时挂(`team.scheduler.start`),测试和脚本里不挂,变体、标题顺序和脚本提示词跟以前完全一样。
 
 你在 /team 停用的结论(status=off)不生效。
 """
 from __future__ import annotations
 
 import math
-from collections import defaultdict
-from typing import Any
+import time
+from collections import Counter, defaultdict
+from typing import Any, Mapping
 
 from .. import db
 from .features import DIMENSION_LABEL, value_label
@@ -56,6 +61,19 @@ def weights(dimension: str, learnings: list[dict[str, Any]] | None = None) -> di
             for k, v in effects.items()}
 
 
+def predict(values: Mapping[str, str], learnings: list[dict[str, Any]] | None = None,
+            by_dim: Mapping[str, Mapping[str, float]] | None = None) -> float:
+    """一个选题 / 一条片的预测倍数:`values` 里各维度取值的权重取几何平均。
+
+    没结论的维度不算(不是按 1 拉平);一条结论都没有 → 1.0。`by_dim` 传了就不再查库。"""
+    ws = []
+    for dim, value in values.items():
+        w = by_dim.get(dim) if by_dim is not None else weights(dim, learnings)
+        if w and value in w:
+            ws.append(float(w[value]))
+    return round(_geo_mean(ws), 3)
+
+
 def describe(r: dict[str, Any]) -> str:
     """一条结论的人话:「开头 = 场景冷开:播放 1.60 倍(5 条,置信度高)」。"""
     conf = "高" if r["confidence"] == "high" else "中"
@@ -80,22 +98,89 @@ def prompt_text(learnings: list[dict[str, Any]] | None = None, limit: int = 6) -
     return "\n".join(parts)
 
 
+# --------------------------------------------------------------------------
+# 写脚本时带上的账号经验
+# --------------------------------------------------------------------------
+#: 看最近几天的作品挑开场正反例
+HINT_DAYS = 30
+#: 诊断只看最近一周发的(老问题可能已经改了)
+HINT_DIAGNOSE_DAYS = 7
+#: 至少这么多条有 2 秒留存的作品才给正反例(两条好、两条差)
+HINT_MIN_WORKS = 4
+HINT_MAX_CHARS = 600
+#: 早期诊断的问题 → 写脚本的硬规则(`distribution` 是封面 / 标题的事,不进脚本)
+SCRIPT_RULE = {
+    "hook": "最近有作品前 2 秒就掉人:第一句直接给判断或最硬的反差,不铺垫、不交代背景、不先说这期讲什么。",
+    "pace": "最近有作品前 15 秒没留住人:把结论和最有信息量的那一条放进前两段,背景往后挪。",
+}
+
+
+def _opening(project_id: str) -> str:
+    from ..pipeline.script_gen import first_sentence
+
+    script = db.read_json(project_id, "script.json", []) or []
+    return first_sentence(str(script[0].get("text") or "")) if script else ""
+
+
+def _hint_rows(since: float) -> list[dict[str, Any]]:
+    from . import features
+
+    rows = features.rows(since=since)
+    seen = {r["pub_id"] for r in rows}
+    return rows + [r for r in features.early_rows(since=since) if r["pub_id"] not in seen]
+
+
+def script_hint(now: float | None = None) -> str:
+    """给写脚本的 LLM 的一段账号经验。没数据 → 空串(提示词不变)。
+
+    - 近 30 天 2 秒留存最高的两条的**真实第一句**当正例,最低的两条当反例;
+    - 最近一周早期诊断出的 hook / pace 问题转成硬规则。
+    不放任何播放 / 留存数字:模型拿到数字会往脚本里写。"""
+    from . import stats
+
+    now = now or time.time()
+    parts = []
+    scored = sorted(((r["outcome"]["retention_2s"], r) for r in _hint_rows(now - HINT_DAYS * 86400)
+                     if r["outcome"].get("retention_2s") is not None), key=lambda x: -x[0])
+    if len(scored) >= HINT_MIN_WORKS:
+        good = [o for _, r in scored[:2] if (o := _opening(r["project_id"]))]
+        bad = [o for _, r in scored[-2:] if (o := _opening(r["project_id"]))]
+        bad = [o for o in bad if o not in good]
+        if good:
+            parts.append("开场留人最好的第一句(学它的写法,别照抄):\n"
+                         + "\n".join(f"- 「{o}」" for o in good))
+        if bad:
+            parts.append("开场留人最差的第一句(避开这种写法):\n"
+                         + "\n".join(f"- 「{o}」" for o in bad))
+    problems = Counter(p for r in _hint_rows(now - HINT_DIAGNOSE_DAYS * 86400)
+                       for p in stats.diagnose(r)["problems"])
+    rules = [SCRIPT_RULE[p] for p in SCRIPT_RULE if problems.get(p)]
+    if rules:
+        parts.append("最近作品的诊断:\n" + "\n".join(f"- {x}" for x in rules))
+    return "\n".join(parts)[:HINT_MAX_CHARS]
+
+
 def install() -> None:
-    from ..pipeline import packaging, variety
+    from .. import config
+    from ..pipeline import packaging, script_gen, variety
 
     variety.learned = weights
     packaging.learned = weights
     variety.plan = plan
     packaging.plan = plan
+    script_gen.learned_hint = script_hint
+    script_gen.hook_candidates = config.TEAM_HOOK_CANDIDATES
 
 
 def uninstall() -> None:
-    from ..pipeline import packaging, variety
+    from ..pipeline import packaging, script_gen, variety
 
     variety.learned = None
     packaging.learned = None
     variety.plan = None
     packaging.plan = None
+    script_gen.learned_hint = None
+    script_gen.hook_candidates = 0
 
 
 # --------------------------------------------------------------------------

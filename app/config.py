@@ -381,6 +381,8 @@ TEAM_THIRD_PARTY_MAX = float(os.getenv("TEAM_THIRD_PARTY_MAX", "0.5"))
 #: 限流监测:24 小时播放低于账号中位数的这个比例 → 疑似限流;基线至少要这么多条作品
 TEAM_THROTTLE_RATIO = float(os.getenv("TEAM_THROTTLE_RATIO", "0.2"))
 TEAM_THROTTLE_MIN_BASELINE = int(os.getenv("TEAM_THROTTLE_MIN_BASELINE", "3"))
+#: 写脚本前先写几版第一句、评审挑一句(多两次短 LLM 调用)。0 / 1 = 不挑。只在服务里生效
+TEAM_HOOK_CANDIDATES = int(os.getenv("TEAM_HOOK_CANDIDATES", "3"))
 #: 平台审核超过这么多小时还没过 → 审核异常
 TEAM_REVIEW_STUCK_HOURS = float(os.getenv("TEAM_REVIEW_STUCK_HOURS", "24"))
 # --------------------------------------------------------------------------

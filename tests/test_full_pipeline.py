@@ -278,3 +278,27 @@ def test_state_reason_records_why(store, wired):
     orchestrator.advance(pid)
     row = db.get_project(pid)
     assert row["state_reason"], "状态跃迁必须留下原因"
+
+
+def test_hook_candidates_pick_first_line(store, wired, monkeypatch):
+    """服务里开了开场多版挑选:挑出来的那句锁进脚本提示词,候选和分数存进 hook_candidates.json。"""
+    from app.pipeline import script_gen
+
+    seen = {}
+    real = script_gen.generate
+
+    def spy(**kw):
+        seen.update(hook=kw.get("hook"), locked=kw.get("hook_locked"))
+        return real(**kw)
+
+    picked = {"chosen": "低配才是最值的", "candidates": [
+        {"text": "低配才是最值的", "fact_refs": [], "score": 8.0, "why": "立场"},
+        {"text": "别急着加钱", "fact_refs": [], "score": 6.0, "why": ""}]}
+    monkeypatch.setattr(script_gen, "hook_candidates", 3)
+    monkeypatch.setattr(script_gen, "choose_hook", lambda **kw: picked)
+    monkeypatch.setattr(script_gen, "generate", spy)
+    pid = _create()
+    orchestrator.advance(pid)
+    assert orchestrator.advance(pid)["state"] == str(State.SCRIPT_READY)
+    assert seen == {"hook": "低配才是最值的", "locked": True}
+    assert db.read_json(pid, "hook_candidates.json", {})["chosen"] == "低配才是最值的"

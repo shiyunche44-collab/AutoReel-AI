@@ -98,5 +98,5 @@ def test_team_overview_has_iteration(fresh_db):
     from app.team import views
 
     data = views.overview()
-    assert set(data["iteration"]) == {"weeks", "experiments", "log"}
+    assert set(data["iteration"]) == {"weeks", "experiments", "log", "script_hint"}
     assert data["iteration"]["log"] == [] and len(data["iteration"]["weeks"]) == 8

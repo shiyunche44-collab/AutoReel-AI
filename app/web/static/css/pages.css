@@ -813,6 +813,8 @@
 .iter-exp { display: flex; flex-direction: column; gap: 5px; padding: 6px 0; }
 .iter-bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .iter-bar span { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
+.iter-h-gap { margin-top: 16px; }
+.iter-hint { white-space: pre-wrap; font: inherit; margin: 0; color: var(--text-2); line-height: 1.7; }
 #iter-log .rowline { padding: 7px 0; }
 #iter-log .rowline:hover { background: none; }
 .review-card { flex-direction: row; gap: 16px; }

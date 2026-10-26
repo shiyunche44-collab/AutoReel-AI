@@ -190,4 +190,6 @@ def overview(now: float | None = None) -> dict[str, Any]:
                      "left": max(0, p["size"] - p["used"])})
     log = [{**r, "kind_label": KIND_LABEL.get(r["kind"], r["kind"])}
            for r in db.list_iteration_log(limit=30)]
-    return {"weeks": weekly(now), "experiments": exps, "log": log}
+    return {"weeks": weekly(now), "experiments": exps, "log": log,
+            # 阶段 2:写脚本时带进提示词的账号经验(开场正反例 + 最近诊断)
+            "script_hint": playbook.script_hint(now)}

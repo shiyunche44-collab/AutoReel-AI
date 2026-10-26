@@ -9,6 +9,7 @@ from .. import config, db
 from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
                playbook, publisher, rapid, roles, scout)
 from .plan import view
+from .features import duration_bucket
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
 LOOKBACK_DAYS = 3
@@ -49,6 +50,14 @@ def overview(category: str | None = None) -> dict[str, Any]:
         rows.setdefault(i["id"], i)
     items = [view(i) for i in sorted(rows.values(), key=lambda r: r["slot_at"])
              if i["status"] not in ("expired",)]
+    # 待批选题的预测倍数(打法手册各维度权重的几何平均),和主编排序用的是同一个函数
+    by_dim = {d: playbook.weights(d) for d in playbook.PROMPT_DIMENSIONS}
+    for i in items:
+        if i["status"] == "proposed":
+            i["predict"] = playbook.predict(
+                {"subject": i.get("subject") or "", "theme": i.get("theme") or "",
+                 "duration": duration_bucket(i.get("duration")), "aspect": i.get("aspect") or ""},
+                by_dim=by_dim)
     latest = scout.latest(category)
     return {
         "category": category,

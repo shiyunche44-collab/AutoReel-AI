@@ -44,6 +44,14 @@ function subjectLine(item) {
 // ---------------------------------------------------------------------------
 // 待批
 // ---------------------------------------------------------------------------
+/** 打法手册的预测倍数:车型、片型、时长、画幅各自的权重取几何平均。没结论 = 1,不显示。 */
+function predictBadge(p) {
+  if (p == null || Math.abs(p - 1) < 0.05) return null;
+  const el = badge(`预测 ×${p.toFixed(2)}`, p > 1 ? 'success' : 'warning');
+  el.title = '按打法手册:这类选题过去的效果相对账号平常水平的倍数';
+  return el;
+}
+
 function pendingCard(item) {
   const evidence = (item.evidence || []).slice(0, 6);
   const act = (label, cls, fn, ic) =>
@@ -61,7 +69,8 @@ function pendingCard(item) {
     h('div', { class: 'row plan-meta' },
       badge(when(item.slot_at), 'brand'),
       badge(themeLabel(item.theme), 'neutral'),
-      badge(`${aspectLabel(item.aspect)} ${item.duration}s`, 'neutral')),
+      badge(`${aspectLabel(item.aspect)} ${item.duration}s`, 'neutral'),
+      predictBadge(item.predict)),
     item.rationale ? h('p', { class: 'muted small' }, item.rationale) : null,
     rapid && item.note ? h('p', { class: 'small text-danger' }, icon('alert-triangle', 'i-sm'), ' ', item.note) : null,
     item.hook ? h('p', { class: 'small' }, '开场:', h('strong', {}, item.hook)) : null,
@@ -720,7 +729,11 @@ function renderIteration() {
       h('div', { class: 'iter-bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': e.size,
         'aria-valuenow': e.used, 'aria-label': e.label },
       h('span', { style: `width:${Math.min(100, (e.used / Math.max(1, e.size)) * 100)}%` }))))
-      : [h('div', { class: 'subtle small' }, '没有在跑的配对实验')]));
+      : [h('div', { class: 'subtle small' }, '没有在跑的配对实验')]),
+    h('h3', { class: 'iter-h iter-h-gap' }, '写脚本时带的经验'),
+    it.script_hint
+      ? h('pre', { class: 'iter-hint small' }, it.script_hint)
+      : h('div', { class: 'subtle small' }, '还没有:至少 4 条有 2 秒留存的作品才给开场正反例'));
   $('#iter-log').replaceChildren(h('h3', { class: 'iter-h' }, '变更日志'),
     ...(it.log.length ? it.log.map((r) => h('div', { class: 'rowline' },
       h('span', { class: 'subtle small num' }, relTime(r.ts)),

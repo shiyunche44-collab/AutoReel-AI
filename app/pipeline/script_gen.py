@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
@@ -212,11 +212,16 @@ def _heading_rule(profile: CategoryProfile | None, plan: Sequence[str]) -> str:
             f"这一章的标题({HEADING_MAX_CHARS} 字以内),会显示在章节条和章节转场上。")
 
 
-def _hook_rule(hook: str) -> str:
-    """热点选题带来的开场钩子:给模型当第一句的参考,不强制照抄。"""
+def _hook_rule(hook: str, locked: bool = False) -> str:
+    """热点选题带来的开场钩子:给模型当第一句的参考,不强制照抄。
+
+    `locked`:这句是写了几版、评审挑出来的(`choose_hook`),第一句就用它。"""
     hook = (hook or "").strip()
     if not hook:
         return ""
+    if locked:
+        return (f"第 1 段第一句用这句(几版开场里评审挑出来的):「{hook}」。"
+                "可以顺口微调措辞,但别换意思;后面紧接着给出支撑它的证据。")
     return (f"选题策划给的开场钩子:「{hook}」。第 1 段第一句可以直接用它,也可以写得更好;"
             "但它里面的数字同样要有事实支撑,找不到就改成不含数字的说法。")
 
@@ -323,6 +328,7 @@ def generate(
     portrait: bool = False,
     hook: str = "",
     variant: Mapping[str, Any] | None = None,
+    hook_locked: bool = False,
 ) -> tuple[list[ScriptSegment], str, str]:
     """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
@@ -330,6 +336,8 @@ def generate(
     `slots` / `subjects`:多车横评的段落位(段落 + 车名)与车单。不传时 prompt 与单车版逐字一致。
     `portrait`:竖屏项目多一组短视频规则;横屏时 prompt 与旧版逐字一致。
     `variant`:开头 / 结尾写法(见 variety)。不传 = 片型默认变体,提示词与以前逐字一致。
+    `hook_locked`:`hook` 是 `choose_hook` 挑出来的,第一句直接用。
+    没挂 `learned_hint`(测试、脚本)时提示词与以前逐字一致。
     """
     roundup = bool(subjects)
     angle = (angle or "").strip()
@@ -387,30 +395,35 @@ def generate(
         f"段落序列:\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines))
     )
 
+    system = SYSTEM.format(
+        domain=vocab.domain,
+        number_examples=vocab.number_examples,
+        subject_noun=vocab.subject_noun,
+        category=profile.label,
+        chars=budget,
+        per_shot=max(20, budget // shot_count),
+        facts=facts_payload,
+        principles=principles_payload,
+        plan="\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines)),
+        scope_line=(ROUNDUP_SCOPE_LINE if roundup else
+                    f"只讲{vocab.subject_noun}/这个品牌本身,不评价其他无关产品。"),
+        keywords=", ".join(profile.visual_keywords[:4]),
+        theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
+        else "   按品类惯例组织叙事。",
+        theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan),
+                                                _hook_rule(hook, hook_locked)],
+                                 variant=variant),
+        rule10=variety.rule10(variant, theme),
+        scope_policy=_scope_policy(theme, vocab),
+        title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
+        angle_policy=_angle_policy(angle) + _portrait_policy(portrait),
+        subject=subject,
+    )
+    hint = learned()
+    if hint:
+        system += LEARNED_BLOCK.format(hint=hint)
     data = llm.structured(
-        SYSTEM.format(
-            domain=vocab.domain,
-            number_examples=vocab.number_examples,
-            subject_noun=vocab.subject_noun,
-            category=profile.label,
-            chars=budget,
-            per_shot=max(20, budget // shot_count),
-            facts=facts_payload,
-            principles=principles_payload,
-            plan="\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines)),
-            scope_line=(ROUNDUP_SCOPE_LINE if roundup else
-                        f"只讲{vocab.subject_noun}/这个品牌本身,不评价其他无关产品。"),
-            keywords=", ".join(profile.visual_keywords[:4]),
-            theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
-            else "   按品类惯例组织叙事。",
-            theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan), _hook_rule(hook)],
-                                     variant=variant),
-            rule10=variety.rule10(variant, theme),
-            scope_policy=_scope_policy(theme, vocab),
-            title_policy=_title_policy(theme) if theme is not None else _TITLE_POLICY_PRODUCT,
-            angle_policy=_angle_policy(angle) + _portrait_policy(portrait),
-            subject=subject,
-        ),
+        system,
         user,
         required_keys=["segments", "title", "thesis"],
         temperature=0.7,
@@ -667,6 +680,111 @@ HOOK_FILLER = ("大家好", "大伙好", "朋友们好", "朋友好", "各位好
 def first_sentence(text: str) -> str:
     """脚本的第一句(到第一个句末标点为止)。"""
     return re.split(r"[。!?!?;;\n]", (text or "").strip(), maxsplit=1)[0].strip()
+
+
+# --------------------------------------------------------------------------
+# 账号经验回灌 + 开场多版挑选(只在服务里开:`team.playbook.install`)
+# --------------------------------------------------------------------------
+#: 打法手册给脚本的一段经验(开场正反例、最近诊断出的问题)。None / 返回空 = 提示词不变
+learned_hint: Callable[[], str] | None = None
+#: 开场写几版再挑。0 / 1 = 不挑(测试、脚本里的默认),服务里设成 `TEAM_HOOK_CANDIDATES`
+hook_candidates: int = 0
+
+LEARNED_BLOCK = """
+
+本账号的经验(来自已发作品的真实数据,照着改进;和上面的硬性要求冲突时以硬性要求为准):
+{hint}"""
+
+
+def learned() -> str:
+    """挂上的账号经验;没挂 / 出错 → 空串(写脚本不能因为这段提示失败)。"""
+    if learned_hint is None:
+        return ""
+    try:
+        return (learned_hint() or "").strip()
+    except Exception:  # noqa: BLE001 - 经验只是锦上添花
+        log.warning("读账号经验失败,这次不带", exc_info=True)
+        return ""
+
+
+HOOK_SYSTEM = """你是中文短视频的开场编导。给「{subject}」这期解说写 {n} 版**第一句话**,
+每版写法要明显不同(反常识 / 有人会反对的立场 / 最硬的一个结论或数字 / 买车人的真实场景冲突),
+不要只换几个字。
+
+要求:
+- 每句 {max_chars} 字以内,口语,直接给判断;不许用"大家好""今天来聊聊""这期视频"这类开场白;
+- 句子里的数字只能来自下面的事实清单,并把事实 ID 写进 fact_refs;没把握就写不含数字的判断;
+- 禁止绝对化用语(最强、第一、顶级、唯一)。
+{extra}
+可用事实清单:
+{facts}
+
+只输出 JSON:{{"candidates": [{{"text": "第一句", "fact_refs": ["事实ID"]}}]}}"""
+
+JUDGE_SYSTEM = """你是短视频开场评审。只看第一句话能不能让刷到的人停下来、想听下去,按下面标准给每版打 1-10 分:
+- 前 3 秒有没有抛出判断、反差或冲突(而不是告诉观众这期讲什么);
+- 普通买车人一听就懂,不靠术语;
+- 不夸大、不像广告。
+{extra}
+只输出 JSON:{{"scores": [{{"i": 序号(从 0 开始), "score": 分数, "why": "一句理由"}}]}}"""
+
+
+def _hook_ok(text: str, refs: Sequence[str], profile: CategoryProfile, fact_ids: set[str]) -> bool:
+    if not text or len(text) > HOOK_MAX_CHARS + 4 or any(f in text for f in HOOK_FILLER):
+        return False
+    if forbidden_in(text, profile):
+        return False
+    # 带数字的开场必须指得出事实:否则全片第一句就是编的
+    return not has_numeric_claim(text) or any(r in fact_ids for r in refs)
+
+
+def choose_hook(*, subject: str, profile: CategoryProfile, facts: Sequence[Fact], llm,
+                n: int = 3, angle: str = "", hook: str = "") -> dict[str, Any] | None:
+    """先写 `n` 版第一句,再让评审按账号经验打分,挑最高的那句。
+
+    返回 {chosen, candidates: [{text, fact_refs, score, why}]};能用的不到两版、
+    或者 LLM 出错 → None(照常写脚本,不挑)。多两次短 LLM 调用。"""
+    facts = [f for f in usable_facts(facts) if not f.compare_with]
+    fact_ids = {f.id for f in facts}
+    hint = learned()
+    extra = "".join((
+        f"- 选题角度:{angle}\n" if angle else "",
+        f"- 选题策划给的参考钩子:「{hook}」(可以当其中一版,也可以都写得更好)\n" if hook else "",
+        f"- 本账号的经验:\n{hint}\n" if hint else "",
+    ))
+    try:
+        data = llm.structured(
+            HOOK_SYSTEM.format(subject=subject, n=n, max_chars=HOOK_MAX_CHARS, extra=extra,
+                               facts="\n".join(f"- {f.id} | {f.claim}" for f in facts) or "(无)"),
+            f"写 {n} 版第一句。", required_keys=["candidates"], temperature=0.9)
+        cands = []
+        for c in data.get("candidates") or []:
+            if not isinstance(c, dict):
+                continue
+            text = first_sentence(str(c.get("text") or ""))
+            refs = [str(r) for r in (c.get("fact_refs") or []) if str(r)]
+            if _hook_ok(text, refs, profile, fact_ids) and text not in {x["text"] for x in cands}:
+                cands.append({"text": text, "fact_refs": refs, "score": None, "why": ""})
+        if len(cands) < 2:
+            return None
+        judged = llm.structured(
+            JUDGE_SYSTEM.format(extra=f"- 本账号的经验(符合的加分):\n{hint}\n" if hint else ""),
+            "\n".join(f"{i}. {c['text']}" for i, c in enumerate(cands)),
+            required_keys=["scores"], temperature=0.2)
+    except Exception:  # noqa: BLE001 - 挑不出来就照常写
+        log.warning("开场多版挑选失败,照常写脚本", exc_info=True)
+        return None
+    for s in judged.get("scores") or []:
+        try:
+            i, score = int(s.get("i")), float(s.get("score"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if 0 <= i < len(cands):
+            cands[i]["score"], cands[i]["why"] = score, str(s.get("why") or "")
+    if all(c["score"] is None for c in cands):
+        return None
+    best = max(cands, key=lambda c: c["score"] if c["score"] is not None else -1)
+    return {"chosen": best["text"], "candidates": cands}
 
 
 #: 开场段的识别词。**只有第一段是开场时**才套用黄金三秒的规矩 ——

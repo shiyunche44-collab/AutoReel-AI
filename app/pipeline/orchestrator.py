@@ -417,12 +417,24 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             (f.topic for f in facts if f.enabled))
         plan = [s.section for s in slots]
         topic = db.read_json(project_id, "topic.json", {}) or {}
+        hook = str(topic.get("hook") or "")
         # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
         with costs.project_spend(project_id, costs.stage_reserve("script")):
+            # 服务里先写几版第一句、评审挑一句(`script_gen.hook_candidates`,默认不挑);
+            # 落选的连分数存下来,复盘时对照
+            picked = None
+            if script_gen.hook_candidates >= 2:
+                picked = script_gen.choose_hook(subject=subject, profile=profile, facts=facts,
+                                                llm=llm, n=script_gen.hook_candidates,
+                                                angle=angle, hook=hook)
+                if picked:
+                    db.write_json(project_id, "hook_candidates.json", picked)
+                    hook = picked["chosen"]
             segments, title, thesis = script_gen.generate(
                 subject=subject, profile=profile, facts=facts, plan=plan,
                 duration=project["duration"], llm=llm, theme=theme, angle=angle,
-                portrait=portrait, hook=str(topic.get("hook") or ""), variant=_variant(project),
+                portrait=portrait, hook=hook, variant=_variant(project),
+                hook_locked=bool(picked),
                 **({"slots": slots, "subjects": subjects} if theme.multi else {}),
             )
         segments = script_gen.normalize_segments(segments, slots)

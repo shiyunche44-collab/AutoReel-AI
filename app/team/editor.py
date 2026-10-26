@@ -98,11 +98,13 @@ def choose_format(profile: CategoryProfile, theme_name: str,
 
 
 def learned_weight(idea: Any, weights: dict[str, dict[str, float]] | None) -> float:
-    """打法手册给这个选题的权重:片型权重 × 车型权重(没结论的 = 1)。"""
+    """打法手册给这个选题的预测倍数:片型、车型权重的几何平均(`playbook.predict`,
+    和选题闸卡片上显示的是同一个数;没结论的 = 1)。"""
     if not weights:
         return 1.0
-    return (weights.get("theme", {}).get(idea.theme, 1.0)
-            * weights.get("subject", {}).get(idea.subject, 1.0))
+    from . import playbook
+
+    return playbook.predict({"theme": idea.theme, "subject": idea.subject}, by_dim=weights)
 
 
 def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
