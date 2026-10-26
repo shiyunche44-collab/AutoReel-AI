@@ -6,8 +6,8 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import (benchmark, compliance, engagement, events, next_slot, paused, playbook, publisher,
-               rapid, roles, scout)
+from . import (activator, benchmark, compliance, engagement, events, next_slot, paused, playbook,
+               publisher, rapid, roles, scout)
 from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
@@ -77,6 +77,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "comments": comment_queue(),
         "engage": {**engagement.stats(),
                    "auto_thanks": bool(db.get_team_setting(engagement.AUTO_THANKS_KEY, False))},
+        "active": activator.stats(),
         "events": events.upcoming(category, now.date(), 0, 30),
         "event_kinds": events.KIND_LABEL,
         "bench": {"accounts": benchmark.accounts_view(), "hits": benchmark.hits(limit=10),

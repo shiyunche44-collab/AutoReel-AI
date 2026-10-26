@@ -106,8 +106,8 @@ class Role:
 def roles() -> list[Role]:
     """按执行顺序排:情报、行业日历、对标、快反先于主编,主编先于素材官和制片,分发官跟在制片后面,发布员之后是分析师,合规看分析师的数据,
     运营官看评论,复盘官最后(每周一次,读整周的数据)。"""
-    from . import (analyst, asset, benchmark, coach, compliance, editor, engagement, events,
-                   producer, publisher, rapid, repurpose, scout)
+    from . import (activator, analyst, asset, benchmark, coach, compliance, editor, engagement,
+                   events, producer, publisher, rapid, repurpose, scout)
 
     return [
         Role("scout", "情报员", "抓懂车帝榜单、新闻、抖音热搜、B站热门,落热点快照,算车型名次涨跌",
@@ -142,6 +142,9 @@ def roles() -> list[Role]:
         Role("engagement", "运营官", "每 2 小时拉团队作品的新评论,分问题 / 夸 / 杠 / 广告,拟好回复等你批量审核"
              "(批过才发);问题类交给主编当选题;断更几天就提醒补位",
              Cadence("interval", minutes=120), engagement.run),
+        Role("activator", "活跃官", "按当天的计划,低频去**别人**的作品下评论 / 点赞 / 分享 / 关注"
+             "(每天 ≤10 评论 / ≤30 赞,时间点随机分散;文案过硬规则校验;失败即停当天)",
+             Cadence("interval", minutes=10), activator.run),
         Role("coach", "复盘官", "每周看近 30 天作品的 24 小时数据,按开头 / 结尾 / 标题写法 / 车型等算效果,"
              "更新打法手册(回灌主编选题、变体和标题顺序),出周报",
              Cadence("weekly", ("20:00",), weekday=6), coach.run),

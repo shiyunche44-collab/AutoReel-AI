@@ -600,6 +600,38 @@ function empty(text) {
   return h('div', { class: 'empty' }, h('div', { class: 'empty-title' }, text));
 }
 
+const ACTIVE_STATE = {
+  done: ['完成', 'success'], failed: ['失败', 'danger'], skipped: ['跳过', 'neutral'],
+  doing: ['进行中', 'neutral'], planned: ['待做', 'neutral'],
+};
+
+function activeRow(r) {
+  const [stateText, stateTone] = ACTIVE_STATE[r.state] || [r.state, 'neutral'];
+  return h('div', { class: 'comment-row' },
+    h('div', { class: 'grow comment-main' },
+      h('div', { class: 'row comment-meta small' },
+        badge(r.action_label || r.action, 'neutral'),
+        h('strong', {}, r.author || (r.title ? r.title.slice(0, 18) : '(对标账号)')),
+        h('span', { class: 'subtle' }, relTime(r.created_at)),
+        badge(stateText, stateTone)),
+      r.text ? h('div', { class: 'comment-text' }, r.text) : null,
+      r.reason ? h('div', { class: 'small text-danger' }, r.reason) : null));
+}
+
+function activeStats(s) {
+  if (!s) return '';
+  const q = s.quotas || {};
+  const c = s.counts || {};
+  const parts = [`今天(截至 ${s.day})已评论 ${c.comment || 0}/${q.comment ?? 0}`,
+    `点赞 ${c.like || 0}/${q.like ?? 0}`, `分享 ${c.share || 0}/${q.share ?? 0}`,
+    `关注 ${c.follow || 0}/${q.follow ?? 0}`];
+  parts.push(`计划 ${s.planned || 0} 个动作`);
+  if (s.failed) parts.push(`⚠ ${s.failed} 次失败`);
+  if (s.paused) parts.push('⚠ 今天已停手');
+  if (!s.enabled) parts.push('已关闭');
+  return parts.join(' · ');
+}
+
 function render() {
   // 快反不等周单:排在待批最前面
   const pending = DATA.plan.filter((i) => i.status === 'proposed')
@@ -622,6 +654,14 @@ function render() {
     ...(comments.length ? comments.map(commentRow) : [empty('没有待审的评论。运营官每 2 小时拉一次团队作品的新评论。')]));
   $('#comment-stats').textContent = engageStats(DATA.engage);
   $('#auto-thanks').checked = !!(DATA.engage && DATA.engage.auto_thanks);
+  const active = DATA.active || {};
+  const activeItems = active.items || [];
+  $('#active-count').textContent = String((active.counts || {}).comment || 0);
+  $('#active-stats').textContent = activeStats(active);
+  $('#active-enabled').checked = !!active.enabled;
+  $('#active-list').replaceChildren(
+    ...(activeItems.length ? activeItems.map(activeRow)
+      : [empty('今天还没有对外互动记录。活跃官按计划低频去对标号的作品下评论 / 点赞 / 分享 / 关注。')]));
   pickedButtons();
   $('#plan-list').replaceChildren(...(rest.length ? rest.map(planRow) : [empty('还没有排上的选题')]));
   const s = DATA.settings;
@@ -699,6 +739,19 @@ $('#auto-thanks').addEventListener('change', async (e) => {
     if (!yes) { e.target.checked = false; return; }
   }
   await call('/api/team/comments/auto-thanks', on ? '感谢类自动回已打开' : '已关闭,全部回复都等你批', { enabled: on });
+});
+
+$('#active-enabled').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  if (!on) {
+    const yes = await confirmDialog({
+      title: '停掉活跃官?',
+      body: '停了就不再去别人的作品下评论 / 点赞 / 分享 / 关注。已做过的留痕还在。',
+      confirmText: '停掉',
+    });
+    if (!yes) { e.target.checked = true; return; }
+  }
+  await call('/api/team/active/toggle', on ? '活跃官已启用' : '活跃官已停', { enabled: on });
 });
 
 function formSubmit(sel, url, ok) {

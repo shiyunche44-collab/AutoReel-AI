@@ -393,6 +393,33 @@ TEAM_REVIEW_STUCK_HOURS = float(os.getenv("TEAM_REVIEW_STUCK_HOURS", "24"))
 #: 本项目的片子全是 AI 生成(TTS 配音 + 概念动画),所以默认开着。
 #: 真要发一条非 AI 的片子,单次请求用 `extra={"declare_ai": False}` 覆盖。
 DOUYIN_DECLARE_AI = os.getenv("DOUYIN_DECLARE_AI", "1") not in ("0", "false", "False")
+# --------------------------------------------------------------------------
+# 活跃官:主动去**别人**作品下评论 / 点赞 / 分享 / 关注。
+# 抖音《社区自律公约》32 条:用自动化手段、频率明显异于常人地评论/点赞/关注
+# 属违规,官方没给频率阈值 —— 所以量级压在真人区间,时间点随机分散。
+# 运行时可在 /team 的「活跃官」面板改(存在 team_settings 里,这里只是默认值)。
+# --------------------------------------------------------------------------
+#: 活跃官总开关。关了立刻停手,不必改代码
+TEAM_ACTIVE_ENABLED = os.getenv("TEAM_ACTIVE_ENABLED", "1") not in ("0", "false", "False")
+#: 每天各动作的上限
+TEAM_ACTIVE_COMMENTS = int(os.getenv("TEAM_ACTIVE_COMMENTS", "10"))
+TEAM_ACTIVE_LIKES = int(os.getenv("TEAM_ACTIVE_LIKES", "30"))
+TEAM_ACTIVE_SHARES = int(os.getenv("TEAM_ACTIVE_SHARES", "8"))
+TEAM_ACTIVE_FOLLOWS = int(os.getenv("TEAM_ACTIVE_FOLLOWS", "3"))
+#: 互动时间窗(本地时的小时),窗口外不动作
+TEAM_ACTIVE_WINDOW = (float(os.getenv("TEAM_ACTIVE_WINDOW_START", "9")),
+                       float(os.getenv("TEAM_ACTIVE_WINDOW_END", "22.5")))
+#: 两条评论之间至少隔这么久(分钟)
+TEAM_ACTIVE_COMMENT_GAP = int(os.getenv("TEAM_ACTIVE_COMMENT_GAP", "45"))
+#: 同一个对标号一天最多互动几次
+TEAM_ACTIVE_PER_ACCOUNT = int(os.getenv("TEAM_ACTIVE_PER_ACCOUNT", "3"))
+#: 候选池:对标作品近多少天内的算
+TEAM_ACTIVE_CANDIDATE_DAYS = int(os.getenv("TEAM_ACTIVE_CANDIDATE_DAYS", "7"))
+#: 点赞数太小的 / 太大的作品不碰(小号看不见我们,大号没意义)
+TEAM_ACTIVE_MIN_LIKES = int(os.getenv("TEAM_ACTIVE_MIN_LIKES", "100"))
+TEAM_ACTIVE_MAX_LIKES = int(os.getenv("TEAM_ACTIVE_MAX_LIKES", "200000"))
+#: 卡在 doing 超过这么多分钟就算进程崩了,退回 planned 重排
+TEAM_ACTIVE_STUCK_MINUTES = int(os.getenv("TEAM_ACTIVE_STUCK_MINUTES", "10"))
 #: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
 #: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

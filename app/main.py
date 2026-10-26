@@ -1361,6 +1361,44 @@ def team_comment_auto_thanks(payload: AutoThanks):
     return {"enabled": payload.enabled}
 
 
+# --------------------------------------------------------------------------
+# 活跃官:主动去别人作品下互动
+# --------------------------------------------------------------------------
+class ActiveToggle(BaseModel):
+    enabled: bool
+
+
+@app.get("/api/team/active")
+def team_active_overview():
+    """「活跃官」面板:今天的额度、已用多少、最近的留痕。"""
+    from .team import activator
+
+    return activator.stats()
+
+
+@app.post("/api/team/active/toggle")
+def team_active_toggle(payload: ActiveToggle):
+    """一键停 / 开。停了下一轮立刻不动手。"""
+    from .team import activator
+
+    activator.set_enabled(payload.enabled)
+    return {"enabled": activator.enabled()}
+
+
+@app.post("/api/team/active/run")
+def team_active_run():
+    """手动让它现在干一次(和角色卡上的「立即运行」一个意思)。"""
+    from . import team
+
+    try:
+        team.role("activator")
+    except KeyError as exc:
+        raise HTTPException(404, "没有这个角色") from exc
+    threading.Thread(target=team.run_role, args=("activator", "manual"),
+                     name="team-manual-activator", daemon=True).start()
+    return {"ok": True}
+
+
 class BenchAdd(BaseModel):
     target: str
     note: str = ""

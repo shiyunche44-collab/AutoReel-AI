@@ -92,6 +92,19 @@
     <div class="card-body" id="bench-list"></div>
     <div class="card-body" id="bench-hits"></div>
   </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>{{ m.icon("activity", "i-sm") }}活跃官 <span class="count" id="active-count">0</span></h2>
+      <div class="row">
+        <label class="small subtle row" title="关了立刻停手,不再去别人作品下互动">
+          <input type="checkbox" id="active-enabled"> 启用</label>
+        <button class="btn btn-sm btn-ghost" type="button" data-run="activator">{{ m.icon("refresh", "i-sm") }}现在跑一次</button>
+      </div>
+    </div>
+    <div class="comment-stats subtle small" id="active-stats"></div>
+    <div class="card-body" id="active-list"></div>
+  </section>
 </div>
 
 <div class="team-grid">

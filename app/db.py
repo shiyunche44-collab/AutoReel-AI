@@ -310,6 +310,30 @@ CREATE TABLE IF NOT EXISTS benchmark_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_bench_posts ON benchmark_posts(account_id, posted_at);
 
+-- 活跃官:我们去**别人**作品下的互动留痕(评论/点赞/分享/关注)。
+-- 每个作品每种动作一辈子只做一次(idx_outbound_once 兜着)。
+-- 和 comments(自己作品下的评论)是两回事,别混。
+CREATE TABLE IF NOT EXISTS outbound_actions (
+    id          TEXT PRIMARY KEY,
+    day         TEXT NOT NULL,          -- 2026-10-25
+    slot        TEXT NOT NULL DEFAULT '',  -- 当天计划里的第几条(同一批做完要能挑下一批)
+    aweme_id    TEXT NOT NULL DEFAULT '',  -- 目标作品(关注动作为空)
+    sec_uid     TEXT NOT NULL DEFAULT '',  -- 目标作者
+    target      TEXT NOT NULL DEFAULT '',  -- 去重的键:作品 id,关注动作是作者 sec_uid
+    author      TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',  -- 目标作品标题(留痕用)
+    action      TEXT NOT NULL,          -- comment / like / share / follow
+    text        TEXT NOT NULL DEFAULT '',  -- 评论文案,其它动作为空
+    state       TEXT NOT NULL DEFAULT 'planned',  -- planned/doing/done/failed/skipped
+    reason      TEXT NOT NULL DEFAULT '',  -- 跳过 / 失败原因
+    created_at  REAL NOT NULL,
+    started_at  REAL,
+    done_at     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_day ON outbound_actions(day, action, state);
+-- 同一个目标同一种动作一辈子只做一次:作品 id(关注动作是作者 sec_uid)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_once ON outbound_actions(target, action);
+
 CREATE TABLE IF NOT EXISTS industry_events (
     id           TEXT PRIMARY KEY,
     category     TEXT NOT NULL,
@@ -1625,6 +1649,131 @@ def list_benchmark_posts(*, account_id: str | None = None, since: float | None =
     args.append(limit)
     with connect() as conn:
         return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+# --------------------------------------------------------------------------
+# 活跃官:对外互动留痕(评论 / 点赞 / 分享 / 关注)
+# --------------------------------------------------------------------------
+#: 允许改的字段(`update_outbound_action`)
+_OUTBOUND_FIELDS = {"text", "state", "reason", "started_at", "done_at", "title",
+                     "author", "sec_uid"}
+
+
+def add_outbound_actions(rows: list[dict[str, Any]]) -> int:
+    """新动作入库。同一目标同一动作已经有了就忽略(唯一索引兜着)。返回新增条数。"""
+    init_db()
+    now = time.time()
+    n = 0
+    with transaction() as conn:
+        for r in rows:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO outbound_actions (id, day, slot, aweme_id, sec_uid, target,"
+                " author, title, action, text, state, reason, created_at, started_at, done_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (r["id"], r["day"], r.get("slot") or "", r.get("aweme_id") or "",
+                 r.get("sec_uid") or "",
+                 r.get("target") or r.get("aweme_id") or r.get("sec_uid") or "",
+                 r.get("author") or "", r.get("title") or "", r["action"],
+                 r.get("text") or "", r.get("state") or "planned", r.get("reason") or "",
+                 r.get("created_at") or now, r.get("started_at"), r.get("done_at")))
+            if cur.rowcount:
+                n += 1
+    return n
+
+
+def get_outbound_action(action_id: str) -> dict[str, Any] | None:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM outbound_actions WHERE id = ?",
+                           (action_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_outbound_actions(*, day: str | None = None, actions: tuple[str, ...] = (),
+                          states: tuple[str, ...] = (), target: str | None = None,
+                          since: float | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    """新的在前。"""
+    init_db()
+    where, args = [], []
+    if day:
+        where.append("day = ?")
+        args.append(day)
+    if actions:
+        where.append(f"action IN ({','.join('?' * len(actions))})")
+        args.extend(actions)
+    if states:
+        where.append(f"state IN ({','.join('?' * len(states))})")
+        args.extend(states)
+    if target:
+        where.append("target = ?")
+        args.append(target)
+    if since is not None:
+        where.append("created_at >= ?")
+        args.append(since)
+    sql = "SELECT * FROM outbound_actions"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    args.append(limit)
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def update_outbound_action(action_id: str, **fields: Any) -> None:
+    bad = set(fields) - _OUTBOUND_FIELDS
+    if bad:
+        raise ValueError(f"不能改的互动字段:{sorted(bad)}")
+    if not fields:
+        return
+    init_db()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with connect() as conn:
+        conn.execute(f"UPDATE outbound_actions SET {sets} WHERE id = ?",
+                     (*fields.values(), action_id))
+
+
+def cas_outbound_state(action_id: str, expected: tuple[str, ...], new: str,
+                       **fields: Any) -> bool:
+    """状态从 expected 之一改成 new;已经被别人改走就返回 False(抢不到就说明有人在做)。"""
+    bad = set(fields) - _OUTBOUND_FIELDS
+    if bad:
+        raise ValueError(f"不能改的互动字段:{sorted(bad)}")
+    init_db()
+    sets = "".join(f", {k} = ?" for k in fields)
+    marks = ",".join("?" * len(expected))
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE outbound_actions SET state = ?{sets} WHERE id = ? AND state IN ({marks})",
+            (new, *fields.values(), action_id, *expected))
+        return cur.rowcount > 0
+
+
+def count_outbound(day: str, action: str | None = None,
+                   states: tuple[str, ...] = ("done",)) -> int:
+    """某天某动作做了多少条(默认只数成功的)。"""
+    init_db()
+    sql = "SELECT COUNT(*) FROM outbound_actions WHERE day = ?"
+    args: list[Any] = [day]
+    if action:
+        sql += " AND action = ?"
+        args.append(action)
+    if states:
+        sql += f" AND state IN ({','.join('?' * len(states))})"
+        args.extend(states)
+    with connect() as conn:
+        return int(conn.execute(sql, args).fetchone()[0])
+
+
+def reset_stuck_outbound(older_than: float, now: float | None = None) -> int:
+    """卡在 doing 超过 `older_than` 秒的(进程崩了)退回 planned,好重排一次。返回改了几条。"""
+    init_db()
+    now = now or time.time()
+    with transaction() as conn:
+        cur = conn.execute(
+            "UPDATE outbound_actions SET state = 'planned', started_at = NULL"
+            " WHERE state = 'doing' AND COALESCE(started_at, created_at) <= ?",
+            (now - older_than,))
+        return cur.rowcount
 
 
 def add_industry_event(row: dict[str, Any]) -> bool:
