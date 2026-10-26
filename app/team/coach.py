@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import db
-from . import Skip, benchmark, features, iteration, playbook, preference, stats
+from . import Skip, beat_retention, benchmark, features, iteration, playbook, preference, stats
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +128,8 @@ def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
         # 对标爆款的标题开头 vs 我们最好的几条;再加拆出来的开场 / 节奏 / 封面结构对照
         "benchmark": {**benchmark.title_compare(top, now),
                       "structure": benchmark.structure_compare(rows, now)},
+        # 逐拍:最近几条片哪一拍被拖过去最多 / 平均观众在第几拍走
+        "beats": beat_retention.report(rows),
     }
 
 
@@ -152,6 +154,7 @@ def _facts(report: dict[str, Any]) -> str:
         lines.append(f"早期观察:《{e['title']}》发布 {e.get('hours')} 小时,"
                      f"{'、'.join(bits)}")
         lines += [f"  要改:{a}" for a in e.get("advice") or []]
+    lines += beat_retention.report_lines(report.get("beats") or [])
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
     lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
     bench = report.get("benchmark") or {}
@@ -220,6 +223,9 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
         raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
     if rows:
         db.replace_learnings(week, stats.learn(rows, week))
+    # 逐拍掉人:进度条分析的跳过率落到拍上,按版式 / 位置 / 素材学
+    beat_works = beat_retention.works(since=ts - beat_retention.WINDOW_DAYS * 86400)
+    db.replace_learnings(week, beat_retention.learn(beat_works, week), source="beat")
     active = playbook.merged(db.list_learnings())
     # 权重变动超过 0.1 的记进迭代日志:自动改了生产,得看得见改了什么
     iteration.log_weight_changes(before, iteration.weight_snapshot(active), ts=ts)

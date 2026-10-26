@@ -338,6 +338,14 @@ CREATE TABLE IF NOT EXISTS benchmark_posts (
 CREATE INDEX IF NOT EXISTS idx_bench_posts ON benchmark_posts(account_id, posted_at);
 
 -- 拆爆款结构:前 3 秒几帧 + 封面交给视觉模型打的标签(一条作品一行,失败也记,不反复试)
+-- 作品「进度条分析」:播放进度上每个点的跳过率 / 回看率(阶段 5,抖音没有逐秒留存曲线)
+CREATE TABLE IF NOT EXISTS progress_curves (
+    pub_id     TEXT PRIMARY KEY,
+    points     TEXT NOT NULL DEFAULT '[]',  -- [[秒, 跳过率, 回看率], ...](JSON)
+    views      INTEGER,
+    fetched_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS benchmark_tags (
     post_id   TEXT PRIMARY KEY,
     tags      TEXT NOT NULL DEFAULT '{}',   -- {opening, claim, cuts, cover}(JSON)
@@ -1692,6 +1700,24 @@ def list_benchmark_tags(since: float | None = None) -> dict[str, dict[str, Any]]
         rows = conn.execute("SELECT * FROM benchmark_tags WHERE tagged_at >= ?",
                             (since or 0,)).fetchall()
     return {r["post_id"]: {**dict(r), "tags": json.loads(r["tags"] or "{}")} for r in rows}
+
+
+def save_progress_curve(pub_id: str, points: list[list[float]], views: int | None = None,
+                        ts: float | None = None) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO progress_curves (pub_id, points, views, fetched_at)"
+                     " VALUES (?, ?, ?, ?)",
+                     (pub_id, json.dumps(points), views, ts or time.time()))
+
+
+def list_progress_curves(since: float | None = None) -> dict[str, dict[str, Any]]:
+    """{pub_id: {points, views, fetched_at}},`since` 按抓取时间。"""
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM progress_curves WHERE fetched_at >= ?",
+                            (since or 0,)).fetchall()
+    return {r["pub_id"]: {**dict(r), "points": json.loads(r["points"] or "[]")} for r in rows}
 
 
 def update_benchmark_account(sec_uid: str, **fields: Any) -> None:

@@ -452,6 +452,18 @@ function reportView(r) {
         + ` · 平均观看 ${e.avg_watch_sec != null ? `${Number(e.avg_watch_sec).toFixed(1)} 秒` : '—'}`),
       ...(e.advice || []).map((a) => h('div', { class: 'small' }, `要改:${a}`))))));
   }
+  if (r.beats && r.beats.length) {
+    out.push(h('div', { class: 'subtle small' }, '逐拍:观众在哪一拍走、哪一拍被拖过去'));
+    out.push(h('div', { class: 'early-list' }, ...r.beats.map((x) => h('div', { class: 'early-row' },
+      h('div', { class: 'row' },
+        h('strong', { class: 'grow' }, x.title || '—'),
+        badge(x.source === 'progress' ? '进度条分析' : '按平均观看估', x.source === 'progress' ? 'brand' : 'neutral')),
+      x.leave ? h('div', { class: 'small' },
+        `平均观众看到第 ${x.leave.pos}/${x.n_beats} 拍(${x.leave.at} 秒,${x.leave.section || '—'}·${x.leave.layout})就走了`)
+        : h('div', { class: 'subtle small' }, '平均观众看完了全片'),
+      ...(x.worst || []).map((w) => h('div', { class: 'small' },
+        `第 ${w.pos} 拍(${w.start} 秒起,${w.section || '—'}·${w.layout})被拖过去的是全片平均的 ${Number(w.rel).toFixed(1)} 倍`))))));
+  }
   if (r.experiments && r.experiments.length) {
     out.push(h('div', { class: 'subtle small' }, '下周实验'),
       h('div', { class: 'row wrap-row' }, ...r.experiments.map((e) => badge(`${e.label} · ${e.why}`, 'brand'))));
@@ -565,6 +577,7 @@ function learningRow(l) {
   return h('div', { class: `rowline${off || l.shadowed ? ' is-off' : ''}` },
     badge(l.effect >= 1 ? '多做' : '少做', l.effect >= 1 ? 'success' : 'warning'),
     bench ? h('span', { title: '对标号的先验:倍数夹在 0.8–1.25;自己同一取值攒够 3 条就让位' }, badge('对标', 'brand')) : null,
+    l.source === 'beat' ? h('span', { title: '进度条分析的跳过率落到每一拍上学的:留人倍数 = 1 ÷ 相对跳过率,回灌分镜挑版式和切片挑段' }, badge('逐拍', 'brand')) : null,
     h('span', { class: 'grow small', title: ev }, bench ? l.text.replace(/^对标号 /, '') : l.text),
     l.shadowed ? badge('自己的数据已覆盖', 'neutral') : null,
     off ? badge('已停用', 'neutral') : null,

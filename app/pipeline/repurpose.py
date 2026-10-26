@@ -42,6 +42,8 @@ NOTE_BODY_MAX = 1000
 CLIP_MIN = 30.0
 CLIP_MAX = 45.0
 MAX_CLIPS = 2
+#: 逐拍掉人回灌(`team.beat_retention.install`):{版式: 留人倍数}。None = 只按信息密度挑段
+layout_weights: Any = None
 CLIP_SIZE = (1080, 1920)
 
 _SENTENCE_RE = re.compile(r"[^。!?！？\n]+[。!?！？]?")
@@ -78,16 +80,31 @@ def shot_spans(storyboard: Sequence[dict[str, Any]], script: Sequence[dict[str, 
             continue
         out.append({"idx": shot.get("idx"), "start": round(t, 3), "end": round(t + dur, 3),
                     "chapter": str(shot.get("chapter") or shot.get("section") or ""),
-                    "refs": refs.get(shot.get("idx"), 0), "card": bool(shot.get("card"))})
+                    "refs": refs.get(shot.get("idx"), 0), "card": bool(shot.get("card")),
+                    "layout": str(shot.get("layout") or "broll")})
         t += dur
     return out
 
 
+def _hold_weights() -> dict[str, float]:
+    if layout_weights is None:
+        return {}
+    try:
+        return dict(layout_weights() or {})
+    except Exception:  # noqa: BLE001
+        log.warning("读逐拍留人权重失败,这次只按密度挑", exc_info=True)
+        return {}
+
+
 def windows(spans: Sequence[dict[str, Any]], lo: float = CLIP_MIN, hi: float = CLIP_MAX
             ) -> list[dict[str, Any]]:
-    """所有候选段:从章节开头起,攒够 `lo` 秒后尽量把这一章收完,不超过 `hi`。按密度从高到低。"""
+    """所有候选段:从章节开头起,攒够 `lo` 秒后尽量把这一章收完,不超过 `hi`。按密度从高到低。
+
+    挂了逐拍留人权重时,密度再乘上这段各拍版式留人倍数的(按时长)平均 —— 观众爱拖过去的
+    版式组成的段,切出来单发也留不住人。"""
     if not spans:
         return []
+    weights = _hold_weights()
     first = spans[0]["chapter"]
     out = []
     for i, s in enumerate(spans):
@@ -108,10 +125,14 @@ def windows(spans: Sequence[dict[str, Any]], lo: float = CLIP_MIN, hi: float = C
         refs = sum(p["refs"] for p in part)
         n_cards = sum(1 for p in part if p["card"])
         chapters = list(dict.fromkeys(p["chapter"] for p in part if p["chapter"]))
+        score = (refs + 2 * n_cards) / dur
+        if weights:
+            score *= sum(weights.get(p.get("layout", ""), 1.0) * (p["end"] - p["start"])
+                         for p in part) / dur
         out.append({"start": s["start"], "end": spans[j]["end"], "duration": round(dur, 3),
                     "shots": [p["idx"] for p in part], "chapter": chapters[0] if chapters else "",
                     "chapters": chapters, "refs": refs, "cards": n_cards,
-                    "score": round((refs + 2 * n_cards) / dur, 4)})
+                    "score": round(score, 4)})
     return sorted(out, key=lambda w: (-w["score"], w["start"]))
 
 

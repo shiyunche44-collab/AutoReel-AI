@@ -15,12 +15,15 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any
 
 from .. import db
 from . import Skip, TeamError
+
+log = logging.getLogger(__name__)
 
 #: 发布后这几个时刻各抓一次(小时)
 MILESTONES = (1.0, 24.0, 72.0, 168.0)
@@ -168,8 +171,34 @@ def _login_blocked() -> bool:
     return not (path.is_file() and path.stat().st_mtime > float(bad))
 
 
-def collect(now: float | None = None, fetch=None) -> dict[str, int]:
-    """抓一轮。`fetch` 测试用(默认开浏览器抓创作者中心)。"""
+#: 发布满这么多小时的快照顺手抓「进度条分析」(页面说发布半小时后才有;一天后才有人拖)
+PROGRESS_AFTER_HOURS = 20.0
+
+
+def _record_progress(pubs: list[dict[str, Any]], views: dict[str, int | None], now: float,
+                     fetch_progress) -> int:
+    """抓进度条分析(每个点的跳过率 / 回看率)存库。抓不到只记日志:它只是复盘用的。"""
+    from ..publish.base import PublishError
+
+    if not pubs:
+        return 0
+    try:
+        got = fetch_progress([p["remote_id"] for p in pubs])
+    except PublishError as exc:
+        log.info("进度条分析没抓到:%s", exc.message)
+        return 0
+    n = 0
+    for p in pubs:
+        if got.get(p["remote_id"]):
+            db.save_progress_curve(p["id"], got[p["remote_id"]], views.get(p["id"]), ts=now)
+            n += 1
+    return n
+
+
+def collect(now: float | None = None, fetch=None, fetch_progress=None) -> dict[str, int]:
+    """抓一轮。`fetch` / `fetch_progress` 测试用(默认开浏览器抓创作者中心);
+    测试只给了 `fetch` 时不抓进度条分析。"""
+    from ..metrics.collector import parse_douyin_creator
     from ..publish.base import PublishError
     from ..publish.platforms import douyin
 
@@ -181,6 +210,7 @@ def collect(now: float | None = None, fetch=None) -> dict[str, int]:
         if _login_blocked():
             raise Skip("抖音登录失效,等你去分发台重新扫码")
         fetch = douyin.fetch_creator_works
+        fetch_progress = fetch_progress or douyin.fetch_work_progress
     oldest = min([submitted_at(p) for p in unmatched] + [p["published_at"] for p in due])
     try:
         works = fetch(since=oldest - MATCH_WINDOW)
@@ -192,6 +222,17 @@ def collect(now: float | None = None, fetch=None) -> dict[str, int]:
     db.set_team_setting(_LOGIN_KEY, None)
     taken = {p["remote_id"] for p in db.list_publications(limit=1000) if p.get("remote_id")}
     claimed = recorded = 0
+    deep: list[dict[str, Any]] = []
+    views: dict[str, int | None] = {}
+
+    def record(pub: dict[str, Any], work: dict[str, Any]) -> bool:
+        if not _record(pub, work, now):
+            return False
+        if now - float(pub.get("published_at") or now) >= PROGRESS_AFTER_HOURS * 3600:
+            deep.append(pub)
+            views[pub["id"]] = (parse_douyin_creator(work) or {}).get("views")
+        return True
+
     for pub in unmatched:
         work = match_work(pub, works, taken)
         if not work:
@@ -199,13 +240,14 @@ def collect(now: float | None = None, fetch=None) -> dict[str, int]:
         taken.add(work["id"])
         pub = _claim(pub, work)
         claimed += 1
-        if _record(pub, work, now):  # 对上时先落一张,1h 那张就是它
+        if record(pub, work):  # 对上时先落一张,1h 那张就是它
             recorded += 1
     for pub in due:
         work = match_work(pub, works)
-        if work and _record(pub, work, now):
+        if work and record(pub, work):
             recorded += 1
-    return {"claimed": claimed, "recorded": recorded, "works": len(works)}
+    curves = _record_progress(deep, views, now, fetch_progress) if fetch_progress else 0
+    return {"claimed": claimed, "recorded": recorded, "works": len(works), "curves": curves}
 
 
 def run() -> str:
@@ -216,4 +258,6 @@ def run() -> str:
     if got["claimed"]:
         parts.append(f"对上 {got['claimed']} 条作品")
     parts.append(f"落 {got['recorded']} 张数据快照")
+    if got.get("curves"):
+        parts.append(f"抓 {got['curves']} 条进度条分析")
     return ",".join(parts)

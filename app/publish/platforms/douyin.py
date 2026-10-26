@@ -692,6 +692,61 @@ def fetch_creator_works(*, since: float | None = None, max_scrolls: int = 4) -> 
     return list(works.values())
 
 
+#: 作品详情页「进度条分析」接口(见 `tests/probe_douyin_retention.py`)
+WORK_DETAIL = "https://creator.douyin.com/creator-micro/work-management/work-detail/{id}"
+PROGRESS_API = "/janus/douyin/creator/bff/data/progress/analysis/v2?item_id={id}"
+_FETCH_JSON_JS = """async (url) => {
+  const r = await fetch(url, {credentials: 'include', headers: {'agw-js-conv': 'str'}});
+  return {status: r.status, text: await r.text()};
+}"""
+
+
+def parse_progress(body: dict[str, Any]) -> list[list[float]]:
+    """进度条分析 → [[秒, 跳过率, 回看率], ...],按秒排。key 是播放进度秒数,value 是整数比率
+    (单位不重要:只拿来和同一条片自己的均值比)。没数据 → []。"""
+    back = {str(p.get("key")): _int(p.get("value")) or 0 for p in body.get("jump_backward") or []
+            if isinstance(p, dict)}
+    out = []
+    for p in body.get("jump_forward") or []:
+        if not isinstance(p, dict):
+            continue
+        try:
+            t = float(p.get("key"))
+        except (TypeError, ValueError):
+            continue
+        out.append([t, float(_int(p.get("value")) or 0), float(back.get(str(p.get("key")), 0))])
+    return sorted(out)
+
+
+def fetch_work_progress(remote_ids: list[str]) -> dict[str, list[list[float]]]:
+    """无头打开作品详情页,用页面自己的登录态 GET「进度条分析」,只读。
+    返回 {作品 id: 点列};某条没拿到就不放进结果。登录失效抛 `PublishError(credential=True)`。"""
+    from .. import browser
+
+    out: dict[str, list[list[float]]] = {}
+    if not remote_ids:
+        return out
+    try:
+        with browser.BrowserSession("douyin", headless=True, lock_timeout=60) as session:
+            session.goto(WORK_DETAIL.format(id=remote_ids[0]), wait_ms=5000)
+            if "扫码登录" in session.page_text():
+                raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
+                                   retryable=False, credential=True)
+            for rid in remote_ids:
+                try:
+                    got = session.page.evaluate(_FETCH_JSON_JS, PROGRESS_API.format(id=rid))
+                    body = json.loads(got.get("text") or "{}") if got.get("status") == 200 else {}
+                except Exception as exc:  # noqa: BLE001 - 一条没拿到不连坐别的
+                    log.info("进度条分析没拿到 %s:%s", rid, exc)
+                    continue
+                points = parse_progress(body) if isinstance(body, dict) else []
+                if points:
+                    out[rid] = points
+    except browser.BrowserUnavailable as exc:
+        raise PublishError(str(exc), retryable=False) from exc
+    return out
+
+
 def resolve_published_work(title: str, *, since: float | None = None,
                            rounds: int = WORK_RESOLVE_ROUNDS,
                            gap: float = WORK_RESOLVE_GAP) -> dict[str, Any]:

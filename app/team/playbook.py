@@ -21,6 +21,7 @@ from collections import Counter, defaultdict
 from typing import Any, Mapping
 
 from .. import db
+from . import beat_retention
 from .features import DIMENSION_LABEL, value_label
 from .stats import METRIC_LABEL
 
@@ -84,6 +85,11 @@ def predict(values: Mapping[str, str], learnings: list[dict[str, Any]] | None = 
 
 def describe(r: dict[str, Any]) -> str:
     """一条结论的人话:「开头 = 场景冷开:播放 1.60 倍(5 条,置信度高)」。"""
+    if r.get("source") == "beat":
+        conf = "高" if r["confidence"] == "high" else "中"
+        return (f"{DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
+                f"{value_label(r['dimension'], r['value'])}:留人 {r['effect']:.2f} 倍"
+                f"({r['n']} 拍,置信度{conf})")
     if r.get("source") == "benchmark":
         return (f"对标号 {DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
                 f"{value_label(r['dimension'], r['value'])}:爆款倍数 {r['effect']:.2f} 倍"
@@ -183,6 +189,7 @@ def install() -> None:
     packaging.plan = plan
     script_gen.learned_hint = script_hint
     script_gen.hook_candidates = config.TEAM_HOOK_CANDIDATES
+    beat_retention.install()
 
 
 def uninstall() -> None:
@@ -194,6 +201,7 @@ def uninstall() -> None:
     packaging.plan = None
     script_gen.learned_hint = None
     script_gen.hook_candidates = 0
+    beat_retention.uninstall()
 
 
 # --------------------------------------------------------------------------

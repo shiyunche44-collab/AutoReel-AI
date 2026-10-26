@@ -451,6 +451,21 @@ def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile,
 
 
 #: 横评时追加到分镜 SYSTEM 末尾的规则
+#: 逐拍掉人回灌(`team.beat_retention.install`):返回一段「本账号最掉人 / 最留人的版式」。
+#: None / 返回空 = 提示词不变
+layout_hint: Any = None
+
+
+def _layout_hint() -> str:
+    if layout_hint is None:
+        return ""
+    try:
+        return (layout_hint() or "").strip()
+    except Exception:  # noqa: BLE001 - 经验只是锦上添花
+        _log.warning("读逐拍经验失败,这次不带", exc_info=True)
+        return ""
+
+
 ROUNDUP_BEAT_RULE = ("\n8. 这是多车横评:拍号后〔〕里是这一拍讲的车。panel / card / stat / concept 的每一行"
                      "只能用**这台车**名下的事实(事实前的 [车名]);没有〔〕的开场 / 结论拍可以用任何一台车的,"
                      "对比卡、柱状图的行名写车名。")
@@ -490,6 +505,9 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             concept_guide=concept_guide(vocab, len(segments)))
         if subjects:
             system = system.replace("\n\n必需键: beats", ROUNDUP_BEAT_RULE + "\n\n必需键: beats")
+        if hint := _layout_hint():
+            system = system.replace("\n\n必需键: beats",
+                                    f"\n\n本账号已发作品的逐拍数据(挑版式时参考):{hint}\n\n必需键: beats")
         data = llm.structured(system, user,
                               required_keys=["beats"], temperature=0.5)
         raw = data.get("beats") or []
