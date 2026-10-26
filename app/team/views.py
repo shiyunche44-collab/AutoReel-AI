@@ -17,6 +17,13 @@ LOOKBACK_DAYS = 3
 OPEN = ("proposed", "approved", "producing", "review", "scheduled")
 
 
+def _playbook_views() -> list[dict[str, Any]]:
+    """手册结论。对标先验被自己同一取值的结论盖过的标 `shadowed`(不生效,只给你看)。"""
+    rows = db.list_learnings(("active", "off"))
+    live = {r["id"] for r in playbook.merged(rows)}
+    return [{**r, "text": playbook.describe(r), "shadowed": r["id"] not in live} for r in rows]
+
+
 def _experiment_views() -> list[dict[str, Any]]:
     """在跑的配对实验(可能几个并行):固定哪个维度、试哪种写法、已经用了几条。"""
     from . import features
@@ -74,8 +81,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "trends_at": latest["captured_at"] if latest else None,
         "trends_n": latest["n"] if latest else 0,
         "runs": [x for x in db.list_team_runs(limit=40) if x["status"] != "idle"][:20],
-        "playbook": [{**r, "text": playbook.describe(r)}
-                     for r in db.list_learnings(("active", "off"))],
+        "playbook": _playbook_views(),
         # 当前在跑的配对实验(攒样本用):固定哪个维度、试哪种写法、还要几条
         "experiments": _experiment_views(),
         # 迭代记录:按周趋势、实验进度、自动改动的变更日志

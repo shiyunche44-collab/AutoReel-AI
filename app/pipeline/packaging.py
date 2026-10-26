@@ -97,6 +97,21 @@ def figures_in(text: str) -> set[str]:
     return grounding.numbers_in(stripped)
 
 
+#: 标题里点名人群的说法(对标号的标题没有 kind,靠这个猜「人群」写法)
+_PERSON_RE = re.compile(r"家庭|宝妈|奶爸|通勤|年轻人|新手|上班族|打工人|二胎|一家|女生|男生|老人"
+                        r"|适合谁|适合.{0,4}的人|谁该买|谁别买")
+
+
+def guess_kind(title: str) -> str:
+    """别人的标题归到我们的三种写法:带事实数字 → 数字;点名人群 → 人群;其余算立场。"""
+    t = re.sub(r"#\S+|@\S+", "", title or "")
+    if figures_in(t):
+        return KIND_NUMBER
+    if _PERSON_RE.search(t):
+        return KIND_PERSON
+    return KIND_STAKE
+
+
 def allowed_figures(fact_claims: Iterable[str] = (), script_texts: Iterable[str] = (),
                     extra: Iterable[str] = ()) -> set[str]:
     """标题 / 评论里允许出现的数字:事实层 + 脚本 + 额外(如封面入门价)。"""

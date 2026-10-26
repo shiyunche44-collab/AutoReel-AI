@@ -467,6 +467,17 @@ function reportView(r) {
       col('对标', b.theirs.map((x) => ({ ...x, tag: h('span', { class: 'subtle' }, ` ${x.account} ×${x.burst}`) }))),
       col('我们', (b.ours || []).map((x) => ({ ...x, tag: x.lift != null ? h('span', { class: 'subtle' }, ` ${x.lift}×`) : null })))));
   }
+  const st = b && b.structure;
+  if (st && st.dims && st.dims.length) {
+    const shares = (xs) => (xs && xs.length ? xs.map((x) => `${x.label} ${Math.round(x.share * 100)}%`).join(' · ') : '—');
+    out.push(h('div', { class: 'subtle small' }, `开场结构:拆过的 ${st.n_theirs} 条对标爆款 vs 我们 ${st.n_ours} 条`
+      + (st.claim_share != null ? `(对标爆款 ${Math.round(st.claim_share * 100)}% 开场就下判断)` : '')),
+    h('div', { class: 'bench-compare' },
+      h('div', { class: 'bench-col' }, h('div', { class: 'subtle small' }, '对标'),
+        ...st.dims.map((d) => h('div', { class: 'small' }, h('strong', {}, `${d.label} `), shares(d.theirs)))),
+      h('div', { class: 'bench-col' }, h('div', { class: 'subtle small' }, '我们'),
+        ...st.dims.map((d) => h('div', { class: 'small' }, h('strong', {}, `${d.label} `), d.dimension === 'cover' ? '没记' : shares(d.ours))))));
+  }
   return out;
 }
 
@@ -550,9 +561,12 @@ function learningRow(l) {
       { status: off ? 'active' : 'off' })),
   }, icon(off ? 'play' : 'pause', 'i-sm'), off ? '恢复' : '停用');
   const ev = (l.evidence || []).map((x) => `《${x.title}》${x.lift}×`).join('\n');
-  return h('div', { class: `rowline${off ? ' is-off' : ''}` },
+  const bench = l.source === 'benchmark';
+  return h('div', { class: `rowline${off || l.shadowed ? ' is-off' : ''}` },
     badge(l.effect >= 1 ? '多做' : '少做', l.effect >= 1 ? 'success' : 'warning'),
-    h('span', { class: 'grow small', title: ev }, l.text),
+    bench ? h('span', { title: '对标号的先验:倍数夹在 0.8–1.25;自己同一取值攒够 3 条就让位' }, badge('对标', 'brand')) : null,
+    h('span', { class: 'grow small', title: ev }, bench ? l.text.replace(/^对标号 /, '') : l.text),
+    l.shadowed ? badge('自己的数据已覆盖', 'neutral') : null,
     off ? badge('已停用', 'neutral') : null,
     btn);
 }

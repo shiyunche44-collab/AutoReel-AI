@@ -4,8 +4,14 @@
 和它自己比才看得出哪条「出圈」了。置顶作品不进中位数(常年挂着,数虚高),
 作品少于 `MIN_POSTS` 条的号不算倍数。点赞比播放靠谱:主页接口的播放数常是 0。
 
-**用在两处。** 主编排选题时拿「对标爆款」当证据,车型命中的加热度;复盘官的周报里
-把对标爆款的标题开头和我们自己最好 / 最差的标题并排放。
+**用在三处。** 主编排选题时拿「对标爆款」当证据,车型命中的加热度;复盘官的周报里
+把对标爆款的标题开头和我们自己最好 / 最差的标题并排放;复盘官还把对标作品按标题写法、
+时长、车型、开场画面、剪辑节奏算成**先验**(`stats.learn_benchmark`),自己样本不够的
+取值先照对标号的规律轻推一把。
+
+**拆爆款结构(`tag_posts`):** 每轮看完主页后,挑几条新抓到的爆款和几条普通作品当对照,
+ffmpeg 只读前 3 秒(每秒 2 帧)和封面,本地比相邻帧算切换快慢,再让视觉模型标开场画面类型、
+有没有判断句、封面类型。播放地址带签名几小时就过期,所以只拆刚抓到的;失败也记一行,不反复试。
 
 **反爬:** 只读公开主页、一次只开一个无头浏览器、号与号之间停几秒、每号只翻一屏;
 任何一个号失败就记下原因、本轮停手,不重试。登录失效等你重新扫码后才再开浏览器。
@@ -15,7 +21,11 @@ from __future__ import annotations
 import logging
 import re
 import statistics
+import subprocess
+import tempfile
 import time
+from collections import Counter
+from pathlib import Path
 from typing import Any, Callable
 
 from .. import db
@@ -39,6 +49,26 @@ HIT_DAYS = 14
 MAX_ACCOUNTS = 30
 
 _LOGIN_KEY = "bench_login_bad"
+#: 拆结构:每轮最多拆几条爆款(倍数 ≥ TAG_MIN_BURST)+ 几条普通作品当对照
+TAG_HITS, TAG_CONTROLS = 5, 3
+TAG_MIN_BURST = 2.0
+CONTROL_MAX_BURST = 1.2
+#: 播放地址带签名:抓到后这么久内才去拆
+URL_FRESH_HOURS = 12
+#: 先验 / 结构对照看多久的对标作品
+PRIOR_DAYS = 60
+#: 相邻两帧 dHash 差这么多位(共 64 位)算一次切换
+CUT_BITS = 20
+OPENING_LABEL = {"car": "实拍车", "person": "人出镜", "text": "大字", "data": "数据"}
+COVER_LABEL = {"text": "大字封面", "car": "车图封面", "person": "人像封面"}
+#: 开场画面类型 → 我们的 `hook_visual` 旋钮(人出镜我们做不了,不映射)
+OPENING_TO_HOOK = {"text": "hook", "data": "highlight", "car": "broll"}
+HOOK_TO_OPENING = {v: k for k, v in OPENING_TO_HOOK.items()}
+TAG_PROMPT = """前几张图是一条抖音汽车视频前 3 秒的画面,最后一张是它的封面。只输出 JSON:
+{"opening": "car|person|text|data", "claim": true, "cover": "text|car|person"}
+opening:开场画面主要是什么 —— car 实拍车,person 人出镜讲,text 屏幕大字,data 数据图表 / 参数卡。
+claim:开场画面或字幕里有没有一句明确的判断(如「别买」「它赢了」「最值的一款」),有填 true。
+cover:封面主体 —— text 大字为主,car 车图为主,person 人像为主。"""
 USER_URL = "https://www.douyin.com/user/"
 
 
@@ -94,7 +124,8 @@ def parse_post(a: dict[str, Any], account_id: str, cars: list[str]) -> dict[str,
         return None
     s = a.get("statistics") or {}
     title = str(a.get("desc") or "").strip()
-    dur = _int(a.get("duration") or (a.get("video") or {}).get("duration"))
+    video = a.get("video") or {}
+    dur = _int(a.get("duration") or video.get("duration"))
     return {
         "id": aid, "account_id": account_id, "title": title[:200], "car": car_in(title, cars),
         "duration": round(dur / 1000, 1) if dur > 1000 else float(dur),
@@ -102,7 +133,13 @@ def parse_post(a: dict[str, Any], account_id: str, cars: list[str]) -> dict[str,
         "views": _int(s.get("play_count")), "likes": _int(s.get("digg_count")),
         "comments": _int(s.get("comment_count")), "shares": _int(s.get("share_count")),
         "collects": _int(s.get("collect_count")), "pinned": 1 if a.get("is_top") else 0,
+        "video_url": _first_url(video.get("play_addr")), "cover_url": _first_url(video.get("cover")),
     }
+
+
+def _first_url(addr: Any) -> str:
+    urls = (addr or {}).get("url_list") if isinstance(addr, dict) else None
+    return str(urls[0]) if urls else ""
 
 
 def with_burst(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], float]:
@@ -277,6 +314,179 @@ def title_compare(our_top: list[dict[str, Any]], now: float | None = None) -> di
     }
 
 
+# --------------------------------------------------------------------------
+# 拆爆款结构
+# --------------------------------------------------------------------------
+def _grab(video_url: str, cover_url: str, workdir: Path) -> tuple[list[Path], Path | None]:
+    """ffmpeg 只读前 3 秒,每秒 2 帧(最多 6 张),再取封面。"""
+    from .. import config
+
+    ffmpeg = str(config.FFMPEG_PATH or "ffmpeg")
+
+    def run(src: str, *args: str, timeout: int) -> None:
+        # 抖音 CDN 不带 Referer 会 403;本地文件不认 -headers
+        head = (["-headers", "Referer: https://www.douyin.com/\r\nUser-Agent: Mozilla/5.0\r\n"]
+                if src.startswith("http") else [])
+        proc = subprocess.run([ffmpeg, "-y", "-loglevel", "error", *head, *args],
+                              capture_output=True, timeout=timeout)
+        if proc.returncode:
+            err = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise TeamError(f"ffmpeg 失败:{err[-1] if err else proc.returncode}")
+
+    run(video_url, "-t", "3", "-i", video_url, "-vf", "fps=2,scale=480:-2", "-frames:v", "6",
+        str(workdir / "f_%d.jpg"), timeout=90)
+    frames = sorted(workdir.glob("f_*.jpg"), key=lambda p: int(p.stem[2:]))
+    cover = None
+    if cover_url:
+        out = workdir / "cover.jpg"
+        try:
+            run(cover_url, "-i", cover_url, "-frames:v", "1", str(out), timeout=60)
+            cover = out if out.is_file() else None
+        except (TeamError, subprocess.SubprocessError, OSError) as exc:
+            log.info("对标封面没取到:%s", exc)
+    return frames, cover
+
+
+def _dhash(path: Path) -> list[bool]:
+    from PIL import Image
+
+    with Image.open(path) as im:
+        px = list(im.convert("L").resize((9, 8)).tobytes())
+    return [px[r * 9 + c] > px[r * 9 + c + 1] for r in range(8) for c in range(8)]
+
+
+def cut_speed(frames: list[Path]) -> str:
+    """前 3 秒相邻帧有几次大变化:≥3 次 fast,1–2 次 mid,没有 slow(对上 `pace` 旋钮)。"""
+    if len(frames) < 2:
+        return ""
+    hs = [_dhash(f) for f in frames]
+    cuts = sum(1 for a, b in zip(hs, hs[1:]) if sum(x != y for x, y in zip(a, b)) > CUT_BITS)
+    return "fast" if cuts >= 3 else "mid" if cuts else "slow"
+
+
+def _ask(paths: list[Path]) -> dict[str, Any]:
+    from ..llm.base import extract_json
+    from ..providers import cli, images
+
+    text = images.describe([cli.upload_temp_url(p) for p in paths], TAG_PROMPT)
+    if not text:
+        raise TeamError("视觉模型没回话")
+    return extract_json(text)
+
+
+def clean_tags(got: dict[str, Any]) -> dict[str, Any]:
+    opening = str(got.get("opening") or "").strip().lower()
+    cover = str(got.get("cover") or "").strip().lower()
+    claim = got.get("claim")
+    return {"opening": opening if opening in OPENING_LABEL else "",
+            "cover": cover if cover in COVER_LABEL else "",
+            "claim": claim is True or str(claim).lower() in ("true", "1", "yes", "有")}
+
+
+def tag_candidates(now: float | None = None) -> list[dict[str, Any]]:
+    """这轮拆哪些:刚抓到、有播放地址、还没拆过的爆款(倍数高的先)+ 几条普通作品。"""
+    now = now or time.time()
+    done = db.list_benchmark_tags()
+    fresh = [p for p in db.list_benchmark_posts(since=now - HIT_DAYS * 86400, limit=400)
+             if p["video_url"] and not p["pinned"] and p["id"] not in done
+             and p["fetched_at"] >= now - URL_FRESH_HOURS * 3600]
+    top = sorted((p for p in fresh if p["burst"] >= TAG_MIN_BURST), key=lambda p: -p["burst"])
+    controls = [p for p in fresh if 0 < p["burst"] < CONTROL_MAX_BURST]
+    return top[:TAG_HITS] + controls[:TAG_CONTROLS]
+
+
+def tag_posts(now: float | None = None, *,
+              grab: Callable[[str, str, Path], tuple[list[Path], Path | None]] | None = None,
+              ask: Callable[[list[Path]], dict[str, Any]] | None = None) -> int:
+    """拆这轮的候选,返回拆成了几条。单条失败记下原因接着拆下一条。"""
+    now = now or time.time()
+    n = 0
+    for p in tag_candidates(now):
+        with tempfile.TemporaryDirectory(prefix="bench_") as tmp:
+            try:
+                frames, cover = (grab or _grab)(p["video_url"], p["cover_url"], Path(tmp))
+                if not frames:
+                    raise TeamError("没取到画面")
+                tags = clean_tags((ask or _ask)([*frames[::2][:3], *([cover] if cover else [])]))
+                tags["cuts"] = cut_speed(frames)
+                db.save_benchmark_tag(p["id"], tags, ts=now)
+                n += 1
+            except Exception as exc:  # noqa: BLE001 - 一条拆不了不影响别的
+                log.info("对标作品 %s 拆结构失败:%s", p["id"], exc)
+                db.save_benchmark_tag(p["id"], None, error=str(exc) or type(exc).__name__, ts=now)
+    return n
+
+
+def post_features(post: dict[str, Any], tags: dict[str, Any] | None = None) -> dict[str, str]:
+    """对标作品 → 和我们自己的特征同名同值的维度(`stats.BENCH_DIMENSIONS`)。"""
+    from ..pipeline import packaging
+    from .features import duration_bucket
+
+    tags = tags or {}
+    return {"title_kind": packaging.guess_kind(post["title"]),
+            "duration": duration_bucket(post["duration"]) if post["duration"] else "",
+            "subject": post["car"],
+            "hook_visual": OPENING_TO_HOOK.get(tags.get("opening") or "", ""),
+            "pace": str(tags.get("cuts") or "")}
+
+
+def prior_rows(now: float | None = None, days: int = PRIOR_DAYS) -> list[dict[str, Any]]:
+    """给 `stats.learn_benchmark`:近期算得出倍数的非置顶作品,带特征。"""
+    now = now or time.time()
+    tags = db.list_benchmark_tags()
+    return [{"id": p["id"], "title": p["title"], "burst": p["burst"],
+             "features": post_features(p, (tags.get(p["id"]) or {}).get("tags"))}
+            for p in db.list_benchmark_posts(since=now - days * 86400, limit=2000)
+            if p["burst"] > 0 and not p["pinned"]]
+
+
+#: 周报的结构对照:(维度, 名字)。`opening` 我们这边用 hook_visual 反查
+STRUCT_DIMENSIONS = (("opening", "开场画面"), ("pace", "剪辑节奏"), ("title_kind", "标题写法"),
+                     ("duration", "时长"), ("cover", "封面"))
+
+
+def _shares(values: list[str], label: Callable[[str], str], top: int = 3) -> list[dict[str, Any]]:
+    values = [v for v in values if v]
+    counts = Counter(values).most_common(top)
+    return [{"value": v, "label": label(v), "share": round(c / len(values), 2)} for v, c in counts]
+
+
+def structure_compare(own_rows: list[dict[str, Any]], now: float | None = None) -> dict[str, Any]:
+    """周报用:拆过结构的对标爆款 vs 我们近期的作品,各维度占比最高的几种。"""
+    from .features import value_label
+
+    now = now or time.time()
+    tags = db.list_benchmark_tags()
+    theirs = []
+    for p in db.list_benchmark_posts(since=now - PRIOR_DAYS * 86400, min_burst=TAG_MIN_BURST,
+                                     limit=400):
+        t = (tags.get(p["id"]) or {}).get("tags") or {}
+        if t:
+            theirs.append({**post_features(p, t), "opening": t.get("opening") or "",
+                           "cover": t.get("cover") or "", "claim": bool(t.get("claim"))})
+    if not theirs:
+        return {"n_theirs": 0, "n_ours": len(own_rows), "dims": [], "claim_share": None}
+    ours = [{**r["features"], "opening": HOOK_TO_OPENING.get(r["features"].get("hook_visual") or "", "")}
+            for r in own_rows]
+
+    def label_of(dim: str) -> Callable[[str], str]:
+        if dim == "opening":
+            return lambda v: OPENING_LABEL.get(v, v)
+        if dim == "cover":
+            return lambda v: COVER_LABEL.get(v, v)
+        return lambda v: value_label(dim, v)
+
+    dims = []
+    for dim, name in STRUCT_DIMENSIONS:
+        their = _shares([x.get(dim, "") for x in theirs], label_of(dim))
+        if not their:
+            continue
+        dims.append({"dimension": dim, "label": name, "theirs": their,
+                     "ours": [] if dim == "cover" else _shares([x.get(dim, "") for x in ours], label_of(dim))})
+    return {"n_theirs": len(theirs), "n_ours": len(ours), "dims": dims,
+            "claim_share": round(sum(x["claim"] for x in theirs) / len(theirs), 2)}
+
+
 def accounts_view() -> list[dict[str, Any]]:
     out = []
     for a in db.list_benchmark_accounts():
@@ -297,4 +507,7 @@ def run() -> str:
     if out["error"] and not out["accounts"]:
         raise TeamError(f"对标主页没抓到:{out['error']}")
     msg = f"看了 {out['accounts']} 个对标号,新作品 {out['added']} 条,爆款 {out['hits']} 条"
+    tagged = tag_posts()
+    if tagged:
+        msg += f",拆了 {tagged} 条的开场结构"
     return msg + (f";停在 {out['error']}" if out["error"] else "")

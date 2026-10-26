@@ -47,12 +47,20 @@ def _geo_mean(values: list[float]) -> float:
     return math.exp(sum(math.log(v) for v in vals) / len(vals))
 
 
+def merged(learnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """自己的结论和对标先验合并:同一维度同一取值上自己有生效的结论,就不看对标的。"""
+    own = {(r["dimension"], r["value"]) for r in learnings
+           if r.get("source", "own") != "benchmark" and r.get("status", "active") == "active"}
+    return [r for r in learnings
+            if r.get("source", "own") != "benchmark" or (r["dimension"], r["value"]) not in own]
+
+
 def weights(dimension: str, learnings: list[dict[str, Any]] | None = None) -> dict[str, float]:
     """`dimension` 维度各取值的权重:播放、完播率、平均观看、2 秒留存各自算一个倍数,
     再取**几何平均** —— 一个指标好、另一个差时互相抵消,不会只挑好听的。
 
     夹在 0.5–2 之间:再好的写法也只是「多挑一点」,不会让别的写法彻底消失。"""
-    rows = db.list_learnings() if learnings is None else learnings
+    rows = merged(db.list_learnings() if learnings is None else learnings)
     effects: dict[str, list[float]] = defaultdict(list)
     for r in rows:
         if r["dimension"] == dimension and r.get("status", "active") == "active":
@@ -76,6 +84,10 @@ def predict(values: Mapping[str, str], learnings: list[dict[str, Any]] | None = 
 
 def describe(r: dict[str, Any]) -> str:
     """一条结论的人话:「开头 = 场景冷开:播放 1.60 倍(5 条,置信度高)」。"""
+    if r.get("source") == "benchmark":
+        return (f"对标号 {DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
+                f"{value_label(r['dimension'], r['value'])}:爆款倍数 {r['effect']:.2f} 倍"
+                f"({r['n']} 条对标作品)")
     conf = "高" if r["confidence"] == "high" else "中"
     return (f"{DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
             f"{value_label(r['dimension'], r['value'])}:"
@@ -84,7 +96,7 @@ def describe(r: dict[str, Any]) -> str:
 
 
 def prompt_text(learnings: list[dict[str, Any]] | None = None, limit: int = 6) -> str:
-    rows = db.list_learnings() if learnings is None else learnings
+    rows = merged(db.list_learnings() if learnings is None else learnings)
     rows = [r for r in rows if r["dimension"] in PROMPT_DIMENSIONS]
     good = sorted((r for r in rows if r["effect"] > 1), key=lambda r: -r["effect"])[:limit]
     bad = sorted((r for r in rows if r["effect"] < 1), key=lambda r: r["effect"])[:limit]

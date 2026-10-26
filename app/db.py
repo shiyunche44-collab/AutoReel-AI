@@ -246,7 +246,8 @@ CREATE TABLE IF NOT EXISTS learnings (
     confidence TEXT NOT NULL,              -- medium / high
     evidence   TEXT NOT NULL DEFAULT '[]', -- 支撑的发布记录 id
     status     TEXT NOT NULL DEFAULT 'active', -- active / stale(本周没再算出来) / off(你停用的)
-    updated_at REAL NOT NULL
+    updated_at REAL NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'own'     -- own(自己作品) / benchmark(对标号先验)
 );
 
 -- 迭代变更日志:打法权重大变、实验开始 / 结束、自动调参……每一次自动改动都留一条
@@ -330,9 +331,19 @@ CREATE TABLE IF NOT EXISTS benchmark_posts (
     collects    INTEGER NOT NULL DEFAULT 0,
     pinned      INTEGER NOT NULL DEFAULT 0,
     burst       REAL NOT NULL DEFAULT 0,    -- 点赞 / 该账号点赞中位数
-    fetched_at  REAL NOT NULL
+    fetched_at  REAL NOT NULL,
+    video_url   TEXT NOT NULL DEFAULT '',   -- 播放地址(带签名,几小时就过期,拆结构要趁新)
+    cover_url   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_bench_posts ON benchmark_posts(account_id, posted_at);
+
+-- 拆爆款结构:前 3 秒几帧 + 封面交给视觉模型打的标签(一条作品一行,失败也记,不反复试)
+CREATE TABLE IF NOT EXISTS benchmark_tags (
+    post_id   TEXT PRIMARY KEY,
+    tags      TEXT NOT NULL DEFAULT '{}',   -- {opening, claim, cuts, cover}(JSON)
+    error     TEXT NOT NULL DEFAULT '',
+    tagged_at REAL NOT NULL
+);
 
 -- 活跃官:我们去**别人**作品下的互动留痕(评论/点赞/分享/关注)。
 -- 每个作品每种动作一辈子只做一次(idx_outbound_once 兜着)。
@@ -490,6 +501,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE plan_items ADD COLUMN {col} {ddl}")
     # 第一期的「已出片」现在叫「成片待审」
     conn.execute("UPDATE plan_items SET status = 'review' WHERE status = 'ready'")
+    if "source" not in _column_names(conn, "learnings"):
+        # 对标先验和自己的结论分开写、分开过期
+        conn.execute("ALTER TABLE learnings ADD COLUMN source TEXT NOT NULL DEFAULT 'own'")
+    bench_cols = _column_names(conn, "benchmark_posts")
+    for col in ("video_url", "cover_url"):
+        if col not in bench_cols:
+            conn.execute(f"ALTER TABLE benchmark_posts ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
 
 
 def init_db() -> None:
@@ -1401,24 +1419,26 @@ def resume_account(account_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def replace_learnings(week: str, rows: list[dict[str, Any]]) -> None:
-    """写本周的结论。上周有、本周没算出来的标 stale(不再生效);你停用过的保持停用。"""
+def replace_learnings(week: str, rows: list[dict[str, Any]], source: str = "own") -> None:
+    """写本周的结论。上周有、本周没算出来的标 stale(不再生效);你停用过的保持停用。
+
+    `source` 分开过期:写对标先验不会把自己作品的结论标 stale,反过来也一样。"""
     init_db()
     now = time.time()
     with transaction() as conn:
         off = {r[0] for r in conn.execute("SELECT id FROM learnings WHERE status = 'off'")}
-        conn.execute("UPDATE learnings SET status = 'stale', updated_at = ? WHERE status = 'active'",
-                     (now,))
+        conn.execute("UPDATE learnings SET status = 'stale', updated_at = ?"
+                     " WHERE status = 'active' AND source = ?", (now, source))
         for r in rows:
             conn.execute(
                 "INSERT INTO learnings (id, week, dimension, value, metric, effect, n, confidence,"
-                " evidence, status, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                " evidence, status, updated_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(id) DO UPDATE SET week = excluded.week, effect = excluded.effect,"
                 " n = excluded.n, confidence = excluded.confidence, evidence = excluded.evidence,"
                 " status = excluded.status, updated_at = excluded.updated_at",
                 (r["id"], week, r["dimension"], r["value"], r["metric"], r["effect"], r["n"],
                  r["confidence"], json.dumps(r.get("evidence") or [], ensure_ascii=False),
-                 "off" if r["id"] in off else "active", now))
+                 "off" if r["id"] in off else "active", now, source))
 
 
 def list_learnings(statuses: tuple[str, ...] = ("active",)) -> list[dict[str, Any]]:
@@ -1655,6 +1675,25 @@ def get_benchmark_account(sec_uid: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def save_benchmark_tag(post_id: str, tags: dict[str, Any] | None, error: str = "",
+                       ts: float | None = None) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO benchmark_tags (post_id, tags, error, tagged_at)"
+                     " VALUES (?, ?, ?, ?)",
+                     (post_id, json.dumps(tags or {}, ensure_ascii=False), error[:200],
+                      ts or time.time()))
+
+
+def list_benchmark_tags(since: float | None = None) -> dict[str, dict[str, Any]]:
+    """{post_id: {tags, error, tagged_at}},`since` 按打标签的时间。"""
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM benchmark_tags WHERE tagged_at >= ?",
+                            (since or 0,)).fetchall()
+    return {r["post_id"]: {**dict(r), "tags": json.loads(r["tags"] or "{}")} for r in rows}
+
+
 def update_benchmark_account(sec_uid: str, **fields: Any) -> None:
     bad = set(fields) - _BENCH_FIELDS
     if bad:
@@ -1682,11 +1721,12 @@ def upsert_benchmark_posts(rows: list[dict[str, Any]]) -> int:
     now = time.time()
     n = 0
     cols = ("id", "account_id", "title", "car", "duration", "posted_at", "views", "likes",
-            "comments", "shares", "collects", "pinned", "burst")
+            "comments", "shares", "collects", "pinned", "burst", "video_url", "cover_url")
+    text = ("id", "account_id", "title", "car", "video_url", "cover_url")
     with transaction() as conn:
         for r in rows:
             exists = conn.execute("SELECT 1 FROM benchmark_posts WHERE id = ?", (r["id"],)).fetchone()
-            vals = [r.get(c, 0 if c not in ("id", "account_id", "title", "car") else "") for c in cols]
+            vals = [r.get(c, "" if c in text else 0) for c in cols]
             conn.execute(
                 f"INSERT OR REPLACE INTO benchmark_posts ({', '.join(cols)}, fetched_at)"
                 f" VALUES ({','.join('?' * len(cols))}, ?)", (*vals, now))

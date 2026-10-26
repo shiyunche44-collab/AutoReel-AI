@@ -125,8 +125,9 @@ def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
         "experiments": experiments(pool if pool is not None else rows),
         # 早期观察:发布 1 小时的快照,不等 24 小时就能看出前 2 秒留没留住人
         "early": early if early is not None else [],
-        # 对标爆款的标题开头 vs 我们最好的几条(对标分析员的数据)
-        "benchmark": benchmark.title_compare(top, now),
+        # 对标爆款的标题开头 vs 我们最好的几条;再加拆出来的开场 / 节奏 / 封面结构对照
+        "benchmark": {**benchmark.title_compare(top, now),
+                      "structure": benchmark.structure_compare(rows, now)},
     }
 
 
@@ -156,6 +157,9 @@ def _facts(report: dict[str, Any]) -> str:
     bench = report.get("benchmark") or {}
     lines += [f"对标爆款:《{b['title']}》{b['account']},是该号平常的 {b['burst']:g} 倍"
               for b in bench.get("theirs", [])[:3]]
+    for d in (bench.get("structure") or {}).get("dims") or []:
+        fmt = lambda xs: "、".join(f"{x['label']} {x['share'] * 100:.0f}%" for x in xs) or "—"  # noqa: E731
+        lines.append(f"对标爆款{d['label']}:{fmt(d['theirs'])};我们:{fmt(d['ours'])}")
     return "\n".join(lines)
 
 
@@ -206,13 +210,17 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     rows = features.rows(since=since)
     early_rows = features.early_rows(since=since)
     early = stats.early_report(early_rows)
-    if not rows and not early:
-        raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
     week = week_key(now)
     before = iteration.weight_snapshot(db.list_learnings())
+    # 对标先验:自己样本不够的取值先按对标号的规律轻推;没作品也照样更新
+    db.replace_learnings(week, stats.learn_benchmark(benchmark.prior_rows(ts), week, own=rows),
+                         source="benchmark")
+    if not rows and not early:
+        iteration.log_weight_changes(before, iteration.weight_snapshot(db.list_learnings()), ts=ts)
+        raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
     if rows:
         db.replace_learnings(week, stats.learn(rows, week))
-    active = db.list_learnings()
+    active = playbook.merged(db.list_learnings())
     # 权重变动超过 0.1 的记进迭代日志:自动改了生产,得看得见改了什么
     iteration.log_weight_changes(before, iteration.weight_snapshot(active), ts=ts)
     pool = _pool(rows, early_rows)

@@ -139,6 +139,58 @@ def learn(rows: list[dict[str, Any]], week: str) -> list[dict[str, Any]]:
     return out
 
 
+# --------------------------------------------------------------------------
+# 对标先验
+# --------------------------------------------------------------------------
+#: 对标先验收缩得更狠:别人号上的规律搬到我们号上要打折
+BENCH_PRIOR = 6.0
+#: 先验的倍数夹在这个范围,只是轻推一把
+BENCH_RANGE = (0.8, 1.25)
+BENCH_MIN_EFFECT = 0.05
+#: 爆款倍数封顶,一条 30 倍的不至于把整组带飞
+BURST_CAP = 4.0
+#: 学这几个维度(都能和我们自己的特征对上)
+BENCH_DIMENSIONS = ("title_kind", "duration", "subject", "hook_visual", "pace")
+
+
+def learn_benchmark(posts: list[dict[str, Any]], week: str,
+                    own: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """对标作品(`benchmark.prior_rows`:{id, title, burst, features})→ 先验结论行。
+
+    倍数 = 一组的平均爆款倍数 ÷ 全部对标作品的平均爆款倍数,收缩 K=6、夹在 0.8–1.25。
+    我们自己在同一取值上已经有 ≥3 条作品的不算:自己的数据说了算。"""
+    posts = [p for p in posts if p.get("burst")]
+    if not posts:
+        return []
+    capped = {p["id"]: min(BURST_CAP, float(p["burst"])) for p in posts}
+    base = statistics.fmean(capped.values())
+    own_n = {dim: sample_counts(own or [], dim) for dim in BENCH_DIMENSIONS}
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for p in posts:
+        for dim in BENCH_DIMENSIONS:
+            value = (p.get("features") or {}).get(dim)
+            if value and own_n[dim].get(value, 0) < MIN_N:
+                groups[(dim, value)].append(p)
+    lo, hi = BENCH_RANGE
+    out = []
+    for (dim, value), members in groups.items():
+        n = len(members)
+        if n < MIN_N:
+            continue
+        effect = min(hi, max(lo, shrink([capped[m["id"]] / base for m in members], BENCH_PRIOR)))
+        if abs(effect - 1) < BENCH_MIN_EFFECT:
+            continue
+        top = sorted(members, key=lambda m: -capped[m["id"]])[:5]
+        out.append({
+            "id": f"bench:{dim}:{value}:views", "week": week, "dimension": dim, "value": value,
+            "metric": "views", "effect": round(effect, 3), "n": n, "confidence": "medium",
+            "evidence": [{"post_id": m["id"], "title": m["title"][:60],
+                          "lift": round(capped[m["id"]] / base, 2)} for m in top],
+        })
+    out.sort(key=lambda r: -abs(r["effect"] - 1))
+    return out
+
+
 def sample_counts(rows: list[dict[str, Any]], dim: str) -> dict[str, int]:
     """某维度各取值有几条作品(复盘官挑「下周多试试」的用)。"""
     counts: dict[str, int] = defaultdict(int)
