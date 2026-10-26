@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import db
-from . import (Skip, activator, beat_retention, benchmark, engagement, features, iteration,
+from . import (Skip, activator, beat_retention, benchmark, engagement, features, health, iteration,
                playbook, preference, stats)
 
 log = logging.getLogger(__name__)
@@ -165,6 +165,7 @@ def _facts(report: dict[str, Any]) -> str:
     lines += [f"回复写法「{s['label']}」:发了 {s['n']} 条,回复后 24 小时平均多 {s['more']:g} 条评论,"
               f"{s['again'] * 100:.0f}% 的人又来留言" for s in engage.get("styles") or []]
     lines += activator.effect_lines(engage.get("active"))
+    lines += health.report_lines(report.get("health"))
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
     lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
     bench = report.get("benchmark") or {}
@@ -234,6 +235,8 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     outcomes = engagement.reply_outcomes(ts)
     db.replace_learnings(week, engagement.learn_styles(outcomes, week), source="reply")
     active_effect = activator.weekly_effect(ts, week)
+    # 流程体检 + 白名单自动调参(跟作品数据无关,没作品也照样量)
+    checkup = health.weekly(ts, week)
     if not rows and not early:
         iteration.log_weight_changes(before, iteration.weight_snapshot(db.list_learnings()), ts=ts)
         raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的作品")
@@ -251,6 +254,7 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     # 各平台 / 切片 / 笔记各有几条数据(它们只进学习,不进上面的总数)
     report["platforms"] = features.platform_summary(rows)
     report["engage"] = {"styles": engagement.style_report(outcomes), "active": active_effect}
+    report["health"] = checkup
     report.update(write_text(report, llm))
     report["made_at"] = time.time()
     db.save_report(week, report)

@@ -1298,6 +1298,18 @@ def team_learning_status(learning_id: str, payload: LearningStatus):
     return {"ok": True}
 
 
+@app.post("/api/team/tuning/{key}/reset")
+def team_tuning_reset(key: str):
+    """流程体检自动调过的参数:恢复默认(白名单里的才认)。"""
+    from .team import health
+
+    if key not in health.TUNABLES:
+        raise HTTPException(404, "没有这个参数")
+    if not health.reset(key):
+        raise HTTPException(404, "这个参数没调过")
+    return {"ok": True}
+
+
 # 评论 id 里带「/」「+」,一律放在请求体里传
 class CommentEdit(BaseModel):
     id: str

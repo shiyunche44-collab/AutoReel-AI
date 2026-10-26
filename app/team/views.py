@@ -8,6 +8,7 @@ from typing import Any
 from .. import config, db
 from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
                playbook, preference, publisher, rapid, roles, scout)
+from . import health
 from .plan import view
 from .features import duration_bucket
 
@@ -99,6 +100,8 @@ def overview(category: str | None = None) -> dict[str, Any]:
                   "burst_ratio": benchmark.BURST_RATIO, "max": benchmark.MAX_ACCOUNTS},
         "rapid": {"top": rapid.TOP, "climb": rapid.CLIMB, "per_day": rapid.MAX_PER_DAY,
                   "prep_hours": rapid.PREP_HOURS},
+        # 复盘官按流程体检自动调过的参数(白名单,有上下限),页面上能一键恢复默认
+        "tuning": health.tuned_view(),
         "settings": {
             "daily_slots": config.TEAM_DAILY_SLOTS, "plan_days": config.TEAM_PLAN_DAYS,
             "slot_times": list(config.TEAM_SLOT_TIMES), "lead_hours": config.TEAM_LEAD_HOURS,

@@ -88,6 +88,10 @@ def cut_problems(project_id: str) -> list[str]:
 
 def _hold(item_id: str, state: str, reason: str) -> None:
     db.update_plan_item(item_id, hold=reason[:300], hold_state=state)
+    # hold 处理完就清掉了;记一条事件,复盘官的流程体检才数得出门禁最常拦什么
+    pid = (db.get_plan_item(item_id) or {}).get("project_id")
+    if pid:
+        db.add_event(pid, "team", src=state, reason=f"拦下:{reason[:300]}")
     log.info("plan %s held at %s: %s", item_id, state, reason)
 
 

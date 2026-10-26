@@ -473,6 +473,27 @@ function reportView(r) {
       ...(x.worst || []).map((w) => h('div', { class: 'small' },
         `第 ${w.pos} 拍(${w.start} 秒起,${w.section || '—'}·${w.layout})被拖过去的是全片平均的 ${Number(w.rel).toFixed(1)} 倍`))))));
   }
+  const hc = r.health;
+  if (hc) {
+    out.push(h('div', { class: 'subtle small' }, '流程体检(近 7 天)'));
+    const rows = [];
+    const stages = (hc.stages || []).filter((s) => s.median_min != null || s.failed);
+    if (stages.length) {
+      rows.push(h('div', { class: 'small num' }, stages.map((s) =>
+        `${s.label} ${s.median_min != null ? `${s.median_min} 分` : '—'}${s.failed ? `(失败 ${s.failed})` : ''}`).join(' · ')));
+    }
+    const c = hc.cost || {};
+    rows.push(h('div', { class: 'small num' },
+      `做完 ${c.done || 0} 条${c.per_video != null ? ` · 每条平均花 ${c.per_video}` : ''}`
+      + ` · 素材不够 ${(hc.thin || []).length} 次 · TTS 出问题 ${hc.tts || 0} 次`
+      + ` · 各拍渲染失败 ${(hc.render || {}).failed || 0}/${(hc.render || {}).shots || 0}`));
+    (hc.gates || []).slice(0, 3).forEach((g) => rows.push(h('div', { class: 'small' },
+      badge(`门禁 ${g.gate}`, 'warning'), ` ${g.reason} · ${g.n} 次`)));
+    (hc.changes || []).forEach((x) => rows.push(h('div', { class: 'small' },
+      badge('自动调参', 'brand'), ` ${x.label} ${x.old}→${x.new} ${x.unit}(${x.why})`)));
+    (hc.advice || []).forEach((a) => rows.push(h('div', { class: 'small' }, `建议:${a}`)));
+    out.push(h('div', { class: 'early-list' }, ...rows));
+  }
   const eg = r.engage || {};
   if ((eg.styles && eg.styles.length) || eg.active) {
     out.push(h('div', { class: 'subtle small' }, '互动效果:回复写法 / 活跃官'));
@@ -586,6 +607,19 @@ function renderSide() {
     ...(bench.hits.length
       ? [h('div', { class: 'subtle small' }, `近 14 天对标爆款(点赞 ≥ 该号中位数 ${bench.burst_ratio} 倍)`), ...bench.hits.map(benchHit)]
       : []));
+}
+
+/** 流程体检自动调过的参数:现值 / 默认 / 边界,一键恢复默认。 */
+function tuningRow(t) {
+  return h('div', { class: 'rowline' },
+    h('span', { title: '复盘官每周按流程体检调一步,范围写死,其他问题只给建议' }, badge('自动调参', 'brand')),
+    h('span', { class: 'grow small num' },
+      `${t.label}:${t.value} ${t.unit}(默认 ${t.default},边界 ${t.bound})`),
+    h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button',
+      onclick: (e) => withLoading(e.currentTarget, () => call(
+        `/api/team/tuning/${encodeURIComponent(t.key)}/reset`, '已恢复默认')),
+    }, icon('refresh', 'i-sm'), '恢复默认'));
 }
 
 function learningRow(l) {
@@ -1008,7 +1042,8 @@ function render() {
     ? `${DATA.report.week} · ${relTime(DATA.report.created_at)}${DATA.report.source === 'template' ? ' · 模板' : ''}` : '';
   const book = DATA.playbook || [];
   $('#playbook-list').replaceChildren(
-    ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]));
+    ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]),
+    ...(DATA.tuning || []).map(tuningRow));
   const exps = DATA.experiments || [];
   $('#experiment-box').replaceChildren(...(exps.length
     ? [...exps.map((exp) => h('div', { class: 'small' },

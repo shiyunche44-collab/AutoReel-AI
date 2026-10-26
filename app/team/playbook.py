@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from typing import Any, Mapping
 
 from .. import db
-from . import beat_retention, engagement
+from . import beat_retention, engagement, health
 from .features import DIMENSION_LABEL, value_label
 from .stats import METRIC_LABEL
 
@@ -197,6 +197,7 @@ def install() -> None:
     script_gen.hook_candidates = config.TEAM_HOOK_CANDIDATES
     beat_retention.install()
     engagement.style_weights = lambda: weights(engagement.STYLE_DIMENSION)
+    health.apply()
 
 
 def uninstall() -> None:
@@ -210,6 +211,7 @@ def uninstall() -> None:
     script_gen.hook_candidates = 0
     beat_retention.uninstall()
     engagement.style_weights = None
+    health.restore()
 
 
 # --------------------------------------------------------------------------
