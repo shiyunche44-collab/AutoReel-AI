@@ -16,7 +16,8 @@ import time
 from typing import Any
 
 from .. import db
-from . import Skip, beat_retention, benchmark, features, iteration, playbook, preference, stats
+from . import (Skip, activator, beat_retention, benchmark, engagement, features, iteration,
+               playbook, preference, stats)
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +156,10 @@ def _facts(report: dict[str, Any]) -> str:
                      f"{'、'.join(bits)}")
         lines += [f"  要改:{a}" for a in e.get("advice") or []]
     lines += beat_retention.report_lines(report.get("beats") or [])
+    engage = report.get("engage") or {}
+    lines += [f"回复写法「{s['label']}」:发了 {s['n']} 条,回复后 24 小时平均多 {s['more']:g} 条评论,"
+              f"{s['again'] * 100:.0f}% 的人又来留言" for s in engage.get("styles") or []]
+    lines += activator.effect_lines(engage.get("active"))
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
     lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
     bench = report.get("benchmark") or {}
@@ -218,6 +223,10 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     # 对标先验:自己样本不够的取值先按对标号的规律轻推;没作品也照样更新
     db.replace_learnings(week, stats.learn_benchmark(benchmark.prior_rows(ts), week, own=rows),
                          source="benchmark")
+    # 互动效果:哪种回复写法引得来评论;活跃官做得多的日子涨粉有没有多(没作品也照样量)
+    outcomes = engagement.reply_outcomes(ts)
+    db.replace_learnings(week, engagement.learn_styles(outcomes, week), source="reply")
+    active_effect = activator.weekly_effect(ts, week)
     if not rows and not early:
         iteration.log_weight_changes(before, iteration.weight_snapshot(db.list_learnings()), ts=ts)
         raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
@@ -232,6 +241,7 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     pool = _pool(rows, early_rows)
     report = build_report(rows, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts,
                           early=early, pool=pool)
+    report["engage"] = {"styles": engagement.style_report(outcomes), "active": active_effect}
     report.update(write_text(report, llm))
     report["made_at"] = time.time()
     db.save_report(week, report)

@@ -83,7 +83,8 @@ def test_collect_only_watched_works_and_keeps_review_state(fresh_db):
     assert got["added"] == 2
     c1 = fresh_db.get_comment("c1")
     assert c1["kind"] == "question" and c1["reply_state"] == "draft"
-    assert c1["reply_draft"] == engagement.TEMPLATES["question"]
+    assert c1["reply_style"] in engagement.REPLY_STYLES
+    assert c1["reply_draft"] == engagement.STYLE_TEMPLATES[c1["reply_style"]]["question"]
     # 再拉一次:上次的评论数已经记下;状态不被覆盖
     fresh_db.cas_comment_state("c1", ("draft",), "approved")
     fetch2 = _fetch({"w1": [_raw("c1", "这车多少钱?", likes=9)]}, counts={"w1": 3})
@@ -100,7 +101,8 @@ def test_llm_reply_checked_falls_back_to_template(fresh_db):
 
     class LLM:
         def structured(self, system, user, **kw):
-            assert "c1 | 续航多少" in user
+            style = engagement.REPLY_STYLES[engagement.pick_style("c1")]
+            assert f"c1 | {style} | 续航多少" in user and "反问=" in system
             return {"items": [
                 {"id": "c1", "kind": "question", "reply": "官方续航 835 公里"},  # 事实层没有这个数
                 {"id": "c2", "kind": "praise", "reply": "谢谢,下期见"},

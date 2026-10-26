@@ -27,7 +27,8 @@ DIMENSIONS = (
 )
 #: 逐拍维度(`beat_retention`)只用于展示:不从作品特征里抽,单独学
 DIMENSION_LABEL = {**dict(DIMENSIONS), "beat_layout": "逐拍·版式", "beat_role": "逐拍·位置",
-                   "beat_footage": "逐拍·素材", "beat_section": "逐拍·段落"}
+                   "beat_footage": "逐拍·素材", "beat_section": "逐拍·段落",
+                   "reply_style": "回复写法"}
 #: 旋钮维度(取值就是 `knobs` 里的取值)
 KNOB_DIMENSIONS = ("pace", "hook_visual", "concept_level", "speed", "voice", "cover_tone")
 #: 取哪个时间窗里的第一张快照当「24 小时结果」(小时)
@@ -51,6 +52,10 @@ def value_label(dimension: str, value: str) -> str:
         return packaging.KIND_LABEL.get(value, value)
     if dimension == "cover":
         return f"封面 {value.upper()}"
+    if dimension == "reply_style":
+        from .engagement import REPLY_STYLES
+
+        return REPLY_STYLES.get(value, value)
     if dimension.startswith("beat_"):
         from . import beat_retention
 

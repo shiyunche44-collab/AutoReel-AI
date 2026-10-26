@@ -105,7 +105,7 @@ def test_collect_claims_and_records(fresh_db, monkeypatch):
              _work("w_old", title="老作品", at=now - 25 * 3600, views=300)]
     seen = {}
     got = analyst.collect(now, fetch=lambda since: seen.setdefault("since", since) and works)
-    assert got == {"claimed": 2, "recorded": 3, "works": 3, "curves": 0}
+    assert got == {"claimed": 2, "recorded": 3, "works": 3, "curves": 0, "daily": 1}
     web = fresh_db.get_publication("web")
     assert web["state"] == "published" and web["remote_id"] == "w_web"
     assert web["remote_url"].endswith("/video/w_web")

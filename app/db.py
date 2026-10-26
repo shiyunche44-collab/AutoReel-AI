@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS comments (
     reply_error    TEXT NOT NULL DEFAULT '',
     replied_at     REAL,
     topic_state    TEXT NOT NULL DEFAULT '',      -- 问题类:'' 待进选题池 / pooled 已给主编 / dismissed
+    reply_style    TEXT NOT NULL DEFAULT '',      -- 回复写法 info / ask / thanks(阶段 6 学哪种引得来互动)
     fetched_at     REAL NOT NULL,
     updated_at     REAL NOT NULL
 );
@@ -344,6 +345,15 @@ CREATE TABLE IF NOT EXISTS progress_curves (
     points     TEXT NOT NULL DEFAULT '[]',  -- [[秒, 跳过率, 回看率], ...](JSON)
     views      INTEGER,
     fetched_at REAL NOT NULL
+);
+
+-- 账号每天一张粉丝快照(分析师抓作品列表时顺手记,作品里带作者粉丝数):量活跃官有没有用
+CREATE TABLE IF NOT EXISTS account_daily (
+    platform    TEXT NOT NULL,
+    day         TEXT NOT NULL,              -- 本地日期 YYYY-MM-DD
+    followers   INTEGER NOT NULL,
+    captured_at REAL NOT NULL,
+    PRIMARY KEY (platform, day)
 );
 
 CREATE TABLE IF NOT EXISTS benchmark_tags (
@@ -512,6 +522,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "source" not in _column_names(conn, "learnings"):
         # 对标先验和自己的结论分开写、分开过期
         conn.execute("ALTER TABLE learnings ADD COLUMN source TEXT NOT NULL DEFAULT 'own'")
+    if "reply_style" not in _column_names(conn, "comments"):
+        conn.execute("ALTER TABLE comments ADD COLUMN reply_style TEXT NOT NULL DEFAULT ''")
     bench_cols = _column_names(conn, "benchmark_posts")
     for col in ("video_url", "cover_url"):
         if col not in bench_cols:
@@ -1534,7 +1546,7 @@ def latest_report() -> dict[str, Any] | None:
 
 #: 评论里允许改的字段(`update_comment`)
 _COMMENT_FIELDS = {"kind", "kind_source", "reply_draft", "reply_source", "reply_state",
-                   "reply_error", "replied_at", "topic_state"}
+                   "reply_error", "replied_at", "topic_state", "reply_style"}
 
 
 def add_comments(rows: list[dict[str, Any]]) -> int:
@@ -1547,12 +1559,13 @@ def add_comments(rows: list[dict[str, Any]]) -> int:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO comments (id, publication_id, account_id, remote_id, author,"
                 " text, created_at, likes, kind, kind_source, reply_draft, reply_source,"
-                " reply_state, fetched_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " reply_state, reply_style, fetched_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (r["id"], r["publication_id"], r.get("account_id"), r.get("remote_id"),
                  r.get("author") or "", r.get("text") or "", r["created_at"], r.get("likes") or 0,
                  r.get("kind") or "other", r.get("kind_source") or "rule",
                  r.get("reply_draft") or "", r.get("reply_source") or "template",
-                 r.get("reply_state") or "draft", now, now))
+                 r.get("reply_state") or "draft", r.get("reply_style") or "", now, now))
             if cur.rowcount:
                 n += 1
             else:
@@ -1709,6 +1722,24 @@ def save_progress_curve(pub_id: str, points: list[list[float]], views: int | Non
         conn.execute("INSERT OR REPLACE INTO progress_curves (pub_id, points, views, fetched_at)"
                      " VALUES (?, ?, ?, ?)",
                      (pub_id, json.dumps(points), views, ts or time.time()))
+
+
+def save_account_daily(platform: str, day: str, followers: int, ts: float | None = None) -> bool:
+    """记当天的粉丝数。一天只记第一张(当天早些的数更接近「前一天结束时」)。返回是不是新记的。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("INSERT OR IGNORE INTO account_daily (platform, day, followers, captured_at)"
+                           " VALUES (?, ?, ?, ?)", (platform, day, int(followers), ts or time.time()))
+    return bool(cur.rowcount)
+
+
+def list_account_daily(platform: str = "douyin", since_day: str = "") -> dict[str, int]:
+    """{日期: 粉丝数},按日期升序。"""
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT day, followers FROM account_daily WHERE platform = ? AND day >= ?"
+                            " ORDER BY day", (platform, since_day)).fetchall()
+    return {r["day"]: int(r["followers"]) for r in rows}
 
 
 def list_progress_curves(since: float | None = None) -> dict[str, dict[str, Any]]:

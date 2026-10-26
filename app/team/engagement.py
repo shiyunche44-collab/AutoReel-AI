@@ -12,6 +12,11 @@
 **问题回灌选题池**:观众问的就是观众想看的。问题类评论交给主编(`audience_text`),
 附在选题提示词里;你也可以在审核区把某条标成「不进选题池」。
 
+**回复写法**(`reply_style`):补充信息 / 反问 / 感谢,每条评论按 id 定一种(重拟还是同一种),
+有结论时按结论的权重挑、留 30% 探索。发出去 24 小时后量这条作品又多了几条评论、原评论者
+有没有再来留言(只存一级评论,楼中楼看不到,所以「再回复」= 同一个人又留了一条),
+每周学哪种写法引得来互动(`learn_styles`),结论和别的打法一样能在 /team 停用。
+
 **断更提醒**:抖音连续 `IDLE_DAYS` 天没发、接下来一天也没排上,记一条团队事件提醒你补位
 (一天最多提醒一次)。
 
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import random
 import re
 import time
 from typing import Any, Callable
@@ -39,6 +45,9 @@ SEND_LIMIT = 10
 IDLE_DAYS = 3
 #: 问题类评论给主编看多少天内的
 QUESTION_DAYS = 14
+#: 同一台车被问到这么多条 / 这些问题合计这么多赞,就算「观众问的」选题
+ASK_MIN_COUNT = 2
+ASK_MIN_LIKES = 5
 
 _COUNTS_KEY = "engage_counts"
 _LOGIN_KEY = "engage_login_bad"
@@ -62,6 +71,44 @@ TEMPLATES = {
     "other": "谢谢关注,想看哪台车评论区告诉我。",
 }
 
+#: 回复写法(旋钮 `reply_style`)
+REPLY_STYLES = {"info": "补充信息", "ask": "反问", "thanks": "感谢"}
+STYLE_RULE = {
+    "info": "多给一点片里没说透的信息(只能用事实里的数字)",
+    "ask": "回应完反问观众一句,引他接着聊(比如他更在意哪一点、想看哪台车)",
+    "thanks": "先真诚道谢,再简短回应",
+}
+#: 各写法的模板。info 就是原来那套
+STYLE_TEMPLATES = {
+    "info": TEMPLATES,
+    "ask": {
+        "praise": "谢谢支持!你最想看哪台车的参数拆解?",
+        "question": "好问题,记下了。你更在意哪一点?后面重点讲。",
+        "argue": "数据是官方口径,片里标了出处。你看到的是哪个数?发出来对一下。",
+        "other": "谢谢关注,你最近在看哪台车?",
+    },
+    "thanks": {
+        "praise": "谢谢你!看到这样的评论特别有动力。",
+        "question": "谢谢提问!记下了,后面专门出一期讲这个。",
+        "argue": "谢谢你较真,数据是官方口径,有出入欢迎具体指出来。",
+        "other": "谢谢你来看!",
+    },
+}
+#: 按结论挑写法之外留多少均匀探索(和 `variety.EXPLORE` 一样)
+STYLE_EXPLORE = 0.3
+#: 回复后看多久的评论增量 / 原评论者多久内再来算「又回了」
+OUTCOME_HOURS = 24
+AGAIN_DAYS = 7
+#: 每种写法至少这么多条回复才下结论;收缩强度
+STYLE_MIN_N = 5
+STYLE_PRIOR = 5
+STYLE_RANGE = (0.7, 1.3)
+#: 回复写法结论的维度 / 指标
+STYLE_DIMENSION = "reply_style"
+STYLE_METRICS = {"reply_more": "回复后 24 小时评论增量", "reply_again": "原评论者再留言率"}
+#: 启动时由 `team.playbook.install` 挂上:() → {写法: 权重}。None = 均匀挑
+style_weights: Callable[[], dict[str, float]] | None = None
+
 SYSTEM = """你是汽车类抖音账号的运营,替作者给观众评论分类并拟回复。回复会以作者名义发出,作者会逐条审核。
 分类(kind):question=提问 / 想看什么;praise=夸奖感谢;argue=抬杠、质疑、骂;ad=广告引流;other=其他。
 回复规则:
@@ -69,7 +116,8 @@ SYSTEM = """你是汽车类抖音账号的运营,替作者给观众评论分类�
 - 只能用下面「事实」里出现过的数字,没有就别写数字;不用「最」「第一」「绝对」这类绝对化用语;
 - 问题类:事实里有答案就直接答,答不了就说记下了、后面讲;
 - 杠类:不争吵,摆出处或承认可以讨论;
-- 广告类:reply 留空。
+- 广告类:reply 留空;
+- 每条评论后面标了「写法」,按写法拟:{style_rules}。
 只输出 JSON:{{"items": [{{"id": "评论 id", "kind": "...", "reply": "..."}}]}}"""
 
 
@@ -90,16 +138,37 @@ def classify(text: str) -> str:
     return "other"
 
 
-def template_draft(kind: str) -> dict[str, str]:
+def template_draft(kind: str, style: str = "info") -> dict[str, str]:
     """模板回复。广告类不回(状态直接 skipped)。"""
     if kind == "ad":
         return {"reply_draft": "", "reply_source": "template", "reply_state": "skipped"}
-    return {"reply_draft": TEMPLATES.get(kind, TEMPLATES["other"]), "reply_source": "template",
+    table = STYLE_TEMPLATES.get(style) or TEMPLATES
+    return {"reply_draft": table.get(kind, table["other"]), "reply_source": "template",
             "reply_state": "draft"}
 
 
-def parse_comment(raw: dict[str, Any], pub: dict[str, Any]) -> dict[str, Any] | None:
-    """评论接口的一条 → 入库的行。作者自己的、楼中楼都不要。"""
+def _style_weights() -> dict[str, float]:
+    if style_weights is None:
+        return {}
+    try:
+        return dict(style_weights() or {})
+    except Exception:  # noqa: BLE001 - 结论坏了照样均匀挑
+        log.warning("读回复写法结论失败,这次均匀挑", exc_info=True)
+        return {}
+
+
+def pick_style(comment_id: str, weights: dict[str, float] | None = None) -> str:
+    """这条评论用哪种写法。按评论 id 定(重抓 / 重拟还是同一种);有权重时 70% 按权重挑。"""
+    rng = random.Random(f"reply_style:{comment_id}")
+    styles = list(REPLY_STYLES)
+    if weights and rng.random() >= STYLE_EXPLORE:
+        return rng.choices(styles, [max(float(weights.get(s, 1.0)), 0.01) for s in styles])[0]
+    return rng.choice(styles)
+
+
+def parse_comment(raw: dict[str, Any], pub: dict[str, Any],
+                  weights: dict[str, float] | None = None) -> dict[str, Any] | None:
+    """评论接口的一条 → 入库的行。作者自己的、楼中楼都不要。`weights` = 回复写法的权重。"""
     if raw.get("is_author") or int(raw.get("level") or 1) != 1:
         return None
     cid = str(raw.get("comment_id") or "")
@@ -107,12 +176,13 @@ def parse_comment(raw: dict[str, Any], pub: dict[str, Any]) -> dict[str, Any] | 
         return None
     text = str(raw.get("text") or "").strip()
     kind = classify(text)
+    style = pick_style(cid, weights)
     return {"id": cid, "publication_id": pub["id"], "account_id": pub.get("account_id"),
             "remote_id": pub.get("remote_id"),
             "author": str((raw.get("user_info") or {}).get("screen_name") or ""),
             "text": text, "created_at": float(raw.get("create_time") or 0) or time.time(),
             "likes": int(raw.get("digg_count") or 0), "kind": kind, "kind_source": "rule",
-            **template_draft(kind)}
+            "reply_style": style, **template_draft(kind, style)}
 
 
 def _reply_context(project_id: str) -> tuple[set[str], tuple[str, ...], list[str]]:
@@ -137,10 +207,14 @@ def llm_drafts(rows: list[dict[str, Any]], title: str, ctx: tuple[set[str], tupl
         return {}
     allowed, terms, facts = ctx
     user = (f"作品标题:{title}\n\n事实:\n" + ("\n".join(facts[:40]) or "(无)")
-            + "\n\n评论(id | 内容):\n" + "\n".join(f"{r['id']} | {r['text'][:200]}" for r in rows))
+            + "\n\n评论(id | 写法 | 内容):\n"
+            + "\n".join(f"{r['id']} | {REPLY_STYLES.get(r.get('reply_style') or 'info', '补充信息')}"
+                        f" | {r['text'][:200]}" for r in rows))
+    rules = ";".join(f"{REPLY_STYLES[k]}={v}" for k, v in STYLE_RULE.items())
+    styles = {r["id"]: r.get("reply_style") or "info" for r in rows}
     try:
-        data = llm.structured(SYSTEM.format(max_chars=packaging.REPLY_MAX_CHARS), user,
-                              required_keys=["items"], temperature=0.4)
+        data = llm.structured(SYSTEM.format(max_chars=packaging.REPLY_MAX_CHARS, style_rules=rules),
+                              user, required_keys=["items"], temperature=0.4)
     except Exception as exc:  # noqa: BLE001 - 模板兜底
         log.warning("评论拟回复失败,用模板:%s", exc)
         return {}
@@ -152,7 +226,8 @@ def llm_drafts(rows: list[dict[str, Any]], title: str, ctx: tuple[set[str], tupl
         kind = str(item.get("kind") or "")
         if kind not in KIND_LABEL:
             continue
-        fields: dict[str, str] = {"kind": kind, "kind_source": "llm", **template_draft(kind)}
+        fields: dict[str, str] = {"kind": kind, "kind_source": "llm",
+                                  **template_draft(kind, styles[str(item["id"])])}
         reply = str(item.get("reply") or "").strip()
         if kind != "ad" and reply and not packaging.check_reply(reply, allowed, terms):
             fields.update(reply_draft=reply, reply_source="llm")
@@ -207,12 +282,13 @@ def collect(now: float | None = None, fetch: Callable[..., dict[str, Any]] | Non
         raise _browser_failed(exc, now, "抓不了评论") from exc
     db.set_team_setting(_LOGIN_KEY, None)
     auto = bool(db.get_team_setting(AUTO_THANKS_KEY, False))
+    weights = _style_weights()
     added = 0
     for wid, raws in (got.get("comments") or {}).items():
         pub = pubs.get(wid)
         if not pub:
             continue
-        rows = [r for r in (parse_comment(x, pub) for x in raws) if r]
+        rows = [r for r in (parse_comment(x, pub, weights) for x in raws) if r]
         fresh = [r for r in rows if not db.get_comment(r["id"])]
         if fresh:
             ctx = _reply_context(pub["project_id"])
@@ -351,6 +427,131 @@ def audience_text(now: float | None = None, limit: int = 8, mark: bool = False) 
         if mark and not r["topic_state"]:
             db.update_comment(r["id"], topic_state="pooled")
     return "观众在评论里问(观众想看的,能排就排):\n" + "\n".join(lines)
+
+
+def reply_outcomes(now: float | None = None, days: int = 60) -> list[dict[str, Any]]:
+    """近 `days` 天发出去、已满 `OUTCOME_HOURS` 小时的回复,各自的效果:
+    {id, style, more: 回复后 24 小时这条作品新增几条评论, again: 原评论者 7 天内有没有再留言}。
+
+    只算按写法拟的(模板 / AI);你自己写的不算哪种写法。"""
+    now = time.time() if now is None else now
+    rows = db.list_comments(since=now - (days + AGAIN_DAYS) * 86400, limit=5000)
+    by_pub: dict[str, list[float]] = {}
+    by_author: dict[str, list[float]] = {}
+    for r in rows:
+        by_pub.setdefault(r["publication_id"], []).append(float(r["created_at"]))
+        if r["author"]:
+            by_author.setdefault(r["author"], []).append(float(r["created_at"]))
+    out = []
+    for r in rows:
+        at = r.get("replied_at")
+        if (r["reply_state"] != "sent" or not at or r.get("reply_style") not in REPLY_STYLES
+                or r["reply_source"] not in ("template", "llm")
+                or now - at < OUTCOME_HOURS * 3600 or now - at > days * 86400):
+            continue
+        more = sum(1 for t in by_pub.get(r["publication_id"], ())
+                   if at < t <= at + OUTCOME_HOURS * 3600)
+        again = bool(r["author"]) and any(at < t <= at + AGAIN_DAYS * 86400
+                                          for t in by_author.get(r["author"], ()))
+        out.append({"id": r["id"], "style": r["reply_style"], "kind": r["kind"],
+                    "more": more, "again": again, "text": r["text"][:40]})
+    return out
+
+
+def _shrunk(vals: list[float], base: float) -> float:
+    return (sum(vals) + STYLE_PRIOR * base) / (len(vals) + STYLE_PRIOR) / base
+
+
+def learn_styles(outcomes: list[dict[str, Any]], week: str) -> list[dict[str, Any]]:
+    """每种写法的两个倍数(相对所有回复的平均,往平均收缩),写成 learnings 的行。
+
+    评论增量和再留言率都是 0 的时候没得比,不下结论。"""
+    rows = []
+    for metric, get in (("reply_more", lambda o: float(o["more"])),
+                        ("reply_again", lambda o: 1.0 if o["again"] else 0.0)):
+        vals = [get(o) for o in outcomes]
+        base = sum(vals) / len(vals) if vals else 0.0
+        if base <= 0:
+            continue
+        for style in REPLY_STYLES:
+            mine = [get(o) for o in outcomes if o["style"] == style]
+            if len(mine) < STYLE_MIN_N:
+                continue
+            effect = round(min(STYLE_RANGE[1], max(STYLE_RANGE[0], _shrunk(mine, base))), 3)
+            if abs(effect - 1) < 0.05:
+                continue
+            sample = [o for o in outcomes if o["style"] == style]
+            sample.sort(key=lambda o: -get(o) if effect > 1 else get(o))
+            rows.append({"id": f"reply:{STYLE_DIMENSION}:{style}:{metric}", "dimension": STYLE_DIMENSION,
+                         "value": style, "metric": metric, "effect": effect, "n": len(mine),
+                         "confidence": "high" if len(mine) >= 3 * STYLE_MIN_N else "medium",
+                         "evidence": [{"comment_id": o["id"], "title": o["text"], "more": o["more"],
+                                       "again": o["again"]} for o in sample[:3]]})
+    return rows
+
+
+def style_report(outcomes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """周报用:每种写法发了几条、平均带来几条新评论、原评论者再留言的比例。"""
+    out = []
+    for style, name in REPLY_STYLES.items():
+        mine = [o for o in outcomes if o["style"] == style]
+        if not mine:
+            continue
+        out.append({"style": style, "label": name, "n": len(mine),
+                    "more": round(sum(o["more"] for o in mine) / len(mine), 2),
+                    "again": round(sum(1 for o in mine if o["again"]) / len(mine), 3)})
+    return out
+
+
+def _subject_of(pub_id: str, cache: dict[str, str]) -> str:
+    """评论所在作品讲的车(多车的取第一台)。没写车名的问题默认问的就是它。"""
+    if pub_id not in cache:
+        pub = db.get_publication(pub_id) or {}
+        project = db.get_project(pub.get("project_id") or "") or {}
+        subjects = project.get("subjects") or []
+        cache[pub_id] = str(subjects[0] if subjects else project.get("subject") or "")
+    return cache[pub_id]
+
+
+def audience_topics(now: float | None = None, cars: list[str] | None = None) -> list[dict[str, Any]]:
+    """把近 `QUESTION_DAYS` 天的问题类评论按车型聚成题:评论里点了车名就归那台车,
+    没点就归评论所在作品讲的车。被问 ≥`ASK_MIN_COUNT` 条或合计 ≥`ASK_MIN_LIKES` 赞的才算。
+
+    返回 [{car, n, likes, samples: [评论原文]}],问得多的在前。`cars` 测试用(默认认热点 + 排过的车)。"""
+    from .. import config
+    from .benchmark import car_in, known_cars
+
+    now = time.time() if now is None else now
+    rows = db.list_comments(kinds=("question",), topic_states=("", "pooled"),
+                            since=now - QUESTION_DAYS * 86400, limit=300)
+    if not rows:
+        return []
+    if cars is None:
+        try:
+            cars = known_cars(config.TEAM_CATEGORY)
+        except Exception:  # noqa: BLE001 - 认不出车名就只按作品归
+            cars = []
+    groups: dict[str, dict[str, Any]] = {}
+    subjects: dict[str, str] = {}
+    for r in sorted(rows, key=lambda r: (-r["likes"], -r["created_at"])):
+        car = car_in(r["text"], cars) or _subject_of(r["publication_id"], subjects)
+        if not car:
+            continue
+        g = groups.setdefault(car, {"car": car, "n": 0, "likes": 0, "samples": []})
+        g["n"] += 1
+        g["likes"] += int(r["likes"] or 0)
+        if len(g["samples"]) < 3:
+            g["samples"].append(r["text"][:40])
+    hot = [g for g in groups.values() if g["n"] >= ASK_MIN_COUNT or g["likes"] >= ASK_MIN_LIKES]
+    return sorted(hot, key=lambda g: (-g["n"], -g["likes"]))
+
+
+def topics_text(topics: list[dict[str, Any]]) -> str:
+    """给主编的一行:「观众问得最多的车:小米YU7(3 条)、……」。"""
+    if not topics:
+        return ""
+    return "观众问得最多的车(优先排一期专门回答):" + "、".join(
+        f"{t['car']}({t['n']} 条)" for t in topics[:5])
 
 
 def idle_days(now: float | None = None) -> float | None:

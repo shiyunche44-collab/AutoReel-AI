@@ -63,6 +63,8 @@ function pendingCard(item) {
       h('div', { class: 'grow' },
         h('div', { class: 'plan-subject' },
           rapid ? h('span', { class: 'badge tone-danger rapid-badge' }, icon('zap', 'i-sm'), '快反') : null,
+          (item.rationale || '').includes('观众问的')
+            ? h('span', { title: '评论区好几条在问这台车,运营官聚出来交给主编的' }, badge('观众问的', 'success')) : null,
           subjectLine(item)),
         h('div', { class: 'plan-angle' }, item.angle || '(没有角度)')),
       h('div', { class: 'plan-heat', title: '热度 1-5' }, '🔥'.repeat(Math.max(1, Math.min(5, item.heat || 3))))),
@@ -464,6 +466,22 @@ function reportView(r) {
       ...(x.worst || []).map((w) => h('div', { class: 'small' },
         `第 ${w.pos} 拍(${w.start} 秒起,${w.section || '—'}·${w.layout})被拖过去的是全片平均的 ${Number(w.rel).toFixed(1)} 倍`))))));
   }
+  const eg = r.engage || {};
+  if ((eg.styles && eg.styles.length) || eg.active) {
+    out.push(h('div', { class: 'subtle small' }, '互动效果:回复写法 / 活跃官'));
+    const rows = (eg.styles || []).map((s) => h('div', { class: 'small num' },
+      h('strong', {}, s.label), ` 发了 ${s.n} 条 · 回复后 24 小时平均多 ${s.more} 条评论 · ${pct(s.again)} 的人又来留言`));
+    const a = eg.active;
+    if (a) {
+      const tone = { effective: 'success', none: 'warning', unknown: 'neutral' }[a.verdict] || 'neutral';
+      const label = { effective: '有效果', none: '看不出效果', unknown: '比不出来' }[a.verdict] || a.verdict;
+      rows.push(h('div', { class: 'row small' }, h('span', {}, '活跃官'), badge(label, tone),
+        h('span', { class: 'grow subtle' }, a.why || ''),
+        a.verdict === 'none' ? h('span', { class: 'subtle num' }, `连续 ${a.streak}/${a.streak_limit} 周`) : null,
+        a.halved && Object.keys(a.halved).length ? badge('额度已减半', 'warning') : null));
+    }
+    out.push(h('div', { class: 'early-list' }, ...rows));
+  }
   if (r.experiments && r.experiments.length) {
     out.push(h('div', { class: 'subtle small' }, '下周实验'),
       h('div', { class: 'row wrap-row' }, ...r.experiments.map((e) => badge(`${e.label} · ${e.why}`, 'brand'))));
@@ -578,6 +596,7 @@ function learningRow(l) {
     badge(l.effect >= 1 ? '多做' : '少做', l.effect >= 1 ? 'success' : 'warning'),
     bench ? h('span', { title: '对标号的先验:倍数夹在 0.8–1.25;自己同一取值攒够 3 条就让位' }, badge('对标', 'brand')) : null,
     l.source === 'beat' ? h('span', { title: '进度条分析的跳过率落到每一拍上学的:留人倍数 = 1 ÷ 相对跳过率,回灌分镜挑版式和切片挑段' }, badge('逐拍', 'brand')) : null,
+    l.source === 'reply' ? h('span', { title: '运营官回复后 24 小时的评论增量 / 原评论者再留言率学的,回灌回复写法的挑选(仍留 30% 探索)' }, badge('互动', 'brand')) : null,
     h('span', { class: 'grow small', title: ev }, bench ? l.text.replace(/^对标号 /, '') : l.text),
     l.shadowed ? badge('自己的数据已覆盖', 'neutral') : null,
     off ? badge('已停用', 'neutral') : null,
@@ -593,6 +612,7 @@ const REPLY_STATE = {
   draft: ['待审', 'warning'], approved: ['已批,待发', 'brand'], sending: ['发送中', 'brand'],
   failed: ['发送失败', 'danger'],
 };
+const REPLY_STYLE = { info: '补充信息', ask: '反问', thanks: '感谢' };
 const PICKED = new Set();
 
 function pickedButtons() {
@@ -631,7 +651,11 @@ function commentRow(c) {
         h('span', { class: 'subtle' }, `${relTime(c.created_at)} · 《${c.work_title || ''}》`),
         c.likes ? h('span', { class: 'subtle' }, `${c.likes} 赞`) : null,
         badge(stateText, stateTone),
-        c.reply_source === 'llm' ? badge('AI 拟', 'neutral') : c.reply_source === 'user' ? badge('你写的', 'neutral') : null),
+        c.reply_source === 'llm' ? badge('AI 拟', 'neutral') : c.reply_source === 'user' ? badge('你写的', 'neutral') : null,
+        REPLY_STYLE[c.reply_style] && c.reply_source !== 'user'
+          ? h('span', { title: '回复写法:每条评论随机一种,复盘官每周比哪种引得来更多评论 / 原评论者再留言' },
+              badge(`写法·${REPLY_STYLE[c.reply_style]}`, 'neutral'))
+          : null),
       h('div', { class: 'comment-text' }, c.text || '(只有表情)'),
       c.reply_error ? h('div', { class: 'small text-danger' }, c.reply_error) : null,
       reply),
@@ -923,6 +947,11 @@ function activeStats(s) {
   if (s.failed) parts.push(`⚠ ${s.failed} 次失败`);
   if (s.paused) parts.push('⚠ 今天已停手');
   if (!s.enabled) parts.push('已关闭');
+  const ef = s.effect || {};
+  if (ef.last) {
+    const label = { effective: '有效果', none: '看不出效果', unknown: '比不出来' }[ef.last.verdict] || ef.last.verdict;
+    parts.push(`上周效果:${label}${ef.streak ? `(连续 ${ef.streak}/${ef.limit} 周没效果,满了额度减半)` : ''}`);
+  }
   return parts.join(' · ');
 }
 

@@ -37,6 +37,7 @@ import hashlib
 import logging
 import random
 import re
+import statistics
 import time
 from typing import Any, Callable
 
@@ -689,8 +690,12 @@ def stats(now: float | None = None, days: int = 1) -> dict[str, Any]:
     for action in (COMMENT, LIKE, SHARE, FOLLOW):
         counts[action] = sum(1 for r in rows if r["action"] == action and r["state"] == DONE)
     plan = plan_for(day)
+    effect_state = db.get_team_setting(EFFECT_KEY, {}) or {}
     return {
         "day": day,
+        # 每周量一次的效果:最近一周的结论 + 连续几周看不出效果
+        "effect": {"last": (effect_state.get("history") or [None])[-1],
+                   "streak": int(effect_state.get("streak") or 0), "limit": EFFECT_STREAK},
         "enabled": enabled(),
         "paused": paused_day() == day,
         "quotas": {a: quota(a) for a in (COMMENT, LIKE, SHARE, FOLLOW)},
@@ -704,3 +709,106 @@ def stats(now: float | None = None, days: int = 1) -> dict[str, Any]:
 
 def _label(action: str) -> str:
     return {COMMENT: "评论", LIKE: "点赞", SHARE: "分享", FOLLOW: "关注"}.get(action, action)
+
+
+# --------------------------------------------------------------------------
+# 效果:互动多的日子,涨粉有没有多(复盘官每周量一次)
+# --------------------------------------------------------------------------
+#: 看最近几天
+EFFECT_DAYS = 28
+#: 互动多 / 少两组各至少这么多天才比
+EFFECT_MIN_DAYS = 4
+#: 互动多的日子平均涨粉比少的日子多这么多(且至少多 1 个)才算有用
+EFFECT_MIN_GAIN = 0.2
+#: 连续这么多周「看不出效果」就把额度减半
+EFFECT_STREAK = 4
+EFFECT_KEY = "active_effect"
+
+
+def effect(now: float | None = None) -> dict[str, Any]:
+    """近 `EFFECT_DAYS` 天每天做完的互动数 vs 当天到第二天的涨粉(第二天的粉丝快照 − 当天的)。
+
+    按互动数的中位数分两组:多于中位数的是「互动多」,其余是「互动少」。
+    返回 {verdict: effective / none / unknown, high, low: {days, actions, gain}, days, why}。
+    天天都做满额度(两组拉不开)、快照不够,都是 unknown —— 比不出来不等于没用。"""
+    now = now or time.time()
+    today = dt.date.fromtimestamp(now)
+    start = today - dt.timedelta(days=EFFECT_DAYS)
+    followers = db.list_account_daily("douyin", start.isoformat())
+    done = db.list_outbound_actions(states=(DONE,), since=now - (EFFECT_DAYS + 2) * 86400, limit=10000)
+    acts: dict[str, int] = {}
+    for r in done:
+        acts[r["day"]] = acts.get(r["day"], 0) + 1
+    days = []
+    for i in range(EFFECT_DAYS):
+        d = start + dt.timedelta(days=i)
+        nxt = (d + dt.timedelta(days=1)).isoformat()
+        if d.isoformat() in followers and nxt in followers:
+            days.append({"day": d.isoformat(), "actions": acts.get(d.isoformat(), 0),
+                         "gain": followers[nxt] - followers[d.isoformat()]})
+    out: dict[str, Any] = {"verdict": "unknown", "days": len(days), "high": None, "low": None}
+    if len(days) < 2 * EFFECT_MIN_DAYS:
+        return {**out, "why": f"粉丝快照只有 {len(days)} 天能算涨粉,至少要 {2 * EFFECT_MIN_DAYS} 天"}
+    mid = statistics.median(d["actions"] for d in days)
+    high = [d for d in days if d["actions"] > mid]
+    low = [d for d in days if d["actions"] <= mid]
+
+    def group(xs: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"days": len(xs), "actions": round(statistics.fmean(d["actions"] for d in xs), 1),
+                "gain": round(statistics.fmean(d["gain"] for d in xs), 2)}
+
+    if len(high) < EFFECT_MIN_DAYS or len(low) < EFFECT_MIN_DAYS:
+        return {**out, "why": "每天的互动量差不多,分不出多和少的日子"}
+    hi, lo = group(high), group(low)
+    better = hi["gain"] - lo["gain"]
+    verdict = "effective" if better >= max(1.0, EFFECT_MIN_GAIN * abs(lo["gain"])) else "none"
+    return {**out, "verdict": verdict, "high": hi, "low": lo,
+            "why": (f"互动多的 {hi['days']} 天(平均 {hi['actions']:g} 次)平均涨粉 {hi['gain']:g},"
+                    f"互动少的 {lo['days']} 天(平均 {lo['actions']:g} 次)平均涨粉 {lo['gain']:g}")}
+
+
+def weekly_effect(now: float | None = None, week: str = "") -> dict[str, Any]:
+    """复盘官每周调一次:量效果,记进历史;连续 `EFFECT_STREAK` 周「看不出效果」(none)就把
+    各动作额度减半(至少留 1)、写变更日志,计数清零重来。有效果维持原额度,**不会自动加**;
+    unknown(比不出来)不算进连续周数,也不清零。同一周重复跑只算一次。"""
+    now = now or time.time()
+    got = effect(now)
+    state = db.get_team_setting(EFFECT_KEY, {}) or {}
+    history = list(state.get("history") or [])
+    streak = int(state.get("streak") or 0)
+    if not history or history[-1].get("week") != week:
+        if got["verdict"] == "none":
+            streak += 1
+        elif got["verdict"] == "effective":
+            streak = 0
+        history.append({"week": week, "verdict": got["verdict"], "why": got.get("why", "")})
+    halved: dict[str, list[int]] = {}
+    if streak >= EFFECT_STREAK:
+        for action in DEFAULT_QUOTAS:
+            old = quota(action)
+            new = max(1, old // 2) if old else 0
+            if new != old:
+                db.set_team_setting(f"active_quota_{action}s", new)
+                halved[action] = [old, new]
+        streak = 0
+        if halved:
+            db.add_iteration_log(
+                "param", f"活跃官连续 {EFFECT_STREAK} 周看不出涨粉效果,额度减半:"
+                + "、".join(f"{_label(a)} {o}→{n}" for a, (o, n) in halved.items()),
+                {"halved": halved, "why": got.get("why", "")}, ts=now)
+    db.set_team_setting(EFFECT_KEY, {"history": history[-12:], "streak": streak})
+    return {**got, "streak": streak, "halved": halved, "streak_limit": EFFECT_STREAK}
+
+
+def effect_lines(e: dict[str, Any] | None) -> list[str]:
+    """周报的一行。"""
+    if not e:
+        return []
+    verdict = {"effective": "有效果(维持额度)", "none": "看不出效果",
+               "unknown": "比不出来"}.get(e["verdict"], e["verdict"])
+    line = f"活跃官效果:{verdict};{e.get('why', '')}"
+    if e["verdict"] == "none":
+        line += f";已连续 {e.get('streak', 0)}/{e.get('streak_limit', EFFECT_STREAK)} 周"
+    if e.get("halved"):
+        line += ";额度已减半:" + "、".join(f"{_label(a)} {o}→{n}" for a, (o, n) in e["halved"].items())
+    return [line]

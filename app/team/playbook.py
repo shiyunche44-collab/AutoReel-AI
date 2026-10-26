@@ -21,7 +21,7 @@ from collections import Counter, defaultdict
 from typing import Any, Mapping
 
 from .. import db
-from . import beat_retention
+from . import beat_retention, engagement
 from .features import DIMENSION_LABEL, value_label
 from .stats import METRIC_LABEL
 
@@ -90,6 +90,12 @@ def describe(r: dict[str, Any]) -> str:
         return (f"{DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
                 f"{value_label(r['dimension'], r['value'])}:留人 {r['effect']:.2f} 倍"
                 f"({r['n']} 拍,置信度{conf})")
+    if r.get("source") == "reply":
+        conf = "高" if r["confidence"] == "high" else "中"
+        return (f"{DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
+                f"{value_label(r['dimension'], r['value'])}:"
+                f"{engagement.STYLE_METRICS.get(r['metric'], r['metric'])} {r['effect']:.2f} 倍"
+                f"({r['n']} 条回复,置信度{conf})")
     if r.get("source") == "benchmark":
         return (f"对标号 {DIMENSION_LABEL.get(r['dimension'], r['dimension'])} = "
                 f"{value_label(r['dimension'], r['value'])}:爆款倍数 {r['effect']:.2f} 倍"
@@ -190,6 +196,7 @@ def install() -> None:
     script_gen.learned_hint = script_hint
     script_gen.hook_candidates = config.TEAM_HOOK_CANDIDATES
     beat_retention.install()
+    engagement.style_weights = lambda: weights(engagement.STYLE_DIMENSION)
 
 
 def uninstall() -> None:
@@ -202,6 +209,7 @@ def uninstall() -> None:
     script_gen.learned_hint = None
     script_gen.hook_candidates = 0
     beat_retention.uninstall()
+    engagement.style_weights = None
 
 
 # --------------------------------------------------------------------------

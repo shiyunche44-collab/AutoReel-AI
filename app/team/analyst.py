@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 import time
@@ -195,23 +196,44 @@ def _record_progress(pubs: list[dict[str, Any]], views: dict[str, int | None], n
     return n
 
 
+#: 今天为记粉丝数单独开过一次浏览器(作品列表是空的就别每小时都开)
+_DAILY_TRIED_KEY = "analyst_daily_tried"
+
+
+def _daily_followers(works: list[dict[str, Any]]) -> int | None:
+    """作品列表里带的作者粉丝数(每条作品都带同一个数,取最大的那个)。"""
+    from ..metrics.collector import parse_douyin_creator
+
+    got = [(parse_douyin_creator(w) or {}).get("followers") or 0 for w in works]
+    return max(got, default=0) or None
+
+
 def collect(now: float | None = None, fetch=None, fetch_progress=None) -> dict[str, int]:
     """抓一轮。`fetch` / `fetch_progress` 测试用(默认开浏览器抓创作者中心);
-    测试只给了 `fetch` 时不抓进度条分析。"""
+    测试只给了 `fetch` 时不抓进度条分析。
+
+    顺手记今天的账号粉丝数(`account_daily`,一天一张,活跃官的效果靠它量):
+    没有到点要抓的作品时,今天还没记就单独抓一次作品列表。"""
     from ..metrics.collector import parse_douyin_creator
     from ..publish.base import PublishError
     from ..publish.platforms import douyin
 
     now = time.time() if now is None else now
+    today = dt.date.fromtimestamp(now).isoformat()
+    need_daily = (today not in db.list_account_daily("douyin", today)
+                  and db.get_team_setting(_DAILY_TRIED_KEY) != today)
     unmatched, due = candidates(now)
-    if not unmatched and not due:
+    if not unmatched and not due and not need_daily:
         raise Skip("没有到点要抓的作品")
     if fetch is None:
         if _login_blocked():
             raise Skip("抖音登录失效,等你去分发台重新扫码")
         fetch = douyin.fetch_creator_works
         fetch_progress = fetch_progress or douyin.fetch_work_progress
-    oldest = min([submitted_at(p) for p in unmatched] + [p["published_at"] for p in due])
+    if not unmatched and not due:
+        db.set_team_setting(_DAILY_TRIED_KEY, today)
+    oldest = min([submitted_at(p) for p in unmatched] + [p["published_at"] for p in due],
+                 default=now - 86400)
     try:
         works = fetch(since=oldest - MATCH_WINDOW)
     except PublishError as exc:
@@ -220,6 +242,8 @@ def collect(now: float | None = None, fetch=None, fetch_progress=None) -> dict[s
             db.add_event("__team__", "team", reason=f"分析师抓不了抖音数据:{exc.message}")
         raise TeamError(exc.message) from exc
     db.set_team_setting(_LOGIN_KEY, None)
+    followers = _daily_followers(works) if need_daily else None
+    daily = int(bool(followers) and db.save_account_daily("douyin", today, followers, now))
     taken = {p["remote_id"] for p in db.list_publications(limit=1000) if p.get("remote_id")}
     claimed = recorded = 0
     deep: list[dict[str, Any]] = []
@@ -247,17 +271,22 @@ def collect(now: float | None = None, fetch=None, fetch_progress=None) -> dict[s
         if work and record(pub, work):
             recorded += 1
     curves = _record_progress(deep, views, now, fetch_progress) if fetch_progress else 0
-    return {"claimed": claimed, "recorded": recorded, "works": len(works), "curves": curves}
+    return {"claimed": claimed, "recorded": recorded, "works": len(works), "curves": curves,
+            "daily": daily}
 
 
 def run() -> str:
     got = collect()
     if not got["claimed"] and not got["recorded"]:
+        if got.get("daily"):
+            return "记下今天的粉丝数"
         raise Skip(f"创作者中心 {got['works']} 条作品里没对上到点的发布")
     parts = []
     if got["claimed"]:
         parts.append(f"对上 {got['claimed']} 条作品")
     parts.append(f"落 {got['recorded']} 张数据快照")
+    if got.get("daily"):
+        parts.append("记下今天的粉丝数")
     if got.get("curves"):
         parts.append(f"抓 {got['curves']} 条进度条分析")
     return ",".join(parts)

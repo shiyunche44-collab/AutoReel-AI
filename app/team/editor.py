@@ -173,8 +173,11 @@ def run(category: str | None = None, *, llm: Any = None,
     learnings = db.list_learnings()
     weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject", "duration")}
     # 打法手册 + 观众在评论里问的(运营官回灌)+ 行业日历 + 对标爆款
+    asked = engagement.audience_topics(now.timestamp())
+    asked_cars = {_norm(t["car"]): t for t in asked}
     hints = "\n\n".join(t for t in (preference.prompt_text(), playbook.prompt_text(learnings),
                                      engagement.audience_text(now.timestamp(), mark=True),
+                                     engagement.topics_text(asked),
                                      events.prompt_text(category, now.date()),
                                      benchmark.prompt_text(now.timestamp())) if t)
     ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
@@ -184,7 +187,8 @@ def run(category: str | None = None, *, llm: Any = None,
     bench_cars = benchmark.hot_cars(now.timestamp())
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
     rates = preference.rates() if preference.rate_on() else None
-    ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars, weights, rates)
+    ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars | set(asked_cars),
+                        weights, rates)
     if not ranked:
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
@@ -203,6 +207,10 @@ def run(category: str | None = None, *, llm: Any = None,
                       f"{event_cars[k]['title']}" for k in dict.fromkeys(keys) if k in event_cars)
         if any(k in bench_cars for k in keys):
             extra += ("对标号同车型出了爆款",)
+        # 观众在评论里问的(放最前面:卡片上的「观众问的」标就认这几个字)
+        extra = tuple(f"观众问的:{asked_cars[k]['n']} 条评论问到{asked_cars[k]['car']}"
+                      f"(「{asked_cars[k]['samples'][0]}」)"
+                      for k in dict.fromkeys(keys) if k in asked_cars) + extra
         evidence = list(idea.evidence) + [x for n in names
                                           for x in benchmark.evidence_for(n, now.timestamp())]
         db.create_plan_item({
