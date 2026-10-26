@@ -16,21 +16,17 @@ LOOKBACK_DAYS = 3
 OPEN = ("proposed", "approved", "producing", "review", "scheduled")
 
 
-def _experiment_view() -> dict[str, Any]:
-    """当前在跑的配对实验:固定哪个维度、试哪种写法、已经用了几条。"""
+def _experiment_views() -> list[dict[str, Any]]:
+    """在跑的配对实验(可能几个并行):固定哪个维度、试哪种写法、已经用了几条。"""
     from . import features
 
-    raw = db.get_team_setting(playbook.PLAN_KEY, None)
-    if not isinstance(raw, dict) or not raw.get("dimension"):
-        return {}
-    dimension, value = str(raw["dimension"]), str(raw.get("value") or "")
-    size = int(raw.get("size") or playbook.BLOCK_SIZE)
-    since = float(raw.get("since") or 0)
-    used = playbook.used_since(dimension, value, since)
-    label = features.value_label(dimension, value)
-    return {"dimension": dimension, "value": value, "label": label,
-            "size": size, "used": used, "left": max(0, size - used),
-            "done": used >= size}
+    out = []
+    for p in playbook.progress():
+        dim, value = p["dimension"], p["value"]
+        out.append({**p, "label": f"{features.DIMENSION_LABEL.get(dim, dim)}:"
+                                  f"{features.value_label(dim, value)}",
+                    "left": max(0, p["size"] - p["used"])})
+    return out
 
 
 def overview(category: str | None = None) -> dict[str, Any]:
@@ -72,7 +68,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "playbook": [{**r, "text": playbook.describe(r)}
                      for r in db.list_learnings(("active", "off"))],
         # 当前在跑的配对实验(攒样本用):固定哪个维度、试哪种写法、还要几条
-        "experiment": _experiment_view(),
+        "experiments": _experiment_views(),
         "report": db.latest_report(),
         "comments": comment_queue(),
         "engage": {**engagement.stats(),

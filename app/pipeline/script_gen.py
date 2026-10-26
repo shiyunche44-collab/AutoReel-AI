@@ -16,7 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from ..categories import CategoryProfile, Slot, Vocab
 from ..models import Fact, ScriptSegment
 from .grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band
-from . import variety
+from . import knobs, variety
 from .timeline import narration_budget_chars
 
 log = logging.getLogger(__name__)
@@ -334,8 +334,10 @@ def generate(
     roundup = bool(subjects)
     angle = (angle or "").strip()
     vocab = profile.vocab
+    # 语速旋钮调快 / 调慢时,同样时长能念的字数按同一比例变(默认 1.0,字数预算不变)
     budget = narration_budget_chars(
-        duration, PORTRAIT_CHARS_PER_SECOND if portrait else LANDSCAPE_CHARS_PER_SECOND)
+        duration, (PORTRAIT_CHARS_PER_SECOND if portrait else LANDSCAPE_CHARS_PER_SECOND)
+        * knobs.speed_factor())
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)

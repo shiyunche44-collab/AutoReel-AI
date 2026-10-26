@@ -281,9 +281,11 @@ def test_coach_writes_experiment_plan(fresh_db):
     for i in range(2):
         _published(fresh_db, f"n{i}", t0=t0 - i * 3600, views=100, kind="number")
     coach.review(now)
-    plan = fresh_db.get_team_setting(playbook.PLAN_KEY, None)
-    assert plan["dimension"] == "opening"
-    assert plan["size"] == 3 and plan["value"]
+    plans = fresh_db.get_team_setting(playbook.PLAN_KEY, None)
+    assert plans[0]["dimension"] == "opening"
+    assert plans[0]["size"] == 3 and plans[0]["value"]
+    assert 1 < len(plans) <= playbook.MAX_PARALLEL  # 并行几个实验,每个维度一个
+    assert len({p["dimension"] for p in plans}) == len(plans)
 
 
 def test_variety_unchanged_without_playbook(fresh_db):

@@ -502,6 +502,8 @@ class CategoryProfile:
     galleries: tuple[str, ...] = ()
     #: 旁白音色,空 = providers.audio.DEFAULT_VOICE_ID
     voice_id: str = ""
+    #: 配音音色候选(两个以上才成为复盘可学的旋钮,见 pipeline/knobs);空 = 只用 voice_id
+    voices: tuple[str, ...] = ()
     #: 热点选题口径(见 TrendSpec)
     trends: TrendSpec = field(default_factory=TrendSpec)
     #: 骨架品类为 True 时,平台会明确提示"该品类尚未完整实现"
@@ -1025,6 +1027,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         fact_queries={str(k): str(v) for k, v in (raw.get("fact_queries") or {}).items()},
         galleries=tuple(str(g) for g in (raw.get("galleries") or ())),
         voice_id=str(raw.get("voice_id") or ""),
+        voices=tuple(str(v) for v in raw.get("voices") or () if v),
         forbidden_terms=tuple(raw.get("forbidden_terms") or ()),
         title_avoid=tuple(str(t) for t in (raw.get("title_avoid") or ())),
         required_disclaimers=tuple(raw.get("required_disclaimers") or ()),

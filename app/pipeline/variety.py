@@ -181,7 +181,7 @@ EXPLORE = 0.3
 #: 作品才凑得出第一条结论。计划说「这轮固定用某个开头」,就照做:连发 3 条同一个开头,
 #: 其余(结尾、视觉包)照常轮换 —— 一次只固定一个变量,才比得出是谁的功劳。
 #: 启动时由 `team.playbook.install` 挂上;没挂 / 计划做够了 → 照旧挑。
-plan: Callable[[], Mapping[str, Any] | None] | None = None
+plan: Callable[..., Mapping[str, Any] | None] | None = None
 
 
 def _weights(dimension: str) -> Mapping[str, float] | None:
@@ -198,13 +198,21 @@ def _planned(dimension: str, allowed: tuple[str, ...]) -> str | None:
     if plan is None:
         return None
     try:
-        p = plan() or {}
+        p = _ask(plan, dimension) or {}
     except Exception:  # noqa: BLE001 - 计划坏了不能挡住建项目
         return None
     if p.get("dimension") != dimension:
         return None
     value = p.get("value")
     return str(value) if value in allowed else None
+
+
+def _ask(fn: Callable[..., Any], dimension: str) -> Any:
+    """问计划「这个维度这条片要不要固定」;老式的无参 `plan()` 也认。"""
+    try:
+        return fn(dimension)
+    except TypeError:
+        return fn()
 
 
 def _choose(rng: random.Random, allowed: tuple[str, ...], used: Iterable[str],

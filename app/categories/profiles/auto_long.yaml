@@ -718,6 +718,9 @@ bgm_genres: [tech, corporate-music, documentary]
 
 # 旁白音色(MiniMax)
 voice_id: male-qn-jingying
+# 配音音色候选:列两个以上,复盘官就会轮着试、按数据多用效果好的那个(pipeline/knobs)。
+# 换音色会改变账号「声音人设」,所以默认不开;要试就取消注释,先听过再放进来。
+# voices: [male-qn-jingying, presenter_male]
 
 # 静图来源(providers/official.GALLERIES):汽车之家官图按视角分好类;official_site 是
 # 车企官网车型页 + 媒体中心的大图(只认点名这台车的页面)。

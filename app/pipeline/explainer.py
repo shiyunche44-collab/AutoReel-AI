@@ -37,7 +37,8 @@ from typing import Any, Sequence
 from .. import config, db
 from ..categories import CategoryProfile, Vocab
 from ..models import Fact, ScriptSegment, ShotSpec
-from . import aspect, cards, library, looks, motion, motion_assets, narration, overlays, rhythm
+from . import (aspect, cards, knobs, library, looks, motion, motion_assets, narration, overlays,
+               rhythm)
 from . import render as render_mod
 from .grounding import numbers_in
 
@@ -334,8 +335,10 @@ def concept_min(beats: int) -> int:
     概念动画是全片视觉质量最高的部分(电池包格子图、补能曲线、尺寸线稿这类"看不见的东西"
     只有它讲得清),但实测一部片只用了 2–3 段。下限按拍数给:片子越长下限越高,
     但不超过上限 6 拍。
+    下限比例跟着项目的「概念动画量」旋钮走(`knobs.concept_share`,默认 0.13)。
     """
-    return min(MAX_CONCEPT, max(3, round(beats * 0.13)))
+    return min(MAX_CONCEPT, max(2 if knobs.value("concept_level") == "low" else 3,
+                                round(beats * knobs.concept_share())))
 
 
 def concept_guide(vocab: Vocab, beats: int = 0) -> str:
@@ -428,6 +431,10 @@ def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile,
                facts: Sequence[Fact] = ()) -> str:
     sec = profile.section(seg.section if seg else "")
     options = list(sec.layouts) or list(LAYOUTS)
+    # 开场画面旋钮:第一拍只给点名的那一种版式(段落本来就允许它时)
+    wanted = knobs.value("hook_visual") if i == 0 else ""
+    if wanted and wanted in options:
+        options = [wanted]
     card = f" | 卡片:{cards.KIND_GUIDE[sec.card]}" if sec.card in cards.KIND_GUIDE else ""
     car = f"〔{seg.subject}〕" if seg is not None and seg.subject else ""
     # 本拍可用事实:脚本给这一拍引用过的那几条。
@@ -1807,6 +1814,42 @@ def footage_mix(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
             "third_party_ratio": round(third / total, 3), "third_party_edge_seconds": round(edge, 1)}
 
 
+def measured_features(project_id: str, specs: Sequence[ShotSpec],
+                      narration: dict | None = None) -> dict[str, Any]:
+    """成片**实际**做成了什么样(复盘按它分档,而不是按旋钮当初想要的值):
+    平均拍长、每分钟切几刀、第一拍版式、概念动画占比、素材构成、实际语速、时长。
+
+    旋钮只是「想要」,素材不够 / 版式降级时实际会偏 —— 学习要学实际。"""
+    beats = [s for s in specs if s.duration > 0]
+    total = sum(s.duration for s in beats)
+    if not beats or not total:
+        return {}
+    cuts = official = 0.0
+    for s in beats:
+        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
+        cuts += max(1, len(pieces))
+        official += sum(float(p.get("length") or 0.0) for p in pieces
+                        if p.get("kind") != "still" and not p.get("third_party"))
+    concept = sum(1 for s in beats if s.layout == "concept")
+    nar = narration or {}
+    chars = int(nar.get("total_chars") or 0)
+    mix = footage_mix(project_id, specs)
+    out = {
+        "duration": round(total, 1),
+        "beats": len(beats),
+        "avg_beat_seconds": round(total / len(beats), 2),
+        "cuts_per_minute": round(cuts * 60 / total, 1),
+        "first_layout": beats[0].layout or "",
+        "concept_share": round(concept / len(beats), 3),
+        "official_video_ratio": round(official / mix["seconds"], 3) if mix.get("seconds") else None,
+        "still_ratio": mix.get("still_ratio"),
+        "third_party_ratio": mix.get("third_party_ratio"),
+        "chars_per_second": round(chars / total, 2) if chars else None,
+        "bgm": bool(nar.get("bgm_path")),
+    }
+    return out
+
+
 def beats_dir(project_id: str) -> Path:
     d = config.project_dir(project_id) / "beats"
     d.mkdir(parents=True, exist_ok=True)
@@ -2157,6 +2200,10 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     if art:
         payload["cover_art"] = {"a": art}
     db.write_json(project_id, "render.json", payload)
+    try:
+        db.write_json(project_id, "features.json", measured_features(project_id, specs, nar))
+    except Exception:  # noqa: BLE001 —— 只是复盘用的记录,不能让成片失败
+        _log.warning("features.json 写入失败", exc_info=True)
     cover_b = _make_cover_b(project_id, project, title, meta, size, result.output_path, still,
                             art=art, title_a=title_a)
     if cover_b:

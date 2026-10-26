@@ -92,9 +92,25 @@ def ratio_of(size: tuple[int, int]) -> str:
 
 
 def bg_index(project_id: str, variant: str = "a") -> int:
-    """色调下标:同一项目每次都一样;B 版取下一个,保证和 A 不同。"""
+    """色调下标:同一项目每次都一样;B 版取下一个,保证和 A 不同。
+
+    项目变体里点了封面底色(`knobs` 的 cover_tone)就从那个色起;没点按项目 ID 散列。"""
     base = int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(TONES)
+    picked = _picked_tone(project_id)
+    ids = [t.name for t in TONES]
+    if picked in ids:
+        base = ids.index(picked)
     return (base + (1 if variant == "b" else 0)) % len(TONES)
+
+
+def _picked_tone(project_id: str) -> str:
+    from .. import db
+    from . import variety
+
+    try:
+        return str(variety.parse((db.get_project(project_id) or {}).get("variant")).get("cover_tone") or "")
+    except Exception:  # noqa: BLE001 - 读不到变体就按散列
+        return ""
 
 
 def tone_of(project_id: str, variant: str = "a") -> Tone:

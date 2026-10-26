@@ -27,6 +27,8 @@ PROMPT_DIMENSIONS = ("subject", "theme", "duration", "aspect")
 PLAN_KEY = "experiment_plan"
 #: 一个取值要几条样本才够下一条结论(统计的最低样本数)
 BLOCK_SIZE = 3
+#: 同时最多几个实验(每个维度最多一个)
+MAX_PARALLEL = 3
 
 
 def _geo_mean(values: list[float]) -> float:
@@ -120,18 +122,50 @@ def used_since(dimension: str, value: str, since: float) -> int:
     return n
 
 
-def plan() -> dict[str, Any] | None:
-    """当前在跑的配对实验:{dimension, value}。没有计划 / 这轮已经做够了 → None。
-
-    做够了就自动回到正常挑选 —— 计划是「凑够样本」用的,不是「永远只用这一种」。"""
+def stored_plans() -> list[dict[str, Any]]:
+    """team_settings 里存的实验(新格式是列表;老格式单个 dict 也认)。"""
     raw = db.get_team_setting(PLAN_KEY, None)
-    if not isinstance(raw, dict):
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    seen: set[str] = set()
+    out = []
+    for p in raw:
+        if not isinstance(p, dict) or not p.get("dimension") or not p.get("value"):
+            continue
+        if p["dimension"] in seen:  # 每个维度最多一个
+            continue
+        seen.add(str(p["dimension"]))
+        out.append(p)
+    return out[:MAX_PARALLEL]
+
+
+def progress() -> list[dict[str, Any]]:
+    """每个实验的进度:{dimension, value, size, since, used, done}。"""
+    out = []
+    for p in stored_plans():
+        size = int(p.get("size") or BLOCK_SIZE)
+        since = float(p.get("since") or 0)
+        used = used_since(str(p["dimension"]), str(p["value"]), since)
+        out.append({"dimension": str(p["dimension"]), "value": str(p["value"]),
+                    "size": size, "since": since, "used": used, "done": used >= size})
+    return out
+
+
+def plan(dimension: str | None = None) -> dict[str, Any] | None:
+    """这条新片该照做的配对实验:{dimension, value}。没有 / 都做够了 → None。
+
+    同时有几个实验时,**一条片只固定其中一个**:挑还差得最多的那个(并列按下发顺序)。
+    几个变量钉在同一批片上就分不清是谁的功劳;轮着来,每周 7 条片也不会闲着 ——
+    单个实验 3 条就做完,以前剩下的几天只能等下周复盘。
+
+    `dimension`:调用方问的维度;当前轮到的不是它 → None(那个维度照常挑)。
+    做够了就自动回到正常挑选 —— 计划是「凑够样本」用的,不是「永远只用这一种」。"""
+    live = [p for p in progress() if not p["done"]]
+    if not live:
         return None
-    dimension, value = raw.get("dimension"), raw.get("value")
-    if not dimension or not value:
+    turn = min(live, key=lambda p: p["used"] / max(1, p["size"]))
+    if dimension is not None and turn["dimension"] != dimension:
         return None
-    size = int(raw.get("size") or BLOCK_SIZE)
-    since = float(raw.get("since") or 0)
-    if used_since(str(dimension), str(value), since) >= size:
-        return None
-    return {"dimension": str(dimension), "value": str(value)}
+    return {"dimension": turn["dimension"], "value": turn["value"]}

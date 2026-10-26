@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import random
 import re
 import time
 from typing import Any
@@ -66,8 +68,12 @@ def cooled_subjects(category: str, now: float, days: int) -> set[str]:
 
 
 def choose_format(profile: CategoryProfile, theme_name: str,
-                  aspect: str | None = None, duration: int | None = None) -> tuple[str, int]:
-    """团队默认画幅 / 时长落到这个主题允许的档位上。横评取最长档(车多才放得下)。"""
+                  aspect: str | None = None, duration: int | None = None,
+                  weights: dict[str, float] | None = None, seed: str = "") -> tuple[str, int]:
+    """团队默认画幅 / 时长落到这个主题允许的档位上。横评取最长档(车多才放得下)。
+
+    `weights`:打法手册里「时长」各档的权重(`features.duration_bucket`)。有就 70% 按权重
+    在允许的时长里挑、30% 照旧取最接近默认的那档(探索)。画幅不学 —— 换画幅等于换账号形态。"""
     aspect = aspect if aspect in config.ASPECTS else config.TEAM_ASPECT
     if aspect not in config.ASPECTS:
         aspect = config.LANDSCAPE
@@ -76,7 +82,19 @@ def choose_format(profile: CategoryProfile, theme_name: str,
     if theme.multi:
         return aspect, max(durations)
     want = duration or config.TEAM_DURATION
-    return aspect, min(durations, key=lambda d: (abs(d - want), d))
+    default = min(durations, key=lambda d: (abs(d - want), d))
+    if duration or not weights or len(durations) < 2:
+        return aspect, default
+    from ..pipeline import variety
+    from .features import duration_bucket
+
+    rng = random.Random(int(hashlib.sha256(f"duration:{seed}".encode()).hexdigest()[:16], 16))
+    if rng.random() < variety.EXPLORE:
+        return aspect, default
+    ws = [max(0.01, float(weights.get(duration_bucket(d), 1.0))) for d in durations]
+    if len(set(ws)) == 1:
+        return aspect, default
+    return aspect, rng.choices(list(durations), ws)[0]
 
 
 def learned_weight(idea: Any, weights: dict[str, dict[str, float]] | None) -> float:
@@ -136,7 +154,7 @@ def run(category: str | None = None, *, llm: Any = None,
     from . import benchmark, engagement, events, playbook
 
     learnings = db.list_learnings()
-    weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject")}
+    weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject", "duration")}
     # 打法手册 + 观众在评论里问的(运营官回灌)+ 行业日历 + 对标爆款
     hints = "\n\n".join(t for t in (playbook.prompt_text(learnings),
                                      engagement.audience_text(now.timestamp(), mark=True),
@@ -159,7 +177,8 @@ def run(category: str | None = None, *, llm: Any = None,
         if key in used:
             continue
         used.add(key)
-        aspect, duration = choose_format(profile, idea.theme)
+        aspect, duration = choose_format(profile, idea.theme, weights=weights.get("duration"),
+                                         seed=f"{slot}:{idea.subject}")
         names = [idea.subject] if not idea.subjects else list(idea.subjects)
         keys = [_norm(n) for n in names]
         extra = tuple(f"{event_cars[k]['in_days']} 天后{event_cars[k]['kind_label']}:"

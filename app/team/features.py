@@ -18,8 +18,16 @@ DIMENSIONS = (
     ("subject", "车型"), ("theme", "片型"), ("opening", "开头"), ("ending", "结尾"),
     ("look", "视觉包"), ("title_kind", "标题写法"), ("cover", "封面"), ("aspect", "画幅"),
     ("duration", "时长"), ("weekday", "发布星期"), ("hour", "发布时段"),
+    # 生产旋钮(`pipeline.knobs`):建项目时挑的「想要」
+    ("pace", "剪辑节奏"), ("hook_visual", "开场画面"), ("concept_level", "概念动画量"),
+    ("speed", "语速"), ("voice", "配音音色"), ("cover_tone", "封面底色"),
+    # 实测(成片 features.json 分档):实际做成的样子,素材不够 / 降级时和旋钮不一样
+    ("m_cuts", "实测切换密度"), ("m_first", "实测开场版式"), ("m_concept", "实测概念动画"),
+    ("m_official", "实测官方实拍占比"), ("m_cps", "实测语速"),
 )
 DIMENSION_LABEL = dict(DIMENSIONS)
+#: 旋钮维度(取值就是 `knobs` 里的取值)
+KNOB_DIMENSIONS = ("pace", "hook_visual", "concept_level", "speed", "voice", "cover_tone")
 #: 取哪个时间窗里的第一张快照当「24 小时结果」(小时)
 DAY_WINDOW = (20.0, 72.0)
 #: 早期诊断取最早那张快照,发布后多久之内算「早期」(小时)
@@ -41,6 +49,10 @@ def value_label(dimension: str, value: str) -> str:
         return packaging.KIND_LABEL.get(value, value)
     if dimension == "cover":
         return f"封面 {value.upper()}"
+    if dimension in KNOB_DIMENSIONS:
+        from ..pipeline import knobs
+
+        return knobs.value_name(dimension, value)
     return value
 
 
@@ -87,6 +99,30 @@ def hour_bucket(ts: float) -> str:
     return "深夜"
 
 
+def _band(x: Any, edges: tuple[float, ...], names: tuple[str, ...]) -> str:
+    """x 落在哪一档:edges 是升序分界,names 比 edges 多一个。取不到 → 空串。"""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return ""
+    for edge, name in zip(edges, names):
+        if v < edge:
+            return name
+    return names[-1]
+
+
+def measured(m: dict[str, Any] | None) -> dict[str, str]:
+    """成片实测(`features.json`)→ 分档特征。老项目没有这个文件 → 全空(统计跳过)。"""
+    m = m or {}
+    return {
+        "m_cuts": _band(m.get("cuts_per_minute"), (12, 20), ("慢切", "常规", "快切")),
+        "m_first": str(m.get("first_layout") or ""),
+        "m_concept": _band(m.get("concept_share"), (0.1, 0.18), ("少", "中", "多")),
+        "m_official": _band(m.get("official_video_ratio"), (0.4, 0.7), ("低", "中", "高")),
+        "m_cps": _band(m.get("chars_per_second"), (4.5, 5.3), ("慢", "中", "快")),
+    }
+
+
 def extract(pub: dict[str, Any], project: dict[str, Any] | None) -> dict[str, str]:
     """一条发布记录的特征。取不到的维度留空串(统计时跳过)。"""
     from ..pipeline import variety
@@ -107,6 +143,8 @@ def extract(pub: dict[str, Any], project: dict[str, Any] | None) -> dict[str, st
         "duration": duration_bucket(project.get("duration")),
         "weekday": "周" + "一二三四五六日"[dt.datetime.fromtimestamp(t0).weekday()] if t0 else "",
         "hour": hour_bucket(t0) if t0 else "",
+        **{k: str(pv.get(k) or "") for k in KNOB_DIMENSIONS},
+        **measured(db.read_json(project["id"], "features.json", None) if project.get("id") else None),
     }
 
 

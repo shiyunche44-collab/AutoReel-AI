@@ -52,7 +52,7 @@ from .. import config
 from ..categories import CategoryProfile, Vocab, load_profile
 from ..providers import clips as clips_mod
 from ..providers import images, official, platform_video
-from . import logo_detect, media_check, vision_verdict
+from . import knobs, logo_detect, media_check, vision_verdict
 
 LIB_ROOT_NAME = "library"
 
@@ -1788,6 +1788,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     out: list[Piece] = []
     covered = 0.0
     left = list(pool)
+    # 一刀最长几秒跟着项目的剪辑节奏旋钮走;没设 = FILL_MAX_PIECE
+    max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]
     while left and covered < seconds - 0.05:
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}
@@ -1796,13 +1798,13 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         left.remove(i)
         remaining = seconds - covered
         if i.kind == "still":
-            take = min(remaining, FILL_MAX_PIECE)
+            take = min(remaining, max_piece)
             start = 0.0
         else:
             # 源片开头的那一段几乎都是黑场淡入(打标签抽的是段中间的帧,看不出来)
             skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
             length = i.length - skip
-            take = min(length, remaining, FILL_MAX_PIECE)
+            take = min(length, remaining, max_piece)
             # 别留一截过短的尾巴:够长就把它吃进这一段
             if remaining - take < FILL_MIN_PIECE:
                 take = min(length, remaining)

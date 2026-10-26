@@ -679,16 +679,17 @@ function render() {
   const book = DATA.playbook || [];
   $('#playbook-list').replaceChildren(
     ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]));
-  const exp = DATA.experiment || {};
-  $('#experiment-box').replaceChildren(exp.dimension
-    ? h('div', { class: 'small' },
-      h('strong', {}, `这轮固定:${exp.label || exp.value}`),
+  const exps = DATA.experiments || [];
+  $('#experiment-box').replaceChildren(...(exps.length
+    ? [...exps.map((exp) => h('div', { class: 'small' },
+      h('strong', {}, `固定 ${exp.label || exp.value}`),
       h('span', { class: 'subtle' }, ` · 已发 ${exp.used}/${exp.size} 条`),
       exp.done
         ? h('span', { class: 'subtle' }, ' · 已攒够,下次复盘换下一个')
-        : h('span', { class: 'subtle' }, ` · 还差 ${exp.left} 条`),
-      h('div', { class: 'subtle small' }, '同一个写法连发,其余照常换 —— 攒够 3 条才比得出好坏'))
-    : empty('没有在跑的配对实验(复盘官每周日下发)'));
+        : h('span', { class: 'subtle' }, ` · 还差 ${exp.left} 条`))),
+    h('div', { class: 'subtle small' },
+      '几个实验轮着来:一条片只固定其中一个,其余照常换 —— 每个攒够 3 条才比得出好坏')]
+    : [empty('没有在跑的配对实验(复盘官每周日下发)')]));
 
   const state = $('#team-state');
   const off = !DATA.enabled;

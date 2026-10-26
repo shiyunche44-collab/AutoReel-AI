@@ -420,14 +420,16 @@ learned: Callable[[str], Mapping[str, float]] | None = None
 EXPLORE = 0.3
 #: 复盘官下发的配对实验计划:`plan()` → {dimension, value}。这一轮点名要试哪个标题写法,
 #: 就把它排第一(凑样本用);没挂 / 不是 title_kind → 照旧按权重排
-plan: Callable[[], Mapping[str, Any] | None] | None = None
+plan: Callable[..., Mapping[str, Any] | None] | None = None
 
 
 def _planned_title_kind() -> str | None:
     if plan is None:
         return None
     try:
-        p = plan() or {}
+        from .variety import _ask
+
+        p = _ask(plan, "title_kind") or {}
     except Exception:  # noqa: BLE001 - 计划坏了不能挡住包装
         return None
     if p.get("dimension") != "title_kind":

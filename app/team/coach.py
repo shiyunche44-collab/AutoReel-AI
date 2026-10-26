@@ -24,10 +24,11 @@ log = logging.getLogger(__name__)
 WINDOW_DAYS = 30
 #: 本周新发的(周报「本周」那几个数)
 WEEK_DAYS = 7
-#: 实验从这几个维度里挑
-EXPERIMENT_DIMENSIONS = ("opening", "ending", "title_kind")
-#: 配对实验一次只固定一个维度,按这个顺序来
-PLAN_PRIORITY = ("opening", "ending", "title_kind")
+#: 配对实验按这个顺序挑维度(越靠前越先补样本:开头和标题决定前 2 秒和点不点进来)。
+#: 也是周报「下周多试试」的维度 —— 写法变体 + 生产旋钮(`pipeline.knobs`)
+PLAN_PRIORITY = ("opening", "title_kind", "hook_visual", "pace", "ending", "look",
+                 "cover_tone", "concept_level", "speed")
+EXPERIMENT_DIMENSIONS = PLAN_PRIORITY
 
 SYSTEM = """你是一个中文汽车短视频账号的复盘官,要给账号主人写本周复盘的结论段。
 
@@ -50,10 +51,11 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     **配对实验**:样本少说明这一组没法比。下周要把它补上 —— 同一个题材连发几条,
     只改这一个变量(开头 / 结尾 / 标题写法),其余保持一致。别的变量不动,比出来的
     差值才是这个变量的功劳,攒够 3 条就能进统计。"""
-    from ..pipeline import packaging, variety
+    from ..pipeline import knobs, looks, packaging, variety
 
     universe = {"opening": list(variety.OPENINGS), "ending": list(variety.ENDINGS),
-                "title_kind": list(packaging.KINDS)}
+                "title_kind": list(packaging.KINDS), "look": list(looks.LOOKS),
+                **{k: list(v) for k, v in knobs.universe().items()}}
     out = []
     for dim in EXPERIMENT_DIMENSIONS:
         counts = stats.sample_counts(rows, dim)
@@ -82,18 +84,22 @@ def _pool(rows: list[dict[str, Any]], early_rows: list[dict[str, Any]]) -> list[
     return rows + [r for r in early_rows if r["pub_id"] not in seen]
 
 
-def build_plan(pool: list[dict[str, Any]]) -> dict[str, Any]:
-    """下一轮配对实验:固定一个维度的取值,连发几条,其余照常变。
+def build_plan(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """下一轮配对实验(最多 `playbook.MAX_PARALLEL` 个,每个维度一个):固定一个取值连发几条。
 
     统计要同一维度 3 条样本才下得了结论,均匀轮着挑要十几条作品才凑得出第一条。
-    所以这里明确点名:这轮固定用哪个写法,连发 3 条。一个取值攒够了换下一个维度。"""
+    所以这里明确点名:哪个写法要补 3 条。几个实验并行,但一条片只照做其中一个
+    (`playbook.plan` 轮流),不会两个变量钉在同一批片上。"""
     exps = {e["dimension"]: e for e in experiments(pool)}
+    out = []
     for dim in PLAN_PRIORITY:
         e = exps.get(dim)
         if e and e["n"] < playbook.BLOCK_SIZE:
-            return {"dimension": dim, "value": e["value"],
-                    "size": playbook.BLOCK_SIZE, "since": time.time()}
-    return {}
+            out.append({"dimension": dim, "value": e["value"],
+                        "size": playbook.BLOCK_SIZE, "since": time.time()})
+        if len(out) >= playbook.MAX_PARALLEL:
+            break
+    return out
 
 
 def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],

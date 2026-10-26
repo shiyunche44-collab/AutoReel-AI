@@ -216,6 +216,15 @@ def pick(project_id: str, recent: Iterable[Mapping[str, Any]] = (), chosen: str 
     fresh = [k for k in LOOKS if k not in used]
     digest = hashlib.sha256(f"look:{project_id}".encode()).hexdigest()
     rng = random.Random(int(digest[:16], 16))
+    # 服务里挂了手册:配对实验点名就照做,有权重就按权重(同旋钮,见 `knobs.choose`)
+    from . import knobs, variety
+
+    planned = variety._planned("look", tuple(LOOKS))
+    if planned:
+        return planned
+    weights = variety._weights("look")
+    if weights:
+        return knobs.choose(rng, tuple(LOOKS), used, weights)
     if fresh:
         return rng.choice(fresh)
     return max(LOOKS, key=lambda k: used.index(k))

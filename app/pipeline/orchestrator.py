@@ -22,8 +22,8 @@ from ..llm.deepseek import DeepSeekProvider
 from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
-from . import (aspect, concept_styles, explainer, intake, library, locks, looks, motion, rhythm,
-               script_gen, variety)
+from . import (aspect, concept_styles, explainer, intake, knobs, library, locks, looks, motion,
+               rhythm, script_gen, variety)
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +177,8 @@ def create_project(payload: ProjectCreate) -> str:
                                opening=payload.opening or None, ending=payload.ending or None)
         # 视觉包同理:避开最近几条用过的
         variant["look"] = looks.pick(project_id, recent, payload.look or None)
+        # 剪辑 / 配音 / 封面旋钮:服务里按打法手册挑,没挂手册全取默认(变体不变)
+        variant.update(knobs.pick(project_id, recent, profile))
     except ValueError as exc:
         raise PipelineError(str(exc)) from exc
 
@@ -298,12 +300,17 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                     "busy": True, "waiting": False}
         try:
             # 这一步里画的面板、数据卡、章节条、字幕、封面都用项目的视觉包
-            with looks.use(looks.of_project(project_id)):
+            # 剪辑节奏、开场画面、语速这些旋钮也按项目变体走
+            with looks.use(looks.of_project(project_id)), knobs.use(_variant_of(project_id)):
                 return _advance(project_id, confirmed=confirmed, force=force,
                                 stop_event=stop_event)
         except costs.BudgetExceeded as exc:
             # 额度用尽:不是错误,是"该停"。进 PAUSED_BUDGET,提额后可恢复。
             return _pause_for_budget(project_id, exc)
+
+
+def _variant_of(project_id: str) -> dict[str, Any]:
+    return variety.parse((db.get_project(project_id) or {}).get("variant"))
 
 
 def _pause_for_budget(project_id: str, exc: Exception) -> dict[str, Any]:

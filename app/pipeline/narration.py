@@ -20,7 +20,7 @@ from typing import Any, Sequence
 from .. import config, db
 from ..models import SubtitleCue
 from ..providers import audio
-from . import looks
+from . import knobs, looks
 from .timeline import (
     build_subtitle_cues,
     format_ass,
@@ -108,8 +108,9 @@ def build(
     `size` / `line_chars`:字幕画布尺寸与单行字数,横屏解说轨用(默认竖屏)。
     `voice_id` 空 = 品类 profile 声明的音色,再没有就用全局默认。
     """
-    voice_id = voice_id or getattr(profile, "voice_id", "") or audio.DEFAULT_VOICE_ID
-    speed = config.TTS_SPEED if speed is None else speed
+    # 项目的配音旋钮(音色 / 语速)排在显式参数之后、品类默认之前;没设 = 以前的行为
+    voice_id = voice_id or knobs.voice() or getattr(profile, "voice_id", "") or audio.DEFAULT_VOICE_ID
+    speed = round(config.TTS_SPEED * knobs.speed_factor(), 3) if speed is None else speed
     emotion = config.TTS_EMOTION if emotion is None else emotion
     project_dir = config.project_dir(project_id)
     audio_dir = project_dir / "audio"
