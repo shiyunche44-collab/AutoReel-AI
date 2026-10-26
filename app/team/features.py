@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import statistics
 from typing import Any
 
 from .. import db
@@ -35,8 +37,35 @@ KNOB_DIMENSIONS = ("pace", "hook_visual", "concept_level", "speed", "voice", "co
 DAY_WINDOW = (20.0, 72.0)
 #: 早期诊断取最早那张快照,发布后多久之内算「早期」(小时)
 EARLY_WINDOW = 24.0
-#: 只统计这些平台(目前只有抖音有完整数据)
-PLATFORMS = ("douyin",)
+#: 学这些平台的作品;一稿多发的切片 / 笔记也学,各自的基线分开算(`stats.lifts`)
+PLATFORMS = ("douyin", "bilibili", "xiaohongshu")
+#: 主阵地:周报的总数、迭代趋势、早期诊断、逐拍、对标对照只看这里的主片
+MAIN_PLATFORMS = ("douyin",)
+#: 切片 / 笔记只学这些维度 —— 开场、节奏、成片实测说的是主片,切出来的段不一定带着
+PIECE_DIMENSIONS = ("subject", "theme", "title_kind", "cover", "aspect", "weekday", "hour")
+PLATFORM_LABEL = {"douyin": "抖音", "bilibili": "B站", "xiaohongshu": "小红书"}
+PIECE_LABEL = {"": "主片", "note": "图文笔记", "clip1": "切片", "clip2": "切片"}
+
+
+def is_main(item: dict[str, Any]) -> bool:
+    """发布记录 / 作品行是不是主阵地的主片。"""
+    return (item.get("platform") or "douyin") in MAIN_PLATFORMS and not item.get("piece")
+
+
+def main_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [r for r in rows if is_main(r)]
+
+
+def piece_kind(piece: str | None) -> str:
+    """clip1 / clip2 都是切片,基线放一起。"""
+    p = str(piece or "")
+    return "clip" if p.startswith("clip") else p
+
+
+def platform_label(platform: str, piece: str | None = "") -> str:
+    name = PLATFORM_LABEL.get(platform, platform)
+    kind = piece_kind(piece)
+    return name if not kind else f"{name}{PIECE_LABEL.get(str(piece), kind)}"
 
 
 def value_label(dimension: str, value: str) -> str:
@@ -72,13 +101,24 @@ def _hours(snap: dict[str, Any], published_at: float) -> float:
     return float(h) if h is not None else (snap["captured_at"] - published_at) / 3600
 
 
+def _usable(snap: dict[str, Any]) -> bool:
+    """小红书以前抓的是数据中心的**账号汇总**(每篇都记成一样的数),只认对上了单篇笔记的快照。"""
+    if snap.get("platform") != "xiaohongshu":
+        return True
+    try:
+        raw = json.loads(snap.get("raw") or "{}")
+    except (TypeError, ValueError):
+        return False
+    return isinstance(raw, dict) and raw.get("scope") == "note"
+
+
 def day_snapshot(pub: dict[str, Any]) -> dict[str, Any] | None:
     t0 = pub.get("published_at")
     if not t0:
         return None
     lo, hi = DAY_WINDOW
     for snap in db.list_snapshots(pub["id"], limit=1000):
-        if lo <= _hours(snap, t0) <= hi and snap.get("views") is not None:
+        if lo <= _hours(snap, t0) <= hi and snap.get("views") is not None and _usable(snap):
             return snap
     return None
 
@@ -142,7 +182,7 @@ def extract(pub: dict[str, Any], project: dict[str, Any] | None) -> dict[str, st
     pv = variety.parse(project.get("variant"))
     tv = variety.parse(pub.get("variant"))
     t0 = pub.get("published_at") or 0
-    return {
+    out = {
         "subject": str(project.get("subject") or ""),
         "theme": str(project.get("theme") or ""),
         "opening": str(pv.get("opening") or ""),
@@ -157,6 +197,9 @@ def extract(pub: dict[str, Any], project: dict[str, Any] | None) -> dict[str, st
         **{k: str(pv.get(k) or "") for k in KNOB_DIMENSIONS},
         **measured(db.read_json(project["id"], "features.json", None) if project.get("id") else None),
     }
+    if pub.get("piece"):
+        out = {k: (v if k in PIECE_DIMENSIONS else "") for k, v in out.items()}
+    return out
 
 
 def outcome(snap: dict[str, Any]) -> dict[str, Any]:
@@ -185,10 +228,11 @@ def outcome(snap: dict[str, Any]) -> dict[str, Any]:
 
 
 def rows(since: float | None = None) -> list[dict[str, Any]]:
-    """有 24 小时结果的作品:[{pub_id, account_id, title, published_at, features, outcome}]。"""
+    """有 24 小时结果的作品:[{pub_id, account_id, platform, piece, title, published_at,
+    features, outcome}]。各平台、切片 / 笔记都在里面;只要主片用 `main_rows`。"""
     out = []
     for pub in db.list_publications(limit=1000):
-        if pub["platform"] not in PLATFORMS or pub["state"] != "published" or pub.get("piece"):
+        if pub["platform"] not in PLATFORMS or pub["state"] != "published":
             continue
         if since is not None and (pub.get("published_at") or 0) < since:
             continue
@@ -196,10 +240,27 @@ def rows(since: float | None = None) -> list[dict[str, Any]]:
         if not snap:
             continue
         out.append({"pub_id": pub["id"], "account_id": pub["account_id"],
+                    "platform": pub["platform"], "piece": pub.get("piece") or "",
                     "project_id": pub["project_id"], "title": pub.get("title") or "",
                     "published_at": pub["published_at"],
                     "features": extract(pub, db.get_project(pub["project_id"])),
                     "outcome": outcome(snap)})
+    return out
+
+
+def platform_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """周报用:各平台 × 主片 / 切片 / 笔记各有几条 24 小时数据、播放中位数、互动率中位数。"""
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in rows:
+        groups.setdefault((r.get("platform") or "douyin", piece_kind(r.get("piece"))), []).append(r)
+    out = []
+    for (platform, kind), rs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        views = [r["outcome"]["views"] for r in rs if r["outcome"].get("views") is not None]
+        eng = [r["outcome"]["engagement"] for r in rs if r["outcome"].get("engagement") is not None]
+        out.append({"platform": platform, "piece": kind,
+                    "label": platform_label(platform, rs[0].get("piece")), "works": len(rs),
+                    "median_views": statistics.median(views) if views else None,
+                    "engagement": round(statistics.median(eng), 4) if eng else None})
     return out
 
 
@@ -226,7 +287,8 @@ def early_rows(since: float | None = None) -> list[dict[str, Any]]:
     """已经拿到早期快照的作品行。跟 `rows` 一样能抽特征,只是结果取的是最早那张。"""
     out = []
     for pub in db.list_publications(limit=1000):
-        if pub["platform"] not in PLATFORMS or pub["state"] != "published" or pub.get("piece"):
+        # 早期诊断看的是 2 秒留存 / 完播,只有主阵地的主片有
+        if not is_main(pub) or pub["state"] != "published":
             continue
         if since is not None and (pub.get("published_at") or 0) < since:
             continue

@@ -435,6 +435,13 @@ function reportView(r) {
         ['播放中位数', t.median_views], ['平均完播', pct(t.completion_rate)]]
         .map(([k, v]) => h('div', {}, h('div', { class: 'subtle small' }, k), h('strong', { class: 'num' }, String(v ?? '—'))))),
   ];
+  const others = (r.platforms || []).filter((p) => p.platform !== 'douyin' || p.piece);
+  if (others.length) {
+    out.push(h('div', { class: 'row small', title: '上面的数只算抖音主片;B站、小红书、切片、笔记各按自己平台 / 类型的基线进学习' },
+      h('span', { class: 'subtle' }, '一稿多发'),
+      ...others.map((p) => h('span', { class: 'num' },
+        `${p.label} ${p.works} 条 · 播放中位数 ${p.median_views ?? '—'} · 互动 ${pct(p.engagement)}`))));
+  }
   if (r.summary) out.push(h('p', { class: 'report-text' }, r.summary));
   if (r.next && r.next.length) {
     out.push(h('div', { class: 'subtle small' }, '下周怎么做'),

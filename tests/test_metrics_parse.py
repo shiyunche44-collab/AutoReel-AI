@@ -40,6 +40,12 @@ def test_bilibili_stat_missing_field_is_none():
     assert out["coins"] is None
 
 
+def test_bilibili_view_payload_reads_the_nested_stat():
+    view = {"code": 0, "data": {"bvid": "BV1x", "duration": 245, "pubdate": 1761000000,
+                                "owner": {"mid": 42}, "stat": BILI["data"]}}
+    assert parse_bilibili_stat(view) == parse_bilibili_stat(BILI)
+
+
 def test_bilibili_stat_empty_payload():
     out = parse_bilibili_stat({})
     assert out["views"] is None

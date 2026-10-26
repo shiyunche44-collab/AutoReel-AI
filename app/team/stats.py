@@ -61,39 +61,48 @@ ADVICE = {
 def lifts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """每条作品补上 `lift`:{指标: 倍数}(算不了的不放)。
 
-    播放按账号自己的中位数比(大号小号不混);其余指标全账号一条基线线,
+    播放按账号自己的中位数比(大号小号不混,账号本来就分平台),主片 / 切片 / 笔记再各算各的;
+    其余指标每个平台 × 主片 / 切片 / 笔记一条基线(B站的互动率不跟抖音比),
     平均观看秒数用中位数(免得一条长片把基线拉飞)。"""
-    by_acc: dict[str, list[float]] = defaultdict(list)
+    from .features import piece_kind
+
+    def acc_key(r: dict[str, Any]) -> tuple[str, str]:
+        return r["account_id"], piece_kind(r.get("piece"))
+
+    def flat_key(r: dict[str, Any]) -> tuple[str, str]:
+        return r.get("platform") or "douyin", piece_kind(r.get("piece"))
+
+    by_acc: dict[tuple[str, str], list[float]] = defaultdict(list)
     for r in rows:
         v = r["outcome"].get("views")
         if v is not None:
-            by_acc[r["account_id"]].append(float(v))
+            by_acc[acc_key(r)].append(float(v))
     base = {acc: statistics.median(vs) for acc, vs in by_acc.items()}
 
-    flat: dict[str, list[float]] = defaultdict(list)
+    flat: dict[tuple[tuple[str, str], str], list[float]] = defaultdict(list)
     for r in rows:
         for metric in METRICS:
             if metric == "views":
                 continue
             val = r["outcome"].get(metric)
             if val is not None:
-                flat[metric].append(float(val))
+                flat[(flat_key(r), metric)].append(float(val))
     baselines = {
-        m: (statistics.median(vs) if m == "avg_watch_sec" else statistics.fmean(vs))
-        for m, vs in flat.items() if vs
+        k: (statistics.median(vs) if k[1] == "avg_watch_sec" else statistics.fmean(vs))
+        for k, vs in flat.items() if vs
     }
 
     out = []
     for r in rows:
         lift: dict[str, float] = {}
-        v, b = r["outcome"].get("views"), base.get(r["account_id"])
+        v, b = r["outcome"].get("views"), base.get(acc_key(r))
         if v is not None and b:
             lift["views"] = float(v) / b
         for metric in METRICS:
             if metric == "views":
                 continue
             val = r["outcome"].get(metric)
-            bb = baselines.get(metric)
+            bb = baselines.get((flat_key(r), metric))
             if val is not None and bb:
                 lift[metric] = float(val) / bb
         out.append({**r, "lift": lift})

@@ -37,11 +37,13 @@ def _int(value: Any) -> int | None:
 # 纯解析函数
 # --------------------------------------------------------------------------
 def parse_bilibili_stat(payload: dict[str, Any]) -> dict[str, Any]:
-    """B站 `archive/stat` → 指标字典。
+    """B站 `archive/stat` 或 `view`(stat 包在 data.stat 里)→ 指标字典。
 
     字段:view / like / reply / favorite / coin / share / danmaku。
     """
     stat = (payload or {}).get("data") or {}
+    if isinstance(stat.get("stat"), dict):
+        stat = stat["stat"]
     return {
         "views": _int(stat.get("view")),
         "likes": _int(stat.get("like")),
@@ -196,6 +198,86 @@ def parse_count(text: str) -> int | None:
     return int(value)
 
 
+#: 小红书创作者中心笔记列表 / 笔记数据里各指标可能的字段名(接口没文档,多认几个)
+XHS_NOTE_KEYS: dict[str, tuple[str, ...]] = {
+    "views": ("view_count", "read_count", "read", "views", "view", "viewCount", "readCount"),
+    "likes": ("likes", "like_count", "liked_count", "like", "likeCount", "likedCount"),
+    "comments": ("comments_count", "comment_count", "comments", "comment", "commentCount"),
+    "favorites": ("collected_count", "collect_count", "collected", "collect", "fav_count",
+                  "collectedCount", "collectCount"),
+    "shares": ("shared_count", "share_count", "shares", "share", "shareCount", "sharedCount"),
+}
+#: 曝光(小红书特有,放 raw 里)
+XHS_IMPRESSION_KEYS = ("imp_count", "impression", "impressions", "exposure", "impCount")
+_XHS_ID_KEYS = ("note_id", "noteId", "id")
+_XHS_TITLE_KEYS = ("display_title", "title", "note_title", "noteTitle", "displayTitle")
+
+
+def _first(d: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for k in keys:
+        if d.get(k) not in (None, ""):
+            return d[k]
+    return None
+
+
+def parse_xhs_notes(payloads: list[Any]) -> list[dict[str, Any]]:
+    """创作者中心页面自己发的 JSON(截获的一串响应)→ 笔记列表
+    [{id, title, metrics: {views, likes, ...}, impressions}]。
+
+    不认死路径:递归找「有 id、有标题、至少一个计数字段」的字典,接口换个包法也认得出。
+    同一篇笔记在几个接口里都出现时,取播放最大的那条(数据页比列表页新)。"""
+    found: dict[str, dict[str, Any]] = {}
+
+    def walk(node: Any, depth: int = 0) -> None:
+        if depth > 8:
+            return
+        if isinstance(node, list):
+            for x in node:
+                walk(x, depth + 1)
+            return
+        if not isinstance(node, dict):
+            return
+        note_id, title = _first(node, _XHS_ID_KEYS), _first(node, _XHS_TITLE_KEYS)
+        metrics = {k: parse_count(str(v)) if (v := _first(node, keys)) is not None else None
+                   for k, keys in XHS_NOTE_KEYS.items()}
+        if note_id and title and any(v is not None for v in metrics.values()):
+            imp = _first(node, XHS_IMPRESSION_KEYS)
+            item = {"id": str(note_id), "title": str(title), "metrics": metrics,
+                    "impressions": parse_count(str(imp)) if imp is not None else None}
+            old = found.get(item["id"])
+            if not old or (metrics["views"] or 0) >= (old["metrics"]["views"] or 0):
+                found[item["id"]] = item
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                walk(v, depth + 1)
+
+    for p in payloads:
+        walk(p)
+    return list(found.values())
+
+
+def _norm_title(text: str) -> str:
+    return re.sub(r"[\s#@!！?？,，。.、:：\"'“”‘’()（）【】\[\]-]+", "", str(text or "")).lower()
+
+
+def match_xhs_note(notes: list[dict[str, Any]], remote_id: str = "",
+                   title: str = "") -> dict[str, Any] | None:
+    """对上是哪篇笔记:有笔记 id 按 id;没有(发布时拿不到 id)按标题 ——
+    发布时标题截到 20 字,所以比前 20 字;对上不止一篇就算对不上(宁缺毋错)。"""
+    if remote_id:
+        for n in notes:
+            if n["id"] == remote_id:
+                return n
+    want = _norm_title(str(title or "")[:20])
+    if not want:
+        return None
+    hits = [n for n in notes if _norm_title(n["title"][:20]) == want]
+    if not hits:
+        hits = [n for n in notes if want in _norm_title(n["title"]) or
+                (len(_norm_title(n["title"])) >= 6 and _norm_title(n["title"]) in want)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def parse_metric_text(text: str) -> dict[str, Any]:
     """从页面文字里抠出指标 —— 给没有数据接口、只能看后台页面的平台用。
 
@@ -224,7 +306,10 @@ def collect(publication: dict[str, Any], account: Account) -> MetricSnapshot:
     platform = publication.get("platform") or ""
     adapter = adapter_for(platform)
     ref = PlatformRef(remote_id=publication.get("remote_id") or "",
-                      remote_url=publication.get("remote_url") or "")
+                      remote_url=publication.get("remote_url") or "",
+                      # 发布时拿不到作品 id 的平台(小红书)靠标题对作品
+                      extra={"title": publication.get("title") or "",
+                             "published_at": publication.get("published_at")})
     return adapter.fetch_metrics(ref, account)
 
 

@@ -141,6 +141,11 @@ def _facts(report: dict[str, Any]) -> str:
              f"本周新发 {t['week_works']} 条,24 小时播放合计 {t['week_views']},涨粉 {t['week_followers']}"]
     if t["completion_rate"] is not None:
         lines.append(f"平均完播率 {t['completion_rate'] * 100:.1f}%")
+    others = [p for p in report.get("platforms") or [] if (p["platform"], p["piece"]) != ("douyin", "")]
+    if others:
+        lines.append("一稿多发(各按自己平台的基线学):" + ";".join(
+            f"{p['label']} {p['works']} 条,播放中位数 {p['median_views'] if p['median_views'] is not None else '—'}"
+            for p in others))
     lines += [f"最好:《{w['title']}》播放 {w['views']}(账号平常的 {w['lift']} 倍)" for w in report["top"]]
     lines += [f"最差:《{w['title']}》播放 {w['views']}(账号平常的 {w['lift']} 倍)"
               for w in report["bottom"]]
@@ -221,7 +226,9 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     week = week_key(now)
     before = iteration.weight_snapshot(db.list_learnings())
     # 对标先验:自己样本不够的取值先按对标号的规律轻推;没作品也照样更新
-    db.replace_learnings(week, stats.learn_benchmark(benchmark.prior_rows(ts), week, own=rows),
+    # 学习用全部平台的作品(各算各的基线);周报的总数、实验、逐拍、对标只看主阵地的主片
+    main = features.main_rows(rows)
+    db.replace_learnings(week, stats.learn_benchmark(benchmark.prior_rows(ts), week, own=main),
                          source="benchmark")
     # 互动效果:哪种回复写法引得来评论;活跃官做得多的日子涨粉有没有多(没作品也照样量)
     outcomes = engagement.reply_outcomes(ts)
@@ -229,7 +236,7 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     active_effect = activator.weekly_effect(ts, week)
     if not rows and not early:
         iteration.log_weight_changes(before, iteration.weight_snapshot(db.list_learnings()), ts=ts)
-        raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
+        raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的作品")
     if rows:
         db.replace_learnings(week, stats.learn(rows, week))
     # 逐拍掉人:进度条分析的跳过率落到拍上,按版式 / 位置 / 素材学
@@ -238,9 +245,11 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     active = playbook.merged(db.list_learnings())
     # 权重变动超过 0.1 的记进迭代日志:自动改了生产,得看得见改了什么
     iteration.log_weight_changes(before, iteration.weight_snapshot(active), ts=ts)
-    pool = _pool(rows, early_rows)
-    report = build_report(rows, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts,
+    pool = _pool(main, early_rows)
+    report = build_report(main, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts,
                           early=early, pool=pool)
+    # 各平台 / 切片 / 笔记各有几条数据(它们只进学习,不进上面的总数)
+    report["platforms"] = features.platform_summary(rows)
     report["engage"] = {"styles": engagement.style_report(outcomes), "active": active_effect}
     report.update(write_text(report, llm))
     report["made_at"] = time.time()

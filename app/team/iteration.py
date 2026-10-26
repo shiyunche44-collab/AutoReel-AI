@@ -58,8 +58,7 @@ def weekly(now: float | None = None, weeks: int = WEEKS) -> list[dict[str, Any]]
         k: {"views": [], "retention_2s": [], "avg_watch_sec": [], "followers": []} for k in keys}
     works = {k: 0 for k in keys}
     for pub in db.list_publications(limit=1000):
-        if pub["platform"] not in features.PLATFORMS or pub["state"] != "published" \
-                or pub.get("piece"):
+        if not features.is_main(pub) or pub["state"] != "published":
             continue
         t0 = pub.get("published_at") or 0
         if t0 < since or week_key(t0) not in buckets:

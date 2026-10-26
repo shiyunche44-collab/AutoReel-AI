@@ -13,9 +13,10 @@
 4. `POST {upos}?output=json&…`           合片,拿 aid / cid
 5. `POST /x/vu/web/cover/up` + `POST /x/vu/web/add/v3`  传封面 + 投递稿件
 
-数据接口是**公开**的,不需要登录:
+数据接口是**公开**的,不需要登录(带上账号 Cookie 只是为了过风控):
 
-- `GET /x/web-interface/archive/stat?bvid=` → 播放/点赞/收藏/投币/转发/弹幕
+- `GET /x/web-interface/view?bvid=`         → stat(播放/点赞/收藏/投币/转发/弹幕)+ 时长 / 发布时间 / UP 主 mid
+- `GET /x/web-interface/archive/stat?bvid=` → 只有 stat,view 拿不到时兜底
 - `GET /x/relation/stat?vmid=`            → 粉丝数
 """
 from __future__ import annotations
@@ -325,27 +326,33 @@ class BilibiliAdapter:
         bvid = ref.remote_id or _bvid_of(ref.remote_url)
         if not bvid:
             raise PublishError("没有 bvid,无法抓数据", retryable=False)
-        with new_client(account.cred("cookie")) as client:
-            data = request_json(client, "GET", f"{API}/x/web-interface/archive/stat",
-                                params={"bvid": bvid}, timeout=30)
-            if data.get("code") not in (0, None):
-                raise PublishError(f"作品数据返回 code={data.get('code')}", retryable=True)
-            stat = data.get("data") or {}
-            followers = self._followers(client, account)
-        return MetricSnapshot(
-            views=_int(stat.get("view")),
-            likes=_int(stat.get("like")),
-            comments=_int(stat.get("reply")),
-            favorites=_int(stat.get("favorite")),
-            shares=_int(stat.get("share")),
-            coins=_int(stat.get("coin")),
-            danmaku=_int(stat.get("danmaku")),
-            followers=followers,
-            raw={"stat": stat},
-        )
+        from ...metrics.collector import parse_bilibili_stat
 
-    def _followers(self, client, account: Account) -> int | None:
-        mid = account.setting("mid") or self._mid_of(client, account)
+        with new_client(account.cred("cookie"), headers={"Referer": "https://www.bilibili.com/"}) \
+                as client:
+            # 先走 view(多带时长 / 发布时间 / mid,mid 拿来查粉丝不用登录);不行再退回 archive/stat
+            try:
+                data = request_json(client, "GET", f"{API}/x/web-interface/view",
+                                    params={"bvid": bvid}, timeout=30)
+            except PublishError:
+                data = {}
+            if data.get("code") != 0 or not (data.get("data") or {}).get("stat"):
+                data = request_json(client, "GET", f"{API}/x/web-interface/archive/stat",
+                                    params={"bvid": bvid}, timeout=30)
+                if data.get("code") not in (0, None):
+                    raise PublishError(f"作品数据返回 code={data.get('code')}", retryable=True)
+            info = data.get("data") or {}
+            stat = info.get("stat") or info
+            mid = str((info.get("owner") or {}).get("mid") or "")
+            followers = self._followers(client, account, mid)
+        raw: dict[str, Any] = {"stat": stat}
+        for key in ("duration", "pubdate"):
+            if info.get(key) is not None:
+                raw[key] = info[key]
+        return MetricSnapshot(**parse_bilibili_stat(data), followers=followers, raw=raw)
+
+    def _followers(self, client, account: Account, mid: str = "") -> int | None:
+        mid = account.setting("mid") or mid or self._mid_of(client, account)
         if not mid:
             return None
         try:

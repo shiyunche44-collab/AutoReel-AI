@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from ..registry import PORTRAIT
 
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
 DATA_URL = "https://creator.xiaohongshu.com/new/data-center"
+#: 笔记管理页:页面会自己拉一页「我发的笔记」,每篇带阅读 / 点赞 / 收藏 / 评论 / 分享
+NOTES_URL = "https://creator.xiaohongshu.com/new/note-manager"
 LOGIN_URL = "https://creator.xiaohongshu.com/login"
 
 #: 上传控件的候选选择器
@@ -156,18 +159,49 @@ class XiaohongshuAdapter:
 
     # -- 数据 ------------------------------------------------------------
     def fetch_metrics(self, ref: PlatformRef, account: Account) -> MetricSnapshot:
+        """**这一篇笔记**的数据(不是账号汇总):打开笔记管理页,截页面自己拉的笔记列表 JSON,
+        按笔记 id(有的话)或标题对上这一篇。
+
+        以前读数据中心的页面文字,拿到的是整个账号的总数 —— 每篇笔记记成一样的数,
+        学习时会被当成每篇的成绩,宁可抓不到也不能这么记。"""
         from .. import browser
-        from ...metrics.collector import parse_metric_text
+        from ...metrics.collector import match_xhs_note, parse_xhs_notes
+
+        payloads: list = []
+
+        def on_response(resp) -> None:  # noqa: ANN001
+            if resp.request.resource_type not in ("xhr", "fetch"):
+                return
+            try:
+                text = resp.text()
+            except Exception:  # noqa: BLE001
+                return
+            if text.startswith("{") and ("note" in text or "title" in text):
+                try:
+                    payloads.append(json.loads(text))
+                except ValueError:
+                    pass
 
         try:
             with browser.BrowserSession(self.key) as session:
-                session.goto(DATA_URL, wait_ms=3000)
-                text = session.page_text()
+                session.page.on("response", on_response)
+                session.goto(NOTES_URL, wait_ms=6000)
+                if "登录" in session.page.url or "扫码登录" in session.page_text()[:500]:
+                    raise PublishError("小红书登录态失效,去分发台重新扫码", retryable=False,
+                                       credential=True)
         except browser.BrowserUnavailable as exc:
             raise PublishError(str(exc), retryable=False) from exc
+        except PublishError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            raise PublishError(f"打不开数据页:{exc}", retryable=True) from exc
-        metrics = parse_metric_text(text)
-        if all(v is None for v in metrics.values()):
-            raise PublishError("数据页里没认出指标(页面可能改版了)", retryable=True)
-        return MetricSnapshot(**metrics, raw={"chars": len(text)})
+            raise PublishError(f"打不开笔记管理页:{exc}", retryable=True) from exc
+        notes = parse_xhs_notes(payloads)
+        if not notes:
+            raise PublishError("笔记管理页里没认出笔记数据(页面可能改版了,跑 tests/probe_xhs_metrics.py)",
+                               retryable=True)
+        note = match_xhs_note(notes, ref.remote_id, (ref.extra or {}).get("title", ""))
+        if not note:
+            raise PublishError(f"笔记列表 {len(notes)} 篇里没对上这一篇", retryable=True)
+        return MetricSnapshot(**note["metrics"],
+                              raw={"note_id": note["id"], "title": note["title"],
+                                   "impressions": note["impressions"], "scope": "note"})

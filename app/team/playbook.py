@@ -149,7 +149,7 @@ def _opening(project_id: str) -> str:
 def _hint_rows(since: float) -> list[dict[str, Any]]:
     from . import features
 
-    rows = features.rows(since=since)
+    rows = features.main_rows(features.rows(since=since))
     seen = {r["pub_id"] for r in rows}
     return rows + [r for r in features.early_rows(since=since) if r["pub_id"] not in seen]
 
