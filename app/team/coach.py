@@ -26,6 +26,8 @@ WINDOW_DAYS = 30
 WEEK_DAYS = 7
 #: 实验从这几个维度里挑
 EXPERIMENT_DIMENSIONS = ("opening", "ending", "title_kind")
+#: 配对实验一次只固定一个维度,按这个顺序来
+PLAN_PRIORITY = ("opening", "ending", "title_kind")
 
 SYSTEM = """你是一个中文汽车短视频账号的复盘官,要给账号主人写本周复盘的结论段。
 
@@ -33,7 +35,8 @@ SYSTEM = """你是一个中文汽车短视频账号的复盘官,要给账号主�
 - summary:3-5 句话,先说本周整体(发了几条、播放多少),再说最明显的一两条打法结论。
 - next:2-3 条下周具体怎么做(多做哪种、少做哪种、试什么)。
 - **所有数字只能逐字来自下面的数据**,不许估算、换算或编;数据里没有的结论不许说。
-- 样本少(置信度「中」)的结论要说「初步」。不要用营销腔。"""
+- 样本少(置信度「中」)的结论要说「初步」。不要用营销腔。
+- 「早期观察」是发布 1 小时的数据,还没定稿:可以指出要改什么,但不要说成结论。"""
 
 
 def week_key(now: dt.datetime) -> str:
@@ -42,7 +45,11 @@ def week_key(now: dt.datetime) -> str:
 
 
 def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """每个维度里样本最少的可选取值(没用过的优先)。"""
+    """每个维度里样本最少的可选取值(没用过的优先)。
+
+    **配对实验**:样本少说明这一组没法比。下周要把它补上 —— 同一个题材连发几条,
+    只改这一个变量(开头 / 结尾 / 标题写法),其余保持一致。别的变量不动,比出来的
+    差值才是这个变量的功劳,攒够 3 条就能进统计。"""
     from ..pipeline import packaging, variety
 
     universe = {"opening": list(variety.OPENINGS), "ending": list(variety.ENDINGS),
@@ -54,7 +61,8 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         n = counts.get(value, 0)
         out.append({"dimension": dim, "value": value,
                     "label": f"{features.DIMENSION_LABEL[dim]}:{features.value_label(dim, value)}",
-                    "n": n, "why": "还没试过" if not n else f"只有 {n} 条样本"})
+                    "n": n, "why": "还没试过" if not n else f"只有 {n} 条样本",
+                    "how": "配对实验:同一题材连发 3 条,只改这一个变量,其余不变"})
     return out
 
 
@@ -65,8 +73,32 @@ def _work(r: dict[str, Any]) -> dict[str, Any]:
             "lift": round(r["lift"].get("views", 0), 2) if r.get("lift") else None}
 
 
+def _pool(rows: list[dict[str, Any]], early_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """24 小时行 + 早期行(按作品去重)。
+
+    样本统计用这个:已经发出去的作品都算,别因为还没满 24 小时就当它不存在 ——
+    「这个写法够几条样本了」是生产问题,不是数据问题。"""
+    seen = {r["pub_id"] for r in rows}
+    return rows + [r for r in early_rows if r["pub_id"] not in seen]
+
+
+def build_plan(pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """下一轮配对实验:固定一个维度的取值,连发几条,其余照常变。
+
+    统计要同一维度 3 条样本才下得了结论,均匀轮着挑要十几条作品才凑得出第一条。
+    所以这里明确点名:这轮固定用哪个写法,连发 3 条。一个取值攒够了换下一个维度。"""
+    exps = {e["dimension"]: e for e in experiments(pool)}
+    for dim in PLAN_PRIORITY:
+        e = exps.get(dim)
+        if e and e["n"] < playbook.BLOCK_SIZE:
+            return {"dimension": dim, "value": e["value"],
+                    "size": playbook.BLOCK_SIZE, "since": time.time()}
+    return {}
+
+
 def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
-                 now: float) -> dict[str, Any]:
+                 now: float, early: list[dict[str, Any]] | None = None,
+                 pool: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     lifted = sorted(stats.lifts(rows), key=lambda r: -(r["lift"].get("views") or 0))
     week = [r for r in rows if r["published_at"] >= now - WEEK_DAYS * 86400]
     rates = [r["outcome"]["completion_rate"] for r in rows
@@ -84,7 +116,9 @@ def build_report(rows: list[dict[str, Any]], learnings: list[dict[str, Any]],
         "top": top,
         "bottom": [_work(r) for r in lifted[-3:][::-1]] if len(lifted) > 3 else [],
         "learnings": [playbook.describe(r) for r in learnings[:10]],
-        "experiments": experiments(rows),
+        "experiments": experiments(pool if pool is not None else rows),
+        # 早期观察:发布 1 小时的快照,不等 24 小时就能看出前 2 秒留没留住人
+        "early": early if early is not None else [],
         # 对标爆款的标题开头 vs 我们最好的几条(对标分析员的数据)
         "benchmark": benchmark.title_compare(top, now),
     }
@@ -100,6 +134,17 @@ def _facts(report: dict[str, Any]) -> str:
     lines += [f"最好:《{w['title']}》播放 {w['views']}(账号平常的 {w['lift']} 倍)" for w in report["top"]]
     lines += [f"最差:《{w['title']}》播放 {w['views']}(账号平常的 {w['lift']} 倍)"
               for w in report["bottom"]]
+    for e in report.get("early") or []:
+        bits = []
+        if e.get("retention_2s") is not None:
+            bits.append(f"2 秒留存 {e['retention_2s'] * 100:.0f}%")
+        if e.get("avg_watch_sec") is not None:
+            bits.append(f"平均观看 {e['avg_watch_sec']:.1f} 秒")
+        if e.get("views") is not None:
+            bits.append(f"播放 {e['views']}")
+        lines.append(f"早期观察:《{e['title']}》发布 {e.get('hours')} 小时,"
+                     f"{'、'.join(bits)}")
+        lines += [f"  要改:{a}" for a in e.get("advice") or []]
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
     lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
     bench = report.get("benchmark") or {}
@@ -112,13 +157,19 @@ def fallback_text(report: dict[str, Any]) -> dict[str, Any]:
     t = report["totals"]
     summary = (f"本周新发 {t['week_works']} 条,24 小时播放合计 {t['week_views']},"
                f"涨粉 {t['week_followers']}。")
-    if report["learnings"]:
+    early = report.get("early") or []
+    bad = [e for e in early if e.get("level") == "bad"]
+    if bad:
+        summary += f"最新一条《{bad[0]['title']}》前 2 秒就掉人:要改 {bad[0]['advice'][0]}"
+    elif report["learnings"]:
         summary += "最明显的结论:" + report["learnings"][0] + "。"
     else:
         summary += f"近 {report['window_days']} 天只有 {t['works']} 条作品有完整数据,还不够下结论。"
-    return {"summary": summary, "next": [f"试试{e['label']}({e['why']})"
-                                         for e in report["experiments"]][:3],
-            "source": "template"}
+    nxt = [f"试试{e['label']}({e['why']})" for e in report["experiments"]][:3]
+    for e in early:
+        for a in e.get("advice") or []:
+            nxt.insert(0, f"《{e['title'][:20]}》: {a}")
+    return {"summary": summary, "next": nxt[:3], "source": "template"}
 
 
 def write_text(report: dict[str, Any], llm: Any) -> dict[str, Any]:
@@ -137,20 +188,30 @@ def write_text(report: dict[str, Any], llm: Any) -> dict[str, Any]:
 
 
 def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
-    """跑一次复盘:更新手册 + 存周报。返回周报。"""
+    """跑一次复盘:更新手册 + 存周报。返回周报。
+
+    没有 24 小时数据也能复盘 —— 早期观察用发布后 1 小时那张快照,不等满一天。
+    这种情况下**不清手册**(没有新数据不等于旧结论失效)。"""
     now = now or dt.datetime.now()
     ts = now.timestamp()
-    rows = features.rows(since=ts - WINDOW_DAYS * 86400)
-    if not rows:
+    since = ts - WINDOW_DAYS * 86400
+    rows = features.rows(since=since)
+    early_rows = features.early_rows(since=since)
+    early = stats.early_report(early_rows)
+    if not rows and not early:
         raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
     week = week_key(now)
-    learnings = stats.learn(rows, week)
-    db.replace_learnings(week, learnings)
+    if rows:
+        db.replace_learnings(week, stats.learn(rows, week))
     active = db.list_learnings()
-    report = build_report(rows, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts)
+    pool = _pool(rows, early_rows)
+    report = build_report(rows, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts,
+                          early=early, pool=pool)
     report.update(write_text(report, llm))
     report["made_at"] = time.time()
     db.save_report(week, report)
+    # 下这轮配对实验:固定一个写法连发几条,把样本攒够
+    db.set_team_setting(playbook.PLAN_KEY, build_plan(pool))
     return report
 
 

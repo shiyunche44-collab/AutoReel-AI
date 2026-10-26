@@ -28,10 +28,11 @@ def no_playbook():
     playbook.uninstall()
 
 
-def _row(pid, views, *, acc="acc1", rate=None, **feat):
+def _row(pid, views, *, acc="acc1", rate=None, out=None, **feat):
+    outcome = {"views": views, "completion_rate": rate}
+    outcome.update(out or {})
     return {"pub_id": pid, "account_id": acc, "project_id": f"p_{pid}", "title": f"作品{pid}",
-            "published_at": 0.0, "features": feat,
-            "outcome": {"views": views, "completion_rate": rate}}
+            "published_at": 0.0, "features": feat, "outcome": outcome}
 
 
 # --------------------------------------------------------------------------
@@ -67,6 +68,85 @@ def test_learn_ignores_small_effects():
 
     rows = [_row(f"a{i}", 100 + i, ending="action") for i in range(8)]
     assert stats.learn(rows, "w") == []
+
+
+def test_learn_uses_retention_metrics():
+    """2 秒留存、平均观看秒数也要进学习 —— 它们才是「开头留没留住人」的直接证据。"""
+    from app.team import stats
+
+    rows = ([_row(f"g{i}", 300, opening="scene",
+                  out={"retention_2s": 0.9, "avg_watch_sec": 30}) for i in range(4)]
+            + [_row(f"b{i}", 100, opening="conflict",
+                    out={"retention_2s": 0.4, "avg_watch_sec": 8}) for i in range(4)])
+    got = {r["id"]: r for r in stats.learn(rows, "w")}
+    assert "opening:scene:retention_2s" in got
+    assert "opening:scene:avg_watch_sec" in got
+    assert got["opening:scene:retention_2s"]["effect"] > 1
+    assert got["opening:conflict:retention_2s"]["effect"] < 1
+    assert got["opening:scene:retention_2s"]["n"] == 4
+
+
+# --------------------------------------------------------------------------
+# 早期诊断
+# --------------------------------------------------------------------------
+def test_diagnose_flags_hook_and_distribution():
+    from app.team import stats
+
+    hook = stats.diagnose({"outcome": {"views": 5, "retention_2s": 0.45,
+                                        "avg_watch_sec": 12.0}})
+    assert hook["level"] == "bad" and "hook" in hook["problems"]
+    assert hook["advice"]
+
+    dist = stats.diagnose({"outcome": {"views": 20, "retention_2s": 0.9,
+                                        "avg_watch_sec": 30.0}})
+    assert dist["level"] == "warn" and "distribution" in dist["problems"]
+
+    ok = stats.diagnose({"outcome": {"views": 500, "retention_2s": 0.9,
+                                     "avg_watch_sec": 30.0}})
+    assert ok["level"] == "ok" and not ok["problems"]
+
+
+def test_early_rows_use_first_snapshot(fresh_db):
+    """早期诊断取最早那张(1 小时),不等 24 小时。"""
+    from app.team import features
+
+    t0 = time.time() - 3 * 3600
+    _published(fresh_db, "a", t0=t0, views=500, hours=8)
+    rows = features.early_rows()
+    assert [r["pub_id"] for r in rows] == ["a"]
+    assert rows[0]["hours"] == 1.0
+    assert features.rows() == []  # 还没有满 24 小时那张
+
+
+def test_zero_view_snapshot_is_not_fake_retention():
+    """平台在没播放数据时把跳出率填 0 —— 那不是「留存 100%」,是「还没人看」。"""
+    from app.team import features, stats
+
+    o = features.outcome({"views": 0, "bounce_2s": 0.0, "avg_watch_sec": 0.0,
+                           "completion_rate": 0.0})
+    assert o["retention_2s"] is None and o["avg_watch_sec"] is None
+    assert o["completion_rate"] is None
+    d = stats.diagnose({"outcome": o})
+    assert d["level"] == "ok" and not d["problems"]
+
+
+def test_early_snapshot_skips_zero_view(fresh_db):
+    """刚发出去那张播放为 0 的快照要跳过,取下一张真有数的。"""
+    from app.team import features
+
+    _project(fresh_db, "p_a")
+    t0 = time.time() - 3 * 3600
+    fresh_db.create_publication({"id": "a", "project_id": "p_a", "account_id": "acc1",
+                                 "platform": "douyin", "title": "作品a", "state": "published",
+                                 "remote_id": "w_a", "published_at": t0,
+                                 "variant": json.dumps({"title_kind": "number", "cover": "a"})})
+    fresh_db.add_snapshot("a", "douyin", t0 + 300, {"views": 0, "hours_since_publish": 0.08})
+    fresh_db.add_snapshot("a", "douyin", t0 + 3900, {"views": 7, "bounce_2s": 0.5,
+                                                     "avg_watch_sec": 12.0,
+                                                     "hours_since_publish": 1.08})
+    rows = features.early_rows()
+    assert rows[0]["outcome"]["views"] == 7
+    assert rows[0]["outcome"]["retention_2s"] == 0.5
 
 
 # --------------------------------------------------------------------------
@@ -130,8 +210,80 @@ def test_weights_combine_and_clip(fresh_db):
         {"dimension": "ending", "value": "action", "metric": "views", "effect": 1.2},
     ]
     w = playbook.weights("opening", rows)
-    assert w == {"scene": 2.0, "conflict": 0.5}
+    # 几何平均 sqrt(1.5 × 1.6) ≈ 1.549 —— 不是相乘的 2.4:
+    # 相乘会把「四个指标都还行」放大成强信号,指标变多以后噪声会失控
+    assert w == {"scene": 1.549, "conflict": 0.5}
     assert playbook.weights("look", rows) == {}
+
+
+def test_weights_contradicting_signals_cancel(fresh_db):
+    """一个指标好、一个差 → 互相抵消,不会只捡好听的那个去加权。"""
+    from app.team import playbook
+
+    rows = [
+        {"dimension": "opening", "value": "scene", "metric": "views", "effect": 1.5},
+        {"dimension": "opening", "value": "scene", "metric": "retention_2s", "effect": 0.67},
+    ]
+    assert playbook.weights("opening", rows)["scene"] == pytest.approx(1.0, abs=0.02)
+
+
+# --------------------------------------------------------------------------
+# 配对实验计划:攒够样本才下得了结论
+# --------------------------------------------------------------------------
+def test_plan_fixes_one_dimension_until_samples(fresh_db):
+    """计划点名要试的开头 → 固定用它;连发够 3 条 → 自动回到正常挑选。"""
+    from app.pipeline import variety
+    from app.team import playbook
+
+    from app.categories import load_profile
+
+    theme = load_profile("auto_long").themes["buyguide"]
+    t0 = time.time()
+    fresh_db.set_team_setting(playbook.PLAN_KEY,
+                              {"dimension": "opening", "value": "conflict",
+                               "size": 3, "since": t0})
+    playbook.install()
+    assert variety.pick(theme, "p1")["opening"] == "conflict"
+
+    for i in range(3):
+        _project(fresh_db, f"p_x{i}", opening="conflict")
+        fresh_db.create_publication({"id": f"x{i}", "project_id": f"p_x{i}",
+                                    "account_id": "acc1", "platform": "douyin", "title": "t",
+                                    "state": "published", "remote_id": f"w_x{i}",
+                                    "published_at": t0 + i,
+                                    "variant": json.dumps({"title_kind": "number",
+                                                           "cover": "a"})})
+    assert playbook.plan() is None  # 攒够了,不再固定
+
+
+def test_plan_only_fixes_the_named_dimension(fresh_db):
+    """一次只固定一个变量:固定开头时结尾照常轮换,不然比不出是谁的功劳。"""
+    from app.pipeline import variety
+    from app.team import playbook
+
+    from app.categories import load_profile
+
+    theme = load_profile("auto_long").themes["buyguide"]
+    fresh_db.set_team_setting(playbook.PLAN_KEY,
+                              {"dimension": "opening", "value": "conflict",
+                               "size": 3, "since": time.time()})
+    playbook.install()
+    endings = {variety.pick(theme, f"p{i}")["ending"] for i in range(30)}
+    assert len(endings) > 1  # 结尾没被钉死
+
+
+def test_coach_writes_experiment_plan(fresh_db):
+    """复盘官复盘完要下发下一轮计划 —— 不然样本永远攒不够。"""
+    from app.team import coach, playbook
+
+    now = dt.datetime(2026, 10, 25, 20, 0)
+    t0 = now.timestamp() - 2 * 86400
+    for i in range(2):
+        _published(fresh_db, f"n{i}", t0=t0 - i * 3600, views=100, kind="number")
+    coach.review(now)
+    plan = fresh_db.get_team_setting(playbook.PLAN_KEY, None)
+    assert plan["dimension"] == "opening"
+    assert plan["size"] == 3 and plan["value"]
 
 
 def test_variety_unchanged_without_playbook(fresh_db):
@@ -234,6 +386,20 @@ def test_review_writes_playbook_and_report(fresh_db):
     assert exp["title_kind"]["value"] == "stake" and exp["title_kind"]["why"] == "还没试过"
     saved = fresh_db.latest_report()
     assert saved["week"] == "2026-W43" and saved["summary"] == report["summary"]
+
+
+def test_review_reports_early_without_day_data(fresh_db):
+    """还没满 24 小时也要能复盘 —— 早期观察照样给结论,只是标明还没定稿。"""
+    from app.team import coach
+
+    now = dt.datetime(2026, 10, 25, 20, 0)
+    t0 = now.timestamp() - 3 * 3600
+    _published(fresh_db, "a", t0=t0, views=500, hours=8)  # 没有 24 小时那张
+    report = coach.review(now)
+    assert report["totals"]["works"] == 0
+    assert report["early"] and report["early"][0]["pub_id"] == "a"
+    assert report["early"][0]["hours"] == 1.0
+    assert report["source"] == "template"
 
 
 def test_review_llm_text_and_fallback(fresh_db):

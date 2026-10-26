@@ -815,6 +815,12 @@
 .report-work { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-top: 1px solid var(--border); }
 .report-text { margin: 8px 0; line-height: 1.6; }
 .report-next { margin: 4px 0 10px; padding-left: 18px; }
+.early-list { margin-bottom: 10px; }
+.early-row { padding: 6px 0 6px 10px; border-top: 1px solid var(--border); border-left: 3px solid var(--border); }
+.early-row.is-bad { border-left-color: var(--danger); }
+.early-row.is-warn { border-left-color: var(--warning); }
+.early-row.is-ok { border-left-color: var(--success); }
+.early-row .row { gap: 8px; align-items: baseline; }
 .rowline.is-off { opacity: .55; }
 .comment-stats { padding: 0 16px 8px; }
 .comment-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--border); }

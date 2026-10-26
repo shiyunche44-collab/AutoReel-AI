@@ -399,6 +399,18 @@ function reportView(r) {
   }
   if (r.top && r.top.length) out.push(h('div', { class: 'subtle small' }, '最好'), ...r.top.map(workLine));
   if (r.bottom && r.bottom.length) out.push(h('div', { class: 'subtle small' }, '最差'), ...r.bottom.map(workLine));
+  if (r.early && r.early.length) {
+    out.push(h('div', { class: 'subtle small' }, '早期观察(发布 1 小时,还没定稿)'));
+    out.push(h('div', { class: 'early-list' }, ...r.early.map((e) => h('div', { class: `early-row is-${e.level}` },
+      h('div', { class: 'row' },
+        h('strong', { class: 'grow' }, e.title || '—'),
+        badge(e.level === 'bad' ? '前 2 秒掉人' : e.level === 'warn' ? '留不住' : '正常',
+          e.level === 'bad' ? 'danger' : e.level === 'warn' ? 'warning' : 'success')),
+      h('div', { class: 'subtle small num' },
+        `发布 ${e.hours ?? '—'} 小时 · ${e.views ?? '—'} 播放 · 2 秒留存 ${pct(e.retention_2s)}`
+        + ` · 平均观看 ${e.avg_watch_sec != null ? `${Number(e.avg_watch_sec).toFixed(1)} 秒` : '—'}`),
+      ...(e.advice || []).map((a) => h('div', { class: 'small' }, `要改:${a}`))))));
+  }
   if (r.experiments && r.experiments.length) {
     out.push(h('div', { class: 'subtle small' }, '下周实验'),
       h('div', { class: 'row wrap-row' }, ...r.experiments.map((e) => badge(`${e.label} · ${e.why}`, 'brand'))));
@@ -627,6 +639,16 @@ function render() {
   const book = DATA.playbook || [];
   $('#playbook-list').replaceChildren(
     ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]));
+  const exp = DATA.experiment || {};
+  $('#experiment-box').replaceChildren(exp.dimension
+    ? h('div', { class: 'small' },
+      h('strong', {}, `这轮固定:${exp.label || exp.value}`),
+      h('span', { class: 'subtle' }, ` · 已发 ${exp.used}/${exp.size} 条`),
+      exp.done
+        ? h('span', { class: 'subtle' }, ' · 已攒够,下次复盘换下一个')
+        : h('span', { class: 'subtle' }, ` · 还差 ${exp.left} 条`),
+      h('div', { class: 'subtle small' }, '同一个写法连发,其余照常换 —— 攒够 3 条才比得出好坏'))
+    : empty('没有在跑的配对实验(复盘官每周日下发)'));
 
   const state = $('#team-state');
   const off = !DATA.enabled;

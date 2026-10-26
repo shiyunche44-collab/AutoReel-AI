@@ -27,6 +27,7 @@ DEFAULT_ENDING = "action"
 RECENT_WINDOW = 4
 
 
+
 @dataclass(frozen=True)
 class Opening:
     id: str
@@ -175,6 +176,13 @@ learned: Callable[[str], Mapping[str, float]] | None = None
 #: 有手册时也留这么多比例随便挑(探索),不然效果差的写法永远没机会翻身
 EXPLORE = 0.3
 
+#: 复盘官下发的**配对实验计划**:`plan()` → {dimension, value}。
+#: 统计要同一维度 3 条样本才下得了结论,而开头有五六种写法、均匀轮着挑的话要十几条
+#: 作品才凑得出第一条结论。计划说「这轮固定用某个开头」,就照做:连发 3 条同一个开头,
+#: 其余(结尾、视觉包)照常轮换 —— 一次只固定一个变量,才比得出是谁的功劳。
+#: 启动时由 `team.playbook.install` 挂上;没挂 / 计划做够了 → 照旧挑。
+plan: Callable[[], Mapping[str, Any] | None] | None = None
+
 
 def _weights(dimension: str) -> Mapping[str, float] | None:
     if learned is None:
@@ -183,6 +191,20 @@ def _weights(dimension: str) -> Mapping[str, float] | None:
         return learned(dimension) or None
     except Exception:  # noqa: BLE001 - 手册坏了不能挡住建项目
         return None
+
+
+def _planned(dimension: str, allowed: tuple[str, ...]) -> str | None:
+    """配对实验计划指定的取值(这一轮固定用它)。计划没挂 / 不是这个维度 / 做够了 → None。"""
+    if plan is None:
+        return None
+    try:
+        p = plan() or {}
+    except Exception:  # noqa: BLE001 - 计划坏了不能挡住建项目
+        return None
+    if p.get("dimension") != dimension:
+        return None
+    value = p.get("value")
+    return str(value) if value in allowed else None
 
 
 def _choose(rng: random.Random, allowed: tuple[str, ...], used: Iterable[str],
@@ -212,10 +234,10 @@ def pick(theme, project_id: str, recent: Iterable[Mapping[str, Any]] = (),
         raise ValueError(f"这个片型的开头可选:{'、'.join(OPENINGS[o].label for o in openings)}")
     if ending and ending not in endings:
         raise ValueError(f"这个片型的结尾可选:{'、'.join(ENDINGS[e].label for e in endings)}")
-    chosen_opening = opening or _choose(rng, openings, (v.get("opening") for v in recent),
-                                        _weights("opening"))
-    chosen_ending = ending or _choose(rng, endings, (v.get("ending") for v in recent),
-                                      _weights("ending"))
+    chosen_opening = opening or _planned("opening", openings) or _choose(
+        rng, openings, (v.get("opening") for v in recent), _weights("opening"))
+    chosen_ending = ending or _planned("ending", endings) or _choose(
+        rng, endings, (v.get("ending") for v in recent), _weights("ending"))
     return {
         "opening": chosen_opening,
         "ending": chosen_ending,

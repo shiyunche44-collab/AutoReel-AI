@@ -418,14 +418,35 @@ def _user_prompt(inp: Mapping[str, Any]) -> str:
 learned: Callable[[str], Mapping[str, float]] | None = None
 #: 有手册时也留这么多比例不按效果排(探索)
 EXPLORE = 0.3
+#: 复盘官下发的配对实验计划:`plan()` → {dimension, value}。这一轮点名要试哪个标题写法,
+#: 就把它排第一(凑样本用);没挂 / 不是 title_kind → 照旧按权重排
+plan: Callable[[], Mapping[str, Any] | None] | None = None
+
+
+def _planned_title_kind() -> str | None:
+    if plan is None:
+        return None
+    try:
+        p = plan() or {}
+    except Exception:  # noqa: BLE001 - 计划坏了不能挡住包装
+        return None
+    if p.get("dimension") != "title_kind":
+        return None
+    value = p.get("value")
+    return str(value) if value in KINDS else None
 
 
 def title_order(project_id: str) -> tuple[str, ...]:
     """三种标题写法的顺序。有手册时按权重抽出第一条(默认发布的那条),30% 随机;
-    种子来自项目 ID,同一个项目重算结果不变。"""
+    种子来自项目 ID,同一个项目重算结果不变。
+
+    配对实验点名了要试哪种写法 → 它排第一(这一轮固定用它,好攒够样本)。"""
     import hashlib
     import random
 
+    planned = _planned_title_kind()
+    if planned:
+        return (planned, *(k for k in KINDS if k != planned))
     if learned is None:
         return KINDS
     try:
