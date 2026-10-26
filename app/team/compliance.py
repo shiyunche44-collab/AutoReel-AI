@@ -135,11 +135,28 @@ def _footage_entry(pid: str) -> dict[str, Any]:
     return _entry("footage", "第三方素材", [], ok_note=note + "(角标都检测过、能裁掉)")
 
 
+def _declare_entry() -> dict[str, Any]:
+    """AI 生成内容自主声明。
+
+    《人工智能生成合成内容标识办法》2025-09-01 起,AI 生成内容应当主动声明;
+    抖音社区规则:未标识 AI 内容将被限流,多次违规封号。平台不主动声明的话,
+    会自己打「疑似使用了AI生成技术」的标签。
+
+    发布流程会自动勾「内容由AI生成」(`douyin.set_declaration`),所以这里是提醒,
+    不是拦人的红项。关掉了自动声明(`DOUYIN_DECLARE_AI=0`)就降级成提醒。"""
+    if config.DOUYIN_DECLARE_AI:
+        return _entry("declare_ai", "AI 自主声明", [], OK,
+                      "本片含 AI 生成内容,发布时自动勾选「内容由AI生成」")
+    return _entry("declare_ai", "AI 自主声明",
+                  ["自动声明已关(DOUYIN_DECLARE_AI=0),这条要手动去发布页勾"
+                   "「内容由AI生成」,否则可能被限流"], WARN)
+
+
 def checklist(project_id: str, title: str) -> dict[str, Any]:
     """成片闸的审核单。`red` > 0 不能通过。"""
     project = db.get_project(project_id) or {}
     items = [*_script_entries(project_id, project), _title_entry(project_id, project, title),
-             _cover_entry(project_id, project), _footage_entry(project_id)]
+             _cover_entry(project_id, project), _footage_entry(project_id), _declare_entry()]
     return {"items": items,
             "red": sum(1 for i in items if i["level"] == RED),
             "warn": sum(1 for i in items if i["level"] == WARN)}

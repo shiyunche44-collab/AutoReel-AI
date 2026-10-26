@@ -383,6 +383,16 @@ TEAM_THROTTLE_RATIO = float(os.getenv("TEAM_THROTTLE_RATIO", "0.2"))
 TEAM_THROTTLE_MIN_BASELINE = int(os.getenv("TEAM_THROTTLE_MIN_BASELINE", "3"))
 #: 平台审核超过这么多小时还没过 → 审核异常
 TEAM_REVIEW_STUCK_HOURS = float(os.getenv("TEAM_REVIEW_STUCK_HOURS", "24"))
+# --------------------------------------------------------------------------
+# 抖音「自主声明」
+# --------------------------------------------------------------------------
+#: 发布时自动勾「内容由AI生成」。
+#: 《人工智能生成合成内容标识办法》2025-09-01 起要求 AI 生成内容主动声明;抖音社区规则:
+#: 未标识 AI 内容将被限流、多次违规封号。不主动声明的话平台会自己打
+#: 「疑似使用了AI生成技术」的标签 —— 比作者主动声明难看得多。
+#: 本项目的片子全是 AI 生成(TTS 配音 + 概念动画),所以默认开着。
+#: 真要发一条非 AI 的片子,单次请求用 `extra={"declare_ai": False}` 覆盖。
+DOUYIN_DECLARE_AI = os.getenv("DOUYIN_DECLARE_AI", "1") not in ("0", "false", "False")
 #: 账号凭据文件。只存**用户态凭据**(各平台 cookie / OAuth token);
 #: 应用级密钥(client_key / OAuth secret)走 .env,两者职责不同。
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"

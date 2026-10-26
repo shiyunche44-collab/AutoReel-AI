@@ -107,6 +107,33 @@ def _cover_srcs(page: Any) -> list[str]:
 
 
 
+def slot_covered(slot: Any) -> bool:
+    """封面位(一个 locator)正中心上面盖着别的东西 —— 话题联想浮层之类 —— 吗。"""
+    return bool(slot.evaluate(
+        "e => { const r = e.getBoundingClientRect();"
+        " const t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);"
+        " return !(t && (e === t || e.contains(t))); }"))
+
+
+def clear_topic_popup(page: Any, slot: Any) -> bool:
+    """让封面位露出来。成功(本来就没盖 / 关掉了)返回 True,关不掉返回 False。
+
+    简介末尾带话题时,光标停在「#话题」后面,输入框就一直弹着「#话题」联想浮层,盖住封面位。
+    Esc、点空白处、失焦都关不掉它,而 `force` 点击会直接点进浮层、把一个话题插进简介。
+    所以把光标点到简介第一行(不改字),浮层随光标离开消失。调用方只在返回 True 时才点封面位。"""
+    for _ in range(3):
+        if not slot_covered(slot):
+            return True
+        try:
+            box = page.locator("[contenteditable=true]").first.bounding_box()
+            if box:
+                page.mouse.click(box["x"] + 30, box["y"] + 8)
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(700)
+    return not slot_covered(slot)
+
+
 def set_covers(session: Any, cover: Path | None) -> str:
     """在发布页的封面弹窗里把竖 / 横封面传上去。成功返回空串;没设上返回一句说明。
 
@@ -115,7 +142,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
     实跑踩过的坑(都在这里绕开):
     - 封面位上写的是「选择封面」几个字,点**文字**才弹编辑器;点外层容器没反应,
       于是等弹窗超时,封面一直是平台自动截帧。
-    - 填简介时弹出的「#添加话题 / @好友」浮层盖住封面区,会吃掉点击 —— 先按 Esc 关掉。
+    - 填简介时弹出的「#添加话题 / @好友」和话题联想浮层盖住封面区,会吃掉点击(`force` 点击还会
+      把话题插进简介)—— 先 `clear_topic_popup` 把光标挪开,封面位露出来才点。
     - 弹窗里的上传控件是 `input.semi-upload-hidden-input`(按钮被上传层盖住,点不到)。
     """
     files = cover_files(cover)
@@ -136,6 +164,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
             if not slot.count():
                 return f"没找到封面位「{tip}」,用平台自动截帧"
             step = f"点开「{tip}」的封面弹窗"
+            if not clear_topic_popup(page, slot.locator("[class*=cover-]").first):
+                return f"封面位「{tip}」被浮层盖住,没敢点,用平台自动截帧"
             btn = slot.get_by_text("选择封面", exact=True)
             if btn.count():
                 btn.first.click(force=True)
@@ -239,10 +269,104 @@ def set_description(session: Any, description: str, hashtags: str = "") -> str:
     return "简介没填上(作品描述框找不到,页面改版了?)"
 
 
+# --------------------------------------------------------------------------
+# 自主声明:AI 生成内容必须挂标识
+# --------------------------------------------------------------------------
+#: 平台给的六个选项(2026-10 实跑看到的)
+DECLARE_AI = "内容由AI生成"
+DECLARE_NONE = "无需添加自主声明"
+#: 「自主声明」那一行里下拉触发器的位置:标签右边那个控件。
+#: **类名是构建期哈希**(selectText-XSrMFZ,每次发版都变),只能靠结构 + 文案定位。
+_DECLARE_ROW = ("xpath=//*[normalize-space(text())='自主声明']"
+                "/ancestor::*[1]/following-sibling::*[1]")
+
+
+def _declaration_trigger(page: Any) -> Any:
+    """「自主声明」那一行的下拉触发器。找不到返回 None。
+
+    优先从「自主声明」标签右边的控件里找;找不着再退一步:
+    还没选过的时候,触发器上就写着「请选择自主声明」。"""
+    try:
+        row = page.locator(_DECLARE_ROW)
+        if row.count():
+            inner = row.locator("[class*='selectText']")
+            if inner.count():
+                return inner.first
+    except Exception:  # noqa: BLE001 - 换下一种找法
+        pass
+    try:
+        loc = page.get_by_text("请选择自主声明", exact=True)
+        return loc.first if loc.count() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def set_declaration(session: Any, kind: str = DECLARE_AI) -> str:
+    """在发布页的「自主声明」里选一项(默认「内容由AI生成」)。
+
+    **不拦发布**:找不到下拉、点不开、平台改了文案 —— 只记一句说明,片子照发。
+
+    为什么必须勾:《人工智能生成合成内容标识办法》2025-09-01 起,AI 生成内容
+    应当主动声明;抖音社区规则明确未标识 AI 内容将被限流、多次违规封号。
+    不主动声明的话平台会自己打「疑似使用了AI生成技术,请谨慎甄别」——
+    作者主动声明是「我说清楚了」,被平台标是「平台怀疑你」,观感完全不同。
+
+    实跑踩过的坑:
+    - 触发器的类名是构建期哈希,不能写死,要从「自主声明」标签的结构里找。
+    - 选项是 radio,文字包在 `label` 里 —— 直接点文字会被 label 挡住
+      (Playwright 报 "<label> intercepts pointer events"),得点 label 本身。
+    - 弹层底部有「取消 / 确定」,选完得点「确定」才生效。
+    """
+    page = session.page
+    try:
+        trigger = _declaration_trigger(page)
+        if trigger is None:
+            return "发布页没找到「自主声明」(页面改版了?)"
+        current = (trigger.inner_text() or "").strip()
+        if current == kind:
+            return ""  # 已经声明过了,别重复点
+        try:
+            trigger.click(timeout=3000)
+        except Exception:  # noqa: BLE001 - 被浮层盖住就硬点
+            trigger.click(force=True)
+        page.wait_for_timeout(600)
+        option = page.locator("label", has_text=kind).first
+        if not option.count():
+            option = page.get_by_text(kind, exact=True).first
+        if not option.count():
+            return f"「自主声明」里没有「{kind}」这一项(平台改文案了?)"
+        option.click()
+        page.wait_for_timeout(400)
+        confirm = page.locator("span.semi-button-content", has_text="确定").first
+        if confirm.count():
+            confirm.click()
+        page.wait_for_timeout(800)
+        now = (trigger.inner_text() or "").strip()
+        if now != kind:
+            return f"「自主声明」选了「{kind}」但没生效(显示「{now}」)"
+        return ""
+    except Exception as exc:  # noqa: BLE001 - 声明失败不拦发布
+        return (f"「自主声明」没设上({type(exc).__name__}),"
+                f"片子照发,但可能被打上「疑似AI」标签")
+
+
 def _config(key: str) -> str:
     from ... import config
 
     return str(getattr(config, key, "") or "")
+
+
+def _declare_enabled(req: Any) -> bool:
+    """这条要不要挂「内容由AI生成」标识。
+
+    默认按配置来(本项目出的片子全是 AI 生成);单次请求可以用
+    `extra={"declare_ai": False}` 关掉 —— 比如发一条真人拍的素材。"""
+    from ... import config
+
+    raw = (req.extra or {}).get("declare_ai")
+    if raw is not None:
+        return bool(raw)
+    return bool(getattr(config, "DOUYIN_DECLARE_AI", True))
 
 class DouyinAdapter:
     """抖音(开放平台优先,网页版兜底)。"""
@@ -398,10 +522,15 @@ class DouyinAdapter:
         if not item_id:
             raise PublishError(f"建片返回里没有 item_id:{json.dumps(payload, ensure_ascii=False)[:200]}",
                                retryable=True)
+        message = "已提交,平台审核中"
+        if _declare_enabled(req):
+            # 开放平台的建片接口没有「自主声明」字段(声明是创作者中心侧的),
+            # 走这条路只能靠平台自动识别 → 要挂标识得去创作者中心手动勾。
+            message += ";开放平台接口无自主声明字段,AI 标识需去创作者中心手动勾"
         return PublishResult(
             ok=True, state="submitted", remote_id=item_id,
             remote_url=f"https://www.douyin.com/video/{vid}" if vid else "",
-            message="已提交,平台审核中", raw={"item_id": item_id, "video_id": vid},
+            message=message, raw={"item_id": item_id, "video_id": vid},
         )
 
     # -- 网页版兜底 ------------------------------------------------------
@@ -435,6 +564,11 @@ class DouyinAdapter:
                 # 的浮层,它就盖在封面区上,封面位上的「选择封面」点了没反应(实跑踩过:
                 # 等弹窗等超时,封面一直是平台自动截帧)。
                 cover_note = set_covers(session, req.cover_path)
+                # 自主声明要赶在填简介**之前**:填简介会弹「#添加话题」浮层,那浮层会
+                # 盖住下面「自主声明」这一行的下拉,勾不上。
+                declare_note = ""
+                if _declare_enabled(req):
+                    declare_note = set_declaration(session, DECLARE_AI)
                 topics = " ".join(f"#{str(t).strip()}" for t in (req.tags or [])[:5] if str(t).strip())
                 desc_note = set_description(session, req.description, hashtags=topics)
                 # 按文字精确匹配:左栏有个「作品发布」按钮,模糊匹配会先命中它,点了等于没发
@@ -469,7 +603,7 @@ class DouyinAdapter:
         work = resolve_published_work(req.title or "", since=started_at)
         if work.get("aweme_id"):
             message = f"网页版已发布,作品 id {work['aweme_id']}"
-        for note in (desc_note, cover_note):
+        for note in (desc_note, cover_note, declare_note):
             if note:
                 message += f";{note}"
         if work.get("aweme_id"):

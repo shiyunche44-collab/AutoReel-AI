@@ -93,6 +93,191 @@ class FakeSession:
         return "发布成功"
 
 
+# --------------------------------------------------------------------------
+# 自主声明:AI 生成内容必须挂标识
+# --------------------------------------------------------------------------
+class FakeDeclarePage:
+    """模拟发布页的「自主声明」下拉。
+
+    结构照 2026-10 实跑看到的:标签「自主声明」右边的控件里有个 selectText,
+    点开是 radio(label 包着文字),弹层底部有「取消 / 确定」。
+
+    `has_row`:标签右边的控件结构还在不在(结构定位靠它)。
+    `has_placeholder`:下拉上是不是还写着「请选择自主声明」(文案定位靠它)。
+    """
+
+    def __init__(self, *, options=("内容由AI生成", "内容为个人观点或见解",
+                                   "内容为转载信息", "无需添加自主声明"),
+                 selected="", has_row=True, has_placeholder=True):
+        self.options = list(options)
+        self.selected = selected
+        self.has_row = has_row
+        self.has_placeholder = has_placeholder
+        self.clicks: list = []
+        self.confirmed = False
+
+    # -- Playwright 面的 API --------------------------------------------
+    def locator(self, selector, has_text=""):
+        return FakeDeclareLocator(self, selector, has_text)
+
+    def get_by_text(self, text, exact=False):
+        return FakeDeclareLocator(self, f"text:{text}", "")
+
+    def wait_for_timeout(self, ms):
+        pass
+
+
+class FakeDeclareLocator:
+    def __init__(self, page, selector, has_text):
+        self.page = page
+        self.selector = selector
+        self.has_text = has_text
+
+    @property
+    def first(self):
+        return self
+
+    def locator(self, selector, has_text=""):
+        return FakeDeclareLocator(self.page, selector, has_text)
+
+    def count(self):
+        s, p = self.selector, self.page
+        if s == douyin._DECLARE_ROW:
+            return 1 if p.has_row else 0
+        if s == "[class*='selectText']":
+            return 1 if p.has_row else 0
+        if s == "label":
+            return 1 if self.has_text in p.options else 0
+        if s == "span.semi-button-content":
+            return 1 if self.has_text == "确定" else 0
+        if s.startswith("text:"):
+            want = s[5:]
+            if want == "请选择自主声明":
+                return 1 if p.has_placeholder else 0
+            return 1 if want in p.options or want == p.selected else 0
+        return 0
+
+    def inner_text(self):
+        return self.page.selected
+
+    def click(self, **kw):
+        p = self.page
+        p.clicks.append((self.selector, self.has_text))
+        if self.selector == "[class*='selectText']":
+            return
+        if self.selector == "label":
+            p.selected = self.has_text
+            return
+        if self.selector == "span.semi-button-content":
+            p.confirmed = True
+            return
+        if self.selector.startswith("text:"):
+            p.selected = self.selector[5:]
+            return
+
+
+class FakeDeclareSession:
+    def __init__(self, page):
+        self.page = page
+
+
+def test_set_declaration_picks_the_ai_option():
+    """AI 生成内容要挂上「内容由AI生成」—— 平台社区规则:未标识会被限流。"""
+    page = FakeDeclarePage()
+    note = douyin.set_declaration(FakeDeclareSession(page))
+    assert note == ""
+    assert page.selected == douyin.DECLARE_AI
+    assert page.confirmed  # 选完得点「确定」才生效
+    assert ("label", douyin.DECLARE_AI) in page.clicks
+
+
+def test_set_declaration_skips_when_already_declared():
+    page = FakeDeclarePage(selected=douyin.DECLARE_AI)
+    assert douyin.set_declaration(FakeDeclareSession(page)) == ""
+    assert page.clicks == []  # 已经声明过就别再点一遍
+
+
+def test_set_declaration_reports_missing_option():
+    """平台改了文案 —— 说清楚,别当成设上了。"""
+    page = FakeDeclarePage(options=("无需添加自主声明",))
+    note = douyin.set_declaration(FakeDeclareSession(page))
+    assert "没有" in note and douyin.DECLARE_AI in note
+
+
+def test_set_declaration_never_raises():
+    """页面改版 / 浏览器抽风 —— 都不能拦住发布。"""
+    class Broken:
+        def locator(self, *a, **k):
+            raise RuntimeError("页面改版")
+
+        def get_by_text(self, *a, **k):
+            raise RuntimeError("页面改版")
+
+        def wait_for_timeout(self, ms):
+            raise RuntimeError("页面改版")
+
+    class Session:
+        page = Broken()
+
+    note = douyin.set_declaration(Session())
+    assert note and "声明" in note
+
+
+def test_set_declaration_reports_missing_row():
+    """结构定位和文案定位都找不到 → 说清楚,别当成设上了。"""
+    page = FakeDeclarePage(has_row=False, has_placeholder=False)
+    note = douyin.set_declaration(FakeDeclareSession(page))
+    assert "没找到" in note
+
+
+def test_set_declaration_falls_back_to_placeholder_text():
+    """结构变了(标签右边的控件挪了),但「请选择自主声明」还在 → 还能勾上。"""
+    page = FakeDeclarePage(has_row=False, has_placeholder=True)
+    note = douyin.set_declaration(FakeDeclareSession(page))
+    assert note == ""
+    assert page.selected == douyin.DECLARE_AI
+
+
+def test_publish_browser_declares_ai_before_description(tmp_path, monkeypatch):
+    """顺序要紧:填简介会弹「#添加话题」浮层,盖住下面「自主声明」那一行的下拉。"""
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+    FakeSession.calls = []
+    order: list = []
+    monkeypatch.setattr(browser, "BrowserSession", FakeSession)
+    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
+    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    monkeypatch.setattr(douyin, "set_declaration",
+                        lambda session, kind: order.append(("declare", kind)) or "")
+    monkeypatch.setattr(douyin, "set_description",
+                        lambda session, desc, hashtags="": order.append(("desc",)) or "")
+    req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
+                         title="标题")
+    result = DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
+                                                  auth_kind="browser"))
+    assert result.ok
+    assert order == [("declare", douyin.DECLARE_AI), ("desc",)]
+
+
+def test_publish_browser_can_skip_the_ai_declaration(tmp_path, monkeypatch):
+    """真发了非 AI 的片子,单次请求能关掉声明。"""
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+    FakeSession.calls = []
+    called: list = []
+    monkeypatch.setattr(browser, "BrowserSession", FakeSession)
+    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
+    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    monkeypatch.setattr(douyin, "set_description", lambda session, desc, hashtags="": "")
+    monkeypatch.setattr(douyin, "set_declaration",
+                        lambda session, kind: called.append(kind) or "")
+    req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
+                         title="标题", extra={"declare_ai": False})
+    DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
+                                          auth_kind="browser"))
+    assert called == []
+
+
 def test_publish_browser_sets_cover_before_clicking_publish(tmp_path, monkeypatch):
     video = tmp_path / "output.mp4"
     video.write_bytes(b"x")

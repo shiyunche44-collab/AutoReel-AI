@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from ..publish.base import PublishError
-from .platforms.douyin import CREATOR_MANAGE, cover_files
+from .platforms.douyin import CREATOR_MANAGE, clear_topic_popup, cover_files
 
 log = logging.getLogger(__name__)
 
@@ -139,9 +139,22 @@ def _dismiss_tips(page: Any) -> None:
 # --------------------------------------------------------------------------
 # 传一张图
 # --------------------------------------------------------------------------
+def _description(page: Any) -> str:
+    """简介输入框里现在的文字。拿来核对:换封面的过程中简介一个字都不能变。"""
+    try:
+        return page.evaluate(
+            "() => { const els = [...document.querySelectorAll('[contenteditable=true]')];"
+            " const e = els.sort((a, b) => b.innerText.length - a.innerText.length)[0];"
+            " return e ? e.innerText : ''; }") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _upload_to_slot(page: Any, tip: str, path: Path) -> str:
     """往一个封面位上传一张图。成功返回一句给日志看的话,失败抛错。"""
     before = _slot_src(page, tip)
+    if not clear_topic_popup(page, _cover_slot(page, tip).locator("div[class*=cover-]").first):
+        raise PublishError(f"「{tip}」封面位被浮层盖住,关不掉,没敢点(页面改版了?)", retryable=False)
     slot = _cover_slot(page, tip)
     # 点封面图本身:上面盖着 `background-*` 层,hover 时才露出「编辑封面」文字,
     # 那个文字节点是隐藏的模板,点不动 —— 直接点图片区域。
@@ -236,9 +249,12 @@ def replace_covers(*, project_id: str, title: str = "", cover: Path | None = Non
                 raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
                                    retryable=False, credential=True)
             _dismiss_tips(page)
+            desc_before = _description(page)
             for tip, _step, path in files:
                 notes.append(_upload_to_slot(page, tip, path))
                 _dismiss_tips(page)
+            if _description(page) != desc_before:
+                raise PublishError("换封面过程中简介被改动了,没提交(页面改版了?)", retryable=False)
             if not submit:
                 try:
                     shot = Path("data/_cache") / f"douyin_cover_{project_id}.png"
