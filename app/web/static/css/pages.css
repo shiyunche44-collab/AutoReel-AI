@@ -789,6 +789,32 @@
 .role-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border); }
 .role-row:first-child { border-top: 0; padding-top: 0; }
 @media (max-width: 900px) { .team-grid { grid-template-columns: 1fr; } }
+/* 迭代记录 */
+.iter-charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.iter-chart { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.iter-chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.iter-chart-title { font-size: 12.5px; color: var(--text-2); }
+.iter-chart-head strong { font-size: 15px; color: var(--text-1); }
+.iter-dot { fill: var(--brand); stroke: var(--surface-1); stroke-width: 2; }
+.iter-cross { stroke: var(--border-strong); stroke-width: 1; }
+.iter-tip {
+  position: absolute; top: 22px; transform: translateX(-50%); pointer-events: none; z-index: 2;
+  background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 6px;
+  padding: 5px 8px; font-size: 12px; white-space: nowrap; color: var(--text-1);
+}
+.iter-table { margin-top: 10px; }
+.iter-table summary { cursor: pointer; color: var(--text-2); }
+.iter-table table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.iter-table th, .iter-table td { text-align: right; padding: 4px 8px; border-top: 1px solid var(--border); }
+.iter-table th:first-child, .iter-table td:first-child { text-align: left; }
+.iter-split { display: grid; grid-template-columns: 2fr 3fr; gap: 20px; border-top: 1px solid var(--border); }
+@media (max-width: 900px) { .iter-split { grid-template-columns: 1fr; } }
+.iter-h { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text-2); }
+.iter-exp { display: flex; flex-direction: column; gap: 5px; padding: 6px 0; }
+.iter-bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.iter-bar span { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
+#iter-log .rowline { padding: 7px 0; }
+#iter-log .rowline:hover { background: none; }
 .review-card { flex-direction: row; gap: 16px; }
 .review-card + .review-card { margin-top: 12px; }
 .review-media { flex: 0 0 46%; min-width: 0; }

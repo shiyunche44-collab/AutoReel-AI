@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import db
-from . import Skip, benchmark, features, playbook, stats
+from . import Skip, benchmark, features, iteration, playbook, stats
 
 log = logging.getLogger(__name__)
 
@@ -207,9 +207,12 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     if not rows and not early:
         raise Skip(f"近 {WINDOW_DAYS} 天还没有发布满 24 小时的抖音作品")
     week = week_key(now)
+    before = iteration.weight_snapshot(db.list_learnings())
     if rows:
         db.replace_learnings(week, stats.learn(rows, week))
     active = db.list_learnings()
+    # 权重变动超过 0.1 的记进迭代日志:自动改了生产,得看得见改了什么
+    iteration.log_weight_changes(before, iteration.weight_snapshot(active), ts=ts)
     pool = _pool(rows, early_rows)
     report = build_report(rows, sorted(active, key=lambda r: -abs(r["effect"] - 1)), ts,
                           early=early, pool=pool)
@@ -217,7 +220,14 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     report["made_at"] = time.time()
     db.save_report(week, report)
     # 下这轮配对实验:固定一个写法连发几条,把样本攒够
-    db.set_team_setting(playbook.PLAN_KEY, build_plan(pool))
+    old_plans = playbook.progress()
+    plans = build_plan(pool)
+    # 同一个实验接着跑:沿用原来的起点,已经发的那几条照算,不从零数
+    since = {(p["dimension"], p["value"]): p["since"] for p in old_plans if not p["done"]}
+    for p in plans:
+        p["since"] = since.get((p["dimension"], p["value"]), p["since"])
+    db.set_team_setting(playbook.PLAN_KEY, plans)
+    iteration.log_plan_changes(old_plans, plans, ts=ts)
     return report
 
 

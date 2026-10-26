@@ -589,6 +589,146 @@ function engageStats(s) {
   return parts.join(' · ');
 }
 
+// ---------------------------------------------------------------------------
+// 迭代记录:按周小图(一张图一个指标)+ 实验进度 + 变更日志
+// ---------------------------------------------------------------------------
+const NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  return el;
+}
+
+function wan(v) {
+  return v >= 10000 ? `${(v / 10000).toFixed(1)} 万` : String(Math.round(v));
+}
+
+const TRENDS = [
+  { key: 'median_views', label: '中位播放', fmt: wan, n: (w) => `${w.measured} 条有数` },
+  { key: 'retention_2s', label: '2 秒留存', fmt: pct, n: (w) => `${w.measured} 条有数` },
+  { key: 'avg_watch_sec', label: '平均观看', fmt: (v) => `${v.toFixed(1)} 秒`, n: (w) => `${w.measured} 条有数` },
+  { key: 'followers', label: '涨粉', fmt: (v) => String(v), n: (w) => `${w.measured} 条有数` },
+  { key: 'reject_rate', label: '你的驳回率', note: '越低越对口味', fmt: pct, n: (w) => `${w.decided} 条已表态` },
+];
+
+function weekDay(iso) {
+  const [, m, d] = iso.split('-');
+  return `${Number(m)}/${Number(d)}`;
+}
+
+/** 一个指标的小折线。没数的周断开(不连过去、不当 0),悬停吸附到最近的周。 */
+function trendChart(weeks, spec) {
+  const W = 240, H = 92, pad = { l: 6, r: 6, t: 10, b: 18 };
+  const vals = weeks.map((w) => w[spec.key]);
+  const have = vals.filter((v) => v != null);
+  const latest = [...weeks].reverse().find((w) => w[spec.key] != null);
+  const head = h('div', { class: 'iter-chart-head' },
+    h('span', { class: 'iter-chart-title' }, spec.label),
+    h('strong', { class: 'num' }, latest ? spec.fmt(latest[spec.key]) : '—'));
+  const box = h('div', { class: 'iter-chart' }, head);
+  const svg = svgEl('svg', {
+    viewBox: `0 0 ${W} ${H}`, class: 'chart-svg', role: 'img',
+    'aria-label': `${spec.label},近 ${weeks.length} 周:${vals.map((v) => (v == null ? '无' : spec.fmt(v))).join('、')}`,
+  });
+  box.appendChild(svg);
+  if (spec.note) box.appendChild(h('div', { class: 'subtle small' }, spec.note));
+  if (!have.length) {
+    const t = svgEl('text', { x: W / 2, y: H / 2, 'text-anchor': 'middle', class: 'chart-empty' });
+    t.textContent = '还没有数据';
+    svg.appendChild(t);
+    return box;
+  }
+  let min = Math.min(...have), max = Math.max(...have);
+  if (min === max) { min -= Math.abs(min) * 0.1 || 1; max += Math.abs(max) * 0.1 || 1; }
+  const x = (i) => pad.l + (i * (W - pad.l - pad.r)) / Math.max(1, weeks.length - 1);
+  const y = (v) => H - pad.b - ((v - min) / (max - min)) * (H - pad.t - pad.b);
+  for (const gy of [pad.t, H - pad.b]) {
+    svg.appendChild(svgEl('line', { x1: pad.l, y1: gy, x2: W - pad.r, y2: gy, class: 'chart-grid' }));
+  }
+  let seg = [];
+  const flush = () => {
+    if (seg.length > 1) {
+      svg.appendChild(svgEl('path', {
+        d: seg.map(([px, py], i) => `${i ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)}`).join(' '),
+        class: 'chart-line',
+      }));
+    }
+    seg = [];
+  };
+  vals.forEach((v, i) => (v == null ? flush() : seg.push([x(i), y(v)])));
+  flush();
+  vals.forEach((v, i) => {
+    if (v != null) svg.appendChild(svgEl('circle', { cx: x(i), cy: y(v), r: 4, class: 'iter-dot' }));
+  });
+  for (const [i, anchor] of [[0, 'start'], [weeks.length - 1, 'end']]) {
+    const t = svgEl('text', { x: x(i), y: H - 4, 'text-anchor': anchor, class: 'chart-label' });
+    t.textContent = weekDay(weeks[i].start);
+    svg.appendChild(t);
+  }
+
+  const cross = svgEl('line', { y1: pad.t, y2: H - pad.b, class: 'iter-cross', visibility: 'hidden' });
+  svg.appendChild(cross);
+  const tip = h('div', { class: 'iter-tip', hidden: true });
+  box.appendChild(tip);
+  const hit = svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'transparent' });
+  svg.appendChild(hit);
+  hit.addEventListener('mousemove', (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    const i = Math.max(0, Math.min(weeks.length - 1,
+      Math.round(((px - pad.l) / (W - pad.l - pad.r)) * (weeks.length - 1))));
+    const w = weeks[i];
+    cross.setAttribute('x1', x(i));
+    cross.setAttribute('x2', x(i));
+    cross.setAttribute('visibility', 'visible');
+    tip.replaceChildren(
+      h('strong', { class: 'num' }, w[spec.key] == null ? '无数据' : spec.fmt(w[spec.key])),
+      h('div', { class: 'subtle' }, `${weekDay(w.start)} 那周 · 发 ${w.works} 条 · ${spec.n(w)}`));
+    tip.hidden = false;
+    tip.style.left = `${(x(i) / W) * 100}%`;
+  });
+  hit.addEventListener('mouseleave', () => {
+    cross.setAttribute('visibility', 'hidden');
+    tip.hidden = true;
+  });
+  return box;
+}
+
+function trendTable(weeks) {
+  return h('details', { class: 'iter-table small' },
+    h('summary', {}, '看表格'),
+    h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, '周'), h('th', {}, '发了'),
+        ...TRENDS.map((s) => h('th', {}, s.label)))),
+      h('tbody', {}, ...[...weeks].reverse().map((w) => h('tr', {},
+        h('td', {}, `${weekDay(w.start)} 起`), h('td', { class: 'num' }, String(w.works)),
+        ...TRENDS.map((s) => h('td', { class: 'num' }, w[s.key] == null ? '—' : s.fmt(w[s.key]))))))));
+}
+
+const LOG_TONE = { weight: 'brand', experiment: 'warning', param: 'neutral' };
+
+function renderIteration() {
+  const it = DATA.iteration || { weeks: [], experiments: [], log: [] };
+  $('#iter-trends').replaceChildren(
+    h('div', { class: 'iter-charts' }, ...TRENDS.map((s) => trendChart(it.weeks, s))),
+    trendTable(it.weeks));
+  $('#iter-exps').replaceChildren(h('h3', { class: 'iter-h' }, '实验进度'),
+    ...(it.experiments.length ? it.experiments.map((e) => h('div', { class: 'iter-exp' },
+      h('div', { class: 'row' }, h('span', { class: 'grow small' }, e.label),
+        h('span', { class: 'subtle small num' }, e.done ? '已攒够,等复盘' : `${e.used}/${e.size} · 差 ${e.left} 条`)),
+      h('div', { class: 'iter-bar', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': e.size,
+        'aria-valuenow': e.used, 'aria-label': e.label },
+      h('span', { style: `width:${Math.min(100, (e.used / Math.max(1, e.size)) * 100)}%` }))))
+      : [h('div', { class: 'subtle small' }, '没有在跑的配对实验')]));
+  $('#iter-log').replaceChildren(h('h3', { class: 'iter-h' }, '变更日志'),
+    ...(it.log.length ? it.log.map((r) => h('div', { class: 'rowline' },
+      h('span', { class: 'subtle small num' }, relTime(r.ts)),
+      badge(r.kind_label, LOG_TONE[r.kind]),
+      h('span', { class: 'grow small' }, r.title)))
+      : [h('div', { class: 'subtle small' }, '还没有自动改动:权重变动超过 0.1、实验开始 / 结束都会记在这里')]));
+}
+
 async function decidePicked(action, ok) {
   const ids = [...PICKED];
   PICKED.clear();
@@ -690,6 +830,7 @@ function render() {
     h('div', { class: 'subtle small' },
       '几个实验轮着来:一条片只固定其中一个,其余照常换 —— 每个攒够 3 条才比得出好坏')]
     : [empty('没有在跑的配对实验(复盘官每周日下发)')]));
+  renderIteration();
 
   const state = $('#team-state');
   const off = !DATA.enabled;

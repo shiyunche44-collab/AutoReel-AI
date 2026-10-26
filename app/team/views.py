@@ -6,8 +6,8 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import (activator, benchmark, compliance, engagement, events, next_slot, paused, playbook,
-               publisher, rapid, roles, scout)
+from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
+               playbook, publisher, rapid, roles, scout)
 from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
@@ -69,6 +69,8 @@ def overview(category: str | None = None) -> dict[str, Any]:
                      for r in db.list_learnings(("active", "off"))],
         # 当前在跑的配对实验(攒样本用):固定哪个维度、试哪种写法、还要几条
         "experiments": _experiment_views(),
+        # 迭代记录:按周趋势、实验进度、自动改动的变更日志
+        "iteration": iteration.overview(),
         "report": db.latest_report(),
         "comments": comment_queue(),
         "engage": {**engagement.stats(),

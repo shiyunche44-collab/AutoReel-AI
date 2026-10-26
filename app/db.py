@@ -249,6 +249,16 @@ CREATE TABLE IF NOT EXISTS learnings (
     updated_at REAL NOT NULL
 );
 
+-- 迭代变更日志:打法权重大变、实验开始 / 结束、自动调参……每一次自动改动都留一条
+CREATE TABLE IF NOT EXISTS iteration_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         REAL NOT NULL,
+    kind       TEXT NOT NULL,              -- weight / experiment / param / ...
+    title      TEXT NOT NULL,              -- 一句人话
+    detail     TEXT NOT NULL DEFAULT '{}'  -- 结构化细节(JSON)
+);
+CREATE INDEX IF NOT EXISTS idx_iteration_log_ts ON iteration_log(ts);
+
 -- 复盘官周报
 CREATE TABLE IF NOT EXISTS team_reports (
     week       TEXT PRIMARY KEY,
@@ -1418,6 +1428,24 @@ def set_learning_status(learning_id: str, status: str) -> bool:
         cur = conn.execute("UPDATE learnings SET status = ?, updated_at = ? WHERE id = ?",
                            (status, time.time(), learning_id))
         return cur.rowcount > 0
+
+
+def add_iteration_log(kind: str, title: str, detail: dict[str, Any] | None = None,
+                      ts: float | None = None) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT INTO iteration_log (ts, kind, title, detail) VALUES (?, ?, ?, ?)",
+                     (ts or time.time(), kind, title,
+                      json.dumps(detail or {}, ensure_ascii=False)))
+
+
+def list_iteration_log(limit: int = 50, since: float | None = None) -> list[dict[str, Any]]:
+    """新的在前。"""
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM iteration_log WHERE ts >= ? ORDER BY ts DESC, id DESC"
+                            " LIMIT ?", (since or 0, limit)).fetchall()
+    return [{**dict(r), "detail": json.loads(r["detail"] or "{}")} for r in rows]
 
 
 def save_report(week: str, data: dict[str, Any]) -> None:
