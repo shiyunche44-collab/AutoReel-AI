@@ -1399,6 +1399,67 @@ def team_active_run():
     return {"ok": True}
 
 
+# --------------------------------------------------------------------------
+# 你的审核偏好:复盘归纳的几条话(可改 / 停用 / 自己加)+ 通过率乘数开关
+# --------------------------------------------------------------------------
+class PreferenceIn(BaseModel):
+    text: str
+
+
+class PreferencePatch(BaseModel):
+    text: str | None = None
+    status: str | None = None
+
+
+class PreferenceRate(BaseModel):
+    enabled: bool
+
+
+def _pref_call(fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    from .team import preference
+
+    return preference.overview()
+
+
+@app.get("/api/team/preferences")
+def team_preferences():
+    from .team import preference
+
+    return preference.overview()
+
+
+@app.post("/api/team/preferences")
+def team_preference_add(payload: PreferenceIn):
+    from .team import preference
+
+    return _pref_call(preference.add, payload.text)
+
+
+@app.patch("/api/team/preferences/{pref_id}")
+def team_preference_patch(pref_id: str, payload: PreferencePatch):
+    from .team import preference
+
+    return _pref_call(preference.update, pref_id, text=payload.text, status=payload.status)
+
+
+@app.delete("/api/team/preferences/{pref_id}")
+def team_preference_delete(pref_id: str):
+    from .team import preference
+
+    return _pref_call(preference.remove, pref_id)
+
+
+@app.post("/api/team/preferences/rate")
+def team_preference_rate(payload: PreferenceRate):
+    from .team import preference
+
+    return _pref_call(db.set_team_setting, preference.RATE_KEY, payload.enabled)
+
+
 class BenchAdd(BaseModel):
     target: str
     note: str = ""

@@ -809,6 +809,10 @@
 .iter-table th:first-child, .iter-table td:first-child { text-align: left; }
 .iter-split { display: grid; grid-template-columns: 2fr 3fr; gap: 20px; border-top: 1px solid var(--border); }
 @media (max-width: 900px) { .iter-split { grid-template-columns: 1fr; } }
+.pref-split { grid-template-columns: 3fr 2fr; }
+@media (max-width: 900px) { .pref-split { grid-template-columns: 1fr; } }
+.pref-split .rowline { gap: 6px; }
+.pref-add { margin-top: 10px; gap: 8px; }
 .iter-h { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: var(--text-2); }
 .iter-exp { display: flex; flex-direction: column; gap: 5px; padding: 6px 0; }
 .iter-bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }

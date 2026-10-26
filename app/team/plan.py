@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import config, db
+from . import preference
 from ..categories import load_profile
 from ..models import ProjectCreate, SubjectEntry
 
@@ -32,18 +33,26 @@ def _get(item_id: str) -> dict[str, Any]:
 def approve(item_id: str) -> dict[str, Any]:
     if not db.cas_plan_status(item_id, ("proposed",), "approved"):
         raise PlanError(f"这条选题现在是「{STATUS_LABEL.get(_get(item_id)['status'])}」,不能批")
-    return _get(item_id)
+    item = _get(item_id)
+    preference.record(item, "topic", "approve")
+    return item
 
 
 def reject(item_id: str, note: str = "") -> dict[str, Any]:
     if not db.cas_plan_status(item_id, EDITABLE, "rejected", note=note[:200]):
         raise PlanError(f"这条选题现在是「{STATUS_LABEL.get(_get(item_id)['status'])}」,不能驳回")
-    return _get(item_id)
+    item = _get(item_id)
+    preference.record(item, "topic", "reject", note=note)
+    return item
 
 
 def approve_all(category: str) -> int:
-    return sum(1 for i in db.list_plan_items(category, statuses=("proposed",), limit=500)
-               if db.cas_plan_status(i["id"], ("proposed",), "approved"))
+    n = 0
+    for i in db.list_plan_items(category, statuses=("proposed",), limit=500):
+        if db.cas_plan_status(i["id"], ("proposed",), "approved"):
+            preference.record(i, "topic", "approve")
+            n += 1
+    return n
 
 
 def patch(item_id: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +80,10 @@ def patch(item_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     if "slot_at" in fields:
         fields["slot_at"] = float(fields["slot_at"])
     db.update_plan_item(item_id, **fields)
+    # 你动手改的(车型 / 角度 / 开场…)是口味信号;只挪排期不算
+    note = preference.edit_note(item, fields)
+    if note:
+        preference.record(_get(item_id), "topic", "edit", note=note)
     return _get(item_id)
 
 

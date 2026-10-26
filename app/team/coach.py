@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import db
-from . import Skip, benchmark, features, iteration, playbook, stats
+from . import Skip, benchmark, features, iteration, playbook, preference, stats
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +200,8 @@ def review(now: dt.datetime | None = None, llm: Any = None) -> dict[str, Any]:
     这种情况下**不清手册**(没有新数据不等于旧结论失效)。"""
     now = now or dt.datetime.now()
     ts = now.timestamp()
+    # 你的偏好不依赖作品数据,先归纳(没作品也照样学你的口味)
+    preference.summarize(llm, ts)
     since = ts - WINDOW_DAYS * 86400
     rows = features.rows(since=since)
     early_rows = features.early_rows(since=since)

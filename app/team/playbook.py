@@ -136,10 +136,11 @@ def script_hint(now: float | None = None) -> str:
     - 近 30 天 2 秒留存最高的两条的**真实第一句**当正例,最低的两条当反例;
     - 最近一周早期诊断出的 hook / pace 问题转成硬规则。
     不放任何播放 / 留存数字:模型拿到数字会往脚本里写。"""
-    from . import stats
+    from . import preference, stats
 
     now = now or time.time()
-    parts = []
+    # 你的偏好放最前:截断时先保住它
+    parts = [p] if (p := preference.prompt_text()) else []
     scored = sorted(((r["outcome"]["retention_2s"], r) for r in _hint_rows(now - HINT_DAYS * 86400)
                      if r["outcome"].get("retention_2s") is not None), key=lambda x: -x[0])
     if len(scored) >= HINT_MIN_WORKS:

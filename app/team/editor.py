@@ -107,21 +107,33 @@ def learned_weight(idea: Any, weights: dict[str, dict[str, float]] | None) -> fl
     return playbook.predict({"theme": idea.theme, "subject": idea.subject}, by_dim=weights)
 
 
+def taste_weight(idea: Any, rates: dict[str, Any] | None) -> float:
+    """你的通过率乘数(`preference.multiplier`):你常批的车型 / 片型往前排。没开 / 没数 = 1。"""
+    if not rates:
+        return 1.0
+    from . import preference
+
+    return preference.multiplier({"theme": idea.theme, "subject": idea.subject}, rates)
+
+
 def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
-               weights: dict[str, dict[str, float]] | None = None) -> list[Any]:
-    """去掉冷却中的,上升车型热度 +1,乘上打法手册的权重,按分排。"""
+               weights: dict[str, dict[str, float]] | None = None,
+               rates: dict[str, Any] | None = None) -> list[Any]:
+    """去掉冷却中的,上升车型热度 +1,乘上打法手册的权重和你的通过率乘数,按分排。"""
     out = []
     for idea in ideas:
         names = [idea.subject] if not idea.subjects else list(idea.subjects)
         if any(_norm(n) in cooled for n in names):
             continue
         boost = 1 if any(_norm(n) in rising_cars for n in names) else 0
-        out.append((min(5, idea.heat + boost) * learned_weight(idea, weights), boost, idea))
+        out.append((min(5, idea.heat + boost) * learned_weight(idea, weights)
+                    * taste_weight(idea, rates), boost, idea))
     out.sort(key=lambda x: (-x[0], -x[1]))
     return [x[2] for x in out]
 
 
-def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, ...] = ()) -> str:
+def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, ...] = (),
+               taste: float = 1.0) -> str:
     why = (idea.why_hot or "").strip()
     if boosted:
         why = (why + ";" if why else "") + "榜单名次在上升"
@@ -129,6 +141,9 @@ def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, 
         why = (why + ";" if why else "") + note
     if abs(weight - 1) >= 0.05:
         note = f"打法手册加权 ×{weight:.2f}" if weight > 1 else f"打法手册降权 ×{weight:.2f}"
+        why = (why + ";" if why else "") + note
+    if abs(taste - 1) >= 0.05:
+        note = f"你常批这类 ×{taste:.2f}" if taste > 1 else f"你常驳这类 ×{taste:.2f}"
         why = (why + ";" if why else "") + note
     return why[:200]
 
@@ -153,12 +168,12 @@ def run(category: str | None = None, *, llm: Any = None,
     items = scout.fresh_items(category)
     if not items:
         raise TeamError("没有热点可用")
-    from . import benchmark, engagement, events, playbook
+    from . import benchmark, engagement, events, playbook, preference
 
     learnings = db.list_learnings()
     weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject", "duration")}
     # 打法手册 + 观众在评论里问的(运营官回灌)+ 行业日历 + 对标爆款
-    hints = "\n\n".join(t for t in (playbook.prompt_text(learnings),
+    hints = "\n\n".join(t for t in (preference.prompt_text(), playbook.prompt_text(learnings),
                                      engagement.audience_text(now.timestamp(), mark=True),
                                      events.prompt_text(category, now.date()),
                                      benchmark.prompt_text(now.timestamp())) if t)
@@ -168,7 +183,8 @@ def run(category: str | None = None, *, llm: Any = None,
     event_cars = events.lead_cars(category, now.date())
     bench_cars = benchmark.hot_cars(now.timestamp())
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
-    ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars, weights)
+    rates = preference.rates() if preference.rate_on() else None
+    ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars, weights, rates)
     if not ranked:
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
@@ -196,7 +212,8 @@ def run(category: str | None = None, *, llm: Any = None,
             "angle": idea.angle, "theme": idea.theme, "aspect": aspect, "duration": duration,
             "hook": idea.hook, "search_terms": idea.search_terms, "evidence": evidence[:12],
             "rationale": _rationale(idea, any(k in rising_cars for k in keys),
-                                    learned_weight(idea, weights), extra),
+                                    learned_weight(idea, weights), extra,
+                                    taste_weight(idea, rates)),
             "heat": idea.heat,
         })
         made += 1

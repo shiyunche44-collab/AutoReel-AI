@@ -259,6 +259,20 @@ CREATE TABLE IF NOT EXISTS iteration_log (
 );
 CREATE INDEX IF NOT EXISTS idx_iteration_log_ts ON iteration_log(ts);
 
+-- 你在两道闸上的每一次表态(批 / 驳回 / 改 / 改标题),主编和写脚本学你的口味用
+CREATE TABLE IF NOT EXISTS review_feedback (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL NOT NULL,
+    item_id     TEXT NOT NULL,
+    stage       TEXT NOT NULL,              -- topic(选题闸) / cut(成片闸)
+    decision    TEXT NOT NULL,              -- approve / reject / edit
+    note        TEXT NOT NULL DEFAULT '',   -- 驳回理由
+    title_from  TEXT NOT NULL DEFAULT '',   -- 成片闸改标题:原标题
+    title_to    TEXT NOT NULL DEFAULT '',   --              改成
+    features    TEXT NOT NULL DEFAULT '{}'  -- 当时的特征 {维度: 取值}(JSON)
+);
+CREATE INDEX IF NOT EXISTS idx_review_feedback_ts ON review_feedback(ts);
+
 -- 复盘官周报
 CREATE TABLE IF NOT EXISTS team_reports (
     week       TEXT PRIMARY KEY,
@@ -1446,6 +1460,30 @@ def list_iteration_log(limit: int = 50, since: float | None = None) -> list[dict
         rows = conn.execute("SELECT * FROM iteration_log WHERE ts >= ? ORDER BY ts DESC, id DESC"
                             " LIMIT ?", (since or 0, limit)).fetchall()
     return [{**dict(r), "detail": json.loads(r["detail"] or "{}")} for r in rows]
+
+
+def add_review_feedback(row: dict[str, Any]) -> None:
+    init_db()
+    row = {"ts": time.time(), "note": "", "title_from": "", "title_to": "", **row}
+    row["features"] = json.dumps(row.get("features") or {}, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute("INSERT INTO review_feedback (ts, item_id, stage, decision, note, title_from,"
+                     " title_to, features) VALUES (:ts, :item_id, :stage, :decision, :note,"
+                     " :title_from, :title_to, :features)", row)
+
+
+def list_review_feedback(since: float | None = None, stage: str | None = None,
+                         limit: int = 1000) -> list[dict[str, Any]]:
+    """新的在前。"""
+    init_db()
+    sql = "SELECT * FROM review_feedback WHERE ts >= ?"
+    args: list[Any] = [since or 0]
+    if stage:
+        sql += " AND stage = ?"
+        args.append(stage)
+    with connect() as conn:
+        rows = conn.execute(sql + " ORDER BY ts DESC, id DESC LIMIT ?", (*args, limit)).fetchall()
+    return [{**dict(r), "features": json.loads(r["features"] or "{}")} for r in rows]
 
 
 def save_report(week: str, data: dict[str, Any]) -> None:

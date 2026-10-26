@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import Skip, compliance, repurpose
+from . import Skip, compliance, preference, repurpose
 from .plan import PlanError
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
@@ -117,7 +117,8 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
     if stopped:
         raise PlanError("选的账号里有被合规审核官暂停的,先去恢复或换一个账号")
     # 审核单按最终要发的标题再查一遍:页面上改过标题,红项可能是新的
-    final = title.strip() or _titles(item)[0]
+    default_title = _titles(item)[0]
+    final = title.strip() or default_title
     sheet = compliance.checklist(item["project_id"], final)
     if sheet["red"]:
         raise PlanError("审核单有红项,不能发:" + compliance.red_summary(sheet))
@@ -147,6 +148,9 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
         db.update_publication(row["id"], scheduled_at=at)
     extras = repurpose.approve(item, pieces or {}, at)
     db.set_team_setting("publish_accounts", list(account_ids))
+    changed = final != default_title
+    preference.record(item, "cut", "approve", title_from=default_title if changed else "",
+                      title_to=final if changed else "")
     when = dt.datetime.fromtimestamp(at).strftime("%m-%d %H:%M")
     db.add_event(item["project_id"], "team", reason=f"成片审核通过,定时 {when} 发布")
     return {"item": db.get_plan_item(item_id), "created": len(out["created"]),
@@ -159,7 +163,9 @@ def reject_cut(item_id: str, note: str = "") -> dict[str, Any]:
     if not db.cas_plan_status(item_id, ("review",), "rejected",
                               note=("成片打回:" + note)[:200]):
         raise PlanError("这条选题不在成片待审")
-    return db.get_plan_item(item_id) or {}
+    item = db.get_plan_item(item_id) or {}
+    preference.record(item, "cut", "reject", note=note)
+    return item
 
 
 def sync() -> int:

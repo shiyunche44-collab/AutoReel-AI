@@ -7,7 +7,7 @@ from typing import Any
 
 from .. import config, db
 from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
-               playbook, publisher, rapid, roles, scout)
+               playbook, preference, publisher, rapid, roles, scout)
 from .plan import view
 from .features import duration_bucket
 
@@ -80,6 +80,8 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "experiments": _experiment_views(),
         # 迭代记录:按周趋势、实验进度、自动改动的变更日志
         "iteration": iteration.overview(),
+        # 你的审核偏好:归纳出的几条话 + 通过率乘数
+        "preference": preference.overview(),
         "report": db.latest_report(),
         "comments": comment_queue(),
         "engage": {**engagement.stats(),

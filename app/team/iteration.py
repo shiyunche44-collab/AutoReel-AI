@@ -176,7 +176,8 @@ def log_plan_changes(old: list[dict[str, Any]], new: list[dict[str, Any]],
 # --------------------------------------------------------------------------
 # 页面
 # --------------------------------------------------------------------------
-KIND_LABEL = {"weight": "打法权重", "experiment": "配对实验", "param": "自动调参"}
+KIND_LABEL = {"weight": "打法权重", "experiment": "配对实验", "param": "自动调参",
+              "preference": "你的偏好"}
 
 
 def overview(now: float | None = None) -> dict[str, Any]:

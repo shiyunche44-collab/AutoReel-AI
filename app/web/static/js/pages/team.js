@@ -97,12 +97,43 @@ async function call(url, ok, body) {
   }
 }
 
-async function rejectItem(item) {
-  const yes = await confirmDialog({
-    title: '驳回这条选题?', body: `「${subjectLine(item)}」。空档会在主编下一轮补上。`,
-    confirmText: '驳回', tone: 'danger',
+const TOPIC_REASONS = ['车型不想做', '角度没意思', '最近做过类似的', '热度不够', '不适合本号'];
+const CUT_REASONS = ['开场没抓人', '节奏拖', '画面 / 素材不行', '配音别扭', '标题不对味', '事实有问题'];
+
+/** 驳回 / 打回:选个理由或自己写一句(可空)。理由会被复盘官归纳成「你的偏好」。取消 → null。 */
+function reasonDialog({ title, body, confirmText, reasons }) {
+  return new Promise((resolve) => {
+    const note = h('input', { class: 'input', maxlength: '120', placeholder: '为什么?(可不填)' });
+    const chips = h('div', { class: 'chips' }, reasons.map((r) => h('button', {
+      class: 'chip', type: 'button', 'aria-pressed': 'false',
+      onclick: (e) => {
+        const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+        e.currentTarget.setAttribute('aria-pressed', String(on));
+        const picked = [...chips.querySelectorAll('[aria-pressed="true"]')].map((c) => c.textContent);
+        note.value = picked.join(';');
+      },
+    }, r)));
+    const ok = h('button', { class: 'btn btn-danger', type: 'button' }, confirmText);
+    const cancel = h('button', { class: 'btn btn-ghost', type: 'button' }, '取消');
+    const content = h('div', {},
+      h('div', { class: 'modal-head' }, h('div', { class: 'modal-title' }, title)),
+      h('div', { class: 'modal-body stack-sm' },
+        h('p', { class: 'small' }, body), chips, note,
+        h('div', { class: 'subtle small' }, '理由会被复盘官归纳成「你的偏好」,以后排选题、写脚本照着来')),
+      h('div', { class: 'modal-foot' }, cancel, ok));
+    const { close } = openModal(content, { label: title, onClose: (r) => resolve(r || null) });
+    cancel.addEventListener('click', () => close(null));
+    ok.addEventListener('click', () => close({ note: note.value.trim() }));
+    note.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok.click(); });
   });
-  if (yes) await call(`/api/team/plan/${item.id}/reject`, '已驳回', { note: '' });
+}
+
+async function rejectItem(item) {
+  const res = await reasonDialog({
+    title: '驳回这条选题?', body: `「${subjectLine(item)}」。空档会在主编下一轮补上。`,
+    confirmText: '驳回', reasons: TOPIC_REASONS,
+  });
+  if (res) await call(`/api/team/plan/${item.id}/reject`, '已驳回', res);
 }
 
 async function startItem(item) {
@@ -289,10 +320,11 @@ function reviewCard(item) {
   }));
   const back = h('button', { class: 'btn btn-sm btn-ghost', type: 'button' }, icon('x', 'i-sm'), '打回');
   back.addEventListener('click', async () => {
-    const yes = await confirmDialog({
-      title: '打回这条成片?', body: '这条不发了。要重做就去项目页改,或者让主编另排。', confirmText: '打回', tone: 'danger',
+    const res = await reasonDialog({
+      title: '打回这条成片?', body: '这条不发了。要重做就去项目页改,或者让主编另排。',
+      confirmText: '打回', reasons: CUT_REASONS,
     });
-    if (yes) await call(`/api/team/plan/${item.id}/reject-cut`, '已打回', { note: '' });
+    if (res) await call(`/api/team/plan/${item.id}/reject-cut`, '已打回', res);
   });
   const portrait = item.aspect === '9:16';
   return h('article', { class: `plan-card review-card${portrait ? ' is-portrait' : ''}` },
@@ -715,7 +747,7 @@ function trendTable(weeks) {
         ...TRENDS.map((s) => h('td', { class: 'num' }, w[s.key] == null ? '—' : s.fmt(w[s.key]))))))));
 }
 
-const LOG_TONE = { weight: 'brand', experiment: 'warning', param: 'neutral' };
+const LOG_TONE = { weight: 'brand', experiment: 'warning', param: 'neutral', preference: 'success' };
 
 function renderIteration() {
   const it = DATA.iteration || { weeks: [], experiments: [], log: [] };
@@ -740,6 +772,88 @@ function renderIteration() {
       badge(r.kind_label, LOG_TONE[r.kind]),
       h('span', { class: 'grow small' }, r.title)))
       : [h('div', { class: 'subtle small' }, '还没有自动改动:权重变动超过 0.1、实验开始 / 结束都会记在这里')]));
+}
+
+// ---------------------------------------------------------------------------
+// 你的审核偏好
+// ---------------------------------------------------------------------------
+async function prefCall(method, url, body, ok) {
+  try {
+    await api[method](url, body);
+    if (ok) toast(ok);
+    await load();
+  } catch (err) {
+    toast(err.message, { type: 'danger' });
+  }
+}
+
+function editPreference(p) {
+  const input = h('input', { class: 'input', value: p.text, maxlength: '60' });
+  const save = h('button', { class: 'btn btn-primary', type: 'button' }, '保存');
+  const cancel = h('button', { class: 'btn btn-ghost', type: 'button' }, '取消');
+  const content = h('div', {},
+    h('div', { class: 'modal-head' }, h('div', { class: 'modal-title' }, '改这条偏好')),
+    h('div', { class: 'modal-body stack-sm' }, input,
+      h('div', { class: 'subtle small' }, '改过的算你手写的,复盘官以后不会覆盖它')),
+    h('div', { class: 'modal-foot' }, cancel, save));
+  const { close } = openModal(content, { label: '改这条偏好' });
+  cancel.addEventListener('click', () => close(false));
+  save.addEventListener('click', () => withLoading(save, async () => {
+    await prefCall('patch', `/api/team/preferences/${p.id}`, { text: input.value.trim() }, '已保存');
+    close(true);
+  }));
+}
+
+function preferenceRow(p) {
+  const off = p.status === 'off';
+  const btn = (label, ico, title, fn) => h('button', {
+    class: 'btn btn-sm btn-ghost btn-icon', type: 'button', title: `${label}:${title}`, 'aria-label': label,
+    onclick: (e) => withLoading(e.currentTarget, fn),
+  }, icon(ico, 'i-sm'));
+  return h('div', { class: `rowline${off ? ' is-off' : ''}` },
+    badge(p.source === 'manual' ? '手写' : '归纳', p.source === 'manual' ? 'brand' : 'neutral'),
+    h('span', { class: 'grow small' }, p.text),
+    off ? badge('已停用', 'neutral') : null,
+    btn('改', 'pen', '改写这条', async () => editPreference(p)),
+    btn(off ? '恢复' : '停用', off ? 'play' : 'pause', off ? '恢复后重新带进提示词' : '停用的不带进提示词,复盘也不会再归纳出来',
+      () => prefCall('patch', `/api/team/preferences/${p.id}`, { status: off ? 'active' : 'off' },
+        off ? '已恢复' : '已停用')),
+    p.source === 'manual'
+      ? btn('删', 'trash', '删掉这条', () => prefCall('del', `/api/team/preferences/${p.id}`, undefined, '已删除'))
+      : null);
+}
+
+function renderPreference() {
+  const pf = DATA.preference || { items: [], rates: [], base: {}, rate_on: true };
+  const add = h('input', { class: 'input grow', maxlength: '60', placeholder: '自己加一条,比如:标题别用问号结尾' });
+  const addBtn = h('button', { class: 'btn btn-sm', type: 'button' }, icon('plus', 'i-sm'), '加');
+  const submit = () => add.value.trim() && withLoading(addBtn,
+    () => prefCall('post', '/api/team/preferences', { text: add.value.trim() }, '已加'));
+  addBtn.addEventListener('click', submit);
+  add.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  $('#pref-list').replaceChildren(
+    h('h3', { class: 'iter-h' }, '带进提示词的偏好'),
+    ...(pf.items.length ? pf.items.map(preferenceRow)
+      : [h('div', { class: 'subtle small' }, '还没有:复盘官每周把你的驳回理由、改动、改标题归纳成 3–5 条(近 30 天至少 3 条有话可说的表态)')]),
+    h('div', { class: 'row pref-add' }, add, addBtn));
+  const base = pf.base || {};
+  const toggle = h('button', {
+    class: 'btn btn-sm btn-ghost', type: 'button',
+    title: '主编排选题时乘上你对这类车型 / 片型的通过率(0.7–1.3)',
+    onclick: (e) => withLoading(e.currentTarget, () => prefCall('post', '/api/team/preferences/rate',
+      { enabled: !pf.rate_on }, pf.rate_on ? '已关:排序不看通过率' : '已开:排序乘上通过率')),
+  }, icon(pf.rate_on ? 'pause' : 'play', 'i-sm'), pf.rate_on ? '停用' : '启用');
+  $('#pref-rates').replaceChildren(
+    h('div', { class: 'row' },
+      h('h3', { class: 'iter-h grow' }, '通过率 → 排序乘数'), toggle),
+    h('div', { class: 'subtle small num' },
+      base.n ? `近 60 天 ${base.n} 次批 / 驳,通过 ${Math.round(base.rate * 100)}%` : '还没有批 / 驳记录'),
+    ...(pf.rates.length ? pf.rates.map((r) => h('div', { class: `rowline${pf.rate_on ? '' : ' is-off'}` },
+      badge(r.mult >= 1 ? '常批' : '常驳', r.mult >= 1 ? 'success' : 'warning'),
+      h('span', { class: 'grow small' }, r.label),
+      h('span', { class: 'subtle small num' }, `批 ${r.approved} / ${r.n}`),
+      h('span', { class: 'small num' }, `×${r.mult.toFixed(2)}`)))
+      : [h('div', { class: 'subtle small' }, '同一车型 / 片型至少表态 3 次,而且和你的平均通过率有差别,才会出乘数')]));
 }
 
 async function decidePicked(action, ok) {
@@ -844,6 +958,7 @@ function render() {
       '几个实验轮着来:一条片只固定其中一个,其余照常换 —— 每个攒够 3 条才比得出好坏')]
     : [empty('没有在跑的配对实验(复盘官每周日下发)')]));
   renderIteration();
+  renderPreference();
 
   const state = $('#team-state');
   const off = !DATA.enabled;
