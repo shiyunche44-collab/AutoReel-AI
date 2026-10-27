@@ -9,7 +9,12 @@
 3. 用 `parse_xhs_notes` 把截到的响应解析一遍,列出认出来的笔记(id / 标题 / 阅读 / 点赞 / 收藏 / 曝光),
    给了标题的再用 `match_xhs_note` 对一次 —— 认不出就照着落盘的响应补 `XHS_NOTE_KEYS`。
 
-实测结论:还没跑过(写探针时分发台没登录小红书)。跑完把接口路径和字段名写在这里。
+实测结论(2026-10-27,账号 4 篇笔记):
+- 笔记管理页自己拉 `creator.xiaohongshu.com/api/galaxy/v2/creator/note/user/posted`,
+  `data.notes[]` 每篇带 id / display_title / view_count / likes / comments_count /
+  collected_count / shared_count / time("2025-09-14 22:40");`parse_xhs_notes` 原样认得,
+  数值与页面列(观看 评论 点赞 收藏 分享)一致。
+- 没有曝光:「数据看板 → 笔记数据」显示「暂未开通数据权限」;旧的 /new/data-center 已 404。
 """
 from __future__ import annotations
 
@@ -22,9 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.metrics.collector import match_xhs_note, parse_xhs_notes  # noqa: E402
 from app.publish import browser  # noqa: E402
-from app.publish.platforms.xiaohongshu import DATA_URL, NOTES_URL  # noqa: E402
+from app.publish.platforms.xiaohongshu import NOTES_URL  # noqa: E402
 
-PAGES = [NOTES_URL, DATA_URL, "https://creator.xiaohongshu.com/statistics/data-analysis"]
+PAGES = [NOTES_URL, "https://creator.xiaohongshu.com/statistics/data-analysis"]
 KEYWORDS = re.compile(r"view_count|read_count|like|collect|imp_count|impression|阅读|曝光|点赞|收藏",
                       re.I)
 

@@ -21,7 +21,6 @@ from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishE
 from ..registry import PORTRAIT
 
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
-DATA_URL = "https://creator.xiaohongshu.com/new/data-center"
 #: 笔记管理页:页面会自己拉一页「我发的笔记」,每篇带阅读 / 点赞 / 收藏 / 评论 / 分享
 NOTES_URL = "https://creator.xiaohongshu.com/new/note-manager"
 LOGIN_URL = "https://creator.xiaohongshu.com/login"
@@ -58,13 +57,14 @@ class XiaohongshuAdapter:
                                  hint="在分发台点「登录」,浏览器打开后扫码,关掉窗口即可。")
         try:
             with browser.BrowserSession(self.key) as session:
-                session.goto(DATA_URL, wait_ms=2500)
+                session.goto(NOTES_URL, wait_ms=2500)
                 text = session.page_text()
+                landed = session.page.url
         except browser.BrowserUnavailable as exc:
             return AccountStatus(False, str(exc), hint="pip install playwright")
         except Exception as exc:  # noqa: BLE001
             return AccountStatus(False, f"打不开后台:{exc}", hint="登录态可能过期了,重新登录")
-        if "登录" in text[:400] and "扫码" in text[:400]:
+        if ("登录" in text[:400] and "扫码" in text[:400]) or "login" in landed:
             return AccountStatus(False, "登录态已失效", hint="重新扫码登录一次")
         return AccountStatus(True, "已登录", detail={"chars": len(text)})
 
