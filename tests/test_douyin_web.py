@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+from tests.library_patch import patch_in_package
 from PIL import Image
 
 from app.publish import browser
@@ -245,11 +247,11 @@ def test_publish_browser_declares_ai_before_description(tmp_path, monkeypatch):
     FakeSession.calls = []
     order: list = []
     monkeypatch.setattr(browser, "BrowserSession", FakeSession)
-    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
-    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
-    monkeypatch.setattr(douyin, "set_declaration",
+    patch_in_package(monkeypatch, douyin, "resolve_published_work", lambda *a, **k: {})
+    patch_in_package(monkeypatch, douyin, "set_covers", lambda session, path: "")
+    patch_in_package(monkeypatch, douyin, "set_declaration",
                         lambda session, kind: order.append(("declare", kind)) or "")
-    monkeypatch.setattr(douyin, "set_description",
+    patch_in_package(monkeypatch, douyin, "set_description",
                         lambda session, desc, hashtags="": order.append(("desc",)) or "")
     req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
                          title="标题")
@@ -266,10 +268,10 @@ def test_publish_browser_can_skip_the_ai_declaration(tmp_path, monkeypatch):
     FakeSession.calls = []
     called: list = []
     monkeypatch.setattr(browser, "BrowserSession", FakeSession)
-    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
-    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
-    monkeypatch.setattr(douyin, "set_description", lambda session, desc, hashtags="": "")
-    monkeypatch.setattr(douyin, "set_declaration",
+    patch_in_package(monkeypatch, douyin, "resolve_published_work", lambda *a, **k: {})
+    patch_in_package(monkeypatch, douyin, "set_covers", lambda session, path: "")
+    patch_in_package(monkeypatch, douyin, "set_description", lambda session, desc, hashtags="": "")
+    patch_in_package(monkeypatch, douyin, "set_declaration",
                         lambda session, kind: called.append(kind) or "")
     req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
                          title="标题", extra={"declare_ai": False})
@@ -284,8 +286,8 @@ def test_publish_browser_sets_cover_before_clicking_publish(tmp_path, monkeypatc
     cover = _img(tmp_path / "cover.jpg", (1920, 1080))
     FakeSession.calls = []
     monkeypatch.setattr(browser, "BrowserSession", FakeSession)
-    monkeypatch.setattr(douyin, "resolve_published_work", lambda *a, **k: {})
-    monkeypatch.setattr(douyin, "set_covers",
+    patch_in_package(monkeypatch, douyin, "resolve_published_work", lambda *a, **k: {})
+    patch_in_package(monkeypatch, douyin, "set_covers",
                         lambda session, path: FakeSession.calls.append(("cover", path.name))
                         or "封面可能没换上:竖封面3:4")
     req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
@@ -307,9 +309,9 @@ def test_publish_browser_fills_in_the_real_work_id(tmp_path, monkeypatch):
     video.write_bytes(b"x")
     FakeSession.calls = []
     monkeypatch.setattr(browser, "BrowserSession", FakeSession)
-    monkeypatch.setattr(douyin, "resolve_published_work",
+    patch_in_package(monkeypatch, douyin, "resolve_published_work",
                         lambda *a, **k: {"aweme_id": "7700", "url": "https://www.douyin.com/video/7700"})
-    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    patch_in_package(monkeypatch, douyin, "set_covers", lambda session, path: "")
     req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
                          title="标题")
     result = DouyinAdapter().publish(req, Account(id="a", platform="douyin", name="抖",
@@ -350,7 +352,7 @@ def test_publish_browser_reports_sms_verification(tmp_path, monkeypatch):
             return "接收短信验证码 请输入验证码"
 
     monkeypatch.setattr(browser, "BrowserSession", Sms)
-    monkeypatch.setattr(douyin, "set_covers", lambda session, path: "")
+    patch_in_package(monkeypatch, douyin, "set_covers", lambda session, path: "")
     req = PublishRequest(project_id="p", account_id="a", platform="douyin", video_path=video,
                          title="标题")
     with pytest.raises(PublishError) as err:
