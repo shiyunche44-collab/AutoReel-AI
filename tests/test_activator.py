@@ -365,7 +365,7 @@ def test_old_db_gets_the_new_table(fresh_db):
 
     from app import config
 
-    path = config.DATA_DIR / "aimovice.db"
+    path = config.DATA_DIR / "AutoReel-AI.db"
     fresh_db.init_db()
     with sqlite3.connect(path) as conn:
         conn.execute("DROP TABLE IF EXISTS outbound_actions")

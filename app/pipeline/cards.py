@@ -145,6 +145,27 @@ def _unbacked_text(value: str, claim: str) -> bool:
     return key(value) not in key(claim)
 
 
+#: 原文里**独立**的数字:前面不是数字、也不是连字符的一部分。
+#: 「100-0km/h」里的 0 不独立 —— 它是 100-0 的一半。
+_STANDALONE_NUM = re.compile(r"(?<![\d.\-])\d+(?:\.\d+)?")
+
+
+def _value_standalone(value: str, claim: str) -> bool:
+    """取值里的每个数,在事实原文里都得是**独立**的一个数。
+
+    「100-0km/h 制动距离 34.9 米」这种原文,里面的「0」不是一个独立的数,
+    它是 100-0 的一部分。模型把它单独拎出来当「制动 0km/h」上屏,屏幕上
+    就只剩一个光秃秃的 0(实跑踩过)。这种取值要丢,宁可这一拍退回 broll。
+    """
+    claim_nums = {m.group(0).replace(".", "") for m in _STANDALONE_NUM.finditer(claim or "")}
+    for m in re.finditer(r"\d+(?:\.\d+)?", value or ""):
+        if m.start() > 0 and value[m.start() - 1] in "-–—":
+            continue  # 取值自己就是范围(100-0km/h):它整体的数在原文里出现过就行
+        if m.group(0).replace(".", "") not in claim_nums:
+            return False
+    return True
+
+
 def _is_bare_number(value: str) -> bool:
     """取值只有一个光杆数字("5""19.2"):没有单位,屏幕上不知道它是什么。"""
     return bool(re.fullmatch(r"\s*[-+~约]?\d[\d,]*(?:\.\d+)?\s*", value))
@@ -184,6 +205,11 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
         bare = [v for v in row["values"] if _is_bare_number(v)]
         if bare:
             dropped.append(f"「{text}」的取值「{bare[0]}」没有单位,上屏观众看不懂")
+            continue
+        partial = [v for v in row["values"] if not _value_standalone(v, fact.claim)]
+        if partial:
+            dropped.append(f"「{text}」的取值「{partial[0]}」是原文里某个复合数字的一部分"
+                           f"(如 100-0km/h 的 0),上屏就是个 0")
             continue
         invented = [v for v in row["values"] if _unbacked_text(v, fact.claim)]
         if invented:

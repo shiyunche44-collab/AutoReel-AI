@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-UA = "aimovice/1.0 (local automation tool; contact: local user)"
+UA = "AutoReel-AI/1.0 (local automation tool; contact: local user)"
 
 
 def http_get(url: str, timeout: int = 25) -> tuple[int, bytes, str]:

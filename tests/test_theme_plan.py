@@ -226,7 +226,7 @@ def test_single_theme_slots_match_plan(auto):
 
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
-    """建项目的测试一律落到临时库,绝不写进 data/aimovice.db。"""
+    """建项目的测试一律落到临时库,绝不写进 data/AutoReel-AI.db。"""
     from app import config, db
 
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")

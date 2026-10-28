@@ -2,12 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "aimovice",
+      "name": "AutoReel-AI",
       "url": "http://127.0.0.1:8848",
       "port": 8848
     },
     {
-      "name": "aimovice-dev",
+      "name": "AutoReel-AI-dev",
       "runtimeExecutable": "python",
       "runtimeArgs": [
         "run.py",
@@ -18,7 +18,7 @@
       "port": 8849
     },
     {
-      "name": "aimovice-e2e",
+      "name": "AutoReel-AI-e2e",
       "runtimeExecutable": "python",
       "runtimeArgs": [
         "run.py",

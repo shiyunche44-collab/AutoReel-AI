@@ -32,7 +32,7 @@ def test_migration_adds_theme_to_existing_db(tmp_path, monkeypatch):
     """老库升级:projects 表建在没有 theme 列时,init_db 必须补上。
 
     `CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列 —— 没有这段迁移,
-    老机器上的 aimovice.db 会直接 "no such column: theme"。
+    老机器上的 AutoReel-AI.db 会直接 "no such column: theme"。
     """
     import sqlite3
 
@@ -42,7 +42,7 @@ def test_migration_adds_theme_to_existing_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
     config.ensure_dirs()
 
-    legacy = sqlite3.connect(config.DATA_DIR / "aimovice.db")
+    legacy = sqlite3.connect(config.DATA_DIR / "AutoReel-AI.db")
     legacy.execute("DROP TABLE IF EXISTS projects")
     legacy.execute("""
         CREATE TABLE projects (

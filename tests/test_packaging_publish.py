@@ -64,7 +64,7 @@ def test_publications_variant_column_migrates_old_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
     config.ensure_dirs()
-    conn = sqlite3.connect(config.DATA_DIR / "aimovice.db")
+    conn = sqlite3.connect(config.DATA_DIR / "AutoReel-AI.db")
     conn.execute("CREATE TABLE publications (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, "
                  "account_id TEXT NOT NULL, platform TEXT NOT NULL, aspect TEXT NOT NULL DEFAULT '16:9', "
                  "artifact TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', "

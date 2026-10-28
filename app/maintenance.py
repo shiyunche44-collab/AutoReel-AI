@@ -304,7 +304,7 @@ def evict_pool(subject: str, *, force: bool = False, dry_run: bool = False) -> d
 # 命令行
 # --------------------------------------------------------------------------
 def _main() -> None:
-    ap = argparse.ArgumentParser(description="aimovice 磁盘与缓存维护")
+    ap = argparse.ArgumentParser(description="AutoReel-AI 磁盘与缓存维护")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("report", help="看 data/ 的体积分布")
     p = sub.add_parser("prune", help="按策略清理")

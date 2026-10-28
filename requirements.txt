@@ -1,4 +1,4 @@
-# aimovice 依赖
+# AutoReel-AI 依赖
 #
 # 依赖清单的**单一来源**是 pyproject.toml(见那里的 [project].dependencies)。
 # 这里保留一个入口,免得文档与脚本里到处都要改。

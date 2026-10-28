@@ -153,7 +153,7 @@ class YoutubeAdapter:
                 content=body,
                 headers={
                     "Authorization": f"Bearer {token}",
-                    "Content-Type": "multipart/related; boundary=aimoviceyoutube",
+                    "Content-Type": "multipart/related; boundary=AutoReelAIyoutube",
                 },
                 timeout=3600,
             )
@@ -181,7 +181,7 @@ class YoutubeAdapter:
 
     def _multipart(self, metadata: bytes, video: bytes, filename: str) -> bytes:
         """拼 multipart/related:元信息一段,视频一段。"""
-        boundary = "aimoviceyoutube"
+        boundary = "AutoReelAIyoutube"
         head = (
             f"--{boundary}\r\n"
             "Content-Type: application/json; charset=UTF-8\r\n\r\n"

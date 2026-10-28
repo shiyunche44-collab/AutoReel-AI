@@ -110,7 +110,7 @@ def test_old_db_gets_angle_column(fresh_db, tmp_path):
     from app import config
 
     config.ensure_dirs()
-    path = config.DATA_DIR / "aimovice.db"
+    path = config.DATA_DIR / "AutoReel-AI.db"
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, "
                  "subject TEXT NOT NULL, category TEXT, duration INTEGER NOT NULL, "

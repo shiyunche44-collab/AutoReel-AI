@@ -7,7 +7,7 @@ stdout 重定向到 `data/logs/server-*.log`,排障时只能靠猜"这会儿到�
 
 这里给出统一入口:
 - **控制台**:带级别与时间,给人实时看;
-- **data/logs/aimovice.log**:按天轮转(留 14 天),给事后追溯看。
+- **data/logs/AutoReel-AI.log**:按天轮转(留 14 天),给事后追溯看。
 
 只用标准库,不引依赖。
 """
@@ -24,7 +24,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)-7s [%(name)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 #: 日志文件名(按天轮转)
-LOG_FILENAME = "aimovice.log"
+LOG_FILENAME = "AutoReel-AI.log"
 
 #: 保留多少天的历史日志
 LOG_BACKUP_DAYS = 14

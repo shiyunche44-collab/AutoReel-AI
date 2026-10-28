@@ -172,7 +172,7 @@ def account_paused() -> bool:
 # --------------------------------------------------------------------------
 def _seed(day: str) -> int:
     """按日期取稳定的随机种子 —— 同一天生成两次,计划必须一模一样。"""
-    digest = hashlib.sha256(f"aimovice-active-{day}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"AutoReel-AI-active-{day}".encode("utf-8")).hexdigest()
     return int(digest[:16], 16)
 
 

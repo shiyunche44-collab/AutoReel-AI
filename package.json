@@ -1,5 +1,5 @@
 {
-  "name": "aimovice-web",
+  "name": "autoreel-ai-web",
   "private": true,
   "description": "Web 前端的工程化工具链:单元测试、类型检查、代码规范。前端代码本身零依赖、零构建,工具链只用来检查。",
   "type": "module",

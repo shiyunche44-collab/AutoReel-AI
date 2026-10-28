@@ -1,4 +1,4 @@
-"""aimovice 启动入口。
+"""AutoReel-AI 启动入口。
 
 用法:
     python run.py                # 默认 http://127.0.0.1:8848
@@ -12,7 +12,7 @@ import uvicorn
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="aimovice 本地解说视频平台")
+    parser = argparse.ArgumentParser(description="AutoReel-AI 本地解说视频平台")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址(单机自用请保持 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8848, help="监听端口")
     parser.add_argument("--reload", action="store_true", help="开发模式自动重载")

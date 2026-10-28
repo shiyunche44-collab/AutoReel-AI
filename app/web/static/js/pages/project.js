@@ -28,7 +28,7 @@ if (rebuildBtn) {
 
 const DATA = readJSON('page-data', {});
 const PID = DATA.pid;
-const RESTORE_KEY = `aimovice.restore.${PID}`;
+const RESTORE_KEY = `AutoReel-AI.restore.${PID}`;
 let lastState = DATA.state;
 let lastSucceeded = DATA.succeeded || 0;
 // 不调视频生成,一拍 = 一段旁白;门禁 B 整片一次审完

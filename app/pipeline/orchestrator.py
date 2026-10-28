@@ -774,7 +774,8 @@ def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[Sho
         raise PipelineError(
             f"脚本 {len(segments)} 段与分镜 {len(specs)} 拍对不上,旁白没法按拍对应。"
             "请在脚本页保持段落数量不变再保存。")
-    synced = explainer.sync_narration(specs, segments, _facts(project_id))
+    profile, _theme = _theme_of(db.get_project(project_id) or {})
+    synced = explainer.sync_narration(specs, segments, _facts(project_id), profile)
     problems = explainer.validate_beats(synced)
     if problems:
         raise PipelineError("同步后分镜自检未通过:" + "; ".join(problems))

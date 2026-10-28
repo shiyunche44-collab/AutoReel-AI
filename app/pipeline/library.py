@@ -1303,12 +1303,20 @@ def is_building(subject: str) -> bool:
 
 
 def pool_status(subject: str) -> str:
-    """素材池的状态:ready(有可用素材) / building(还在建) / empty(建了但没有可用素材)
-    / none(压根没有这个池子 —— 品类不用素材池,或采集完全失败)。
+    """素材池的状态:
+    - ready(有可用素材)
+    - building(还在建)
+    - tagging(素材下载完了,正在打标签 —— 还没认出哪些能用)
+    - empty(建完了但确实没有可用素材)
+    - none(压根没有这个池子 —— 品类不用素材池,或采集完全失败)
 
     渲某台车的拍之前先看这个。素材池采集与逐拍渲染是并行的:池子还在建时
     就把这一拍渲掉,渲出来就是一张**没有这台车画面**的卡片 —— 观众看到的是
-    「这车一个镜头都没有」。所以 building 要等,empty 要留痕。
+    「这车一个镜头都没有」。所以 building / tagging 要等,empty 要留痕。
+
+    **tagging 必须单独认出来**:素材下完了但还没打标签时,一条都还「不可用」,
+    这时候看是 empty 就等于「建完了没素材」,于是这一拍被立刻渲成卡片 ——
+    等池子再过几分钟打好标签也来不及了(实跑踩过:27 拍全成了卡片)。
     """
     if is_building(subject):
         return "building"
@@ -1318,6 +1326,10 @@ def pool_status(subject: str) -> str:
     for i in lib.items:
         if i.usable and Path(i.path).is_file():
             return "ready"
+    # 还没打标签的条目 = 池子还在干活,不是「没有素材」
+    for i in lib.items:
+        if not i.tagged and not i.skipped and i.frame and Path(i.frame).is_file():
+            return "tagging"
     return "empty"
 
 
@@ -1446,6 +1458,40 @@ def _crop_edge(item: Item) -> float:
 #: 会在图上打自家标识的图库:汽车之家把「汽车之家 AUTOHOME」印在车牌上(位置跟着车走,
 #: 按固定位置裁不掉;封面那边用 cover_art.scrub_plates 抹,背景图上检测太慢也不稳)
 BRANDED_GALLERIES = {"autohome"}
+
+
+#: 这些图库在车牌上印着自己的 logo(懂车帝的黄牌 / 汽车之家的白牌)。
+#: 当背景铺满全屏时,那个黄方块明晃晃挂在车头正中,不能带上屏。
+BRANDED_PLATFORMS = ("dongchedi", "autohome")
+
+
+def clean_still(item: Item) -> str:
+    """当背景用的官图:先把车牌上别家的 logo 抹掉,返回该用的那张图的路径。
+
+    抹不动的就还是原图 —— 宁可留个小 logo,也不要糊一片说不清是什么的色块。
+    抹好的版本缓存在池子的 `clean/` 目录里,同一个池子只抹一次。
+    """
+    if item.kind != "still" or item.platform not in BRANDED_PLATFORMS:
+        return item.path
+    src = Path(item.path)
+    if not src.is_file():
+        return item.path
+    dest = src.parent.parent / "clean" / src.name
+    if dest.is_file():
+        return str(dest)
+    try:
+        from PIL import Image
+
+        from . import cover_art
+
+        with Image.open(src) as im:
+            fixed = cover_art.scrub_watermarks(im.convert("RGB"))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        fixed.save(dest, quality=94)
+        return str(dest)
+    except Exception as exc:  # noqa: BLE001 - 抹不掉就用原图,不该拦住渲染
+        log.warning("背景图抹水印失败(%s):%s", src.name, exc)
+        return item.path
 
 
 def _branded_still(item: Item) -> bool:
@@ -1811,7 +1857,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             start = i.start + skip
         if take < min(FILL_MIN_PIECE, remaining):
             continue
-        out.append(Piece(item_id=i.id, kind=i.kind, path=i.path, start=start, length=round(take, 3),
+        out.append(Piece(item_id=i.id, kind=i.kind, path=clean_still(i), start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0,
                          crop_edge=_crop_edge(i), third_party=_third_party(i)))
         used[i.id] = used.get(i.id, 0) + 1
@@ -1837,7 +1883,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             i = spare[k % len(spare)]
             k += 1
             take = min(rest, FILL_MAX_PIECE)
-            out.append(Piece(item_id=i.id, kind="still", path=i.path, start=0.0,
+            out.append(Piece(item_id=i.id, kind="still", path=clean_still(i), start=0.0,
                              length=round(take, 3)))
             used[i.id] = used.get(i.id, 0) + 1
             recent.append(i.id)

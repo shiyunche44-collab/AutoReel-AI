@@ -405,7 +405,10 @@ def advance(pub_id: str) -> dict[str, Any]:
                               error=f"文案含禁用词:{'、'.join(hits)}")
         return {"ok": False, "state": FAILED, "message": f"文案含禁用词:{'、'.join(hits)}"}
 
-    db.update_publication(pub_id, state=UPLOADING)
+    # 抢占:同一条任务只能有一个执行者。调度线程和手动重试可能同时盯上它,
+    # 两边都传一遍就会在账号里留下两条一样的作品(实跑踩过:一条片子发了 4 遍)。
+    if not db.cas_publication_state(pub_id, ("pending",), UPLOADING):
+        return {"ok": False, "state": row["state"], "skipped": "别的执行流正在发这条"}
     try:
         result = attempt(row)
     except PublishError as exc:
@@ -448,7 +451,13 @@ def retry(pub_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError("任务不存在")
     db.update_publication(pub_id, state=PENDING, error="", attempts=0)
-    return advance(pub_id)
+    out = advance(pub_id)
+    if out.get("skipped"):
+        # 调度线程抢先发上了:它已经在传,别再传一遍(实跑踩过:同一片子发了 4 条)
+        cur = db.get_publication(pub_id) or {}
+        return {"ok": True, "state": cur.get("state") or PENDING,
+                "skipped": "调度线程已经在发这条,没重复发"}
+    return out
 
 
 # --------------------------------------------------------------------------

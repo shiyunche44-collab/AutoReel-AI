@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aimovice"
+name = "AutoReel-AI"
 version = "0.1.0"
 description = "本地运行的产品解说视频工厂:输入一个车型/产品型号,产出 16:9 横屏的信息型解说长视频"
 readme = "README.md"

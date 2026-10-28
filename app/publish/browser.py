@@ -20,7 +20,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .. import config
 from ..publish.base import PublishError
@@ -91,6 +91,73 @@ def profile_dir(key: str) -> Path:
     path = config.DATA_DIR / "_browser" / "profiles" / key
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# --------------------------------------------------------------------------
+# 假 IP 直连
+# --------------------------------------------------------------------------
+#: 本机如果挂着 Clash 这类代理(常见配置:fake-IP 模式),域名会被解析到
+#: 198.18.x.x 的假 IP,再由代理接管转发。**浏览器连过去常常被直接关连接**
+#: (ERR_CONNECTION_CLOSED),表现成「页面改版了」「找不到上传入口」这类
+#: 让人摸不着头脑的错 —— 实测同一时刻普通 HTTP 客户端访问同一个站点是通的。
+#: 抖音、B 站、小红书都是境内站点,本来也不需要代理:用 DoH 问出真实 IP,
+#: 让浏览器直接连真实地址,就不经过那层假 IP 了。
+DIRECT_IP_HOSTS: dict[str, tuple[str, ...]] = {
+    "douyin": ("creator.douyin.com", "www.douyin.com"),
+    "bilibili": ("www.bilibili.com", "member.bilibili.com"),
+    "xiaohongshu": ("www.xiaohongshu.com", "creator.xiaohongshu.com"),
+}
+
+#: 问真实 IP 用的 DoH(境内优先)
+_DOH_RESOLVERS = ("https://223.5.5.5/resolve", "https://1.12.12.12/resolve")
+
+_ip_cache: dict[str, tuple[float, str]] = {}
+_ip_cache_lock = threading.Lock()
+_IP_TTL = 600.0
+
+
+def _resolve_real_ip(host: str) -> str:
+    """用 DoH 问一个域名的真实 A 记录。问不到返回空串。"""
+    with _ip_cache_lock:
+        hit = _ip_cache.get(host)
+        if hit and time.time() - hit[0] < _IP_TTL:
+            return hit[1]
+    ip = ""
+    try:
+        import httpx
+
+        for resolver in _DOH_RESOLVERS:
+            try:
+                resp = httpx.get(resolver, params={"name": host, "type": "A"}, timeout=8,
+                                 headers={"accept": "application/dns-json"})
+                answers = resp.json().get("Answer") or []
+                ips = [a.get("data") for a in answers if a.get("type") == 1 and a.get("data")]
+                if ips:
+                    ip = str(ips[0])
+                    break
+            except Exception:  # noqa: BLE001 - 换下一个 DoH
+                continue
+    except Exception:  # noqa: BLE001 - httpx 不可用就算了,走原来的路
+        return ""
+    if ip:
+        with _ip_cache_lock:
+            _ip_cache[host] = (time.time(), ip)
+    return ip
+
+
+def real_ip_args(key: str) -> list[str]:
+    """给浏览器加 --host-resolver-rules:把假 IP 换成真实 IP。问不到就不加。"""
+    hosts = DIRECT_IP_HOSTS.get(key) or ()
+    if not hosts:
+        return []
+    rules = []
+    for host in hosts:
+        ip = _resolve_real_ip(host)
+        if ip:
+            rules.append(f"MAP {host} {ip}")
+    if not rules:
+        return []
+    return [f"--host-resolver-rules={', '.join(rules)}"]
 
 
 def chrome_major(executable: str | Path | None) -> str:
@@ -169,6 +236,9 @@ class BrowserSession:
         launch: dict[str, Any] = {"headless": self.headless}
         if executable and Path(executable).is_file():
             launch["executable_path"] = executable
+        extra_args = real_ip_args(self.key)
+        if extra_args:
+            launch["args"] = extra_args
         try:
             self._browser = self._pw.chromium.launch(**launch)
         except Exception as exc:  # noqa: BLE001
@@ -208,6 +278,9 @@ class BrowserSession:
         ua = stable_user_agent(executable)
         if ua:
             kwargs["user_agent"] = ua
+        extra_args = real_ip_args(self.key)
+        if extra_args:
+            kwargs["args"] = extra_args
         try:
             self._context = self._pw.chromium.launch_persistent_context(
                 str(profile_dir(self.key)), **kwargs)

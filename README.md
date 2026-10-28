@@ -1,4 +1,4 @@
-# aimovice
+# AutoReel-AI
 
 **一个人加一支 AI 团队的产品解说视频工厂**，本地运行。主做汽车，母婴已接入，其它品类加一份 YAML 即可。
 
@@ -72,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 - 要长期运行就用 `serve.ps1`：它会起一个独立进程，日志写到 `data/logs/server-*.log`。直接运行 `python run.py` 的话，进程会被托管任务的 1 小时上限一起收走。
 - `serve.ps1` 会先**杀掉已经占用该端口的进程**，启动前先确认端口上没有正在渲染的服务。
-- **只能跑一个服务。** 两个服务连同一个库时，两边的调度器会同时推进同一个项目，结果是重复渲染、成片损坏。开发调试用 `.claude/launch.json` 里的 `aimovice-dev`（端口 8849），并且要另配 `DATA_DIR`。
+- **只能跑一个服务。** 两个服务连同一个库时，两边的调度器会同时推进同一个项目，结果是重复渲染、成片损坏。开发调试用 `.claude/launch.json` 里的 `AutoReel-AI-dev`（端口 8849），并且要另配 `DATA_DIR`。
 
 ### 4. 出第一条片
 

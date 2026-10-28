@@ -174,8 +174,23 @@ def echoes_narration(keyword: str, narration: str) -> bool:
     return False
 
 
+def forbidden_on_screen(text: str, profile: Any = None) -> bool:
+    """上屏的文字里不能有广告法绝对化用语 / 品类禁用词。
+
+    脚本有 lint 管着,但**上屏的字不止脚本**:大数字下面那行「所以呢」、参数卡的
+    行名、大字关键词都是另外几条通道,LLM 会照着事实原文抄,事实里带「第一」
+    就把「第一」抄上了屏(实跑踩过:保值率那张卡的注释写着「35万以上新能源SUV第一」,
+    脚本改合规了,卡片没改)。所以上屏前统一再过一遍。
+    """
+    if not text or profile is None:
+        return False
+    from .script_gen import forbidden_in
+
+    return bool(forbidden_in(str(text), profile))
+
+
 def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact],
-                    drop_echo: bool = False) -> list[str]:
+                    drop_echo: bool = False, profile: Any = None) -> list[str]:
     """核对两行大字。中文描述放行;数字、英文、型号这类**最容易编**的记号,
     必须在这一拍的旁白或启用的事实里出现过。核不过的行直接丢。
 
@@ -199,6 +214,8 @@ def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact],
             continue
         if drop_echo and echoes_narration(text, narration_text):
             continue
+        if forbidden_on_screen(text, profile):
+            continue
         out.append(text[: KEYWORD_CHARS + 4])
     return out[:2]
 
@@ -207,19 +224,25 @@ def ground_keywords(lines: Any, narration_text: str, facts: Sequence[Fact],
 STAT_NOTE_CHARS = 14
 
 
-def ground_note(raw: Any, narration: str) -> str:
+def ground_note(raw: Any, narration: str, profile: Any = None) -> str:
     """大数字的"所以呢"(对观众意味着什么)。数字只能是旁白里说过的,超长或编了数字就不上屏。
 
-    单摆一个数字没有意义:"23.35 万"要跟着"同价位最低一档","15 分钟"要跟着"吃顿饭的工夫"。"""
+    单摆一个数字没有意义:"23.35 万"要跟着"同价位最低一档","15 分钟"要跟着"吃顿饭的工夫"。
+
+    另外:这行字也是**上屏**的字,一样不能有广告法绝对化用语(「第一」这种)。
+    """
     note = re.sub(r"\s+", " ", str(raw or "")).strip(" ,，。.")
     if not note or len(note) > STAT_NOTE_CHARS:
         return ""
     if numbers_in(note) - numbers_in(narration or ""):
         return ""
+    if forbidden_on_screen(note, profile):
+        return ""
     return note
 
 
-def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "") -> tuple[dict | None, list[str]]:
+def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "",
+                profile: Any = None) -> tuple[dict | None, list[str]]:
     """核对大数字:当成一行参数卡交给 `cards.ground`(数字必须见于引用的事实),
     再要求取值里确实有个能滚动的数字。核不过返回 (None, 原因)。
     `narration` 是这一拍的旁白,"所以呢"那行(`note`)只能用它里面的数字。"""
@@ -236,7 +259,11 @@ def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "") -> tuple[d
     out = {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
            "fact_id": r["fact_id"], "source": grounded.get("source", ""),
            "tag": r.get("tag", "")}
-    note = ground_note(raw.get("note"), narration)
+    if forbidden_on_screen(out["label"], profile):
+        out["label"] = ""
+    if forbidden_on_screen(out["tag"], profile):
+        out["tag"] = ""
+    note = ground_note(raw.get("note"), narration, profile)
     if note:
         out["note"] = note
     return out, dropped
@@ -552,7 +579,7 @@ def facts_for(facts: Sequence[Fact], subject: str, section: str = "") -> list[Fa
 
 
 def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
-                   facts: Sequence[Fact]) -> list[ShotSpec]:
+                   facts: Sequence[Fact], profile: Any = None) -> list[ShotSpec]:
     """把改过的脚本同步进分镜。
 
     门禁 A 的脚本编辑器改的是 script.json,而 TTS 读的是分镜里的 `narration_zh` ——
@@ -574,7 +601,7 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
         ov = spec.overlay
         if isinstance(ov, dict) and ov.get("kind") in ("highlight", "hook"):
             kept = ground_keywords(ov.get("lines") or [], text, facts,
-                                   drop_echo=(ov.get("kind") == "highlight"))
+                                   drop_echo=(ov.get("kind") == "highlight"), profile=profile)
             if kept:
                 spec.overlay = {**ov, "lines": kept}
             elif ov.get("kind") == "highlight" or not ov.get("stat"):
@@ -619,7 +646,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         # 既没加信息又挡住画面 —— 这两行白扔,行都扔光就退回 broll。
         asked = item.get("keywords")
         asked = [asked] if isinstance(asked, str) else list(asked or [])
-        lines = ground_keywords(asked, seg.text, facts, drop_echo=True)
+        lines = ground_keywords(asked, seg.text, facts, drop_echo=True, profile=profile)
         echoed = [str(x).strip() for x in asked
                   if str(x).strip() and str(x).strip() not in lines
                   and echoes_narration(str(x), seg.text)]
@@ -630,7 +657,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         else:
             layout = SAFE_LAYOUT
     elif layout == "stat":
-        overlay, dropped = ground_stat(item.get("stat"), facts, seg.text)
+        overlay, dropped = ground_stat(item.get("stat"), facts, seg.text, profile)
         if overlay is None:
             # 大数字做不出来(取值里没有能滚的数字):同一行数据改成参数面板照样上屏
             raw = item.get("stat")
@@ -644,10 +671,10 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
     elif layout == "hook":
         # 开场大字也不许照抄旁白:旁白有字幕,第一句话是观众看得最认真的一句,
         # 大字+字幕+口播三遍同一句就是在浪费这三秒。数字另有大数字展示,大字不再重复它
-        lines = ground_keywords(item.get("keywords"), seg.text, facts, drop_echo=True)
+        lines = ground_keywords(item.get("keywords"), seg.text, facts, drop_echo=True, profile=profile)
         stat = None
         if item.get("stat"):
-            stat, dropped = ground_stat(item.get("stat"), facts)
+            stat, dropped = ground_stat(item.get("stat"), facts, profile=profile)
         if stat:
             shown = numbers_in(stat["value"])
             lines = [x for x in lines if not (numbers_in(x) & shown)]
@@ -965,7 +992,7 @@ def add_keyword_beats(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
         spec, seg = specs[n], segments[n]
         lines = ground_keywords(lines_by_idx.get(spec.idx), seg.text,
                                 facts_for(facts, seg.subject, profile.section(seg.section).name),
-                                drop_echo=True)
+                                drop_echo=True, profile=profile)
         if not lines:
             continue
         spec.layout, spec.card = "highlight", None
@@ -1889,7 +1916,10 @@ def _load_recent(project_id: str) -> list[str]:
 
 def card_backgrounds(subject: str) -> list[Path]:
     """数据卡的底图候选:池子里干净的主视角官图(汽车是外观;虚化压暗后做底),
-    按视角散开排 —— 各张卡按拍号轮换,不再全片共用一张。"""
+    按视角散开排 —— 各张卡按拍号轮换,不再全片共用一张。
+
+    图库官图的车牌上印着别家 logo(懂车帝的黄牌),铺满全屏时太显眼,
+    这里换成抹过水印的版本(抹不动就用原图)。"""
     lib = library.Library.load(subject)
     stills = [i for i in lib.items if i.kind == "still" and i.usable and Path(i.path).is_file()]
     primary = library.vocab_of(lib).primary_views
@@ -1900,7 +1930,7 @@ def card_backgrounds(subject: str) -> list[Path]:
     for i in stills:  # 同一簇(几乎同一张)只留一张
         if groups[i.id] not in seen:
             seen.add(groups[i.id])
-            out.append(Path(i.path))
+            out.append(Path(library.clean_still(i)))
     return out
 
 
@@ -1982,13 +2012,18 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
         status = pool_cache.get(car)
         if status is None:
             status = pool_cache[car] = library.pool_status(car)
-        if status == "building":
+        if status in ("building", "tagging"):
+            # 首次遇到这一拍:记下开始等的时间。**必须用记下来的这个时间**,
+            # 拿 0 当起点会让「等了多久」变成 epoch 差值(实跑踩过:记成 29884999 分钟),
+            # 于是这一拍等都没等就直接降级成卡片了。
             first = float(waits.get(str(s.idx)) or 0.0)
             if not first:
-                waits[str(s.idx)] = time.time()
+                first = time.time()
+                waits[str(s.idx)] = first
                 db.write_json(project_id, "beats_waiting.json", waits)
             if time.time() - first <= POOL_WAIT_SECONDS:
-                waiting.append(f"第 {s.idx} 拍({car}):等素材池建好")
+                waiting.append(f"第 {s.idx} 拍({car}):等素材池"
+                               f"{'建好' if status == 'building' else '打好标签'}")
                 continue
             notes.append(f"第 {s.idx} 拍({car}):素材池 {int((time.time() - first) // 60)} 分钟还没建好,"
                          "这拍只能出卡片")

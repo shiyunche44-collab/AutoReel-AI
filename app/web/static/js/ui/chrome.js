@@ -1,7 +1,7 @@
 /* 所有页面共有的外壳行为:主题切换、状态词表、套餐到期提醒。 */
 import { $, $$, readJSON, isMac } from './dom.js';
 
-const THEME_KEY = 'aimovice.theme';
+const THEME_KEY = 'AutoReel-AI.theme';
 
 function currentTheme() {
   const set = document.documentElement.dataset.theme;

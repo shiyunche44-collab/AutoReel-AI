@@ -181,7 +181,7 @@ def test_old_db_gets_piece_column(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
     (tmp_path / "data").mkdir()
-    conn = sqlite3.connect(tmp_path / "data" / "aimovice.db")
+    conn = sqlite3.connect(tmp_path / "data" / "AutoReel-AI.db")
     conn.executescript("""CREATE TABLE publications (id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
         account_id TEXT NOT NULL, platform TEXT NOT NULL, aspect TEXT NOT NULL DEFAULT '16:9',
         artifact TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',

@@ -31,7 +31,7 @@ from . import browser_fetch
 from .images import ImageRef
 
 #: Wikimedia 要求请求方标明身份,匿名 UA 会被 403
-USER_AGENT = "aimovice/1.0 (local AI video automation; single-user local tool)"
+USER_AGENT = "AutoReel-AI/1.0 (local AI video automation; single-user local tool)"
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 WIKI_API = "https://en.wikipedia.org/w/api.php"

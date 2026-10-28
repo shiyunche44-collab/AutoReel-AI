@@ -41,6 +41,9 @@ PART_SIZE = 20 * 1024 * 1024
 TITLE_MAX = 30
 #: 网页版等视频传完(页面出现「重新上传」)的时限
 UPLOAD_WAIT_MS = 10 * 60 * 1000
+#: 发布页打开后,上传控件要等页面把「加载中,请稍候」跑完才出现 —— 实测约 18 秒,
+#: 等不够就判「没找到上传入口」,其实页面只是慢(直连真实 IP 时更慢)。
+UPLOAD_ENTRY_TIMEOUT_MS = 60 * 1000
 #: 点「发布」后页面先挂「正在发布」(实测 20 秒以上),跳到作品管理才算发完 —— 提前关浏览器等于撤稿
 PUBLISH_WAIT_MS = 3 * 60 * 1000
 PUBLISH_DONE_TEXTS = ("发布成功", "投稿成功")
@@ -134,6 +137,113 @@ def clear_topic_popup(page: Any, slot: Any) -> bool:
     return not slot_covered(slot)
 
 
+#: 上传完平台会弹这个引导框(「设置竖封面获更多流量」),它盖住整页:
+#: 封面位点不到、底部的「发布」按钮也点不到(按钮还是灰的)。
+COVER_PROMPT_TEXTS = ("暂不设置",)
+
+
+def dismiss_cover_prompt(session: Any) -> bool:
+    """关掉上传后弹的封面引导框。关掉了返回 True。"""
+    page = session.page
+    for text in COVER_PROMPT_TEXTS:
+        try:
+            btn = page.get_by_text(text, exact=True)
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=5000)
+                page.wait_for_timeout(1200)
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
+
+
+def wait_publish_ready(session: Any, timeout_ms: int = 300000) -> bool:
+    """等「发布」按钮真的能点。
+
+    平台还在上传 / 处理视频时,这个按钮是灰的 —— 点它等于没点(实跑踩过:
+    点完页面一点动静没有,最后报「网页版发布后没找到成功提示」,作品也没发出去)。
+    所以这里等按钮可点了再往下走。
+    """
+    page = session.page
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        try:
+            btn = page.get_by_role("button", name="发布", exact=True).first
+        except Exception:  # noqa: BLE001 - 这个页面没有这套 API(比如测试里的假页面):按就绪算
+            return True
+        try:
+            if btn.count() and btn.is_visible() and btn.is_enabled():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        dismiss_cover_prompt(session)
+        page.wait_for_timeout(2000)
+    return False
+
+
+def wait_upload_done(session: Any, timeout_ms: int = 600000) -> bool:
+    """等视频**真的**传完(页面上的「重新上传」出现)。
+
+    注意:页面里那个「上传中」的字样**不会自己消失**(一直挂在提示里),
+    拿它判断会永远等下去(实跑踩过:等到 10 分钟超时,其实早就传完了)。
+    """
+    page = session.page
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        try:
+            body = session.page_text() or ""
+        except Exception:  # noqa: BLE001
+            body = ""
+        if "重新上传" in body:
+            return True
+        dismiss_cover_prompt(session)
+        page.wait_for_timeout(3000)
+    return False
+
+
+def publish_done(session: Any) -> bool:
+    """发布成功的判据:页面上有**正好是**「发布成功 / 投稿成功」的气泡,或者已经跳到作品管理页。
+
+    不能用「页面里包含『发布成功』」来判断 —— 页面上有「发布成功后不可修改」这类提示,
+    包含判断会把它当成已经发出去(实跑踩过:报成功,作品列表里根本没有这条)。
+    """
+    page = session.page
+    try:
+        for text in PUBLISH_DONE_TEXTS:
+            if page.get_by_text(text, exact=True).count():
+                return True
+    except Exception:  # noqa: BLE001 - 页面没有这套 API:退回包含判断
+        try:
+            body = session.page_text() or ""
+        except Exception:  # noqa: BLE001
+            body = ""
+        return any(t in body for t in PUBLISH_DONE_TEXTS)
+    return "content/manage" in (page.url or "")
+
+
+def close_cover_editor(session: Any) -> None:
+    """关掉封面编辑器(外层那个大对话框)。
+
+    它开着的时候,底下的「自主声明」「作品描述」都点不到 —— 实跑踩过:
+    声明那一步报「没有『内容由AI生成』这一项」,其实是被封面编辑器挡着,
+    脚本点到的根本不是声明那个下拉。
+    """
+    page = session.page
+    try:
+        btn = page.get_by_role("button", name="完成", exact=True).last
+        if btn.count():
+            btn.first.click(timeout=5000)
+            page.wait_for_timeout(1200)
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(800)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def set_covers(session: Any, cover: Path | None) -> str:
     """在发布页的封面弹窗里把竖 / 横封面传上去。成功返回空串;没设上返回一句说明。
 
@@ -153,6 +263,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
     dialog = None
     step = "找封面位"
     try:
+        # 上传后平台弹的封面引导框会盖住整页,先关掉
+        dismiss_cover_prompt(session)
         try:
             page.keyboard.press("Escape")
             page.wait_for_timeout(300)
@@ -174,6 +286,10 @@ def set_covers(session: Any, cover: Path | None) -> str:
             step = f"等「{tip}」的弹窗"
             dialog = page.locator("[role=dialog]:visible").last
             dialog.wait_for(timeout=15000)
+            # 封面编辑器里会叠一层「设置竖封面获更多流量」的引导框,盖住整个编辑器,
+            # 先把它关掉,再重新取对话框(关掉后编辑器才是最后一个)
+            dismiss_cover_prompt(session)
+            dialog = page.locator("[role=dialog]:visible").last
             before = _dialog_preview(dialog)
             step = f"在「{tip}」弹窗里找上传控件"
             upload = None
@@ -200,6 +316,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
             page.wait_for_timeout(1500)
             if before and after and before == after:
                 return f"封面位「{tip}」传上去没变化,用平台自动截帧"
+        # 封面都设完了,把编辑器本身关掉 —— 它开着的话底下的声明 / 简介都点不到
+        close_cover_editor(session)
     except Exception as exc:  # noqa: BLE001 - 封面设不上不该拦住发布
         try:
             if dialog is not None and dialog.count():
@@ -226,6 +344,77 @@ def _dialog_preview(dialog: Any) -> str:
         return ""
 
 
+def dismiss_topic_popup(page: Any) -> bool:
+    """把话题联想浮层关掉:光标点到简介第一行(不改字),浮层随光标离开消失。
+
+    简介末尾带「#话题」时,光标停在「#」后面,联想浮层一直弹着。它会盖住页面
+    底部的「发布」按钮,点它会一直等到超时(被浮层拦截)。挪开光标就没了。
+    """
+    try:
+        box = page.locator("[contenteditable=true]").first.bounding_box()
+        if not box:
+            return False
+        page.mouse.click(box["x"] + 30, box["y"] + 8)
+        page.wait_for_timeout(600)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def publish_confirmed(session: Any) -> bool:
+    """页面上是不是已经出现「发布成功」的迹象。"""
+    try:
+        body = session.page_text()
+    except Exception:  # noqa: BLE001
+        body = ""
+    if any(t in body for t in PUBLISH_DONE_TEXTS):
+        return True
+    return "content/manage" in (session.page.url or "")
+
+
+def click_publish(session: Any) -> str:
+    """点提交按钮。返回空串 = 点到了;返回一句说明 = 没点到(调用方拿它当报错文案)。
+
+    点击超时**不等于没点到**:Playwright 点完还要等页面稳下来,这一步超时会把
+    异常抛出来,但那一下其实已经生效了(平台已经收了片子)。所以点完异常时先看
+    页面上是不是已经有成功迹象 —— 有就当成功,**绝不能再点一下**,再点一遍
+    就是同一条片子在账号里多留一条。
+    """
+    page = getattr(session, "page", None)
+    reason = "页面上没有完全等于「发布」/「提交」的按钮"
+    for selector in ("button:text-is('发布')", "button:text-is('提交')"):
+        try:
+            if not session.exists(selector, timeout=1500):
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            session.click(selector)
+            return ""
+        except Exception as exc:  # noqa: BLE001 - 被浮层盖住 / 点击超时
+            reason = str(exc)[:160]
+        # 点不动:可能话题浮层盖着,也可能「点超时但其实已经生效了」。
+        # 先确认平台上是不是已经收了片子,没确认上才换 force 点。
+        for _ in range(3):
+            if publish_confirmed(session):
+                return ""
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:  # noqa: BLE001
+                break
+        if publish_confirmed(session):
+            return ""
+        try:
+            dismiss_topic_popup(page)
+            loc = page.locator(selector).first
+            loc.scroll_into_view_if_needed(timeout=5000)
+            loc.click(force=True, timeout=6000)
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            reason = str(exc)[:160]
+    return f"发布页没找到或点不到「发布」按钮(页面改版了?):{reason}"
+
+
 def _click_publish(session: Any) -> bool:
     """点提交按钮。返回是否点到了。
 
@@ -233,14 +422,7 @@ def _click_publish(session: Any) -> bool:
     折叠项「发布设置」—— 按文字模糊匹配会点到这些,点了等于没发。所以只认
     **完全等于**「发布」/「提交」的按钮。
     """
-    for selector in ("button:text-is('发布')", "button:text-is('提交')"):
-        try:
-            if session.exists(selector, timeout=1500):
-                session.click(selector)
-                return True
-        except Exception:  # noqa: BLE001 - 换下一种点法
-            continue
-    return False
+    return click_publish(session) == ""
 
 
 def set_description(session: Any, description: str, hashtags: str = "") -> str:
@@ -545,16 +727,32 @@ class DouyinAdapter:
         started_at = time.time()
         try:
             with browser.BrowserSession("douyin") as session:
-                session.goto(CREATOR_UPLOAD, wait_ms=3000)
-                if not session.exists("input[type=file]"):
+                # 打开发布页可能撞上瞬时断连(ERR_CONNECTION_CLOSED),重试几次:
+                # 一次打不开就判「页面改版」是冤枉平台了(实跑踩过)。
+                opened = False
+                last_err = ""
+                for _ in range(3):
+                    try:
+                        session.goto(CREATOR_UPLOAD, wait_ms=4000)
+                        opened = True
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        last_err = str(exc)[:120]
+                        time.sleep(3)
+                if not opened:
+                    raise PublishError(f"打不开创作者平台发布页:{last_err}", retryable=True)
+                if not session.exists("input[type=file]", timeout=UPLOAD_ENTRY_TIMEOUT_MS):
                     if "扫码登录" in session.page_text():
                         raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
                                            retryable=False, credential=True)
                     raise PublishError("创作者平台发布页没找到上传入口(页面改版了?)",
-                                       retryable=False)
+                                       retryable=True)
                 session.upload_file("input[type=file]", video)
                 if not session.wait_text("重新上传", timeout=UPLOAD_WAIT_MS):
                     raise PublishError("视频上传没在时限内完成", retryable=True)
+                # 「重新上传」出现 = 文件传完了,但平台还在转码/生成封面,这时「发布」
+                # 按钮是灰的 —— 点它等于没点。等它可点再往下走。
+                wait_publish_ready(session, timeout_ms=180 * 1000)
                 for selector in ("input[name=title]", "input[placeholder*='标题']",
                                  "input[class*='title']"):
                     if session.exists(selector, timeout=1500):
@@ -571,22 +769,26 @@ class DouyinAdapter:
                     declare_note = set_declaration(session, DECLARE_AI)
                 topics = " ".join(f"#{str(t).strip()}" for t in (req.tags or [])[:5] if str(t).strip())
                 desc_note = set_description(session, req.description, hashtags=topics)
+                # 点发布前:封面引导框可能又冒出来(它盖住整页),先关掉;
+                # 再确认「发布」按钮已经是可点的(处理中的时候它是灰的)
+                dismiss_cover_prompt(session)
+                wait_publish_ready(session, timeout_ms=90 * 1000)
                 # 按文字精确匹配:左栏有个「作品发布」按钮,模糊匹配会先命中它,点了等于没发
-                if not _click_publish(session):
-                    raise PublishError("发布页没找到「发布」按钮(页面改版了?)", retryable=False)
+                reason = click_publish(session)
+                if reason:
+                    raise PublishError(reason, retryable=False)
                 body = ""
+                ok = False
                 for _ in range(PUBLISH_WAIT_MS // 3000):
                     session.page.wait_for_timeout(3000)
                     body = session.page_text()
-                    if any(t in body for t in PUBLISH_DONE_TEXTS):
+                    if publish_done(session):
+                        ok = True
                         break
                     if "接收短信验证码" in body:  # 平台要本人验证,只能人来;重试只会反复发短信
                         raise PublishError("抖音要求短信验证(本人操作):在分发台点「登录」,"
                                            "在打开的窗口里手动发一次稿并输入验证码",
                                            retryable=False, credential=True)
-                    if "content/manage" in (session.page.url or ""):  # 发完会跳到作品管理
-                        body += "\n发布成功"
-                        break
                 session.save_state()
         except browser.BrowserUnavailable as exc:
             raise PublishError(str(exc), retryable=False) from exc
@@ -594,7 +796,17 @@ class DouyinAdapter:
             raise
         except Exception as exc:  # noqa: BLE001
             raise PublishError(f"网页版发布失败:{type(exc).__name__}: {exc}", retryable=True) from exc
-        if not any(t in body for t in PUBLISH_DONE_TEXTS):
+        if not ok:
+            # 页面上没看到成功提示,不代表平台没收下 —— 回查作品管理页确认真伪。
+            # 确认已经发出去了就按成功算,**不要重试**:重试会在账号里多留一条一样的作品
+            # (实跑踩过:一条片子在抖音上留下 4 条)。
+            work = resolve_published_work(req.title or "", since=started_at, rounds=2, gap=4)
+            if work.get("aweme_id"):
+                return PublishResult(
+                    ok=True, state="submitted", remote_id=work["aweme_id"],
+                    remote_url=work.get("url") or "",
+                    message=f"网页版已发布(页面没给成功提示,回查确认),作品 id {work['aweme_id']}",
+                    raw=work)
             raise PublishError("网页版发布后没找到成功提示,可能是页面改版或需要验证码",
                                retryable=True)
         message = "网页版已提交"

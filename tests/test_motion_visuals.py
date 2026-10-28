@@ -1,7 +1,7 @@
 """画面去重复:近重复簇、相邻多样性、运镜与转场、broll 样式、章节标牌、概念动画(HyperFrames)。
 
 除了标了 skip 条件的真实渲染,其余不需要网络、node 与额度。
-设环境变量 AIMOVICE_MOTION_TESTS=1 会把每个概念动画模板都真渲染一遍(约 2 分钟)。
+设环境变量 AUTOREEL_MOTION_TESTS=1 会把每个概念动画模板都真渲染一遍(约 2 分钟)。
 """
 from __future__ import annotations
 
@@ -423,14 +423,14 @@ def test_concept_beat_falls_back_to_card_when_motion_fails(tmp_path, monkeypatch
 
 
 MOTION_OK = config.motion_status()[0] and HAS_FFMPEG
-ALL_SCENES = os.getenv("AIMOVICE_MOTION_TESTS") == "1"
+ALL_SCENES = os.getenv("AUTOREEL_MOTION_TESTS") == "1"
 
 
 @pytest.mark.skipif(not MOTION_OK, reason="没有 node / HyperFrames / Chrome")
 @pytest.mark.parametrize("scene", sorted(load_profile("auto_long").vocab.concept_scenes))
 def test_scene_renders_with_hyperframes(scene, tmp_path, monkeypatch):
     if scene != "battery" and not ALL_SCENES:
-        pytest.skip("只默认真渲染一个模板;AIMOVICE_MOTION_TESTS=1 全渲染")
+        pytest.skip("只默认真渲染一个模板;AUTOREEL_MOTION_TESTS=1 全渲染")
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     rows = [{"label": "续航", "values": ["835公里", "700公里"]},
             {"label": "售价", "values": ["25.35万元", "26万元"]}]

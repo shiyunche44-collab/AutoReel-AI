@@ -91,16 +91,33 @@ def ratio_of(size: tuple[int, int]) -> str:
     return "9x16" if h / w > 1.5 else "3x4"
 
 
+def _is_light(tone: Tone) -> bool:
+    """浅底(深字)还是暗底(浅字)。"""
+    return tone.luma[0] > 120
+
+
 def bg_index(project_id: str, variant: str = "a") -> int:
     """色调下标:同一项目每次都一样;B 版取下一个,保证和 A 不同。
 
-    项目变体里点了封面底色(`knobs` 的 cover_tone)就从那个色起;没点按项目 ID 散列。"""
+    项目变体里点了封面底色(`knobs` 的 cover_tone)就从那个色起;没点按项目 ID 散列。
+
+    **B 版不能落到暗底**:四种底色里只有一种是暗的,主页一排封面如果混进一张
+    暗底白字的,看着就像另一个人做的(实跑踩过:A 版米色,B 版正好轮到唯一的暗色)。
+    """
     base = int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(TONES)
     picked = _picked_tone(project_id)
     ids = [t.name for t in TONES]
     if picked in ids:
         base = ids.index(picked)
-    return (base + (1 if variant == "b" else 0)) % len(TONES)
+    if variant != "b":
+        return base
+    idx = (base + 1) % len(TONES)
+    if _is_light(TONES[base]) and not _is_light(TONES[idx]):
+        for step in (2, 3):  # 往后找一个同样是浅底的
+            cand = (base + step) % len(TONES)
+            if _is_light(TONES[cand]):
+                return cand
+    return idx
 
 
 def _picked_tone(project_id: str) -> str:
@@ -142,9 +159,40 @@ def _vlm_says_clean(path: Path) -> bool:
     return not (answer.startswith("YES") or "YES" in answer[:12] or answer.startswith(("是", "有")))
 
 
+def _correct_bg(im: Any, luma: tuple[int, int]) -> Any:
+    """把底图**修正**到能压字的状态,而不是直接扔掉重画。
+
+    生图出来的影棚底图亮度经常差一点、上半部又有光斑,直接判不合格就重画,
+    实跑踩过:一张封面三个画幅各重画 3 次,9 次生图 + 9 次视觉调用全废,
+    最后还是落到纯渐变兜底。这里改成:亮度拉进窗口,上半部太花就抹平 ——
+    影棚背景本来就是渐变,抹平之后比纯色渐变还多一点层次。
+    """
+    from PIL import ImageEnhance, ImageFilter
+
+    lo, hi = luma
+    cur = _luma(im)
+    if cur < lo:
+        k = min(2.4, max(1.05, ((lo + hi) / 2) / max(cur, 1)))
+        im = ImageEnhance.Brightness(im).enhance(k)
+    elif cur > hi:
+        k = max(0.4, ((lo + hi) / 2) / max(cur, 1))
+        im = ImageEnhance.Brightness(im).enhance(k)
+    if _upper_spread(im) > BG_MAX_SPREAD:
+        top = im.crop((0, 0, im.width, int(im.height * 0.6)))
+        top = top.filter(ImageFilter.GaussianBlur(max(4, im.width // 70)))
+        im = im.copy()
+        im.paste(top, (0, 0))
+    return im
+
+
 def generate(prompt: str, ratio: str, dest: Path, *, luma: tuple[int, int] = (150, 250),
-             retries: int = 2) -> Path | None:
-    """按提示词生一张底图并质检,合格才写到 dest(已有就直接用)。失败返回 None。"""
+             retries: int = 1) -> Path | None:
+    """按提示词生一张底图并质检,合格才写到 dest(已有就直接用)。失败返回 None。
+
+    质检不过先**修正**再判一次(见 `_correct_bg`),修正后合格就用它;
+    底图里有车 / 字 / 水印(修正也去不掉的)就不用,交给渐变兜底 ——
+    宁可背景朴素,也不能出现一个糊在字后面的车影。
+    """
     from PIL import Image
 
     from ..providers import images
@@ -162,11 +210,12 @@ def generate(prompt: str, ratio: str, dest: Path, *, luma: tuple[int, int] = (15
             images.download(ref.url, raw)
             with Image.open(raw) as im:
                 im = im.convert("RGB")
-            if not luma[0] <= _luma(im) <= luma[1] or _upper_spread(im) > BG_MAX_SPREAD:
-                log.info("封面底图亮度 / 干净度不合格,重来(%s)", dest.name)
+            fixed = _correct_bg(im, luma)
+            if not luma[0] <= _luma(fixed) <= luma[1] or _upper_spread(fixed) > BG_MAX_SPREAD:
+                log.info("封面底图亮度 / 干净度修正后仍不合格,重来(%s)", dest.name)
                 continue
             tmp = dest.with_name(f"{dest.stem}.part{dest.suffix}")
-            im.save(tmp, quality=94)
+            fixed.save(tmp, quality=94)
             if not _vlm_says_clean(tmp):
                 tmp.unlink(missing_ok=True)
                 log.info("封面底图里有车或字,重来(%s)", dest.name)
@@ -901,6 +950,80 @@ def find_plates(im: Any) -> list[tuple[int, int, int, int]]:
     return found
 
 
+def find_yellow_plates(im: Any) -> list[tuple[int, int, int, int]]:
+    """找**黄底黑字**的车牌 —— 懂车帝在自己牌子上打了黄底黑字的 logo。
+
+    图库官图拿来做背景时,这个黄方块会明晃晃地挂在车头正中(实跑踩过:28 秒那拍
+    整个车头被一块「A懂车帝」黄牌占住)。判据:又黄又匀的横长方块、位置在车身
+    下半部、里面有深色字(logo)。返回 [(x0, y0, x1, y1)]。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+
+    a = np.asarray(im.convert("RGB")).astype(np.int32)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    yellow = (r >= 180) & (g >= 130) & (b <= 125) & ((r - b) >= 80) & ((g - b) >= 50)
+    m = Image.fromarray(np.where(yellow, 255, 0).astype(np.uint8), "L")
+    m = m.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(5)).copy()
+    H, W = yellow.shape
+    found: list[tuple[int, int, int, int]] = []
+    ys, xs = np.nonzero(np.asarray(m)[::3, ::3] == 255)
+    for y, x in zip(ys * 3, xs * 3):
+        if m.getpixel((int(x), int(y))) != 255:
+            continue
+        ImageDraw.floodfill(m, (int(x), int(y)), 128, thresh=0)
+        comp = np.asarray(m) == 128
+        m.paste(0, mask=Image.fromarray((comp * 255).astype(np.uint8)))
+        yy, xx = np.nonzero(comp)
+        x0, x1, y0, y1 = int(xx.min()), int(xx.max()) + 1, int(yy.min()), int(yy.max()) + 1
+        w, h = x1 - x0, y1 - y0
+        if not (W * 0.04 <= w <= W * 0.30 and 1.6 <= w / max(1, h) <= 6.0):
+            continue
+        if not (H * 0.38 <= (y0 + y1) / 2 <= H * 0.93):
+            continue
+        inner = a[y0 + 1:y1 - 1, x0 + 1:x1 - 1, :3]
+        if inner.size == 0:
+            continue
+        if float((inner.max(axis=2) < 95).mean()) < 0.03:
+            continue  # 里面没有深色字:不是印了 logo 的车牌,是车身上的黄漆
+        found.append((x0, y0, x1, y1))
+    return found
+
+
+def scrub_body_plates(im: Any, boxes: Sequence[tuple[int, int, int, int]]) -> Any:
+    """把车牌涂成**车身颜色**:取车牌上下各一行的颜色,纵向渐变贴上去。
+
+    直接糊一块纯色会像贴了个补丁;用车身自己的颜色过渡,看起来就是「这块没车牌」。
+    """
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+
+    im = im.convert("RGB")
+    a = np.asarray(im).astype(np.float64)
+    H, W = a.shape[:2]
+    for x0, y0, x1, y1 in boxes:
+        top = a[max(0, y0 - 3):max(1, y0), x0:x1, :3].reshape(-1, 3).mean(axis=0)
+        bot = a[y1:min(H, y1 + 3), x0:x1, :3].reshape(-1, 3).mean(axis=0)
+        n = max(1, y1 - y0)
+        ramp = np.linspace(0.0, 1.0, n)[:, None]
+        grad = top[None, :] * (1 - ramp) + bot[None, :] * ramp
+        patch = np.repeat(grad[:, None, :], max(1, x1 - x0), axis=1)
+        mask = Image.new("L", (x1 - x0, y1 - y0), 0)
+        ImageDraw.Draw(mask).rectangle((0, 0, x1 - x0 - 1, y1 - y0 - 1), fill=255)
+        im.paste(Image.fromarray(patch.astype(np.uint8), "RGB"), (x0, y0),
+                 mask.filter(ImageFilter.GaussianBlur(1.2)))
+    return im
+
+
+def scrub_watermarks(im: Any) -> Any:
+    """抹掉车身上印着别家标识的**黄底**车牌(懂车帝)。没找到就原样返回。"""
+    boxes = find_yellow_plates(im)
+    if not boxes:
+        return im
+    log.info("背景图抹掉 %d 块带标识的黄色车牌", len(boxes))
+    return scrub_body_plates(im, boxes)
+
+
 def scrub_plates(im: Any) -> Any:
     """把车牌上的字抹成空白车牌:留一圈细牌框,里面填车牌底色(按纵向拟合的渐变,和原来的打光一致)。
     返回新图。"""
@@ -1179,6 +1302,24 @@ def split_title(title: str, name: str = "") -> tuple[str, str]:
     return title, ""
 
 
+def strip_figure(text: str, figure: str) -> str:
+    """副标里去掉已经当大字用的那个数字。
+
+    B 版大字是价格「38.28万」,副标是整条标题「38.28万起,换电加420kW快充」——
+    同一屏上这个数字出现两次,看着像手滑(实跑踩过)。这里把大字从副标里摘掉,
+    连跟在后面的「起」「元起」一起摘,副标只留剩下的信息。
+    """
+    if not text or not figure or figure not in text:
+        return text
+    out = text.replace(figure, "", 1)
+    out = out.lstrip(" :：,，、")
+    for prefix in ("万元起", "元起", "起"):
+        if out.startswith(prefix):
+            out = out[len(prefix):]
+            break
+    return out.strip(" :：,，、")
+
+
 def usable_hook(hook: str) -> str:
     """B 版大字只用带数字的钩子(价格、时长、续航)。主论点硬截出来的半句(「小米YU7版本跨」)
     放大成主视觉只会更难看,这种情况 B 版改排标题。"""
@@ -1296,7 +1437,11 @@ def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str 
     """底图 → 型号大字 + 车 → 字。返回 (图, 底图来源)。"""
     canvas, source = background(tone, size)
     place_car(canvas, cut, Frame.of(size), tone=tone, ghost=model_word(name))
-    chip = name if name and name not in main and name not in sub else ""
+    # 车名角标**始终画**:主页一排封面靠它认出同一个号(账号里已发的几条都有这块)。
+    # 以前是「主标题已经是车名就不重复」—— 大唐、小米YU7 那几条的角标能出现是因为
+    # 大字和车名不是同一个字符串,纯属巧合;蔚来ES8 这种大字就是车名的就整个没了,
+    # 一排看过去跟别人的封面不是一套(实跑踩过)。
+    chip = name or ""
     return render(canvas, tone, main=main, sub=sub, chip=chip, brand=brand), source
 
 
@@ -1322,6 +1467,9 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         cut, still = visual.cut, visual.still
         hook = usable_hook(hook) if variant == "b" else ""
         main, sub = (hook, title) if hook else split_title(title, short_name(kicker))
+        if hook:
+            # 大字是那个数字,副标里就别再出现一遍
+            sub = strip_figure(sub, hook) or sub
         tone = tone_of(project_id, variant)
         short = min(size)
         jobs = [(Path(dest), size),

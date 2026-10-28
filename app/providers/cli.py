@@ -217,7 +217,7 @@ def call(
         tmp_path: str | None = None
         started = time.monotonic()
         try:
-            fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="aimovice_args_")
+            fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="AutoReel-AI_args_")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False)
 
