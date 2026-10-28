@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 PROJECTS_DIR = DATA_DIR / "projects"
+#: SQLite 库文件名
+DB_FILENAME = "AutoReel-AI.db"
 CATEGORIES_DIR = Path(__file__).resolve().parent / "categories"
 
 # 首次导入时加载 .env(若存在)。已存在的真实环境变量优先。
