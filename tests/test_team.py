@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+from tests.library_patch import patch_library
+
 
 @pytest.fixture
 def fresh_db(tmp_path, monkeypatch):
@@ -468,7 +470,7 @@ def test_asset_wants_thin_pools_only(monkeypatch):
 
     thin = {"小米YU7": True, "理想i8": False, "问界M8": True, "乐道L90": True}
     monkeypatch.setattr(asset, "_thin", lambda name, target: thin[name])
-    monkeypatch.setattr(library, "is_building", lambda name: name == "乐道L90")
+    patch_library(monkeypatch, "is_building", lambda name: name == "乐道L90")
     items = [{"subject": "小米YU7", "subjects": [], "category": "auto_long"},
              {"subject": "SUV 横评", "subjects": ["理想i8", "问界M8", "乐道L90", "小米YU7"],
               "category": "auto_long"}]

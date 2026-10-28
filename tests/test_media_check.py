@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.library_patch import patch_library
+
 from app import config
 from app.pipeline import library as lib_mod
 from app.pipeline import media_check
@@ -74,7 +76,7 @@ def test_fill_skips_small_stills(data_dir, tmp_path):
 
 
 def test_fill_prefers_higher_bitrate_within_tier(data_dir, tmp_path, monkeypatch):
-    monkeypatch.setattr(lib_mod, "near_dup_groups", lambda items, bits=0: {i.id: i.id for i in items})
+    patch_library(monkeypatch, "near_dup_groups", lambda items, bits=0: {i.id: i.id for i in items})
     video = tmp_path / "v.mp4"
     video.write_bytes(b"x")
     common = dict(kind="video", path=str(video), frame="", tagged=True, view="exterior_45",

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.library_patch import patch_library
+
 CARS = ["比亚迪秦L EV", "小鹏MONA M03", "银河A7 EM-i", "海豹06 DM-i"]
 
 
@@ -122,11 +124,11 @@ def test_pool_status_tells_building_from_empty(tmp_path, monkeypatch):
     from app.pipeline import library
 
     monkeypatch.setattr(library.config, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(library, "is_building", lambda subject: False)
+    patch_library(monkeypatch, "is_building", lambda subject: False)
     assert library.pool_status("没有这台车") == "none"
 
     (library.Library.dir_for("测试车型") / "stills").mkdir(parents=True, exist_ok=True)
     assert library.pool_status("测试车型") == "empty"
 
-    monkeypatch.setattr(library, "is_building", lambda subject: True)
+    patch_library(monkeypatch, "is_building", lambda subject: True)
     assert library.pool_status("测试车型") == "building"

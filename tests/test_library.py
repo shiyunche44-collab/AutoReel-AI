@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.library_patch import patch_library
+
 from app import config
 from app.pipeline import library as lib_mod
 from app.pipeline.library import Item, Library, Source
@@ -130,7 +132,7 @@ def _write_lib(data_dir: Path, items: list[Item]) -> None:
 
 
 def test_tag_queue_caps_per_source(data_dir, monkeypatch):
-    monkeypatch.setattr(lib_mod, "MAX_TAGGED_PER_SOURCE", 2)
+    patch_library(monkeypatch, "MAX_TAGGED_PER_SOURCE", 2)
     items = [_seg(n, n * 3, n * 3 + (1 + n * 0.1), tagged=False) for n in range(5)]
     items.append(Item(id="img", kind="still", path="p", frame="f", tagged=False))
     lib = Library(subject="x", items=items)
@@ -148,7 +150,7 @@ def test_build_async_is_single_flight(monkeypatch):
         calls.append(subject)
         gate.wait(5)
 
-    monkeypatch.setattr(lib_mod, "build", _slow)
+    patch_library(monkeypatch, "build", _slow)
     assert lib_mod.build_async("小米YU7")
     assert not lib_mod.build_async("小米 yu7")
     assert lib_mod.is_building("小米YU7")
@@ -220,7 +222,7 @@ def _frame(path: Path, seed: int) -> str:
 
 
 def test_reject_sources_skips_rest_of_mostly_waste_source(monkeypatch):
-    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    patch_library(monkeypatch, "EARLY_STOP_SAMPLE", 4)
     bad = [_seg(n, n, n + 2, problem="no_subject") for n in range(3)]
     bad.append(_seg(3, 3, 5, problem="subtitle"))     # 字幕段能裁,不算废
     rest = [_seg(n, n, n + 2, tagged=False) for n in range(10, 13)]
@@ -231,7 +233,7 @@ def test_reject_sources_skips_rest_of_mostly_waste_source(monkeypatch):
 
 
 def test_reject_sources_keeps_source_with_subtitles_only(monkeypatch):
-    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    patch_library(monkeypatch, "EARLY_STOP_SAMPLE", 4)
     segs = [_seg(n, n, n + 2, problem="subtitle") for n in range(4)]
     segs.append(_seg(9, 9, 11, tagged=False))
     lib = Library(subject="x", items=segs)
@@ -240,14 +242,14 @@ def test_reject_sources_keeps_source_with_subtitles_only(monkeypatch):
 
 
 def test_reject_sources_waits_for_full_sample(monkeypatch):
-    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 4)
+    patch_library(monkeypatch, "EARLY_STOP_SAMPLE", 4)
     segs = [_seg(n, n, n + 2, problem="no_subject") for n in range(3)]
     segs.append(_seg(9, 9, 11, tagged=False))
     assert lib_mod.reject_sources(Library(subject="x", items=segs)) == 0
 
 
 def test_tag_queue_puts_samples_of_every_source_first(monkeypatch):
-    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 2)
+    patch_library(monkeypatch, "EARLY_STOP_SAMPLE", 2)
     a = [_seg(n, n, n + 2 + n * 0.1, tagged=False) for n in range(4)]
     b = [_seg(n, n, n + 2 + n * 0.1, tagged=False) for n in range(10, 14)]
     for i in b:
@@ -283,7 +285,7 @@ def test_tag_items_stops_videos_when_enough(monkeypatch):
 
     monkeypatch.setattr(lib_mod.vision_verdict, "judge", _judge)
     monkeypatch.setattr(lib_mod.images.cli, "upload_temp_url", lambda p: "u")
-    monkeypatch.setattr(lib_mod, "TAG_BATCH", 2)
+    patch_library(monkeypatch, "TAG_BATCH", 2)
     monkeypatch.setattr(Path, "is_file", lambda self: True)
     monkeypatch.setattr(Library, "save", lambda self: None)
     items = [_seg(n, n * 10, n * 10 + 10, tagged=False) for n in range(6)]
@@ -388,7 +390,7 @@ def test_confirmed_seconds_counts_only_safe_footage():
 
 
 def test_tag_queue_tags_official_sources_first(monkeypatch):
-    monkeypatch.setattr(lib_mod, "EARLY_STOP_SAMPLE", 1)
+    patch_library(monkeypatch, "EARLY_STOP_SAMPLE", 1)
     third = [_seg(n, n, n + 2, tagged=False) for n in range(2)]
     offi = [_seg(n, n, n + 2, tagged=False, official=True) for n in range(10, 12)]
     for i in offi:
@@ -420,7 +422,7 @@ def test_new_gallery_backfills_old_pool(data_dir, monkeypatch):
         "autohome": official.Gallery(lambda *a: calls.append("autohome") or []),
         "official_site": official.Gallery(lambda *a: calls.append("official_site") or []),
     })
-    monkeypatch.setattr(lib_mod, "profile_of", lambda lib: type(
+    patch_library(monkeypatch, "profile_of", lambda lib: type(
         "P", (), {"galleries": ["autohome", "official_site"]})())
     lib = Library(subject="x", gallery_at=1.0, galleries_done=["autohome"])
     lib_mod.ingest_gallery(lib, [])
@@ -438,7 +440,7 @@ def test_gallery_that_needs_login_is_retried_later(data_dir, monkeypatch):
         raise official.DongchediLoginRequired("要登录")
 
     monkeypatch.setattr(official, "GALLERIES", {"dongchedi": official.Gallery(need_login)})
-    monkeypatch.setattr(lib_mod, "profile_of", lambda lib: type(
+    patch_library(monkeypatch, "profile_of", lambda lib: type(
         "P", (), {"galleries": ["dongchedi"]})())
     lib = Library(subject="x")
     errors: list[str] = []

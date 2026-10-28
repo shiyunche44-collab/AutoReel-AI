@@ -1,6 +1,8 @@
 """封面 B(大字版):版式、尺寸、底图排除、文件名。"""
 from __future__ import annotations
 
+from tests.library_patch import patch_library
+
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -113,8 +115,8 @@ def _fake_library(monkeypatch, tmp_path, kinds):
                                      view="front", target="yes", frame="", small_still=False))
     lib = SimpleNamespace(items=items)
     monkeypatch.setattr(library.Library, "load", classmethod(lambda cls, subject: lib))
-    monkeypatch.setattr(library, "vocab_of", lambda l: SimpleNamespace(primary_views={"front"}, views={"front"}))
-    monkeypatch.setattr(library, "is_studio_shot", lambda path: False)
+    patch_library(monkeypatch, "vocab_of", lambda l: SimpleNamespace(primary_views={"front"}, views={"front"}))
+    patch_library(monkeypatch, "is_studio_shot", lambda path: False)
     return items
 
 
@@ -188,13 +190,13 @@ def test_make_cover_b_in_compose(monkeypatch, tmp_path):
 
     monkeypatch.setattr(render_mod, "build_cover", fake_build)
     second = tmp_path / "b.jpg"
-    monkeypatch.setattr(library, "cover_still", lambda subject, exclude=(): None)
+    patch_library(monkeypatch, "cover_still", lambda subject, exclude=(): None)
     project = {"subject": "小米YU7", "thesis": "买的是补能速度,不是屏幕", "aspect": config.PORTRAIT}
     got = explainer._make_cover_b("p1", project, "标题", {"kicker": "k", "subtitle": "s"},
                                   (1080, 1920), "v.mp4", tmp_path / "a.jpg")
     assert got and got["same_still"] is True and got["hook"]
     assert seen["layout"] == "hook" and seen["dest"].name == "cover_vertical_b.jpg"
-    monkeypatch.setattr(library, "cover_still", lambda subject, exclude=(): second)
+    patch_library(monkeypatch, "cover_still", lambda subject, exclude=(): second)
     got = explainer._make_cover_b("p1", project, "标题", {"kicker": "k", "subtitle": "s"},
                                   (1080, 1920), "v.mp4", tmp_path / "a.jpg")
     assert got["same_still"] is False and got["still"] == str(second)
