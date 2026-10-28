@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 
 import pytest
+
+from tests.library_patch import patch_in_package
 from PIL import Image, ImageDraw
 
 from app import config
@@ -46,7 +48,7 @@ def art(tmp_path, monkeypatch):
     monkeypatch.setattr(images, "describe", lambda urls, prompt, **kw: "NO")
     monkeypatch.setattr("app.providers.cli.upload_temp_url", lambda p, **kw: "data:x")
     car = _studio_car(tmp_path / "car.png")
-    monkeypatch.setattr(cover_art, "pick_car",
+    patch_in_package(monkeypatch, cover_art, "pick_car",
                         lambda subject, exclude=(): (motion_assets.cutout(car), car) if subject else None)
     return calls
 
@@ -197,21 +199,21 @@ def _ai_env(monkeypatch, tmp_path, *, clean="NO", same="YES"):
 
     monkeypatch.setattr(images, "generate_many", fake_generate_many)
     monkeypatch.setattr(images, "download", fake_download)
-    monkeypatch.setattr(cover_art, "_vlm_answer", fake_vlm)
-    monkeypatch.setattr(cover_art, "pick_reference",
+    patch_in_package(monkeypatch, cover_art, "_vlm_answer", fake_vlm)
+    patch_in_package(monkeypatch, cover_art, "pick_reference",
                         lambda subject, exclude=(): (car, "白色比亚迪唐右前45度白底定妆照"))
-    monkeypatch.setattr(cover_art, "_ask_ref_attributes",
+    patch_in_package(monkeypatch, cover_art, "_ask_ref_attributes",
                         lambda ref: {"model": "BYD Tang", "color": "silver", "body": "SUV"})
     # 生图模式固定成"只走文字生图":图生图那条路要 mcode-tools CLI,在场,
     # 跑测试的机器不一定有 —— 模式表由 cover_art._car_modes 决定,这里钉死它。
-    monkeypatch.setattr(cover_art, "_car_modes", lambda: ("t2i",))
+    patch_in_package(monkeypatch, cover_art, "_car_modes", lambda: ("t2i",))
     return calls
 
 
 def test_ai_car_used_when_no_white_bg(art, tmp_path, monkeypatch):
     """素材池抠不出车 → 生图那台车顶上,出来的封面和老模板完全不是一个样。"""
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     dest = tmp_path / "cover_a.jpg"
     got = cover_art.build("p1", dest, size=(1920, 1080), title="23.99万起", subject="比亚迪大唐",
                           kicker="比亚迪大唐 · 23.99万元起")
@@ -232,7 +234,7 @@ def test_ai_car_used_when_no_white_bg(art, tmp_path, monkeypatch):
 def test_ai_car_rejected_when_model_differs(art, tmp_path, monkeypatch):
     """同款门判否 → 这一台不能用。四张全否就退回老封面(封面不能拦住成片)。"""
     calls = _ai_env(monkeypatch, tmp_path, same="NO")
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
                            subject="比亚迪大唐") is None
     # 判否过一次就别再烧钱了
@@ -244,7 +246,7 @@ def test_ai_car_rejected_when_model_differs(art, tmp_path, monkeypatch):
 def test_ai_car_cached_not_regenerated(art, tmp_path, monkeypatch):
     """同一台车重出封面不再生图(缓存命中)。"""
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     first = cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
                              subject="比亚迪大唐")
     second = cover_art.build("p1", tmp_path / "b.jpg", size=(1920, 1080), title="t",
@@ -265,7 +267,7 @@ def test_car_prompt_has_model_and_color():
 
 def test_ref_attributes_fall_back_to_desc(art, monkeypatch):
     """视觉模型不可用时,用参照图 desc 里的中文颜色兜底。"""
-    monkeypatch.setattr(cover_art, "_ask_ref_attributes", lambda ref: {})
+    patch_in_package(monkeypatch, cover_art, "_ask_ref_attributes", lambda ref: {})
     attrs = cover_art.ref_attributes(Path("x.jpg"), "白色比亚迪唐右前45度白底定妆照")
     assert attrs["color"] == "white"
 
@@ -282,7 +284,7 @@ def test_cover_ai_car_switch_off(art, tmp_path, monkeypatch):
     """COVER_AI_CAR=0 → 不生图,行为同今天(抠不到就退回老封面)。"""
     monkeypatch.setattr(config, "COVER_AI_CAR", False)
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
                            subject="比亚迪大唐") is None
     assert calls["generate"] == 0
@@ -291,8 +293,8 @@ def test_cover_ai_car_switch_off(art, tmp_path, monkeypatch):
 def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
     """图生图:把官方参照图传进生图接口,并且强制走 Connector 后端(直连不支持参考图)。"""
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
-    monkeypatch.setattr(cover_art, "_car_modes", lambda: ("ref",))
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "_car_modes", lambda: ("ref",))
     monkeypatch.setattr("app.providers.cli.connector_available", lambda: True)
     uploaded = {}
 
@@ -317,7 +319,7 @@ def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
 def test_car_facing_must_match_cover_direction(art, tmp_path, monkeypatch):
     """车头朝向不对(朝左)→ 淘汰。封面版式固定朝右,朝左的车并排放一眼就露馅。"""
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     real_cutout = motion_assets.cutout
 
     def left_facing(path, item_id=""):
@@ -346,7 +348,7 @@ def test_clean_gate_does_not_kill_factory_badges(art, tmp_path, monkeypatch):
 def test_clean_gate_catches_text_and_roof_accessories(art, tmp_path, monkeypatch):
     """有可读文字 / 车顶行李箱的候选判否。"""
     calls = _ai_env(monkeypatch, tmp_path, clean="YES")
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
                            subject="比亚迪大唐") is None
     assert calls["generate"] == 1
@@ -355,7 +357,7 @@ def test_clean_gate_catches_text_and_roof_accessories(art, tmp_path, monkeypatch
 def test_gates_version_invalidates_stale_cache(art, tmp_path, monkeypatch):
     """改了质检门判据,旧缓存里的"全否"结论不能继续挡住 —— 得重跑。"""
     calls = _ai_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(cover_art, "pick_car", lambda subject, exclude=(): None)
+    patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     assert cover_art.build("p1", tmp_path / "a.jpg", size=(1920, 1080), title="t",
                            subject="比亚迪大唐")
     # 把缓存里的门版本改成旧版 → 下次必须重新生图
