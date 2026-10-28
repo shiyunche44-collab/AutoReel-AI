@@ -387,6 +387,16 @@ TEAM_THROTTLE_MIN_BASELINE = int(os.getenv("TEAM_THROTTLE_MIN_BASELINE", "3"))
 TEAM_HOOK_CANDIDATES = int(os.getenv("TEAM_HOOK_CANDIDATES", "3"))
 #: 平台审核超过这么多小时还没过 → 审核异常
 TEAM_REVIEW_STUCK_HOURS = float(os.getenv("TEAM_REVIEW_STUCK_HOURS", "24"))
+#: 总管每天的简报要不要让 LLM 润色成几句话(关了或出错就用模板文字)
+TEAM_CHIEF_LLM = os.getenv("TEAM_CHIEF_LLM", "1") not in ("0", "false", "False")
+#: 某角色连续失败几次就升级成「等你处理」
+TEAM_CHIEF_ESCALATE_AFTER = max(2, int(os.getenv("TEAM_CHIEF_ESCALATE_AFTER", "3")))
+#: 总管的全局仲裁总开关(只拦 / 挪,不改选题内容)。0 = 各角色各管各的
+TEAM_CHIEF_ARBITRATE = os.getenv("TEAM_CHIEF_ARBITRATE", "1") not in ("0", "false", "False")
+#: 一天最多开工几条(快反不受限);超了的顺延到明天
+TEAM_CHIEF_DAILY_MAX = max(1, int(os.getenv("TEAM_CHIEF_DAILY_MAX", "3")))
+#: 同一账号两条发布至少隔多少分钟
+TEAM_CHIEF_PUBLISH_GAP = max(10, int(os.getenv("TEAM_CHIEF_PUBLISH_GAP", "60")))
 # --------------------------------------------------------------------------
 # 抖音「自主声明」
 # --------------------------------------------------------------------------

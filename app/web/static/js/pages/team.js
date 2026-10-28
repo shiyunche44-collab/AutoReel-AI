@@ -241,6 +241,22 @@ function healthBanner(row) {
     btn);
 }
 
+// 总管:角色反复失败的告警 + 今日简报
+function escalationBanner(e) {
+  return h('div', { class: 'callout tone-danger health-banner' }, icon('alert-circle'),
+    h('div', { class: 'grow' }, h('strong', {}, `${e.label}连续失败 ${e.failed} 次`),
+      e.last_error ? ` · ${e.last_error}` : '',
+      h('div', { class: 'subtle small' }, `总管 · 最近一次 ${relTime(e.last_at)}`)));
+}
+
+function chiefBrief(c) {
+  const b = c && c.brief;
+  if (!b) return [];
+  return [h('div', { class: 'callout health-banner' }, icon('inbox'),
+    h('div', { class: 'grow' }, h('strong', {}, '今日简报'), ` · ${b.text}`,
+      h('div', { class: 'subtle small' }, `总管 ${relTime(b.made_at)}写`)))];
+}
+
 // 分发官的衍生品:图文笔记 + 竖版切片,各自勾发到哪些账号
 function pieceView(p) {
   const red = (p.problems || []).length > 0;
@@ -1006,6 +1022,8 @@ function render() {
   $('#pending-list').replaceChildren(
     ...(pending.length ? pending.map(pendingCard) : [empty('没有待批的选题。主编每天 09:00 补空档。')]));
   $('#health-list').replaceChildren(...(DATA.health || []).map(healthBanner));
+  $('#chief-escalations').replaceChildren(...((DATA.chief || {}).escalations || []).map(escalationBanner));
+  $('#chief-brief').replaceChildren(...chiefBrief(DATA.chief));
   const reviews = rest.filter((i) => i.status === 'review');
   $('#review-count').textContent = String(reviews.length);
   $('#review-list').replaceChildren(

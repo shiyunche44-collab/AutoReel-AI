@@ -8,7 +8,7 @@ from typing import Any
 from .. import config, db
 from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
                playbook, preference, publisher, rapid, roles, scout)
-from . import health
+from . import chief, health
 from .plan import view
 from .features import duration_bucket
 
@@ -78,6 +78,8 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "held": sum(1 for i in items if i["status"] == "producing" and i.get("hold")),
         "accounts": publisher.accounts(),
         "health": compliance.health(),
+        # 总管:今日简报 + 反复失败的角色
+        "chief": chief.view(),
         "rising": scout.rising(category),
         "trends_at": latest["captured_at"] if latest else None,
         "trends_n": latest["n"] if latest else 0,

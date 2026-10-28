@@ -104,9 +104,9 @@ class Role:
 
 
 def roles() -> list[Role]:
-    """按执行顺序排:情报、行业日历、对标、快反先于主编,主编先于素材官和制片,分发官跟在制片后面,发布员之后是分析师,合规看分析师的数据,
+    """按执行顺序排:情报、行业日历、对标、快反先于总管和主编,主编先于素材官和制片,分发官跟在制片后面,发布员之后是分析师,合规看分析师的数据,
     运营官看评论,复盘官最后(每周一次,读整周的数据)。"""
-    from . import (activator, analyst, asset, benchmark, coach, compliance, editor, engagement,
+    from . import (activator, analyst, asset, benchmark, chief, coach, compliance, editor, engagement,
                    events, producer, publisher, rapid, repurpose, scout)
 
     return [
@@ -121,6 +121,8 @@ def roles() -> list[Role]:
         Role("rapid", "快反", "榜单急升进前 5 或事件当天,不等周单单出一条竖版 60–90 秒选题等你批;"
              "素材不够会写明",
              Cadence("interval", minutes=60), rapid.run),
+        Role("chief", "总管", "每天早上出今日简报(等你处理什么、哪里卡着),角色连续失败就升级成告警;只汇总不指挥",
+             Cadence("daily", ("08:40",)), chief.run),
         Role("editor", "主编", "读最新热点,给未来几天的空档排选题(去重、冷却、按热度),等你批",
              Cadence("daily", ("09:00",)), editor.run),
         Role("asset", "素材官", "选题一批准就给它的车提前建 / 补素材池,确认本车视频不够才建",

@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import Skip, compliance, preference, repurpose
+from . import Skip, chief, compliance, preference, repurpose
 from .plan import PlanError
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
@@ -123,6 +123,9 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
     if sheet["red"]:
         raise PlanError("审核单有红项,不能发:" + compliance.red_summary(sheet))
     at = next_publish_time(float(publish_at or item["slot_at"]))
+    # 总管:同账号发布别撞车(快反不挪)。人手改的时间也一视同仁,免得单账号短时间连发
+    at = chief.free_publish_time(at, account_ids, rapid=item.get("kind") == "rapid",
+                                 subject=item.get("subject") or "")
     # 衍生品有问题就整单不过,别主片排上了它没排
     repurpose.approve(item, pieces or {}, at, dry_run=True)
     if not db.cas_plan_status(item_id, ("review",), "scheduled", publish_at=at):

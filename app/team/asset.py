@@ -15,7 +15,7 @@ from typing import Any
 
 from .. import config, db
 from ..categories import load_profile
-from . import Skip
+from . import Skip, chief
 
 #: 这些状态的选题还用得上提前建的池子
 _WANT = ("approved",)
@@ -55,6 +55,8 @@ def run() -> str:
         raise Skip("提前建池已关闭")
     from ..pipeline import library, orchestrator
 
+    if chief.render_busy():
+        raise Skip("渲染名额占满,素材预建先让路")
     todo = wanted(db.list_plan_items(statuses=_WANT, limit=200))
     if not todo:
         raise Skip("已批选题的素材池都够了")

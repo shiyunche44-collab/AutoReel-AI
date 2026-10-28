@@ -21,7 +21,7 @@ from typing import Any
 
 from .. import config, db
 from ..state import State
-from . import Skip
+from . import Skip, chief
 from .plan import to_payload
 
 log = logging.getLogger(__name__)
@@ -161,6 +161,8 @@ def sync(*, background: bool = True) -> int:
                 continue  # 还卡在原地,等人
             db.update_plan_item(item["id"], hold="", hold_state="")  # 人处理过了
         if state in _GATES and config.TEAM_AUTO_GATES:
+            if chief.render_busy():
+                continue  # 总管:渲染名额占满,放闸会排队抢资源,下一轮再看
             if _gate_async(item, state, background):
                 changed += 1
     return changed
@@ -173,13 +175,16 @@ def retry_gate(item_id: str) -> dict[str, Any]:
 
 
 def run(now: float | None = None) -> str:
-    started = [pid for pid in (start(i["id"]) for i in due(now)) if pid]
+    ready, later = chief.admit(due(now), now)  # 日产量上限:超了的顺延到明天
+    started = [pid for pid in (start(i["id"]) for i in ready) if pid]
     changed = sync()
     if not started and not changed:
-        raise Skip("没有到开工时间的选题")
+        raise Skip(f"总管:今天产能已满,{len(later)} 条顺延" if later else "没有到开工时间的选题")
     parts = []
     if started:
         parts.append(f"开工 {len(started)} 条:{'、'.join(started)}")
     if changed:
         parts.append(f"{changed} 条选题推进 / 状态更新")
+    if later:
+        parts.append(f"总管顺延 {len(later)} 条到明天")
     return ",".join(parts)
