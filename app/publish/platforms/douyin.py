@@ -275,6 +275,15 @@ def set_covers(session: Any, cover: Path | None) -> str:
             slot = page.locator("[class*=coverControl]", has_text=tip).first
             if not slot.count():
                 return f"没找到封面位「{tip}」,用平台自动截帧"
+            # 封面位在页面很下面(y 坐标好几万像素),**不滚过去不能做遮挡检测**:
+            # 元素在视口外时 elementFromPoint 拿不到它,一律判成「被浮层盖住」→
+            # 两次封面都没设上,竖封面位空着,平台feed就用了横封面(实跑踩过:
+            # 线上封面是 720x540 的横版,账号里别的作品都是 540x720)。
+            try:
+                slot.scroll_into_view_if_needed(timeout=8000)
+                page.wait_for_timeout(600)
+            except Exception:  # noqa: BLE001
+                pass
             step = f"点开「{tip}」的封面弹窗"
             if not clear_topic_popup(page, slot.locator("[class*=cover-]").first):
                 return f"封面位「{tip}」被浮层盖住,没敢点,用平台自动截帧"
@@ -747,7 +756,8 @@ class DouyinAdapter:
                                            retryable=False, credential=True)
                     raise PublishError("创作者平台发布页没找到上传入口(页面改版了?)",
                                        retryable=True)
-                session.upload_file("input[type=file]", video)
+                # 上传控件要等页面把「加载中」跑完才出现(约 18 秒),给足等待
+                session.upload_file("input[type=file]", video, timeout=90000)
                 if not session.wait_text("重新上传", timeout=UPLOAD_WAIT_MS):
                     raise PublishError("视频上传没在时限内完成", retryable=True)
                 # 「重新上传」出现 = 文件传完了,但平台还在转码/生成封面,这时「发布」
