@@ -124,9 +124,11 @@ def test_editor_boosts_and_tags_asked_cars(fresh_db, monkeypatch):
 
     monkeypatch.setattr(config, "TEAM_PLAN_DAYS", 1)
     monkeypatch.setattr(config, "TEAM_DAILY_SLOTS", 1)
+    monkeypatch.setattr(config, "TEAM_SLOT_TIMES", ("18:30",))
     _seed_trends(fresh_db)
     _pub(fresh_db)
-    now = time.time()
+    # 固定在当天上午:窗口只有 1 天 1 个档期(默认 18:30),用真实时间的话过了档期就排满了
+    now = dt.datetime.now().replace(hour=8, minute=0, second=0, microsecond=0).timestamp()
     _comment(fresh_db, "q1", at=now - H, text="理想i8 续航到底多少?")
     _comment(fresh_db, "q2", at=now - 2 * H, text="理想i8 能不能拉露营装备?")
     theme = load_profile("auto_long").default_theme
