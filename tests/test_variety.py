@@ -46,7 +46,7 @@ def test_pick_avoids_recent(auto):
               (("conflict", "action"), ("question", "pick_side"), ("scene", "verdict"), ("myth", "next_episode"))]
     for i in range(20):
         v = variety.pick(theme, f"p_{i}", recent)
-        assert v["opening"] == "number" and v["ending"] == "decision_card"
+        assert v["opening"] in ("number", "rundown") and v["ending"] == "decision_card"
 
 
 def test_pick_all_used_falls_back_to_oldest(auto):

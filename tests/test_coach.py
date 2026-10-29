@@ -317,7 +317,7 @@ def test_variety_leans_on_playbook_but_explores(fresh_db):
          "evidence": []} for o in openings])
     picks = [variety.pick(theme, f"p{i}")["opening"] for i in range(200)]
     share = picks.count(best) / len(picks)
-    assert share > 0.35  # 均匀挑是 0.2;权重 4 倍 + 30% 探索约 0.5
+    assert share > 0.28  # 6 个开头时均匀挑是 0.17;权重 4 倍 + 30% 探索约 0.36
     assert len(set(picks)) == len(openings)  # 别的也还有机会(探索)
     assert variety.pick(theme, "p1") == variety.pick(theme, "p1")  # 可复现
 

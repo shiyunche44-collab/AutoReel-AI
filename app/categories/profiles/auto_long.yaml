@@ -75,7 +75,7 @@ themes:
       - 用车成本段讲落地价之后还要花的钱:电费、保险、保养、保值率。
         有事实就写数字并说明口径;算不出年成本就只讲定性,不许编。
     # 开头 / 结尾写法(pipeline/variety.py),第一个是老项目的默认;建项目时避开最近几条用过的
-    openings: [conflict, question, scene, myth, number]
+    openings: [conflict, question, scene, myth, number, rundown]
     endings: [action, pick_side, next_episode, verdict, decision_card]
     # 竖屏短时长(60s ≈ 8 拍)放不下全部块时按 drop 整档精简(1 先砍,0 = 必留);横屏档位块数放得下,不受影响
     # only_opening:只有冲突三段式开头才有「兑现承诺」「亮出出处」;
