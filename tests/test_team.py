@@ -424,7 +424,7 @@ def test_cut_gate_schedules_publications(fresh_db, monkeypatch):
     from app.team import plan, publisher
 
     _fake_enqueue(fresh_db, monkeypatch)
-    slot = time.time() + 86400
+    slot = (dt.datetime.now() + dt.timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0).timestamp()  # 固定中午:now+1天会随运行时刻落进深夜静默时段而被总管挪走
     _item(fresh_db, status="review", project_id="p_x", slot_at=slot)
     with pytest.raises(plan.PlanError):
         publisher.approve_cut("pl_1", [])
