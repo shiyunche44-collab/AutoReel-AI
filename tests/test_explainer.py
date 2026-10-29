@@ -406,6 +406,22 @@ def test_fill_third_party_waits_for_logo_check_and_fresh_first_party(pool):
     assert library.fill("测试车", 3.0, used=used)[0].item_id == "unknown1"
 
 
+def test_fill_video_first_look_prefers_video_over_stills(pool):
+    from app.pipeline import looks
+
+    # 默认:没用过的一方素材够铺这一拍,第三方视频不进(静图和一方视频先用)
+    assert "unknown1" not in {p.item_id for p in library.fill("测试车", 3.0, used={})}
+    with looks.use("lite"):
+        pieces = library.fill("测试车", 60.0, used={})
+        ids = [p.item_id for p in pieces]
+        assert "unknown1" in ids
+        videos = [p for p in pieces if p.kind == "video"]
+        assert pieces[0].kind == "video" and videos
+        # hook / ending 仍然只用一方素材
+        edge = library.fill("测试车", 60.0, used={}, role="hook")
+        assert not any(p.third_party for p in edge)
+
+
 def test_fit_filter_edge_crop_runs_before_fit():
     out = explainer._fit_filter(1920, 1080, 0.0, 0.14)
     assert out.startswith("[0:v]crop=trunc(iw*0.860/2)*2:trunc(ih*0.860/2)*2,split")

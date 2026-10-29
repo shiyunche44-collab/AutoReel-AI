@@ -71,6 +71,9 @@ class Look:
     label_bg: RGB = (10, 16, 30)
     #: 横屏底部常驻章节条;关掉后只剩字幕(参考「三分半看懂发布会」的轻包装)
     chapter_bar: bool = True
+    #: 正文背景视频优先:能裁掉台标的第三方视频也和一方视频同档、排在静图前面(不再只当静图用尽后的兜底)。
+    #: hook / ending 不受影响(那两段始终只用一方素材)
+    video_first: bool = False
     #: 建项目时自动挑 look 会不会选到它;False = 只在手动指定时用(不改变老的随机分布)
     auto_pick: bool = True
     # ---- 字幕 ----
@@ -173,7 +176,7 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         "lite", "轻包装", "无常驻章节条,白字描边字幕,信息靠口播;对标三分半说车的清爽画面",
         paper=(236, 238, 233), ink=(18, 22, 26), key=(61, 68, 76), muted=(93, 101, 110),
         accent=(255, 90, 31),
-        subs="outline", concept="studio", chapter_bar=False, auto_pick=False,
+        subs="outline", concept="studio", chapter_bar=False, video_first=True, auto_pick=False,
     ),
 )}
 

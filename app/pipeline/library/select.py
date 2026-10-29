@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 from ...categories import Vocab
-from .. import knobs
+from .. import knobs, looks
 
 from .model import FILL_MIN_PIECE, Item, Library, STILL_SECONDS, _confirmed, _hard_bad, _has_host, _host_sources, _third_party, _third_party_ok, vocab_of
 from .tagging import _dhash
@@ -316,7 +316,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         return sum(used.get(m, 0) for m in members.get(group[i.id], [i.id]))
 
     # 第三方兜底:没用过的一方素材够铺这一拍,第三方就不进候选
-    fallback = _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
+    video_first = looks.current().video_first and not strict
+    fallback = video_first or         _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
     if not fallback:
         pool = [i for i in pool if not _third_party(i)]
 
@@ -326,6 +327,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             return 0
         if n:
             return 2
+        if video_first:  # 视频(含可裁台标的第三方)在前,静图在后
+            return 0 if i.kind == "video" else 1
         return 1 if _third_party(i) else 0
 
     def rank(i: Item, recent_groups: set[str], last_view: str) -> tuple:
