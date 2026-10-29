@@ -40,6 +40,11 @@ def pick_car(subject: str, exclude: Sequence[str | Path] = ()) -> tuple[Any, Pat
         c = motion_assets.cutout(item.path, item_id=item.id)
         if c is not None:
             return c, Path(item.path)
+    # 没有白底官图:用抠图模型从实拍图里抠(车是真车,不是 AI 画的)
+    for item in cands[:10]:
+        c = motion_assets.cutout(item.path, item_id=item.id, ml=True)
+        if c is not None:
+            return c, Path(item.path)
     return None
 
 

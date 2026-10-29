@@ -187,12 +187,30 @@ def _facing(fg: np.ndarray, top: int, bottom: int, left: int, right: int) -> str
     return "left" if lh < rh else "right"
 
 
-def cutout(path: str | Path, item_id: str = "") -> Cutout | None:
-    """抠一张白底图。不是白底、车贴边或面积离谱时返回 None。结果按原图内容缓存。"""
+_ml_session = None
+
+
+def _ml_foreground(im: Image.Image) -> np.ndarray | None:
+    """用 rembg(isnet-general-use)从实拍图里抠出车身蒙版;没装 rembg 返回 None。"""
+    global _ml_session
+    try:
+        from rembg import new_session, remove
+    except ImportError:
+        return None
+    if _ml_session is None:
+        _ml_session = new_session("isnet-general-use")
+    out = remove(im, session=_ml_session, only_mask=True)
+    return np.asarray(out.convert("L")) >= 128
+
+
+def cutout(path: str | Path, item_id: str = "", ml: bool = False) -> Cutout | None:
+    """抠一张白底图。不是白底、车贴边或面积离谱时返回 None。结果按原图内容缓存。
+
+    `ml=True`:实拍图(非白底)改用抠图模型出蒙版,缓存单独一份(`_ml`)。"""
     path = Path(path)
     if not path.is_file():
         return None
-    key = f"{_sha(path)}_v{CACHE_VERSION}"
+    key = f"{_sha(path)}_v{CACHE_VERSION}" + ("_ml" if ml else "")
     d = cutout_dir()
     png, edges, meta = d / f"{key}.png", d / f"{key}_edges.png", d / f"{key}.json"
     if png.is_file() and meta.is_file():
@@ -214,10 +232,15 @@ def cutout(path: str | Path, item_id: str = "") -> Cutout | None:
         return None
     if im.width > WORK_WIDTH:
         im = im.resize((WORK_WIDTH, round(im.height * WORK_WIDTH / im.width)), Image.LANCZOS)
-    if not is_studio(im):
+    if ml:
+        fg = _ml_foreground(im)
+        if fg is None:
+            return None  # 没装抠图模型:不记缓存,装上之后还能再试
+    elif not is_studio(im):
         return remember(None)
-    rgb = np.asarray(im)
-    fg = _strip_shadow(_foreground(rgb), rgb)
+    else:
+        rgb = np.asarray(im)
+        fg = _strip_shadow(_foreground(rgb), rgb)
     h, w = fg.shape
     area = fg.mean()
     ys, xs = np.where(fg)
