@@ -449,8 +449,10 @@ def test_run_stops_day_on_verification(fresh_db, monkeypatch):
         raise douyin_outreach.VerificationNeeded("抖音弹了二次验证")
 
     monkeypatch.setattr(douyin_outreach, "run_actions", boom)
+    # 活跃计划按时刻排:固定在当天 20:00,别让凌晨跑测试时一条到点的都没有
+    now = dt.datetime.combine(dt.date.today(), dt.time(20, 0)).timestamp()
     with pytest.raises(activator.TeamError):
-        activator.run()
+        activator.run(now=now)
     assert activator.paused_day() == dt.date.today().isoformat()
 
 
