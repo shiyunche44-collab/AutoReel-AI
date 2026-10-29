@@ -74,6 +74,12 @@ REDISCOVER_SECONDS = 7 * 24 * 3600
 #: 实测小米 YU7 池子里四成视觉调用花在这类段上
 EARLY_STOP_SAMPLE = 8
 EARLY_STOP_RATIO = 0.7
+#: 发布会回放:舞台、主讲人、观众席占不少画面,但车和 PPT 段也多,样本给多一点、门槛放宽,
+#: 否则整场会被当成"口播源"早早拒掉
+LAUNCH_EARLY_STOP_SAMPLE = 20
+LAUNCH_EARLY_STOP_RATIO = 0.9
+#: 最多收几条发布会回放(单独计数,不占官方号 / 第三方的名额)
+MAX_LAUNCH_SOURCES = 2
 #: 解说轨的"够用":**确认是这台车**的干净视频秒数(`confirmed_seconds`)达到它,就不再给
 #: 视频段打标签。只算确认过的:没认出车型的第三方段凑够了秒数,背景照样会配错车
 ENOUGH_USABLE_SECONDS = 240.0
@@ -123,6 +129,8 @@ class Source:
     #: 静态角标检测(logo_detect):checked = 下过结论;boxes = 归一化 [x0, y0, x1, y1]
     logo_checked: bool = False
     logo_boxes: list[list[float]] = field(default_factory=list)
+    #: launch = 官方发布会回放(主讲人出镜多,废段判定更宽松);空 = 普通源
+    kind: str = ""
 
 
 @dataclass

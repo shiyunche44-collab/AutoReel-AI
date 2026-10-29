@@ -876,6 +876,8 @@ vocab:
                赛车计划, 车模, 模型, 申报图, 老鼠, 二手车, ota升级, ota 升级]
   showcase_words: [静态, 外观, 内饰, walkaround, exterior, interior]
   official_markers: [汽车, motors, motor, auto]
+  # 官方发布会回放:舞台讲解 + PPT + 官方渲染片,所说即所见
+  launch_replays: true
 
   # 概念动画模板:名字 → 什么时候用(进分镜提示词)。模板只画示意,数字全部来自 rows
   concept_scenes:

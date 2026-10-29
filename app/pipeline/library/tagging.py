@@ -9,7 +9,7 @@ from ...categories import Vocab
 from ...providers import images
 from .. import vision_verdict
 
-from .model import DUP_BITS, EARLY_STOP_RATIO, EARLY_STOP_SAMPLE, Item, Library, TAG_BATCH, confirmed_seconds, is_waste, vocab_of
+from .model import DUP_BITS, EARLY_STOP_RATIO, EARLY_STOP_SAMPLE, LAUNCH_EARLY_STOP_RATIO, LAUNCH_EARLY_STOP_SAMPLE, Item, Library, TAG_BATCH, confirmed_seconds, is_waste, vocab_of
 
 
 # --------------------------------------------------------------------------
@@ -110,11 +110,14 @@ def reject_sources(lib: Library) -> int:
         if i.kind == "video" and i.source:
             by_src.setdefault(i.source, []).append(i)
     n = 0
-    for segs in by_src.values():
+    launch = {s.id for s in lib.sources if s.kind == "launch"}
+    for src, segs in by_src.items():
+        sample, ratio = ((LAUNCH_EARLY_STOP_SAMPLE, LAUNCH_EARLY_STOP_RATIO) if src in launch
+                         else (EARLY_STOP_SAMPLE, EARLY_STOP_RATIO))
         tagged = [i for i in segs if i.tagged]
-        if len(tagged) < EARLY_STOP_SAMPLE:
+        if len(tagged) < sample:
             continue
-        if sum(1 for i in tagged if is_waste(i)) / len(tagged) < EARLY_STOP_RATIO:
+        if sum(1 for i in tagged if is_waste(i)) / len(tagged) < ratio:
             continue
         for i in segs:
             if not i.tagged and not i.skipped:

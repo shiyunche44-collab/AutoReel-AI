@@ -10,7 +10,7 @@ from ...categories import Vocab
 from ...providers import clips as clips_mod
 from ...providers import official, platform_video
 
-from .model import Library, MAX_AUTO_SOURCES, MAX_OFFICIAL_SOURCES, MAX_SITE_SOURCES, OFFICIAL_ENOUGH_SOURCES, Source, THIRD_PARTY_WITH_OFFICIAL, normalise_url, platform_of, vocab_of
+from .model import Library, MAX_AUTO_SOURCES, MAX_LAUNCH_SOURCES, MAX_OFFICIAL_SOURCES, MAX_SITE_SOURCES, OFFICIAL_ENOUGH_SOURCES, Source, THIRD_PARTY_WITH_OFFICIAL, normalise_url, platform_of, vocab_of
 from .ingest import _add_still
 
 
@@ -86,6 +86,14 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
     for h in hits:
         h.official = h.official or bool(aliases and platform_video.is_official(
             h, aliases, markers=vocab.official_markers))
+    launch: list[platform_video.PlatformHit] = []
+    if aliases and vocab.launch_replays:
+        try:
+            launch = official.launch_replays(subject, aliases, markers=vocab.official_markers,
+                                             limit=MAX_LAUNCH_SOURCES, errors=errors)
+        except Exception as exc:  # noqa: BLE001 - 找不到回放只是少一路
+            errors.append(f"发布会回放查找失败:{str(exc)[:120]}")
+    launch_urls = {normalise_url(h.url) for h in launch}
     ranked = [*_dedupe_hits(site),
               *rank_sources(_dedupe_hits(hits), subject, names=[en], vocab=vocab)]
 
@@ -112,6 +120,20 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
         got = lib.add_source(_source_of(h))
         n_other += got
         added += got
+    # 发布会回放单独计数:官方号已经收满了也要给它留位置
+    for src in lib.sources:
+        if src.url in launch_urls:
+            src.kind = "launch"
+    n_launch = sum(1 for s in lib.sources if s.kind == "launch")
+    for h in launch:
+        if n_launch >= MAX_LAUNCH_SOURCES:
+            break
+        if lib.add_source(_source_of(h)):
+            n_launch += 1
+            added += 1
+        for src in lib.sources:
+            if src.url == normalise_url(h.url):
+                src.kind = "launch"
     lib.discovered_at = time.time()
     return added
 

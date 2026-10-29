@@ -290,6 +290,8 @@ class Vocab:
     junk_words: tuple[str, ...] = ()
     showcase_words: tuple[str, ...] = ()
     official_markers: tuple[str, ...] = ()
+    #: 找官方发布会回放当素材(新品有发布会的品类才开,汽车 / 数码)
+    launch_replays: bool = False
 
     # ---- 概念动画(解说轨 concept 版式,模板在 motion/scenes/<名>.html)----
     #: 模板名 → 什么时候用(拼进分镜提示词)。空 = 这个品类不开 concept 版式

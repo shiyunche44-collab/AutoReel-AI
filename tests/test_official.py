@@ -416,3 +416,19 @@ def test_yiche_other_series_page_gives_nothing_and_retries(monkeypatch):
                         lambda url, **k: '<img src="//image.bitautoimg.com/a_1200x800.jpg">')
     with pytest.raises(official.YicheUnavailable):
         official.yiche_images("小米YU7")
+
+
+def test_launch_replays_only_official_long_named_model(monkeypatch):
+    H = platform_video.PlatformHit
+    hits = [
+        H("bilibili", "ok", "小米YU7 发布会 全程回放", uploader="小米汽车", duration=40 * 60),
+        H("bilibili", "short", "小米YU7 发布会 30秒预告", uploader="小米汽车", duration=30),
+        H("bilibili", "fan", "小米YU7 发布会 解读", uploader="某博主", duration=40 * 60),
+        H("bilibili", "sib", "小米SU7和YU7 发布会", uploader="小米汽车", duration=40 * 60),
+        H("bilibili", "notlaunch", "小米YU7 外观展示", uploader="小米汽车", duration=40 * 60),
+        H("bilibili", "dup", "小米YU7 发布会 全程回放", uploader="小米汽车", duration=41 * 60),
+    ]
+    monkeypatch.setattr(platform_video, "search", lambda q, **k: list(hits))
+    monkeypatch.setattr(official, "bilibili_official", lambda *a, **k: [])
+    got = official.launch_replays("小米YU7", ["小米汽车", "小米SU7", "小米YU7"], markers=("汽车",))
+    assert [h.url for h in got] == ["ok"] and got[0].official

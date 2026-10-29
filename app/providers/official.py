@@ -248,6 +248,62 @@ def bilibili_official(subject: str, aliases: Sequence[str], *, markers: Sequence
     return rank_uploads(out)[:limit]
 
 
+#: 发布会回放的标题词
+_LAUNCH_WORDS = ("发布会", "上市会", "新车上市", "上市发布", "全球首发", "launch event", "launch",
+                 "press conference", "keynote", "unveil", "world premiere")
+#: 回放的时长范围(秒):太短是预告 / 切条,太长是整场直播带暖场
+LAUNCH_SECONDS = (8 * 60.0, 3 * 3600.0)
+
+
+def launch_replays(subject: str, aliases: Sequence[str], *, markers: Sequence[str] = (),
+                   limit: int = 3, errors: list[str] | None = None
+                   ) -> list[platform_video.PlatformHit]:
+    """官方发布会回放:舞台上边讲边指车、PPT 页、官方渲染片,所说即所见,是参考片的主力画面。
+
+    只收**官方号**发的、标题点名发布会、点名这台车(且没点名同品牌别的车型)、时长在
+    `LAUNCH_SECONDS` 里的;关键词搜索 + 官方号投稿合起来找。回放里主讲人出镜很多,
+    下载时按长源分窗抽几段(`download_windows`),打标签时按发布会的宽松门槛判废源。"""
+    if not aliases:
+        return []
+    keyword = model_keyword(subject, aliases)
+    siblings = sibling_models(aliases, keyword)
+    lo, hi = LAUNCH_SECONDS
+    cands: list[platform_video.PlatformHit] = []
+    primary = aliases[0]
+    platforms = [p for p in config.MEDIA_PLATFORMS if p in ("bilibili", "youtube")]
+    for q in (f"{subject} 发布会", f"{primary} {keyword} 发布会 回放", f"{subject} launch event"):
+        cands += platform_video.search(q, platforms=platforms, limit=10, errors=errors)
+    if "bilibili" in config.MEDIA_PLATFORMS:
+        cands += bilibili_official(subject, aliases, markers=markers, limit=30, errors=errors)
+    out: list[platform_video.PlatformHit] = []
+    seen: set[str] = set()
+    for h in cands:
+        if h.url in seen:
+            continue
+        seen.add(h.url)
+        title = h.title.lower()
+        if not any(w in title for w in _LAUNCH_WORDS):
+            continue
+        if h.duration and not (lo <= h.duration <= hi):
+            continue
+        if not _names_model(h.title, keyword) or any(_names_model(h.title, s) for s in siblings):
+            continue
+        if not (h.official or platform_video.is_official(h, aliases, markers)):
+            continue
+        h.official = True
+        out.append(h)
+    # 时长越接近 40 分钟越像完整发布会回放;同标题发好几遍的只留一条
+    out.sort(key=lambda h: abs((h.duration or 40 * 60.0) - 40 * 60.0))
+    titles: set[str] = set()
+    uniq: list[platform_video.PlatformHit] = []
+    for h in out:
+        norm = re.sub(r"[\W_]+", "", h.title.lower())
+        if norm not in titles:
+            titles.add(norm)
+            uniq.append(h)
+    return uniq[:limit]
+
+
 #: 判断"文案对不对题"时不算数的词:品牌号每条文案都带品牌名
 _GENERIC_TOKENS = {"ev", "car", "cars", "the", "new", "auto", "official", "global", "motors"}
 

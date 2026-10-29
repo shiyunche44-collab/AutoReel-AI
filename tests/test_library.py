@@ -467,3 +467,45 @@ def test_third_party_copy_of_official_footage_is_marked(tmp_path):
     assert not t2.dup_of and not o1.dup_of
     assert t2 in lib_mod._tag_queue(lib) and t1 not in lib_mod._tag_queue(lib)
     assert lib_mod.mark_official_duplicates(lib) == 0   # 幂等
+
+
+def test_discover_adds_launch_replay_separately(monkeypatch):
+    from app.providers import official, platform_video
+
+    H = platform_video.PlatformHit
+    off = [H("bilibili", f"https://www.bilibili.com/video/BVoff{n}", f"小米YU7 宣传片{n}",
+             uploader="小米汽车", duration=60, official=True) for n in range(12)]
+    launch = [H("bilibili", "https://www.bilibili.com/video/BVlaunch", "小米YU7 发布会 回放",
+                uploader="小米汽车", duration=40 * 60, official=True)]
+    monkeypatch.setattr(official, "bilibili_official", lambda *a, **k: list(off))
+    monkeypatch.setattr(official, "platform_official", lambda *a, **k: [])
+    monkeypatch.setattr(official, "launch_replays", lambda *a, **k: list(launch))
+    monkeypatch.setattr(platform_video, "search", lambda q, **k: [])
+    monkeypatch.setattr(platform_video, "is_official", lambda h, *a, **k: h.official)
+    lib = Library(subject="小米YU7")
+    lib_mod.discover(lib, ["小米汽车"], [])
+    kinds = {s.url.rsplit("/", 1)[-1]: s.kind for s in lib.sources}
+    assert kinds["BVlaunch"] == "launch"                       # 官方号已收满,发布会回放照样有位置
+    assert sum(1 for k in kinds.values() if k == "launch") == 1
+    # 品类没开这个开关就不找
+    monkeypatch.setattr(official, "launch_replays", lambda *a, **k: pytest.fail("不该调用"))
+    lib2 = Library(subject="小米YU7", category="baby_long")
+    lib_mod.discover(lib2, ["小米汽车"], [])
+
+
+def test_launch_source_gets_lenient_early_stop():
+    from app.pipeline.library import tagging
+    from app.pipeline.library.model import Source
+
+    def seg(n, src):
+        return Item(id=f"{src}{n}", kind="video", path="x", source=src, tagged=True,
+                    view="people", target="yes")  # people 视角 = 废段
+
+    lib = Library(subject="x")
+    lib.sources = [Source(url="u1", id="L", kind="launch"), Source(url="u2", id="N")]
+    lib.items = [seg(n, "L") for n in range(10)] + [seg(n, "N") for n in range(10)]
+    lib.items += [Item(id="L_t", kind="video", path="x", source="L"),
+                  Item(id="N_t", kind="video", path="x", source="N")]
+    tagging.reject_sources(lib)
+    skipped = {i.id: i.skipped for i in lib.items if i.id.endswith("_t")}
+    assert skipped == {"L_t": "", "N_t": "source_rejected"}     # 同样 10 个废样本:普通源拒,发布会不拒
