@@ -41,3 +41,5 @@ node_modules/
 motion/bakeoff/assets/
 motion/bakeoff/fonts/
 motion/bakeoff/out/
+analysis/ref_*/
+analysis/teardown_*/

@@ -425,13 +425,16 @@ def compose(
     if proc.returncode != 0 or not tmp_output.is_file():
         # 字幕烧录是 Windows 上最容易出问题的一环,失败时退化为"无字幕重试"
         if ass_filter:
-            warnings.append("烧录字幕失败,已输出无字幕版本")
-            return compose(
+            # 递归那次的 warnings 是新的:不把这条带回去,成片会悄悄没字幕、render.json 里却一条警告都没有
+            warnings.append(f"烧录字幕失败,已输出无字幕版本:{(proc.stderr or '').strip()[-300:]}")
+            retry = compose(
                 project_id, shot_paths,
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations,
             )
+            retry.warnings = warnings + (retry.warnings or [])
+            return retry
         # 别把半截文件留在那儿 —— 它不是成片
         tmp_output.unlink(missing_ok=True)
         return RenderResult(
