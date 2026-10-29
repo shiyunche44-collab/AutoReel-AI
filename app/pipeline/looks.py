@@ -69,6 +69,10 @@ class Look:
     bar_on_text: RGBA = (20, 20, 20, 255)
     #: 章节标牌、角标名牌的深色底
     label_bg: RGB = (10, 16, 30)
+    #: 横屏底部常驻章节条;关掉后只剩字幕(参考「三分半看懂发布会」的轻包装)
+    chapter_bar: bool = True
+    #: 建项目时自动挑 look 会不会选到它;False = 只在手动指定时用(不改变老的随机分布)
+    auto_pick: bool = True
     # ---- 字幕 ----
     #: box = 半透明黑底条;outline = 白字描边无底;band = 色块底(用 sub_box 的颜色)
     subs: str = "box"
@@ -164,6 +168,13 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         broll_cycle=("split", "lower_third", "split", "plain"),
         cover_accent=(214, 40, 58),
     ),
+    # 轻包装:无常驻章节条,白字描边字幕,配色沿用 hud 基线。只能手动指定
+    Look(
+        "lite", "轻包装", "无常驻章节条,白字描边字幕,信息靠口播;对标三分半说车的清爽画面",
+        paper=(236, 238, 233), ink=(18, 22, 26), key=(61, 68, 76), muted=(93, 101, 110),
+        accent=(255, 90, 31),
+        subs="outline", concept="studio", chapter_bar=False, auto_pick=False,
+    ),
 )}
 
 _ACTIVE: contextvars.ContextVar[str] = contextvars.ContextVar("look", default=DEFAULT)
@@ -213,21 +224,22 @@ def pick(project_id: str, recent: Iterable[Mapping[str, Any]] = (), chosen: str 
             raise ValueError(f"视觉包可选:{'、'.join(lk.label for lk in LOOKS.values())}")
         return chosen
     used = [str((v or {}).get("look") or "") for v in recent]
-    fresh = [k for k in LOOKS if k not in used]
+    auto = tuple(k for k, lk in LOOKS.items() if lk.auto_pick)
+    fresh = [k for k in auto if k not in used]
     digest = hashlib.sha256(f"look:{project_id}".encode()).hexdigest()
     rng = random.Random(int(digest[:16], 16))
     # 服务里挂了手册:配对实验点名就照做,有权重就按权重(同旋钮,见 `knobs.choose`)
     from . import knobs, variety
 
-    planned = variety._planned("look", tuple(LOOKS))
+    planned = variety._planned("look", auto)
     if planned:
         return planned
     weights = variety._weights("look")
     if weights:
-        return knobs.choose(rng, tuple(LOOKS), used, weights)
+        return knobs.choose(rng, auto, used, weights)
     if fresh:
         return rng.choice(fresh)
-    return max(LOOKS, key=lambda k: used.index(k))
+    return max(auto, key=lambda k: used.index(k) if k in used else -1)
 
 
 def options() -> list[dict[str, str]]:

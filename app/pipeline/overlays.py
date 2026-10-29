@@ -172,6 +172,11 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
     img, d = _canvas(size)
     bar_h = int(h * BAR_HEIGHT)
     top = h - bar_h
+    if not looks.current().chapter_bar:  # 轻包装:留一张全透明的条,滤镜图不用改
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest)
+        return dest
     d.rectangle((0, top, w, h), fill=looks.current().bar_bg)
     if not chapters:
         img.save(dest)

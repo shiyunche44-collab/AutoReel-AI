@@ -86,11 +86,12 @@ def test_every_look_renders(tmp_path, look_id, size):
 
 def test_looks_render_differently(tmp_path):
     seen = set()
-    for lk in looks.LOOKS:
+    auto = [k for k, lk in looks.LOOKS.items() if lk.auto_pick]  # lite 面板沿用 hud 配色,区别在章节条
+    for lk in auto:
         with looks.use(lk):
             p = overlays.panel(PANEL, "小米YU7", LAND, tmp_path / f"{lk}.png")
         seen.add(Image.open(p).tobytes())
-    assert len(seen) == len(looks.LOOKS)
+    assert len(seen) == len(auto)
 
 
 def test_cover_with_each_look(tmp_path):
@@ -132,7 +133,7 @@ def test_create_project_rotates_look(fresh_db):
     for _ in range(4):
         pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240))
         seen.append(looks.of_project(pid).id)
-    assert sorted(seen) == sorted(looks.LOOKS)
+    assert sorted(seen) == sorted(k for k, lk in looks.LOOKS.items() if lk.auto_pick)
 
     pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240, look="cinema"))
     assert looks.of_project(pid).id == "cinema"
@@ -169,3 +170,14 @@ def test_old_project_without_variant_is_hud(fresh_db):
     pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240))
     fresh_db.update_project(pid, variant="")
     assert looks.of_project(pid).id == "hud"
+
+
+def test_lite_look_has_no_chapter_bar(tmp_path):
+    chapters = [("外观", 10.0), ("座椅", 12.0)]
+    with looks.use("hud"):
+        bar = Image.open(overlays.chapter_bar(chapters, 0, LAND, tmp_path / "hud.png"))
+    with looks.use("lite"):
+        lite = Image.open(overlays.chapter_bar(chapters, 0, LAND, tmp_path / "lite.png"))
+    assert bar.getbbox() is not None and lite.getchannel("A").getbbox() is None
+    assert looks.pick("p_x", chosen="lite") == "lite"
+    assert all(looks.pick(f"p_{i}") != "lite" for i in range(30))
