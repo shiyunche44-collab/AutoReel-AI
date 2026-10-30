@@ -332,7 +332,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     layer: Path | None = None
     layer_input: list[str] = []
     flt = spec.layout
-    if spec.layout == "panel" and spec.overlay:
+    no_panel = spec.layout == "panel" and not looks.current().panel
+    if spec.layout == "panel" and spec.overlay and not no_panel:
         layer = overlays.panel(spec.overlay, subject, size, work / "layer.png")
     elif spec.layout == "highlight" and spec.overlay:
         layer = overlays.highlight(spec.overlay.get("lines") or [], size, work / "layer.png")
@@ -344,7 +345,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     elif spec.layout == "stat" and spec.overlay:
         layer = _stat_listing(spec.overlay, subject, size, work, seconds)
         layer_input = ["-f", "concat", "-safe", "0", "-i", str(layer)]
-    elif broll_style(spec) == "lower_third" and not sting:
+    elif broll_style(spec) == "lower_third" and not sting and not no_panel:
         name = chapters[chapter_idx][0] if 0 <= chapter_idx < len(chapters) else ""
         if name == subject:  # 横评:章名就是车名,角标改写「车名 · 段落」
             name = spec.section

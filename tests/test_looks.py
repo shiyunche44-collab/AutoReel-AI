@@ -179,5 +179,6 @@ def test_lite_look_has_no_chapter_bar(tmp_path):
     with looks.use("lite"):
         lite = Image.open(overlays.chapter_bar(chapters, 0, LAND, tmp_path / "lite.png"))
     assert bar.getbbox() is not None and lite.getchannel("A").getbbox() is None
+    assert looks.LOOKS["lite"].panel is False and looks.LOOKS["hud"].panel is True
     assert looks.pick("p_x", chosen="lite") == "lite"
     assert all(looks.pick(f"p_{i}") != "lite" for i in range(30))
