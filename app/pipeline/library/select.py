@@ -113,8 +113,8 @@ def _dark_strip(path: str) -> bool:
 _TEXT_SLIDE = re.compile(r"含大字|大字|销量|数据|数字|参数|榜|图表|价格|PPT")
 
 
-#: 回放段里一半以上的帧是黑的(换场黑屏、只剩一个台标):整段不要
-SPAN_DARK_RATIO = 0.4
+#: 回放段里三成以上的帧是黑的(换场黑屏、只剩一个台标):整段不要
+SPAN_DARK_RATIO = 0.3
 
 
 @functools.lru_cache(maxsize=4096)
