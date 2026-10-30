@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 from ...categories import Vocab
@@ -269,6 +269,29 @@ def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
     return 0 if (shown & want_detail) else 1
 
 
+def _chunk_videos(pool: list[Item], group: dict[str, str], members: dict[str, list[str]],
+                  by_id: dict[str, Item], piece: float) -> list[Item]:
+    """长视频段按一刀的长度切成虚拟块(id 加 `~k`),每块单独计"用过"。
+
+    不切的话一段 40 秒的回放只取 4.5 秒就整段作废,视频优先的池子实际能用的秒数少一大截。
+    块各自成簇:同一段的几块共用一帧,按近重复算会一块用过全算用过。"""
+    out: list[Item] = []
+    for i in pool:
+        if i.kind != "video" or i.length < 2 * piece:
+            out.append(i)
+            continue
+        n = max(2, int(i.length // piece))
+        step = i.length / n
+        for k in range(n):
+            c = replace(i, id=f"{i.id}~{k}", start=round(i.start + step * k, 3),
+                        end=round(i.start + step * (k + 1), 3))
+            group[c.id] = c.id
+            members[c.id] = [c.id]
+            by_id[c.id] = c
+            out.append(c)
+    return out
+
+
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
          recent: list[str] | None = None, detail: str = "", role: str = "body") -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
@@ -331,6 +354,10 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
 
     # 第三方兜底:没用过的一方素材够铺这一拍,第三方就不进候选
     video_first = looks.current().video_first and not strict
+    # 一刀最长几秒跟着项目的剪辑节奏旋钮走;没设 = FILL_MAX_PIECE
+    max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]
+    if video_first:
+        pool = _chunk_videos(pool, group, members, by_id, max_piece)
     fallback = video_first or         _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
     if not fallback:
         pool = [i for i in pool if not _third_party(i)]
@@ -365,8 +392,6 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     out: list[Piece] = []
     covered = 0.0
     left = list(pool)
-    # 一刀最长几秒跟着项目的剪辑节奏旋钮走;没设 = FILL_MAX_PIECE
-    max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]
     while left and covered < seconds - 0.05:
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}

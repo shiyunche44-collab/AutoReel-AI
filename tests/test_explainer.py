@@ -422,6 +422,26 @@ def test_fill_video_first_look_prefers_video_over_stills(pool):
         assert not any(p.third_party for p in edge)
 
 
+def test_fill_video_first_splits_long_video_so_remainder_is_reusable(pool):
+    from app.pipeline import looks
+
+    lib = library.Library.load("测试车")
+    lib.items.append(library.Item(id="long1", kind="video", path=lib.items[0].path, tagged=True,
+                                  view="exterior_45", target="yes", official=True,
+                                  start=100, end=140))
+    lib.save()
+    with looks.use("lite"):
+        used: dict[str, int] = {}
+        first = library.fill("测试车", 30.0, used=used)
+        ids = [p.item_id for p in first if p.item_id.startswith("long1")]
+        # 40 秒一段按一刀长度切块,同一次铺背景能连着取好几块,且都在原段的时间范围里
+        assert len(set(ids)) > 1 and all("~" in i for i in ids)
+        assert all(100 <= p.start and p.start + p.length <= 140.01
+                   for p in first if p.item_id.startswith("long1"))
+    # 默认 look 不切块
+    assert not any("~" in p.item_id for p in library.fill("测试车", 30.0, used={}))
+
+
 def test_fit_filter_edge_crop_runs_before_fit():
     out = explainer._fit_filter(1920, 1080, 0.0, 0.14)
     assert out.startswith("[0:v]crop=trunc(iw*0.860/2)*2:trunc(ih*0.860/2)*2,split")
