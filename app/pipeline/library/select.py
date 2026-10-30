@@ -68,6 +68,10 @@ FILL_MAX_PIECE = 4.5
 
 #: 从源片第 0 秒开始的段,跳过开头这么多秒(黑场淡入)
 SOURCE_FADE_IN = 0.8
+#: 发布会回放每个镜头开头常是黑场 / 白场淡入,取用时跳过这么多秒
+LAUNCH_FADE_IN = 0.5
+#: 回放里前景有观众头 / 手机的段,取用时裁掉底部这么多(放大后头就出画了)
+AUDIENCE_CROP = 0.2
 #: 帧平均亮度低于它就当黑场(宣传片开头结尾的黑底片名卡,打标签时常被放过)
 DARK_LUMA = 28
 
@@ -81,6 +85,43 @@ def _luma(path: str) -> float:
             return float(ImageStat.Stat(im.convert("L").resize((64, 36))).mean[0])
     except (OSError, ValueError):
         return 255.0  # 读不了就不拦
+
+
+#: 观众头 / 手机的剪影:画面底部一条比上面暗得多(舞台灯打亮,观众背光成黑块)
+AUDIENCE_STRIP = 0.2
+AUDIENCE_DARK_RATIO = 0.35
+
+
+@functools.lru_cache(maxsize=4096)
+def _dark_strip(path: str) -> bool:
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(path) as im:
+            g = im.convert("L").resize((64, 36))
+        cut = int(36 * (1 - AUDIENCE_STRIP))
+        top = ImageStat.Stat(g.crop((0, 0, 64, cut))).mean[0]
+        bottom = ImageStat.Stat(g.crop((0, cut, 64, 36))).mean[0]
+        return top >= 90 and bottom < min(60.0, top * AUDIENCE_DARK_RATIO)
+    except (OSError, ValueError):
+        return False
+
+
+def _audience(item: Item) -> bool:
+    """回放里前景挡着观众头 / 手机:打标签时写明了,或底部一条背光剪影明显比上面暗。"""
+    if not item.launch:
+        return False
+    if "前景观众" in (item.desc or ""):
+        return True
+    return bool(item.frame) and Path(item.frame).is_file() and _dark_strip(item.frame)
+
+
+def _head_skip(item: Item) -> float:
+    """段开头要跳过的秒数:源片开头的黑场淡入;回放每个镜头的头(虚拟块只有第一块带淡入)。"""
+    if item.launch:
+        first = "~" not in item.id or item.id.endswith("~0")
+        return LAUNCH_FADE_IN if first and item.length - LAUNCH_FADE_IN >= FILL_MIN_PIECE else 0.0
+    return SOURCE_FADE_IN if item.start < 0.5 else 0.0
 
 
 def is_dark(item: Item) -> bool:
@@ -388,7 +429,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             # 视频同档。否则永远选不到它:静图本来比视频低一档。
             tier = 0
         # 码率不够的视频同档里往后排(不降档:AV1 官方片普遍码率低,降档就全让给静图了)
-        return (stage(i, n), tier, i.target != "yes", i.low_bitrate, _branded_still(i),
+        return (stage(i, n), tier, i.view == "people", _audience(i), i.target != "yes", i.low_bitrate, _branded_still(i),
                 group[i.id] in recent_groups,
                 bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
                 _dirt(i), fit, _detail_conflict(i, want_detail, vocab),
@@ -409,7 +450,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             start = 0.0
         else:
             # 源片开头的那一段几乎都是黑场淡入(打标签抽的是段中间的帧,看不出来)
-            skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
+            skip = _head_skip(i)
             length = i.length - skip
             take = min(length, remaining, max_piece)
             # 别留一截过短的尾巴:够长就把它吃进这一段
@@ -419,7 +460,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         if take < min(FILL_MIN_PIECE, remaining):
             continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=clean_still(i), start=start, length=round(take, 3),
-                         crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0,
+                         crop_bottom=SUBTITLE_CROP if _croppable(i) else AUDIENCE_CROP if _audience(i) else 0.0,
                          crop_edge=_crop_edge(i), third_party=_third_party(i), **_trace(book, i)))
         used[i.id] = used.get(i.id, 0) + 1
         recent.append(i.id)
@@ -493,7 +534,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
         pool = [i for i in pool if not _third_party(i) or _third_party_ok(i)]
 
     def usable_len(i: Item) -> float:
-        return i.length - (SOURCE_FADE_IN if i.start < 0.5 else 0.0)
+        return i.length - _head_skip(i)
 
     pool = [i for i in pool if usable_len(i) >= need]
     if not pool:
@@ -504,7 +545,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
                                  used.get(group[x.id], 0) + used.get(x.id, 0),
                                  group[x.id] in recent_groups, x.view not in LONG_TAKE_VIEWS,
                                  _dirt(x), not x.official, -x.length))
-    skip = SOURCE_FADE_IN if i.start < 0.5 else 0.0
+    skip = _head_skip(i)
     length = usable_len(i)
     take = min(length, seconds)
     start = i.start + skip + (length - take) / 2

@@ -536,3 +536,55 @@ def test_launch_source_gets_lenient_early_stop():
     tagging.reject_sources(lib)
     skipped = {i.id: i.skipped for i in lib.items if i.id.endswith("_t")}
     assert skipped == {"L_t": "", "N_t": "source_rejected"}     # 同样 10 个废样本:普通源拒,发布会不拒
+
+
+def test_launch_replay_allows_people_view_and_presenter_description():
+    people = _seg(1, 0, 3, view="people")
+    people.desc = "台上主讲人介绍新车"
+    assert not people.usable
+    people.launch = True
+    assert people.usable and not lib_mod._has_host(people)
+    assert not lib_mod._hard_bad(people)
+    other = _seg(2, 0, 3, view="other")
+    other.launch = True
+    assert not other.usable
+
+
+def test_select_launch_head_skip_and_audience_crop():
+    from app.pipeline.library import select
+
+    head = _seg(1, 10, 14)
+    head.launch = True
+    assert select._head_skip(head) == select.LAUNCH_FADE_IN
+    # 虚拟块只有第一块带淡入
+    head.id = "b~0"
+    assert select._head_skip(head) == select.LAUNCH_FADE_IN
+    head.id = "b~1"
+    assert select._head_skip(head) == 0.0
+    short = _seg(2, 10, 11)
+    short.launch = True
+    assert select._head_skip(short) == 0.0
+    # 非回放仍按源片开头淡入
+    plain = _seg(3, 0, 4)
+    assert select._head_skip(plain) == select.SOURCE_FADE_IN
+    aud = _seg(4, 10, 14)
+    aud.launch, aud.desc = True, "红色新车,前景观众举手机"
+    assert select._audience(aud) and not select._audience(_seg(5, 0, 3))
+
+
+def test_select_audience_detects_dark_silhouette_strip(tmp_path):
+    from PIL import Image
+
+    from app.pipeline.library import select
+
+    lit = Image.new("RGB", (320, 180), (230, 230, 230))
+    lit.save(tmp_path / "lit.jpg")
+    crowd = lit.copy()
+    crowd.paste((10, 10, 10), (0, 140, 320, 180))
+    crowd.save(tmp_path / "crowd.jpg")
+    a, b = _seg(1, 0, 4), _seg(2, 0, 4)
+    a.launch = b.launch = True
+    a.frame, b.frame = str(tmp_path / "lit.jpg"), str(tmp_path / "crowd.jpg")
+    assert not select._audience(a) and select._audience(b)
+    b.launch = False
+    assert not select._audience(b)

@@ -308,14 +308,46 @@ _HLS_RE = re.compile(r"https?://[^\"'\s<>\\]+?\.m3u8[^\"'\s<>\\]*", re.IGNORECAS
 _TITLE_RE = re.compile(r"<title[^>]*>([^<]*)</title>", re.IGNORECASE)
 
 
+_LIST_ITEM_RE = re.compile(
+    r'\{"title":"([^"]*)","description":"([^"]*)"[^{}]*?"link":"([^"]+)"\}')
+#: 列表页里最多取几场匹配这台车的回放(列表按时间倒排,取最新的)
+LAUNCH_LIST_MAX = 2
+
+
+def launch_list_entries(subject: str, spec: dict[str, tuple[str, ...]]) -> list[str]:
+    """YAML `launch_list` 里的直播列表页 → 标题带这台车型号、又是发布会的回放页地址。
+
+    列表页把每场直播的标题和链接以 JSON 写在 HTML 里(比亚迪官网 /cn/live-list),
+    新车上市后回放自动出现在列表里,不用再手工登记「车型=地址」。"""
+    keyword = re.sub(r"[\s-]+", "", model_keyword(subject, spec.get("aliases", ())).lower())
+    if not keyword:
+        return []
+    out: list[str] = []
+    for list_url in spec.get("launch_list", ()):
+        body = html.unescape(clips.fetch_page(list_url))
+        for title, _, link in _LIST_ITEM_RE.findall(body):
+            norm = re.sub(r"[\s-]+", "", title.lower())
+            if "发布会" in norm and keyword in norm:
+                page = urllib.parse.urljoin(list_url, link)
+                if page not in out:
+                    out.append(page)
+    return out[:LAUNCH_LIST_MAX]
+
+
 def launch_pages(subject: str, spec: dict[str, tuple[str, ...]], *,
                  errors: list[str] | None = None) -> list[platform_video.PlatformHit]:
-    """官网的发布会回放页(YAML `launch`:「车型=页面地址」)→ 页面里的 m3u8 直链。
+    """官网的发布会回放页(YAML `launch`:「车型=页面地址」,或 `launch_list` 直播列表页自动找)
+    → 页面里的 m3u8 直链。
 
-    官网回放无水印、无需登录,1080p 整场(比亚迪海鸥 58 分钟),比 B 站访客只给 480p 强得多。
-    页面地址要人工登记:回放页挂在直播列表下,没有按车型检索的入口。"""
+    官网回放无水印、无需登录,1080p 整场(比亚迪海鸥 58 分钟),比 B 站访客只给 480p 强得多。"""
     out: list[platform_video.PlatformHit] = []
-    for page in press_entries(subject, spec, "launch"):
+    pages = list(press_entries(subject, spec, "launch"))
+    try:
+        pages += [p for p in launch_list_entries(subject, spec) if p not in pages]
+    except Exception as exc:  # noqa: BLE001 - 列表页打不开只是少自动发现
+        if errors is not None:
+            errors.append(f"官网直播列表解析失败:{str(exc)[:100]}")
+    for page in pages:
         try:
             body = html.unescape(clips.fetch_page(page))
             m = _HLS_RE.search(body)

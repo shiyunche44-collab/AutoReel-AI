@@ -1021,7 +1021,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
         official_sites={
             str(brand): {
                 key: tuple(str(x) for x in (spec or {}).get(key) or ())
-                for key in ("aliases", "sites", "media", "tiktok", "company", "press", "launch")
+                for key in ("aliases", "sites", "media", "tiktok", "company", "press", "launch", "launch_list")
             }
             for brand, spec in (raw.get("official_sites") or {}).items()
         },

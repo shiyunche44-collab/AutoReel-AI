@@ -542,3 +542,8 @@ def test_beat_role_follows_chapter_position():
     assert [explainer.beat_role(where, n, 3) for n in range(5)] == \
         ["hook", "hook", "body", "body", "ending"]
     assert explainer.beat_role([0, 0], 1, 1) == "hook"     # 只有一章:宁严勿松
+
+
+def test_layout_filter_highlight_without_pip_is_fullscreen():
+    f = explainer.layout_filter("highlight", (1920, 1080), True, pip=False)
+    assert "pad=" not in f and "scale=" not in f and "[2:v]" in f and f.endswith("[out]")

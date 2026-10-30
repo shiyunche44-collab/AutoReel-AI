@@ -74,7 +74,7 @@ class Look:
     #: 正文背景视频优先:能裁掉台标的第三方视频也和一方视频同档、排在静图前面(不再只当静图用尽后的兜底)。
     #: hook / ending 不受影响(那两段始终只用一方素材)
     video_first: bool = False
-    #: 参数面板(panel 拍左侧的 SPEC 卡);关掉后 panel 拍只留背景画面,数字交给旁白和字幕
+    #: 参数面板(panel 拍左侧的 SPEC 卡)和横屏 highlight 的小窗;关掉后 panel 拍只留背景画面、highlight 全屏压字,数字交给旁白和字幕
     panel: bool = True
     #: 建项目时自动挑 look 会不会选到它;False = 只在手动指定时用(不改变老的随机分布)
     auto_pick: bool = True

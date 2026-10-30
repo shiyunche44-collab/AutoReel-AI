@@ -454,3 +454,17 @@ def test_launch_pages_reports_page_without_stream(monkeypatch):
     spec = {"aliases": ("比亚迪",), "launch": ("海鸥=https://www.byd.com/cn/livedetail160",)}
     assert official.launch_pages("比亚迪海鸥", spec, errors=errors) == []
     assert errors and "m3u8" in errors[0]
+
+
+def test_launch_list_entries_matches_model_in_title(monkeypatch):
+    body = (
+        '{&quot;title&quot;:&quot;第二代海鸥上市发布会&quot;,&quot;description&quot;:&quot;2026.10.20&quot;,'
+        '&quot;image&quot;:&quot;/a.jpg&quot;,&quot;link&quot;:&quot;/cn/livedetail160&quot;}'
+        '{&quot;title&quot;:&quot;海鸥车主见面会&quot;,&quot;description&quot;:&quot;x&quot;,'
+        '&quot;link&quot;:&quot;/cn/livedetail161&quot;}'
+        '{&quot;title&quot;:&quot;海狮08上市发布会&quot;,&quot;description&quot;:&quot;x&quot;,'
+        '&quot;link&quot;:&quot;/cn/livedetail158&quot;}')
+    monkeypatch.setattr(official.clips, "fetch_page", lambda url, **kw: body)
+    spec = {"aliases": ("比亚迪",), "launch_list": ("https://www.byd.com/cn/live-list",)}
+    assert official.launch_list_entries("比亚迪海鸥", spec) == ["https://www.byd.com/cn/livedetail160"]
+    assert official.launch_list_entries("比亚迪海豹", spec) == []

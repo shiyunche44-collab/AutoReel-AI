@@ -625,6 +625,8 @@ official_sites:
     # 官网发布会回放页(「车型=页面地址」):页面里带 1080p 的 m3u8,无水印无需登录。2026-10-30 核对
     launch:
       - "海鸥=https://www.byd.com/cn/livedetail160"
+    # 官网直播列表页:标题含车型名的「发布会」回放自动发现(新车上市不用再手工登记)
+    launch_list: ["https://www.byd.com/cn/live-list"]
   tesla:
     aliases: [特斯拉, Tesla, Model 3, Model Y, Model S, Model X, Cybertruck]
     sites: [tesla.cn, tesla.com]

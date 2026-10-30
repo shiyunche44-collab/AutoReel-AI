@@ -29,16 +29,23 @@ def chapters_of(specs: Sequence[ShotSpec]) -> tuple[list[tuple[str, float]], lis
     return chapters, where
 
 
-def layout_filter(layout: str, size: tuple[int, int], has_layer: bool) -> str:
+def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool = True) -> str:
     """把背景 [0]、章节条 [1]、叠加层 [2] 合成 [out] 的滤镜图。
 
-    `layout` 除了版式名,还可以是 broll 的样式 `lower_third`(角标从左擦入)。"""
+    `layout` 除了版式名,还可以是 broll 的样式 `lower_third`(角标从左擦入)。
+    `pip` = False(轻包装):横屏 highlight 不缩小窗,画面全屏,关键词直接压在上面。"""
     w, h = size
     if layout == "highlight" and has_layer and aspect.is_portrait_size(size):
         # 竖屏:实拍本来就在画面带里,不用再缩小窗;关键词占标题区,淡入
         return (
             f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
             f"[0:v][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
+        )
+    if layout == "highlight" and has_layer and not pip:
+        return (
+            f"[0:v]eq=brightness=-0.1[bgd];"
+            f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
+            f"[bgd][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "highlight" and has_layer:
         pip_w = int(w * 0.62) // 2 * 2
@@ -357,7 +364,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     dest = out_dir / f"{spec.idx:03d}.mp4"
     inputs = ["-i", str(base), "-loop", "1", "-framerate", str(render_mod.FPS), "-i", str(bar)]
     inputs += layer_input
-    graph = layout_filter(flt, size, bool(layer))
+    graph = layout_filter(flt, size, bool(layer), pip=looks.current().panel)
     if sting:
         frames = overlays.chapter_sting_frames(sting[0], sting[1], size, work / "sting")
         inputs += ["-f", "concat", "-safe", "0", "-i",

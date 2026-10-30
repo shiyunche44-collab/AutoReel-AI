@@ -222,8 +222,10 @@ class Item:
     @property
     def usable(self) -> bool:
         blocking = BLOCKING - {"poster"} if self.launch else BLOCKING
+        # 回放里的人(台上的主讲、全场)也是发布会画面;选料时排在车的画面后面
+        banned = ("text", "other", "") if self.launch else ("people", "text", "other", "")
         return self.tagged and self.target != "no" and self.problem not in blocking \
-            and self.view not in ("people", "text", "other", "") and not self.low_res \
+            and self.view not in banned and not self.low_res \
             and not self.skipped
 
 
@@ -415,8 +417,8 @@ def platform_of(url: str) -> str:
 
 
 def _has_host(item: Item) -> bool:
-    """描述里点名有人在讲解 / 介绍(评测博主口播)。"""
-    return bool(re.search(r"主持|讲解|介绍|解说|博主|主播|口播|出镜|对着镜头|评测员|自述|演示", item.desc or ""))
+    """描述里点名有人在讲解 / 介绍(评测博主口播)。发布会回放里的主讲人不算。"""
+    return not item.launch and bool(re.search(r"主持|讲解|介绍|解说|博主|主播|口播|出镜|对着镜头|评测员|自述|演示", item.desc or ""))
 
 
 def is_waste(item: Item) -> bool:
