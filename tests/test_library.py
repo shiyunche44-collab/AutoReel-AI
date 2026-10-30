@@ -564,6 +564,29 @@ def test_select_launch_text_slide_excluded_from_pool():
     assert not select._text_slide(slide)
 
 
+def test_launch_replay_blocks_burned_subtitle_inserts():
+    seg = _seg(4, 0, 3, view="detail")
+    seg.launch = True
+    assert seg.usable
+    seg.problem = "subtitle"
+    assert not seg.usable
+    seg.launch = False
+    assert seg.usable
+
+
+def test_select_span_dark_detects_black_chunk(monkeypatch):
+    from app.pipeline import media_check
+    from app.pipeline.library import select
+
+    select._span_dark.cache_clear()
+    monkeypatch.setattr(media_check, "frame_stats", lambda *a: [(3.0, 50.0)] * 3 + [(120.0, 800.0)] * 2)
+    assert select._span_dark("x.mp4", 0.0, 2.0)
+    select._span_dark.cache_clear()
+    monkeypatch.setattr(media_check, "frame_stats", lambda *a: [(3.0, 50.0)] + [(120.0, 800.0)] * 4)
+    assert not select._span_dark("x.mp4", 0.0, 2.0)
+    select._span_dark.cache_clear()
+
+
 def test_select_launch_head_skip_and_audience_crop():
     from app.pipeline.library import select
 

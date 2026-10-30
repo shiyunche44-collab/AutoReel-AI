@@ -221,7 +221,8 @@ class Item:
 
     @property
     def usable(self) -> bool:
-        blocking = BLOCKING - {"poster"} if self.launch else BLOCKING
+        # 回放大屏本身没有烧录字幕;带字幕的是插播的第三方视频(博主讲解、他人 VTR),不用
+        blocking = (BLOCKING - {"poster"}) | {"subtitle"} if self.launch else BLOCKING
         # 回放里的人(台上的主讲、全场)也是发布会画面;选料时排在车的画面后面
         banned = ("text", "other", "") if self.launch else ("people", "text", "other", "")
         return self.tagged and self.target != "no" and self.problem not in blocking \

@@ -113,6 +113,23 @@ def _dark_strip(path: str) -> bool:
 _TEXT_SLIDE = re.compile(r"含大字|大字|销量|数据|数字|参数|榜|图表|价格|PPT")
 
 
+#: 回放段里一半以上的帧是黑的(换场黑屏、只剩一个台标):整段不要
+SPAN_DARK_RATIO = 0.4
+
+
+@functools.lru_cache(maxsize=4096)
+def _span_dark(path: str, start: float, length: float) -> bool:
+    stats = media_check.frame_stats(path, start, start + length)
+    if not stats:
+        return False
+    dark = sum(1 for luma, sharp in stats if media_check.is_dark_frame(luma, sharp, launch=True))
+    return dark / len(stats) >= SPAN_DARK_RATIO
+
+
+def _blackout(item: Item) -> bool:
+    return item.launch and item.kind == "video" and _span_dark(item.path, item.start, item.length)
+
+
 def _text_slide(item: Item) -> bool:
     return item.launch and bool(_TEXT_SLIDE.search(item.desc or ""))
 
@@ -382,7 +399,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view and not i.small_still))
-        and not is_dark(i) and not _text_slide(i)]
+        and not is_dark(i) and not _text_slide(i) and not _blackout(i)]
     pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
@@ -469,6 +486,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             start = i.start + skip
         if take < min(FILL_MIN_PIECE, remaining):
             continue
+        if i.launch and i.kind == "video" and _span_dark(i.path, start, take):
+            continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=clean_still(i), start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else AUDIENCE_CROP if _audience(i) else 0.0,
                          crop_edge=_crop_edge(i), third_party=_third_party(i), **_trace(book, i)))
@@ -534,7 +553,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     want = vocab.hint_views(hint)
     need = seconds / LONG_TAKE_MAX_SLOWDOWN
     pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
-            and not is_dark(i) and not _text_slide(i) and (not want or i.view in want)]
+            and not is_dark(i) and not _text_slide(i) and not _blackout(i) and (not want or i.view in want)]
     pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
