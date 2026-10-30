@@ -80,6 +80,9 @@ LAUNCH_EARLY_STOP_SAMPLE = 20
 LAUNCH_EARLY_STOP_RATIO = 0.9
 #: 最多收几条发布会回放(单独计数,不占官方号 / 第三方的名额)
 MAX_LAUNCH_SOURCES = 2
+#: 回放是整场(一小时上下),只抽 8 个窗只看到 9%:多抽些窗,打标签的上限也跟着放宽
+LAUNCH_WINDOWS = 20
+LAUNCH_MAX_TAGGED = 120
 #: 解说轨的"够用":**确认是这台车**的干净视频秒数(`confirmed_seconds`)达到它,就不再给
 #: 视频段打标签。只算确认过的:没认出车型的第三方段凑够了秒数,背景照样会配错车
 ENOUGH_USABLE_SECONDS = 240.0

@@ -59,6 +59,13 @@ def test_download_windows():
     assert long[-1][0] + long[-1][1] <= 3600 * 0.92 + 0.01
 
 
+def test_download_windows_launch_takes_more_windows_without_overlap():
+    wins = lib_mod.download_windows(3483, lib_mod.LAUNCH_WINDOWS)
+    assert len(wins) == lib_mod.LAUNCH_WINDOWS > lib_mod.WINDOWS_PER_LONG_SOURCE
+    assert all(a[0] + a[1] <= b[0] for a, b in zip(wins, wins[1:]))   # 窗之间不重叠
+    assert wins[-1][0] + wins[-1][1] <= 3483 * 0.92 + 0.01
+
+
 def test_split_segments_trims_edges_and_drops_slivers():
     segs = lib_mod.split_segments([2.0, 2.3, 5.0, 99.0], 8.0)
     assert segs == [(0.1, 1.9), (2.4, 4.9), (5.1, 7.9)]

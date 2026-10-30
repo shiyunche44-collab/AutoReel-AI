@@ -67,6 +67,8 @@ from .model import (  # noqa: E402,F401
     FOOTAGE_HINT_SECONDS,
     HOST_SOURCE_RATIO,
     Item,
+    LAUNCH_MAX_TAGGED,
+    LAUNCH_WINDOWS,
     LIB_ROOT_NAME,
     Library,
     MAX_AUTO_SOURCES,

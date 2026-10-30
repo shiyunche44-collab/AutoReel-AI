@@ -8,7 +8,7 @@ from typing import Any
 from ... import config
 from ...providers import official
 
-from .model import CONFIRMED_VIDEO_TARGET, EARLY_STOP_SAMPLE, ENOUGH_USABLE_SECONDS, Item, Library, MAX_AUTO_SOURCES, MAX_TAGGED_PER_SOURCE, REDISCOVER_MIN_GAP, REDISCOVER_SECONDS, REDISCOVER_THIN_SECONDS, confirmed_seconds, profile_of, slug
+from .model import CONFIRMED_VIDEO_TARGET, EARLY_STOP_SAMPLE, ENOUGH_USABLE_SECONDS, Item, LAUNCH_MAX_TAGGED, Library, MAX_AUTO_SOURCES, MAX_TAGGED_PER_SOURCE, REDISCOVER_MIN_GAP, REDISCOVER_SECONDS, REDISCOVER_THIN_SECONDS, confirmed_seconds, profile_of, slug
 from .sources import discover
 from .ingest import check_logos, ingest_gallery, ingest_source
 from .tagging import _same_frame, mark_official_duplicates, tag_items
@@ -214,7 +214,7 @@ def _tag_queue(lib: Library) -> list[Item]:
     # 官方源先打:够用(按确认过的秒数算)就停,第三方的段可能根本不用看
     for segs in sorted(by_src.values(), key=lambda segs: not segs[0].official):
         tagged = sum(1 for i in segs if i.tagged)
-        room = MAX_TAGGED_PER_SOURCE - tagged
+        room = (LAUNCH_MAX_TAGGED if segs[0].launch else MAX_TAGGED_PER_SOURCE) - tagged
         if room <= 0:
             continue
         kept = [i for i in segs if i.tagged]

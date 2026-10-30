@@ -10,21 +10,22 @@ from ...providers import clips as clips_mod
 from ...providers import images, official, platform_video
 from .. import logo_detect, media_check
 
-from .model import Item, Library, MIN_TAG_SECONDS, SCENE_THRESHOLD, Source, WHOLE_MAX_SECONDS, WINDOWS_PER_LONG_SOURCE, WINDOW_SECONDS, platform_of, profile_of, short_id
+from .model import Item, LAUNCH_WINDOWS, Library, MIN_TAG_SECONDS, SCENE_THRESHOLD, Source, WHOLE_MAX_SECONDS, WINDOWS_PER_LONG_SOURCE, WINDOW_SECONDS, platform_of, profile_of, short_id
 
 
 # --------------------------------------------------------------------------
 # 攒 + 切:下载与场景检测
 # --------------------------------------------------------------------------
-def download_windows(duration: float) -> list[tuple[float, float]]:
-    """要下载的 (起点, 时长)。短源整条下;长源在 8%–92% 区间均匀取几个窗
+def download_windows(duration: float, windows: int = WINDOWS_PER_LONG_SOURCE
+                     ) -> list[tuple[float, float]]:
+    """要下载的 (起点, 时长)。短源整条下;长源在 8%–92% 区间均匀取 `windows` 个窗
     (片头片尾多是 logo、口播、求三连)。"""
     if 0 < duration <= WHOLE_MAX_SECONDS:
         return [(0.0, duration)]
     if duration <= 0:
         return [(0.0, WHOLE_MAX_SECONDS)]
     lo, hi = duration * 0.08, duration * 0.92 - WINDOW_SECONDS
-    n = WINDOWS_PER_LONG_SOURCE
+    n = windows
     step = (hi - lo) / (n - 1) if n > 1 and hi > lo else 0.0
     return [(round(lo + step * k, 2), WINDOW_SECONDS) for k in range(n if step else 1)]
 
@@ -76,7 +77,8 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
             src.title = src.title or str(info.get("title") or "")
             src.uploader = src.uploader or str(info.get("uploader") or info.get("channel") or "")
         added = 0
-        for k, (start, length) in enumerate(download_windows(src.duration)):
+        windows = LAUNCH_WINDOWS if src.kind == "launch" else WINDOWS_PER_LONG_SOURCE
+        for k, (start, length) in enumerate(download_windows(src.duration, windows)):
             try:
                 raw = platform_video.download_segment(
                     src.url, raw_dir / f"{src.id}_{k}.mp4", start=start, seconds=length,
