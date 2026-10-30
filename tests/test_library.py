@@ -303,6 +303,26 @@ def test_tag_items_stops_videos_when_enough(monkeypatch):
     assert lib.stats()["vlm_calls"] == 2
 
 
+def test_tag_items_enough_does_not_stop_launch_replay_segments(monkeypatch):
+    calls: list[int] = []
+
+    def _judge(urls, *a, **k):
+        calls.append(len(urls))
+        return [{"target": "yes", "view": "exterior_45", "problem": ""} for _ in urls], [], {}
+
+    monkeypatch.setattr(lib_mod.vision_verdict, "judge", _judge)
+    monkeypatch.setattr(lib_mod.images.cli, "upload_temp_url", lambda p: "u")
+    patch_library(monkeypatch, "TAG_BATCH", 2)
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(Library, "save", lambda self: None)
+    items = [_seg(n, n * 10, n * 10 + 10, tagged=False) for n in range(4)]
+    for i in items[2:]:
+        i.launch = True
+    lib = Library(subject="x", items=items)
+    lib_mod.tag_items(lib, list(items), None, [], enough_seconds=15)
+    assert [i.tagged for i in items] == [True, True, True, True]   # 够用后回放段仍继续打
+
+
 # --------------------------------------------------------------------------
 # 品类:静图来源按 profile 分派、手动加图、视角表跟着池子的品类走
 # --------------------------------------------------------------------------

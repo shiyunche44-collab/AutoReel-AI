@@ -137,12 +137,24 @@ def image_stats(path: str | Path) -> tuple[float, float] | None:
         return None
 
 
-def frame_verdict(stats: list[tuple[float, float]]) -> str:
+#: 发布会回放里深色主题的 PPT / 舞台屏:平均亮度低,但文字和图形多、边缘方差极高
+#: (实测 1900–2500,可用段 275 起);真黑场、淡场的方差很低
+LAUNCH_DARK_MIN_LUMA = 15
+LAUNCH_DARK_MIN_SHARP = 1000.0
+
+
+def is_dark_frame(luma: float, sharp: float, launch: bool = False) -> bool:
+    if luma >= DARK_LUMA:
+        return False
+    return not (launch and luma >= LAUNCH_DARK_MIN_LUMA and sharp >= LAUNCH_DARK_MIN_SHARP)
+
+
+def frame_verdict(stats: list[tuple[float, float]], launch: bool = False) -> str:
     """"" = 没问题;frame_dark = 取的帧全黑;frame_flat = 多数帧没有内容(纯色、淡场)。
-    没取到帧不判。"""
+    没取到帧不判。`launch`:发布会回放的深色 PPT 页不算黑。"""
     if not stats:
         return ""
-    if all(luma < DARK_LUMA for luma, _ in stats):
+    if all(is_dark_frame(luma, sharp, launch) for luma, sharp in stats):
         return "frame_dark"
     sharp = sorted(s for _, s in stats)
     if sharp[len(sharp) // 2] < FLAT_SHARPNESS:

@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
 from ...categories import Vocab
-from .. import knobs, looks
+from .. import knobs, looks, media_check
 
 from .licensing import BACKGROUND, LicenseBook
 from .model import FILL_MIN_PIECE, Item, Library, STILL_SECONDS, _confirmed, _hard_bad, _has_host, _host_sources, _third_party, _third_party_ok, vocab_of
@@ -86,7 +86,12 @@ def _luma(path: str) -> float:
 def is_dark(item: Item) -> bool:
     """背景用不了的黑场:大面积黑底 + 一行小字的片名卡。叠上面板后整屏发黑。"""
     probe = item.frame or (item.path if item.kind == "still" else "")
-    return bool(probe) and Path(probe).is_file() and _luma(probe) < DARK_LUMA
+    if not (probe and Path(probe).is_file()) or _luma(probe) >= DARK_LUMA:
+        return False
+    if item.launch:  # 回放里深色主题的 PPT 页:亮度低但内容多,不是黑场
+        stats = media_check.image_stats(probe)
+        return stats is None or media_check.is_dark_frame(stats[0], stats[1], launch=True)
+    return True
 
 
 #: 烧录字幕段当背景时裁掉画面底部的比例。字幕几乎都在下方五分之一,

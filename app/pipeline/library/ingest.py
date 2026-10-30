@@ -100,7 +100,7 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
                     frame = str(got) if got else ""
                     # 送视觉模型之前先本地看三帧:黑场、纯色淡场直接跳过,不花调用
                     stats = media_check.frame_stats(raw, a, b)
-                    skipped = media_check.frame_verdict(stats)
+                    skipped = media_check.frame_verdict(stats, launch=src.kind == "launch")
                     sharp = media_check.median_sharpness(stats)
                 lib.items.append(Item(
                     id=item_id, kind="video", path=str(raw), frame=frame, source=src.id,

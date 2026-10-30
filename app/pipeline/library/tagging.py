@@ -76,7 +76,8 @@ def tag_items(lib: Library, todo: Sequence[Item], llm: Any, errors: list[str], *
         if deadline and time.monotonic() > deadline:
             break
         if enough_seconds and confirmed_seconds(lib, video_only=True) >= enough_seconds:
-            queue = [i for i in queue if i.kind == "still"]
+            # 发布会回放是整场里挑出来的主力画面:官方来源够用了也要打完
+            queue = [i for i in queue if i.kind == "still" or i.launch]
         batch = [i for i in queue[:TAG_BATCH] if not i.tagged and not i.skipped
                  and i.frame and Path(i.frame).is_file()]
         queue = queue[TAG_BATCH:]

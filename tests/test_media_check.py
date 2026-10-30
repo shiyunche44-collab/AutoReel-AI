@@ -136,3 +136,11 @@ def test_frame_stats_tells_black_from_content(tmp_path):
     assert len(sb) == media_check.HEALTH_FRAMES
     assert media_check.frame_verdict(sb) == "frame_dark"
     assert media_check.frame_verdict(media_check.frame_stats(busy, 0.1, 1.9)) == ""
+
+
+def test_frame_verdict_launch_keeps_dark_slides_but_not_black():
+    v = media_check.frame_verdict
+    slide = [(22.0, 2200.0)] * 3     # 深色主题的 PPT 页:亮度低,文字边缘多
+    assert v(slide) == "frame_dark" and v(slide, launch=True) == ""
+    assert v([(6.0, 1250.0)] * 3, launch=True) == "frame_dark"    # 近乎全黑的字卡仍不要
+    assert v([(22.0, 460.0)] * 3, launch=True) == "frame_dark"    # 夜路、观众席:内容少
