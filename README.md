@@ -222,7 +222,7 @@ python tests/test_profile_vocab.py --regen
 - `_viz.js` 绘制 7 种场景图形，刻度取自 `vocab.concept_ranges`，没有真实比例就不画数量图。每行数据的出现时间对齐到旁白念出那个数字的时刻（`explainer.mark_reveal_times`）。
 - 渲染结果按模板、数据、时长和底图缓存在 `data/_cache/motion/`。GPU 挂起时自动切换到软件渲染，也可以设 `MOTION_BROWSER_GPU=off` 强制软件渲染。
 
-### 素材池（`pipeline/library.py`）
+### 素材池（`pipeline/library/`）
 
 **先攒、再切、再看、最后铺**，按车型存在 `data/library/<车型>/`，跨项目复用。
 
@@ -235,9 +235,17 @@ python tests/test_profile_vocab.py --regen
 python -m app.pipeline.library build 小米YU7 --brand 小米         # 构建 / 续建（--category baby_long 换品类）
 python -m app.pipeline.library add 小米YU7 <链接>...               # 加自动搜不到的素材（抖音只能走这里）
 python -m app.pipeline.library add-images <主体> <图片|详情页>... --category baby_long
-python -m app.pipeline.library show 小米YU7                        # 统计
+python -m app.pipeline.library show 小米YU7                        # 统计（含授权汇总）
 python -m app.pipeline.library sheet 小米YU7 [--usable]            # 导出联系表，人工过一遍标签
+python -m app.pipeline.library license 小米YU7                     # 列出各源的授权状态
+python -m app.pipeline.library license 小米YU7 --source <id|地址> --status allowed \
+    --scope background --expires 2027-01-01 --proof "授权邮件 2026-10-30" --review approved
 ```
+
+**素材授权。** "公开""官方号发布""能在线播放"都不等于允许二次剪辑发布。授权不明的源照常下载、分析，但**取材**（`library.fill` / `long_take`）要过闸门。每个源有授权状态：`unverified` 未核验、`pending` 待确认、`allowed` 允许使用、`restricted` 限制使用（只许 `--scope` 里列的用途，没写就只许背景）、`denied` 禁止使用、`expired` 授权过期（到期自动判定）；审核 `rejected` 的源一律不取。没人工标过的按来源推断：车企官网视频（含官网发布会回放页）和官方图库是 `restricted`，B站 / YouTube / 手动链接是 `unverified`。
+
+- 闸门由环境变量 `LICENSE_GATE` 控制。默认 `warn`：不拦，只在使用记录里标出授权状态（存量素材池几乎全是未核验，直接拦会让出片没有背景）。核验完常用来源后改成 `enforce`，授权不明、过期、禁止、用途不符的素材就不再进成片。
+- 使用记录：每拍的 `beats/NNN.json` 带每段素材的原始来源地址、平台和取材时的授权状态；渲染完汇总成项目下的 `materials_used.json`，其中 `uncleared` 是授权没核验的来源，发布前复核。收到版权投诉时用 `explainer.projects_using(来源地址, 项目 id 列表)` 反查哪些成片用过。
 
 **画面质量的上限是素材池。** 项目页会显示「确认本车」视频的秒数；少于 180 秒时会提示，并提前重新找源。
 
@@ -351,7 +359,7 @@ app/
     variety.py / looks.py   开场结尾变体、视觉包
     cards.py / overlays.py / overlays_portrait.py / hud.py   本地绘制的叠加层
     motion.py / motion_assets.py / concept_styles.py         概念动画
-    library.py / vision_verdict.py / logo_detect.py          素材池
+    library/ / vision_verdict.py / logo_detect.py            素材池（含授权闸门 licensing.py）
     narration.py / voice_qa.py / render.py / timeline.py     旁白、质检、ffmpeg 合成、字幕
     cover_art.py / packaging.py / repurpose.py               封面、标题包装、一稿多发
     aspect.py            画幅规格（横 / 竖的唯一来源）

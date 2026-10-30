@@ -87,10 +87,13 @@ def discover(lib: Library, aliases: Sequence[str], errors: list[str], *,
         h.official = h.official or bool(aliases and platform_video.is_official(
             h, aliases, markers=vocab.official_markers))
     launch: list[platform_video.PlatformHit] = []
+    if vocab.launch_replays:
+        # 官网回放页排最前:1080p、无水印,不受 B 站访客 480p 限制
+        launch += official.launch_pages(subject, spec or {}, errors=errors)
     if aliases and vocab.launch_replays:
         try:
-            launch = official.launch_replays(subject, aliases, markers=vocab.official_markers,
-                                             limit=MAX_LAUNCH_SOURCES, errors=errors)
+            launch += official.launch_replays(subject, aliases, markers=vocab.official_markers,
+                                              limit=MAX_LAUNCH_SOURCES, errors=errors)
         except Exception as exc:  # noqa: BLE001 - 找不到回放只是少一路
             errors.append(f"发布会回放查找失败:{str(exc)[:120]}")
     launch_urls = {normalise_url(h.url) for h in launch}

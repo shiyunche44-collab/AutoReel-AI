@@ -304,6 +304,37 @@ def launch_replays(subject: str, aliases: Sequence[str], *, markers: Sequence[st
     return uniq[:limit]
 
 
+_HLS_RE = re.compile(r"https?://[^\"'\s<>\\]+?\.m3u8[^\"'\s<>\\]*", re.IGNORECASE)
+_TITLE_RE = re.compile(r"<title[^>]*>([^<]*)</title>", re.IGNORECASE)
+
+
+def launch_pages(subject: str, spec: dict[str, tuple[str, ...]], *,
+                 errors: list[str] | None = None) -> list[platform_video.PlatformHit]:
+    """官网的发布会回放页(YAML `launch`:「车型=页面地址」)→ 页面里的 m3u8 直链。
+
+    官网回放无水印、无需登录,1080p 整场(比亚迪海鸥 58 分钟),比 B 站访客只给 480p 强得多。
+    页面地址要人工登记:回放页挂在直播列表下,没有按车型检索的入口。"""
+    out: list[platform_video.PlatformHit] = []
+    for page in press_entries(subject, spec, "launch"):
+        try:
+            body = html.unescape(clips.fetch_page(page))
+            m = _HLS_RE.search(body)
+            if not m:
+                raise platform_video.PlatformError("页面里没有 m3u8 直链")
+            title_m = _TITLE_RE.search(body)
+            title = re.sub(r"\s+", " ", title_m.group(1)).strip() if title_m else ""
+            stream = m.group(0)
+            duration = float(platform_video.probe(stream).get("duration") or 0.0)
+        except Exception as exc:  # noqa: BLE001 - 官网改版只是少一路
+            if errors is not None:
+                errors.append(f"官网发布会回放解析失败({page}):{str(exc)[:100]}")
+            continue
+        out.append(platform_video.PlatformHit(
+            platform="site", url=stream, title=title or f"{subject} 发布会回放",
+            uploader="官网", duration=duration, official=True, verified=True))
+    return out
+
+
 #: 判断"文案对不对题"时不算数的词:品牌号每条文案都带品牌名
 _GENERIC_TOKENS = {"ev", "car", "cars", "the", "new", "auto", "official", "global", "motors"}
 
@@ -505,13 +536,13 @@ PRESS_PAGE_LIMIT = 60
 _CLOUDINARY_LIST_RE = re.compile(r"^(https://[^?#]+?)/image/list/([^/?#]+)\.json$")
 
 
-def press_entries(subject: str, spec: dict[str, tuple[str, ...]]) -> list[str]:
-    """YAML `press` 里写的是「车型=地址」,只取型号和这台车完全一致的。
+def press_entries(subject: str, spec: dict[str, tuple[str, ...]], key: str = "press") -> list[str]:
+    """YAML `press`(图库)/ `launch`(发布会回放页)里写的是「车型=地址」,只取型号和这台车完全一致的。
 
     型号比整串:"Model Y" 不取 "Model Y L" 的图库,反之亦然。"""
     keyword = re.sub(r"[\s-]+", "", model_keyword(subject, spec.get("aliases", ())).lower())
     out = []
-    for entry in spec.get("press", ()):
+    for entry in spec.get(key, ()):
         model, sep, url = entry.partition("=")
         if sep and url.strip() and re.sub(r"[\s-]+", "", model.lower()) == keyword:
             out.append(url.strip())

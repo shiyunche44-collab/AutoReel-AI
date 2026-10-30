@@ -95,6 +95,11 @@ MEDIA_PLATFORMS: tuple[str, ...] = tuple(
     if p.strip()
 )
 
+#: 素材授权闸门(`pipeline/library/licensing.py`):取材时按来源的授权状态过滤。
+#: warn = 不拦,只在每段的使用记录里标出授权状态(存量素材池全是"未核验",直接拦会让出片没有背景);
+#: enforce = 授权不明 / 过期 / 禁止 / 用途不在范围内的素材一律不取。
+LICENSE_GATE: str = "enforce" if os.getenv("LICENSE_GATE", "warn").strip().lower() == "enforce" else "warn"
+
 #: yt-dlp 走的代理(国内访问 YouTube 需要),如 http://127.0.0.1:7890 。
 #: 只给 yt-dlp 用:B 站、车媒站点直连更快,不该被代理拖慢。
 YTDLP_PROXY = os.getenv("YTDLP_PROXY", "").strip()

@@ -622,6 +622,9 @@ official_sites:
     sites: [bydauto.com.cn, byd.com]
     media: [byd.com/cn/news]
     tiktok: [byd_global]
+    # 官网发布会回放页(「车型=页面地址」):页面里带 1080p 的 m3u8,无水印无需登录。2026-10-30 核对
+    launch:
+      - "海鸥=https://www.byd.com/cn/livedetail160"
   tesla:
     aliases: [特斯拉, Tesla, Model 3, Model Y, Model S, Model X, Cybertruck]
     sites: [tesla.cn, tesla.com]

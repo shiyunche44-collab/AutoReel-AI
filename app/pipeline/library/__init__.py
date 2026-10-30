@@ -109,6 +109,16 @@ from .model import (  # noqa: E402,F401
     usable_seconds,
     vocab_of,
 )
+from .licensing import (  # noqa: E402,F401
+    License,
+    LicenseBook,
+    STATUSES,
+    STATUS_LABEL,
+    gate_mode,
+    license_of_source,
+    set_license,
+)
+from .licensing import summary as license_summary  # noqa: E402,F401
 from .sources import (  # noqa: E402,F401
     JUNK_TITLE_WORDS,
     OFFICIAL_MAX_SECONDS,

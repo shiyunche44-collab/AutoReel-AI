@@ -432,3 +432,25 @@ def test_launch_replays_only_official_long_named_model(monkeypatch):
     monkeypatch.setattr(official, "bilibili_official", lambda *a, **k: [])
     got = official.launch_replays("小米YU7", ["小米汽车", "小米SU7", "小米YU7"], markers=("汽车",))
     assert [h.url for h in got] == ["ok"] and got[0].official
+
+
+def test_launch_pages_reads_m3u8_from_registered_page(monkeypatch):
+    page = ('<title>第二代海鸥上市发布会</title>{&quot;liveUrl&quot;:&quot;'
+            'https://vod.example.com/a/b.m3u8&quot;,&quot;x&quot;:1}')
+    monkeypatch.setattr(official.clips, "fetch_page", lambda url, **k: page)
+    monkeypatch.setattr(platform_video, "probe", lambda url: {"duration": 3483})
+    spec = {"aliases": ("比亚迪", "海鸥"), "launch": ("海鸥=https://www.byd.com/cn/livedetail160",)}
+    got = official.launch_pages("比亚迪海鸥", spec)
+    assert [(h.url, h.duration, h.official) for h in got] == [
+        ("https://vod.example.com/a/b.m3u8", 3483.0, True)]
+    assert got[0].title == "第二代海鸥上市发布会"
+    # 别的车型不取这个页面
+    assert official.launch_pages("比亚迪海豹", spec) == []
+
+
+def test_launch_pages_reports_page_without_stream(monkeypatch):
+    monkeypatch.setattr(official.clips, "fetch_page", lambda url, **k: "<title>x</title>")
+    errors: list[str] = []
+    spec = {"aliases": ("比亚迪",), "launch": ("海鸥=https://www.byd.com/cn/livedetail160",)}
+    assert official.launch_pages("比亚迪海鸥", spec, errors=errors) == []
+    assert errors and "m3u8" in errors[0]

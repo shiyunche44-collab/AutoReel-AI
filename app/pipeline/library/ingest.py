@@ -106,7 +106,8 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
                     official=src.official,
                     origin=f"library:{src.platform or platform_of(src.url)}",
                     license=f"{src.platform}:{src.uploader or '未知上传者'}",
-                    start=a, end=b, skipped=skipped, sharp=sharp, **info,
+                    start=a, end=b, skipped=skipped, sharp=sharp, launch=src.kind == "launch",
+                    **info,
                 ))
                 added += 1
         if not added:

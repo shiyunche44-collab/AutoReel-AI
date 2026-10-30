@@ -157,6 +157,8 @@ from .beat_render import (  # noqa: E402,F401
 )
 from .footage import (  # noqa: E402,F401
     footage_mix,
+    materials_used,
+    projects_using,
 )
 
 
@@ -441,6 +443,10 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
         done.append(s.idx)
     db.write_json(project_id, "beats_used.json", used)
     db.write_json(project_id, "beats_recent.json", recent)
+    try:
+        materials_used(project_id, specs)
+    except OSError:  # 使用记录写不下不该拦住出片
+        pass
     for note in notes:
         # 降级要留痕:不然「概念动画全变成数据卡」看起来像正常产出
         db.add_event(project_id, "concept:degraded", reason=note)

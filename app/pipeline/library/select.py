@@ -9,6 +9,7 @@ from typing import Sequence
 from ...categories import Vocab
 from .. import knobs, looks
 
+from .licensing import BACKGROUND, LicenseBook
 from .model import FILL_MIN_PIECE, Item, Library, STILL_SECONDS, _confirmed, _hard_bad, _has_host, _host_sources, _third_party, _third_party_ok, vocab_of
 from .tagging import _dhash
 
@@ -47,6 +48,17 @@ class Piece:
     crop_edge: float = 0.0
     #: 别家账号的视频(`_third_party`):记进每拍的 beats/NNN.json,统计兜底用了多少
     third_party: bool = False
+    #: 使用记录(随 beats/NNN.json 落盘,版权投诉 / 下架时按出处反查成片):
+    #: 原始来源地址、平台、取材当时的授权状态(licensing.STATUSES)
+    source_url: str = ""
+    platform: str = ""
+    license_status: str = ""
+
+
+def _trace(book: LicenseBook, item: Item) -> dict[str, str]:
+    """Piece 的使用记录字段:这段素材的原始来源和取材时的授权状态。"""
+    return {"source_url": book.origin_url(item), "platform": item.platform,
+            "license_status": book.license(item).status}
 
 
 #: 一段最长用几秒就换下一段 —— 信息解说的背景是 2–4 秒一刀的节奏,
@@ -285,12 +297,14 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     recent = recent if recent is not None else []
     lib = Library.load(subject)
     vocab = vocab_of(lib)
+    book = LicenseBook(lib)
     want = vocab.hint_views(hint)
     want_detail = vocab.detail_types_in(detail) if detail else set()
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view and not i.small_still))
         and not is_dark(i)]
+    pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
     strict = role != "body"
@@ -376,7 +390,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=clean_still(i), start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0,
-                         crop_edge=_crop_edge(i), third_party=_third_party(i)))
+                         crop_edge=_crop_edge(i), third_party=_third_party(i), **_trace(book, i)))
         used[i.id] = used.get(i.id, 0) + 1
         recent.append(i.id)
         del recent[:-RECENT_PIECES]
@@ -393,6 +407,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
                  and i.problem not in ("cropped", "unclear", "poster")
                  and (not strict or _confirmed(i))
                  and not (want_detail and _detail_conflict(i, want_detail, vocab))]
+        spare = book.keep(spare, BACKGROUND)
         spare.sort(key=lambda i: (bool(want) and i.view not in want, _branded_still(i),
                                    used.get(i.id, 0), i.target != "yes", i.id))
         k = 0
@@ -401,7 +416,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             k += 1
             take = min(rest, FILL_MAX_PIECE)
             out.append(Piece(item_id=i.id, kind="still", path=clean_still(i), start=0.0,
-                             length=round(take, 3)))
+                             length=round(take, 3), **_trace(book, i)))
             used[i.id] = used.get(i.id, 0) + 1
             recent.append(i.id)
             del recent[:-RECENT_PIECES]
@@ -434,10 +449,12 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     recent = recent if recent is not None else []
     lib = Library.load(subject)
     vocab = vocab_of(lib)
+    book = LicenseBook(lib)
     want = vocab.hint_views(hint)
     need = seconds / LONG_TAKE_MAX_SLOWDOWN
     pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
             and not is_dark(i) and (not want or i.view in want)]
+    pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
     if role != "body":
@@ -466,4 +483,4 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     del recent[:-RECENT_PIECES]
     return Piece(item_id=i.id, kind="video", path=i.path, start=round(start, 3), length=round(take, 3),
                  crop_bottom=SUBTITLE_CROP if _croppable(i) else 0.0, crop_edge=_crop_edge(i),
-                 third_party=_third_party(i))
+                 third_party=_third_party(i), **_trace(book, i))

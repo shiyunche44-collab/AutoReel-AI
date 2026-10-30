@@ -131,6 +131,21 @@ class Source:
     logo_boxes: list[list[float]] = field(default_factory=list)
     #: launch = 官方发布会回放(主讲人出镜多,废段判定更宽松);空 = 普通源
     kind: str = ""
+    #: 授权(见 licensing.py)。空 = 没人工标过,按来源推断:官网 → restricted,其余 → unverified。
+    #: "公开 / 官方号发布 / 能在线播放"都不等于允许二次使用
+    license_status: str = ""
+    #: 允许的用途,逗号分隔(background…);空 = restricted 只许背景,allowed 不限
+    license_scope: str = ""
+    #: 授权到期时间戳,0 = 无期限
+    license_expires: float = 0.0
+    #: 凭证引用(合同 / 邮件 / 授权页面地址)
+    license_proof: str = ""
+    #: 人工审核:空 = 未审;approved / rejected(rejected 一律不取)
+    review_status: str = ""
+    reviewed_by: str = ""
+    reviewed_at: float = 0.0
+    #: 所属发布会(名称 / 日期),只记录
+    event: str = ""
 
 
 @dataclass
@@ -178,6 +193,8 @@ class Item:
     logo_crop: float = -1.0
     #: 第三方段和某条官方段是同一画面时,那条官方段的 id(见 mark_official_duplicates)
     dup_of: str = ""
+    #: 来自发布会回放源:舞台大屏 / PPT 页被视觉模型判成 poster,但正是回放要的画面
+    launch: bool = False
 
     @property
     def length(self) -> float:
@@ -201,7 +218,8 @@ class Item:
 
     @property
     def usable(self) -> bool:
-        return self.tagged and self.target != "no" and self.problem not in BLOCKING \
+        blocking = BLOCKING - {"poster"} if self.launch else BLOCKING
+        return self.tagged and self.target != "no" and self.problem not in blocking \
             and self.view not in ("people", "text", "other", "") and not self.low_res \
             and not self.skipped
 
