@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
@@ -105,6 +106,15 @@ def _dark_strip(path: str) -> bool:
         return top >= 90 and bottom < min(60.0, top * AUDIENCE_DARK_RATIO)
     except (OSError, ValueError):
         return False
+
+
+#: 回放里整屏是大标题 / 大数字的 PPT 页:它自己带着一个数,和这一拍旁白讲的数对不上
+#: (旁白讲充电、屏上写 776万销量),观众会以为说的是一件事。当背景一律不要
+_TEXT_SLIDE = re.compile(r"含大字|大字|销量|数据|数字|参数|榜|图表|价格|PPT")
+
+
+def _text_slide(item: Item) -> bool:
+    return item.launch and bool(_TEXT_SLIDE.search(item.desc or ""))
 
 
 def _audience(item: Item) -> bool:
@@ -372,7 +382,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view and not i.small_still))
-        and not is_dark(i)]
+        and not is_dark(i) and not _text_slide(i)]
     pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
@@ -524,7 +534,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     want = vocab.hint_views(hint)
     need = seconds / LONG_TAKE_MAX_SLOWDOWN
     pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
-            and not is_dark(i) and (not want or i.view in want)]
+            and not is_dark(i) and not _text_slide(i) and (not want or i.view in want)]
     pool = book.keep(pool, BACKGROUND)
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]

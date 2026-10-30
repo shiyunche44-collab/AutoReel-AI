@@ -540,7 +540,7 @@ def test_launch_source_gets_lenient_early_stop():
 
 def test_launch_replay_allows_people_view_and_presenter_description():
     people = _seg(1, 0, 3, view="people")
-    people.desc = "台上主讲人介绍新车"
+    people.desc = "台上主讲人演讲"
     assert not people.usable
     people.launch = True
     assert people.usable and not lib_mod._has_host(people)
@@ -548,6 +548,20 @@ def test_launch_replay_allows_people_view_and_presenter_description():
     other = _seg(2, 0, 3, view="other")
     other.launch = True
     assert not other.usable
+
+
+def test_select_launch_text_slide_excluded_from_pool():
+    from app.pipeline.library import select
+
+    slide = _seg(3, 0, 3, view="car")
+    slide.launch = True
+    slide.desc = "发布会大屏含大字776万累计销量"
+    assert select._text_slide(slide)
+    slide.desc = "海鸥正面特写"
+    assert not select._text_slide(slide)
+    slide.launch = False
+    slide.desc = "含大字"
+    assert not select._text_slide(slide)
 
 
 def test_select_launch_head_skip_and_audience_crop():

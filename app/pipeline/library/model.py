@@ -417,8 +417,9 @@ def platform_of(url: str) -> str:
 
 
 def _has_host(item: Item) -> bool:
-    """描述里点名有人在讲解 / 介绍(评测博主口播)。发布会回放里的主讲人不算。"""
-    return not item.launch and bool(re.search(r"主持|讲解|介绍|解说|博主|主播|口播|出镜|对着镜头|评测员|自述|演示", item.desc or ""))
+    """描述里点名有人在讲解 / 介绍(评测博主口播)。台上"演讲"的主讲人不在这个词表里,
+    回放里的人物画面照常放行;但"女性介绍后备箱"这类带讲解的视频段仍然算。"""
+    return bool(re.search(r"主持|讲解|介绍|解说|博主|主播|口播|出镜|对着镜头|评测员|自述|演示", item.desc or ""))
 
 
 def is_waste(item: Item) -> bool:
