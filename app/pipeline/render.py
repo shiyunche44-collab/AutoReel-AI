@@ -234,6 +234,7 @@ BGM_DUCK_THRESHOLD = 0.01
 
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
+    has_sfx: bool = False,
 ) -> tuple[str, str]:
     """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
 
@@ -243,8 +244,15 @@ def _build_audio_graph(
 
     `first_input`:旁白(没旁白时是 BGM)的输入序号。单独混音时是 0,
     跟视频同一条命令时视频占了 0,就是 1。
+    `has_sfx`:音效轨(sfx.build_track),输入序号排在旁白、BGM 之后,不进侧链,
+    直接和旁白 / BGM 一起 amix 再过 loudnorm。
     """
     filters: list[str] = []
+    sfx_index = first_input + int(has_narration) + int(has_bgm)
+    sfx_mix = ""
+    if has_sfx and (has_narration or has_bgm):
+        filters.append(f"[{sfx_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[sfx]")
+        sfx_mix = "[sfx]"
     if has_narration:
         filters.append(f"[{first_input}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr0]")
     if has_bgm:
@@ -261,13 +269,16 @@ def _build_audio_graph(
             ":attack=15:release=500:makeup=1[bgm]"
         )
         filters.append(
-            "[narr][bgm]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+            f"[narr][bgm]{sfx_mix}amix=inputs={3 if sfx_mix else 2}:duration=first:dropout_transition=0:normalize=0,"
             f"loudnorm={TARGET_LOUDNESS}[aout]"
         )
-    elif has_narration:
-        filters.append(f"[narr0]loudnorm={TARGET_LOUDNESS}[aout]")
-    elif has_bgm:
-        filters.append(f"[bgmraw]loudnorm={TARGET_LOUDNESS}[aout]")
+    elif has_narration or has_bgm:
+        main = "[narr0]" if has_narration else "[bgmraw]"
+        if sfx_mix:
+            filters.append(f"{main}{sfx_mix}amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
+                           f"loudnorm={TARGET_LOUDNESS}[aout]")
+        else:
+            filters.append(f"{main}loudnorm={TARGET_LOUDNESS}[aout]")
     else:
         # **既没旁白也没 BGM**:TTS 全失败 + BGM 也失败时就是这种。
         #
@@ -287,7 +298,7 @@ def _build_audio_graph(
 
 
 def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: float,
-               dest: Path) -> tuple[Path | None, str]:
+               dest: Path, sfx_path: Path | None = None) -> tuple[Path | None, str]:
     """旁白 + BGM 单独混成一条 wav,返回 (路径, 错误信息)。
 
     **不能**跟视频放在同一条 ffmpeg 里混:2026-10-23 实测(ffmpeg 9.0.2),
@@ -306,7 +317,10 @@ def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: floa
     if has_bgm:
         # -stream_loop -1:BGM 比成片短时循环铺满
         inputs += ["-stream_loop", "-1", "-i", str(bgm_path)]
-    graph, label = _build_audio_graph(has_narration, has_bgm, 0.0, first_input=0)
+    has_sfx = bool(sfx_path and Path(sfx_path).is_file())
+    if has_sfx:
+        inputs += ["-i", str(sfx_path)]
+    graph, label = _build_audio_graph(has_narration, has_bgm, 0.0, first_input=0, has_sfx=has_sfx)
     dest.parent.mkdir(parents=True, exist_ok=True)
     proc = _run(
         ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
@@ -328,8 +342,15 @@ def compose(
     output_name: str = "output.mp4",
     size: tuple[int, int] | None = None,
     durations: Sequence[float] | None = None,
+    layer_path: Path | None = None,
+    sfx_path: Path | None = None,
 ) -> RenderResult:
     """主合成入口。
+
+    `sfx_path` = 音效轨(sfx.build_track),和旁白 / BGM 一起混音;混失败自动不带音效重混。
+
+    `layer_path` = 带透明通道的花字字幕层(webm,见 caption_layer):给了就 overlay 它,
+    不再烧 ASS;overlay 这一遍失败会退回 ASS 字幕重合。
 
     `durations` 给了就是逐镜头时长不等的横屏解说轨:镜头不再截成 6 秒,
     成片总长 = 各镜时长之和。
@@ -371,7 +392,11 @@ def compose(
     total_seconds = sum(durations) if durations else config.SHOT_GRID_SECONDS * len(normalised)
 
     # 音频先单独混好(原因见 _mix_audio),主命令只负责视频 + 封装现成的音轨
-    mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav")
+    mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
+                                   sfx_path=sfx_path)
+    if mix_err and sfx_path:
+        warnings.append("音效混入失败,改为不带音效")
+        mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav")
     if mix_err:
         warnings.append(f"旁白/BGM 混音失败,成片将没有声音:{mix_err}")
 
@@ -381,11 +406,19 @@ def compose(
 
     # 视频滤镜链:拼接后的视频 → 归一化 → 可选烧字幕
     vf_parts = [f"scale={w}:{h}", f"fps={FPS}", "setsar=1", "format=yuv420p"]
-    ass_filter = _build_ass_filter(ass_path, project_dir)
+    use_layer = bool(layer_path and Path(layer_path).is_file())
+    ass_filter = None if use_layer else _build_ass_filter(ass_path, project_dir)
     if ass_filter:
         vf_parts.append(ass_filter)
     vf = ",".join(vf_parts)
-    filters = f"[0:v]{vf}[vout]"
+    if use_layer:
+        # 花字层是 vp8+alpha:ffmpeg 自带的 vp8 解码器会丢掉 alpha,必须指定 libvpx
+        layer_idx = 2 if mix_path else 1
+        inputs += ["-c:v", "libvpx", "-i", str(layer_path)]
+        filters = (f"[0:v]{vf}[vbase];"
+                   f"[vbase][{layer_idx}:v]overlay=eof_action=pass:format=auto,format=yuv420p[vout]")
+    else:
+        filters = f"[0:v]{vf}[vout]"
     if mix_path:
         audio_map = "1:a"
     else:
@@ -423,6 +456,18 @@ def compose(
         if problem:
             warnings.append(f"重合后仍不合格:{problem},请检查后重新合成")
     if proc.returncode != 0 or not tmp_output.is_file():
+        if use_layer:
+            # 花字层 overlay 失败:退回 ASS 字幕重合(ASS 烧录自己的失败由递归那次再兜底)
+            tmp_output.unlink(missing_ok=True)
+            warnings.append(f"花字层叠加失败,改用 ASS 字幕:{(proc.stderr or '').strip()[-300:]}")
+            retry = compose(
+                project_id, shot_paths,
+                ass_path=ass_path, narration_path=narration_path,
+                bgm_path=bgm_path, output_name=output_name,
+                size=size, durations=durations, layer_path=None, sfx_path=sfx_path,
+            )
+            retry.warnings = warnings + (retry.warnings or [])
+            return retry
         # 字幕烧录是 Windows 上最容易出问题的一环,失败时退化为"无字幕重试"
         if ass_filter:
             # 递归那次的 warnings 是新的:不把这条带回去,成片会悄悄没字幕、render.json 里却一条警告都没有

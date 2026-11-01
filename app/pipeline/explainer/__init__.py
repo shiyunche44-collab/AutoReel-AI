@@ -591,6 +591,43 @@ def cover_meta(project_id: str, profile: CategoryProfile, total: float) -> dict[
     return {"kicker": kicker, "subtitle": subtitle, "price_fact": fact_id}
 
 
+def _caption_layer(project_dir: Path, nar: dict, size: tuple[int, int], total: float) -> Path | None:
+    """当前 look 用花字字幕层(Remotion)就渲一份;没开 / 渲不出来返回 None,成片退回 ASS 字幕。"""
+    lk = looks.current()
+    if not lk.sub_layer or not nar.get("cues"):
+        return None
+    from .. import caption_layer
+
+    try:
+        layer = caption_layer.build_layer(nar["cues"], size, render_mod.FPS, lk.accent, duration=total)
+        return caption_layer.render_layer(layer, project_dir / "_captions")
+    except Exception:  # noqa: BLE001 —— 花字只是加分项,不能让成片失败
+        _log.warning("花字层生成失败,退回 ASS 字幕", exc_info=True)
+        return None
+
+
+def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Sequence[ShotSpec],
+               total: float) -> Path | None:
+    """当前 look 要音效就摆一条音效轨(章节 whoosh + 关键词 pop);没开 / 失败返回 None,成片不带音效。"""
+    lk = looks.current()
+    if not lk.sfx or not nar.get("cues"):
+        return None
+    from .. import caption_layer, sfx
+
+    try:
+        layer = caption_layer.build_layer(nar["cues"], size, render_mod.FPS, lk.accent, duration=total)
+        chapters, _ = chapters_of(beats)
+        starts, acc = [], 0.0
+        for _, dur in chapters:
+            starts.append(acc)
+            acc += dur
+        return sfx.build_track(sfx.events_for(layer["cues"], starts), total,
+                               project_dir / "_render" / "sfx.wav")
+    except Exception:  # noqa: BLE001 —— 音效只是加分项
+        _log.warning("音效轨生成失败,成片不带音效", exc_info=True)
+        return None
+
+
 def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
             title: str, llm: Any = None) -> dict[str, Any]:
     """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。"""
@@ -605,6 +642,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     size = aspect.frame_size(project)
     # 拼接缓存按序号命名,重拍过的拍必须重新归一化
     shutil.rmtree(project_dir / "_render", ignore_errors=True)
+    layer_path = _caption_layer(project_dir, nar, size, sum(s.duration for s in beats))
+    sfx_path = _sfx_track(project_dir, nar, size, beats, sum(s.duration for s in beats))
     result = render_mod.compose(
         project_id, [Path(rows[s.idx]["final_path"]) for s in beats],
         ass_path=Path(nar["ass_path"]) if nar.get("ass_path") else None,
@@ -612,6 +651,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
         size=size, durations=[s.duration for s in beats],
         output_name=aspect.output_name(project),
+        layer_path=layer_path, sfx_path=sfx_path,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -654,6 +694,40 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     if cover_b:
         payload["cover_b"] = cover_b
         db.write_json(project_id, "render.json", payload)
+    return payload
+
+
+def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
+    """只重出成片视频(字幕文字改过了):不动 `_render` 里已归一化的拍、不重做封面和包装。
+
+    各拍成片没变,归一化缓存直接复用;字幕层 / 音效轨按当前 narration.json 重出。
+    render.json 在原有内容上更新视频相关字段,封面等其余字段保留。"""
+    rows = {r["idx"]: r for r in db.get_shots(project_id, "final")}
+    beats = [s for s in specs if s.duration > 0]
+    missing = [s.idx for s in beats if not (rows.get(s.idx) or {}).get("final_path")]
+    if missing:
+        raise RuntimeError(f"还有 {len(missing)} 拍没有成片:{missing[:12]}")
+    nar = db.read_json(project_id, "narration.json", {}) or {}
+    project_dir = config.project_dir(project_id)
+    project = db.get_project(project_id) or {}
+    size = aspect.frame_size(project)
+    total = sum(s.duration for s in beats)
+    layer_path = _caption_layer(project_dir, nar, size, total)
+    sfx_path = _sfx_track(project_dir, nar, size, beats, total)
+    result = render_mod.compose(
+        project_id, [Path(rows[s.idx]["final_path"]) for s in beats],
+        ass_path=Path(nar["ass_path"]) if nar.get("ass_path") else None,
+        narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
+        bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
+        size=size, durations=[s.duration for s in beats],
+        output_name=aspect.output_name(project),
+        layer_path=layer_path, sfx_path=sfx_path,
+    )
+    if not result.ok or not result.output_path:
+        raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
+    payload = {**(db.read_json(project_id, "render.json", {}) or {}), **result.to_dict(),
+               "narration": nar}
+    db.write_json(project_id, "render.json", payload)
     return payload
 
 

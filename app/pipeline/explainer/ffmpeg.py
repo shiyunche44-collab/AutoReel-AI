@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 from ... import config
-from .. import aspect, library
+from .. import aspect, library, looks
 from .. import render as render_mod
 
 from .consts import STILL_MOTIONS, XFADE, XFADE_KINDS, _ENC
@@ -77,6 +77,28 @@ def _fit_filter(w: int, h: int, crop_bottom: float = 0.0, crop_edge: float = 0.0
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={render_mod.FPS},format=yuv420p")
 
 
+#: 实拍镜头运镜的幅度:缓推 / 拉远 6%,冲击推 12%(0.4 秒内推到位后停住)
+PUSH_SLOW, PUSH_PUNCH, PUNCH_SECONDS = 0.06, 0.12, 0.4
+
+
+def push_filter(motion: str, seconds: float, size: tuple[int, int]) -> str:
+    """实拍视频的居中运镜(静图的运镜另走 `render.still_filter`)。
+
+    按静图运镜名分三类,让一片里推拉有变化:`zoom_out` 拉远,`punch_in` 冲击推,其余缓推。
+    先放大到 2 倍再 zoompan,否则逐帧取整会抖;`d=1` 是逐帧处理视频输入。"""
+    w, h = size
+    frames = max(1, int(round(seconds * render_mod.FPS)))
+    if motion == "punch_in":
+        punch = max(1, min(frames, int(round(render_mod.FPS * PUNCH_SECONDS))))
+        z = f"1+{PUSH_PUNCH}*(1-pow(1-min(1,on/{punch}),3))"
+    elif motion == "zoom_out":
+        z = f"1+{PUSH_SLOW}*(1-on/{frames})"
+    else:
+        z = f"1+{PUSH_SLOW}*on/{frames}"
+    return (f"scale={w * 2}:{h * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={w}x{h}:fps={render_mod.FPS},setsar=1,format=yuv420p")
+
+
 def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion: str) -> Path:
     w, h = size
     if piece.kind == "still":
@@ -84,8 +106,9 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
                                         motion=motion, size=size)
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐。
     # 竖屏也照常裁烧录字幕:实拍只放在 16:9 的画面带里,和横屏是同一个比例
+    push = f",{push_filter(motion, piece.length, size)}" if looks.current().cam_push else ""
     vf = _fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
-                     letterbox_crop(piece.path)) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}[v]"
+                     letterbox_crop(piece.path)) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}{push}[v]"
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():

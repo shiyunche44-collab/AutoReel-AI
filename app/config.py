@@ -230,6 +230,11 @@ PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
 DATA_SIZE_WARN_BYTES = int(os.getenv("DATA_SIZE_WARN_BYTES", str(10 * 1024 ** 3)))
 
 
+#: 成片精修(OpenFilm Studio)的 npm 版本。固定,不用 @latest:格式还在变,升级前先跑 refine 的往返测试
+OPENFILM_VERSION = os.getenv("OPENFILM_VERSION", "0.2.7").strip() or "0.2.7"
+#: 成片闸上的「精修」按钮。默认关:首次要下载约 100 MB 的无头浏览器,Studio 也只能在本机打开
+OPENFILM_ENABLED = os.getenv("OPENFILM_ENABLED", "0") in ("1", "true", "True")
+
 #: HyperFrames 要求的 Node 主版本
 MOTION_NODE_MIN = 22
 _node_cache: list[str] = []

@@ -205,6 +205,8 @@ def _evidence(now: float) -> list[str]:
             lines.append(f"[{stage}驳回 {what}] {r['note']}")
         elif r["decision"] == "edit" and r["note"]:
             lines.append(f"[改选题 {what}] {r['note']}")
+        elif r["decision"] == "refine" and r["note"]:
+            lines.append(f"[精修字幕 {what}] {r['note']}")
         if r["title_to"] and r["title_to"] != r["title_from"]:
             lines.append(f"[改标题] 「{r['title_from']}」→「{r['title_to']}」")
     return lines

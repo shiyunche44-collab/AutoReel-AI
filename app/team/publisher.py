@@ -171,6 +171,52 @@ def reject_cut(item_id: str, note: str = "") -> dict[str, Any]:
     return item
 
 
+def _refine_item(item_id: str) -> dict[str, Any]:
+    if not config.OPENFILM_ENABLED:
+        raise PlanError("精修没开启(OPENFILM_ENABLED=1 才有)")
+    item = db.get_plan_item(item_id)
+    if not item:
+        raise PlanError("选题不存在")
+    if item["status"] != "review":
+        raise PlanError("这条选题不在成片待审,不能精修")
+    return item
+
+
+def refine_open(item_id: str) -> dict[str, Any]:
+    """精修:导出成片到 Studio 项目并起 Studio。上次改的字幕还没应用就不重导,接着改。"""
+    from ..pipeline import refine
+
+    item = _refine_item(item_id)
+    pid = item["project_id"]
+    try:
+        try:
+            pending = refine.read_edits(pid)
+        except refine.RefineError:
+            pending = None
+        if pending is None or not pending.any:
+            refine.export(pid)
+        return {"url": refine.studio_url(pid), "pending": len(pending.changed) if pending else 0}
+    except refine.RefineError as exc:
+        raise PlanError(str(exc)) from exc
+
+
+def refine_apply(item_id: str) -> dict[str, Any]:
+    """应用精修:改了几句字幕、重出成片。记进偏好(你常改哪类字幕)。耗时 = 一次完整合成。"""
+    from ..pipeline import refine
+
+    item = _refine_item(item_id)
+    try:
+        out = refine.apply(item["project_id"])
+    except refine.RefineError as exc:
+        raise PlanError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 —— 含 ProjectBusy:别人正占着项目
+        raise PlanError(str(exc)) from exc
+    if out["changed"]:
+        note = ";".join(f"「{e['old']}」→「{e['new']}」" for e in out["edits"])
+        preference.record(item, "cut", "refine", note=note)
+    return out
+
+
 def sync() -> int:
     """已排发布的选题跟着发布任务走:都发出去 → 已发布;有失败且没有在途的 → 失败。"""
     changed = 0

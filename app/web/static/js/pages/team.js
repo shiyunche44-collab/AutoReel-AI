@@ -344,6 +344,34 @@ function reviewCard(item) {
     });
     if (res) await call(`/api/team/plan/${item.id}/reject-cut`, '已打回', res);
   });
+  // 精修:Studio 里改字幕,点「应用」重出成片。Studio 只在本机 127.0.0.1 能打开
+  const refineBtns = [];
+  if (DATA.refine) {
+    const open = h('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+      title: '在 OpenFilm Studio 里改字幕(只能在这台电脑上打开)' }, icon('pen', 'i-sm'), '精修字幕');
+    open.addEventListener('click', () => withLoading(open, async () => {
+      try {
+        const res = await api.post(`/api/team/plan/${item.id}/refine/open`);
+        window.open(res.url, '_blank');
+        toast(res.pending ? `接着上次的改动(${res.pending} 句没应用)` : '已在 Studio 打开,改完回来点「应用精修」');
+      } catch (err) {
+        toast(err.message, { type: 'danger', title: '没打开 Studio' });
+      }
+    }));
+    const apply = h('button', { class: 'btn btn-sm btn-ghost', type: 'button',
+      title: '把 Studio 里改的字幕应用到成片(要重新合成一遍,几分钟)' }, icon('refresh', 'i-sm'), '应用精修');
+    apply.addEventListener('click', () => withLoading(apply, async () => {
+      try {
+        const res = await api.post(`/api/team/plan/${item.id}/refine/apply`);
+        toast(res.changed ? `已改 ${res.changed} 句字幕,成片已重出` : 'Studio 里没有字幕改动');
+        (res.warnings || []).forEach((w) => toast(w, { type: 'warning' }));
+        await load();
+      } catch (err) {
+        toast(err.message, { type: 'danger', title: '没应用上' });
+      }
+    }));
+    refineBtns.push(open, apply);
+  }
   const portrait = item.aspect === '9:16';
   return h('article', { class: `plan-card review-card${portrait ? ' is-portrait' : ''}` },
     h('div', { class: 'review-media' },
@@ -362,7 +390,7 @@ function reviewCard(item) {
           ? h('div', { class: 'row wrap-row' }, boxes.map((b) => b.el))
           : h('span', { class: 'subtle small' }, '还没有可用账号,先去', h('a', { href: '/publish' }, '分发台'), '添加')),
       pieces.el,
-      h('div', { class: 'row plan-actions' }, pass, back, h('span', { class: 'grow' }),
+      h('div', { class: 'row plan-actions' }, pass, back, ...refineBtns, h('span', { class: 'grow' }),
         h('a', { class: 'btn btn-sm btn-ghost', href: `/project/${item.project_id}` }, icon('external', 'i-sm'), '项目'))),
   );
 }

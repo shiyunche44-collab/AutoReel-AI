@@ -27,6 +27,7 @@ from .timeline import (
     normalize_for_tts,
     probe_safe,
     split_sentences,
+    wrap_subtitle,
 )
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,25 @@ class NarrationResult:
             "warnings": self.warnings,
             "cues": [c.model_dump() for c in self.cues],
         }
+
+
+def retext_ass(path: Path, cues: Sequence[SubtitleCue], *, size: tuple[int, int] | None = None,
+               line_chars: int | None = None) -> None:
+    """字幕文字改了、时间轴不变:只换原 ASS 里每句的文字,样式沿用成片当时的(外观包之后可能换过)。
+
+    Dialogue 行数和 cue 数对不上就退回整份重写(用当前外观包)。"""
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    at = [i for i, ln in enumerate(lines) if ln.startswith("Dialogue:")]
+    if len(at) == len(cues):
+        for i, cue in zip(at, cues):
+            head = lines[i].split(",", 9)[:9]    # Layer 到 Effect 共 9 段,第 10 段是文字
+            lines[i] = ",".join(head) + "," + wrap_subtitle(cue.text, line_chars)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    w, h = size or (None, None)
+    path.write_text(format_ass(cues, width=w, height=h, font_name=_pick_font_name(),
+                               line_chars=line_chars, look=looks.current()), encoding="utf-8")
 
 
 def collect_sentences(specs: Sequence[Any]) -> list[tuple[str, int]]:

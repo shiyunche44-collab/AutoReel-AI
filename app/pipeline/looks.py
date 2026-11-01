@@ -78,6 +78,12 @@ class Look:
     panel: bool = True
     #: 建项目时自动挑 look 会不会选到它;False = 只在手动指定时用(不改变老的随机分布)
     auto_pick: bool = True
+    #: 字幕改用 Remotion 渲的花字层(关键词变色弹出,见 caption_layer.py);层不可用时退回 ASS
+    sub_layer: bool = False
+    #: 实拍视频镜头加缓推 / 拉远 / 冲击推(静图镜头本来就有运镜,见 render.still_filter)
+    cam_push: bool = False
+    #: 成片混入音效:章节切换 whoosh、关键词弹出 pop(见 sfx.py)
+    sfx: bool = False
     # ---- 字幕 ----
     #: box = 半透明黑底条;outline = 白字描边无底;band = 色块底(用 sub_box 的颜色)
     subs: str = "box"
@@ -179,7 +185,7 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         paper=(236, 238, 233), ink=(18, 22, 26), key=(61, 68, 76), muted=(93, 101, 110),
         accent=(255, 90, 31),
         subs="outline", concept="studio", chapter_bar=False, video_first=True, panel=False,
-        auto_pick=False,
+        auto_pick=False, sub_layer=True, cam_push=True, sfx=True,
     ),
 )}
 

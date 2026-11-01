@@ -43,3 +43,6 @@ motion/bakeoff/fonts/
 motion/bakeoff/out/
 analysis/ref_*/
 analysis/teardown_*/
+
+# Remotion 包装层子工程的依赖(remotion/ 下 npm install 生成)
+remotion/node_modules/

@@ -165,6 +165,28 @@ def team_cut_reject(item_id: str, payload: PlanReject):
     return _plan_call(publisher.reject_cut, item_id, payload.note)
 
 
+@router.post("/api/team/plan/{item_id}/refine/open")
+def team_refine_open(item_id: str):
+    """精修:把成片导出到 Studio 并起 Studio,返回本机地址。"""
+    from ..team import publisher
+
+    try:
+        return publisher.refine_open(item_id)
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/team/plan/{item_id}/refine/apply")
+def team_refine_apply(item_id: str):
+    """应用 Studio 里改的字幕:检查 → 重出成片(一次完整合成的时间)。"""
+    from ..team import publisher
+
+    try:
+        return publisher.refine_apply(item_id)
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/api/team/plan/{item_id}/retry-gate")
 def team_retry_gate(item_id: str):
     """门禁被机器拦下、你已经在项目页改好:清掉拦截,制片下一轮重新过闸。"""

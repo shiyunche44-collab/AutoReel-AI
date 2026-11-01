@@ -77,6 +77,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
         "reviews": sum(1 for i in items if i["status"] == "review"),
         "held": sum(1 for i in items if i["status"] == "producing" and i.get("hold")),
         "accounts": publisher.accounts(),
+        "refine": config.OPENFILM_ENABLED,
         "health": compliance.health(),
         # 总管:今日简报 + 反复失败的角色
         "chief": chief.view(),
