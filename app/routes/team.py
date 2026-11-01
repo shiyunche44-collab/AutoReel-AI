@@ -178,13 +178,20 @@ def team_refine_open(item_id: str):
 
 @router.post("/api/team/plan/{item_id}/refine/apply")
 def team_refine_apply(item_id: str):
-    """应用 Studio 里改的字幕:检查 → 重出成片(一次完整合成的时间)。"""
+    """应用 Studio 里改的字幕:后台检查并重出成片(一次完整合成的时间),进度用 refine/status 轮询。"""
     from ..team import publisher
 
     try:
-        return publisher.refine_apply(item_id)
+        return publisher.refine_apply_start(item_id)
     except team_plan.PlanError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/api/team/plan/{item_id}/refine/status")
+def team_refine_status(item_id: str):
+    from ..team import publisher
+
+    return publisher.refine_status(item_id)
 
 
 @router.post("/api/team/plan/{item_id}/retry-gate")

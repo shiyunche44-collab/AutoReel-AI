@@ -360,9 +360,20 @@ function reviewCard(item) {
     }));
     const apply = h('button', { class: 'btn btn-sm btn-ghost', type: 'button',
       title: '把 Studio 里改的字幕应用到成片(要重新合成一遍,几分钟)' }, icon('refresh', 'i-sm'), '应用精修');
+    // 后台跑:点一下立刻返回,这里每 3 秒问一次进度,直到出结果
+    const watchApply = async () => {
+      for (;;) {
+        const job = await api.get(`/api/team/plan/${item.id}/refine/status`);
+        if (job.state === 'failed') throw new Error(job.error || '应用失败');
+        if (job.state !== 'running') return job.result || {};
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    };
     apply.addEventListener('click', () => withLoading(apply, async () => {
       try {
-        const res = await api.post(`/api/team/plan/${item.id}/refine/apply`);
+        await api.post(`/api/team/plan/${item.id}/refine/apply`);
+        toast('已开始应用,后台重出成片,完成后会提示', { title: '应用精修' });
+        const res = await watchApply();
         toast(res.changed ? `已改 ${res.changed} 句字幕,成片已重出` : 'Studio 里没有字幕改动');
         (res.warnings || []).forEach((w) => toast(w, { type: 'warning' }));
         await load();

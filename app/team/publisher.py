@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 import time
 from typing import Any
 
@@ -215,6 +216,37 @@ def refine_apply(item_id: str) -> dict[str, Any]:
         note = ";".join(f"「{e['old']}」→「{e['new']}」" for e in out["edits"])
         preference.record(item, "cut", "refine", note=note)
     return out
+
+
+#: 后台应用精修的任务状态,按选题 id 存(只在内存里:服务重启就丢,成片本身不受影响)
+_refine_jobs: dict[str, dict[str, Any]] = {}
+_refine_lock = threading.Lock()
+
+
+def refine_apply_start(item_id: str) -> dict[str, Any]:
+    """后台应用精修:立刻返回,页面轮询 `refine_status`。同一条选题同一时刻只跑一个。"""
+    _refine_item(item_id)  # 开关 / 选题状态的错在这里就抛,不用等到后台
+    with _refine_lock:
+        if (_refine_jobs.get(item_id) or {}).get("state") == "running":
+            return dict(_refine_jobs[item_id])
+        _refine_jobs[item_id] = {"state": "running", "started_at": time.time()}
+
+    def _run() -> None:
+        try:
+            result = refine_apply(item_id)
+            job = {"state": "done", "result": result}
+        except Exception as exc:  # noqa: BLE001 - 失败原因交给页面显示
+            job = {"state": "failed", "error": str(exc)}
+        with _refine_lock:
+            _refine_jobs[item_id] = {**_refine_jobs[item_id], **job, "finished_at": time.time()}
+
+    threading.Thread(target=_run, name=f"refine-{item_id}", daemon=True).start()
+    return dict(_refine_jobs[item_id])
+
+
+def refine_status(item_id: str) -> dict[str, Any]:
+    with _refine_lock:
+        return dict(_refine_jobs.get(item_id) or {"state": "idle"})
 
 
 def sync() -> int:
