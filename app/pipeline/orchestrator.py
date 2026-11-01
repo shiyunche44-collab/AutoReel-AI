@@ -36,6 +36,10 @@ class PipelineError(RuntimeError):
     """流水线无法继续。"""
 
 
+class StateRaced(PipelineError):
+    """状态已被别的执行流推进(CAS 没抢到)。不是项目坏了,调用方重读状态即可,不能判死。"""
+
+
 # --------------------------------------------------------------------------
 # 工具
 # --------------------------------------------------------------------------
@@ -71,7 +75,7 @@ def _set_state(project_id: str, src: State | str, dst: State | str,
     with db.transaction() as conn:
         moved = db.cas_state(project_id, str(src), str(dst), conn=conn, reason=reason)
         if not moved:
-            raise PipelineError(
+            raise StateRaced(
                 f"状态已被并发推进(期望 {src},实际不是),本轮放弃"
             )
         db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost, conn=conn)

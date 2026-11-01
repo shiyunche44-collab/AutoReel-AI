@@ -141,3 +141,43 @@ def test_success_clears_failure_counters(store, monkeypatch):
     main.scheduler._retry_after.pop("p_fail", None)  # 跳过退避窗口
     _sweep()
     assert "p_fail" not in main.scheduler._failures
+
+
+def test_state_raced_does_not_fail_a_finished_project(store, monkeypatch):
+    """另一路已把项目推到 DONE:迟到的一路 CAS 没抢到,不能把成片标成 FAILED。
+
+    线上出过:p_8649d98ac728 合成完成(DONE)并已发布后,又被这条分支写成 FAILED。"""
+    store.create_project(_project(state="COMPOSING"))
+
+    def raced(pid, **kwargs):
+        store.update_project(pid, state="DONE")  # 另一路赶在前面合成完了
+        raise main.orchestrator.StateRaced("状态已被并发推进")
+
+    monkeypatch.setattr(main.orchestrator, "advance", raced)
+    _sweep()
+    assert store.get_project("p_fail")["state"] == "DONE"
+
+
+def test_pipeline_error_never_overwrites_done(store, monkeypatch):
+    store.create_project(_project(state="COMPOSING"))
+
+    def boom(pid, **kwargs):
+        store.update_project(pid, state="DONE")
+        raise main.orchestrator.PipelineError("别的原因")
+
+    monkeypatch.setattr(main.orchestrator, "advance", boom)
+    _sweep()
+    assert store.get_project("p_fail")["state"] == "DONE"
+
+
+def test_pipeline_error_fails_from_current_state(store, monkeypatch):
+    """这一轮推进了几步才出错:按现在的状态判死,不是按开头读到的。"""
+    store.create_project(_project(state="QA_PASSED"))
+
+    def boom(pid, **kwargs):
+        store.update_project(pid, state="COMPOSING")
+        raise main.orchestrator.PipelineError("拼接失败")
+
+    monkeypatch.setattr(main.orchestrator, "advance", boom)
+    _sweep()
+    assert store.get_project("p_fail")["state"] == "FAILED"

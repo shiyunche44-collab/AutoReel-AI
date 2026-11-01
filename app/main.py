@@ -223,14 +223,22 @@ class Scheduler:
         try:
             # 关键:推进放到线程池,事件循环不被占住
             out = await loop.run_in_executor(self._executor(), self._advance_call, pid)
+        except orchestrator.StateRaced as exc:
+            # 别的执行流已经把状态推走了(比如另一路刚把它合成完):不是项目坏了,
+            # 不判死。之前这里和下面的分支一样一律写 FAILED,把已发布的成片标成了失败。
+            log.info("项目 %s 状态被别处推进,本轮让出:%s", pid, exc)
+            now = db.get_project(pid) or {}
+            return str(now.get("state") or "") in AUTO_ADVANCE_STATES
         except orchestrator.PipelineError as exc:
             # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
             self._failures[pid] = MAX_CONSECUTIVE_FAILURES
             log.error("推进 %s 失败(不可恢复):%s", pid, exc)
-            db.update_project(pid, state=str(State.FAILED),
-                              state_reason=f"后台推进失败:{exc}")
-            db.add_event(pid, str(State.FAILED), src=state,
-                         reason=f"后台推进失败:{exc}")
+            # 按**现在**的状态判死(这一轮可能已推进了几步);已完成 / 已结束的不覆盖
+            cur = str((db.get_project(pid) or {}).get("state") or "")
+            if cur not in (str(State.DONE), str(State.FAILED), str(State.CANCELLED)) and \
+                    db.cas_state(pid, cur, str(State.FAILED), reason=f"后台推进失败:{exc}"):
+                db.add_event(pid, str(State.FAILED), src=cur,
+                             reason=f"后台推进失败:{exc}")
             return False
         except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
             n = self._failures.get(pid, 0) + 1
