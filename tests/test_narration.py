@@ -397,3 +397,21 @@ def test_concat_audio_honours_per_sentence_gaps(tmp_path):
     ok, err = narration._concat_audio([a, b], dest, gaps=[0.1, 0.5])
     assert ok, err
     assert _wav_duration(dest) == pytest.approx(0.4 + 0.1 + 0.4 + 0.5, abs=0.05)
+
+
+def test_sentence_tempos_hook_faster_and_close_slower(monkeypatch):
+    monkeypatch.setattr(config, "TTS_PROSODY", True)
+    t = narration.sentence_tempos([0, 0, 1, 2, 3, 3])
+    assert t[0] == config.TTS_HOOK_TEMPO > 1.0
+    assert t[1] == t[2] == t[3] == 1.0
+    assert t[4] == t[5] == config.TTS_CLOSE_TEMPO < 1.0
+    monkeypatch.setattr(config, "TTS_PROSODY", False)
+    assert narration.sentence_tempos([0, 1, 1]) == [1.0, 1.0, 1.0]
+
+
+def test_trim_clip_tempo_changes_duration(tmp_path):
+    src = _make_tone(tmp_path / "s.wav", 2.0)
+    fast = narration.trim_clip(src, tmp_path / "f.wav", tempo=1.05)
+    slow = narration.trim_clip(src, tmp_path / "w.wav", tempo=0.95)
+    assert _wav_duration(fast) < _wav_duration(slow)
+    assert _wav_duration(fast) == pytest.approx(2.0 / 1.05, abs=0.1)

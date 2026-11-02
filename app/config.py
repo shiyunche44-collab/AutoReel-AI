@@ -132,6 +132,11 @@ SENTENCE_GAP_MS = 220
 #: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪空 = 不传(试听后再定)
 TTS_SPEED = float(os.getenv("TTS_SPEED", "1.12"))
 TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
+#: 按句子在片里的角色微调语速(TTS 之后用 atempo 处理,不动 TTS 调用与缓存):
+#: 开场第一句略快、有冲击;结论段略慢、有分量。1.0 = 不调;TTS_PROSODY=0 整个关掉
+TTS_PROSODY = os.getenv("TTS_PROSODY", "1") != "0"
+TTS_HOOK_TEMPO = float(os.getenv("TTS_HOOK_TEMPO", "1.05"))
+TTS_CLOSE_TEMPO = float(os.getenv("TTS_CLOSE_TEMPO", "0.95"))
 TTS_PITCH = int(os.getenv("TTS_PITCH", "0"))
 #: 语音质检:每句合成后自动核对(信号检查 + 对可疑句转写比对),不合格自动重合成,
 #: 仍不合格拦在门禁 A。VOICE_QA_ASR=0 只做信号检查;转写需要 `pip install faster-whisper`,

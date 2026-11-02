@@ -225,8 +225,9 @@ def build(
 
     order = sorted(by_pos)
     assets = [by_pos[i] for i in order]
-    result.audio_paths = [trim_clip(Path(a.local_path), audio_dir / f"trim_{i:03d}.wav")
-                          for i, a in zip(order, assets)]
+    tempos = sentence_tempos([shot_indices[i] for i in order])
+    result.audio_paths = [trim_clip(Path(a.local_path), audio_dir / f"trim_{i:03d}.wav", tempo=t)
+                          for (i, a), t in zip(zip(order, assets, strict=False), tempos, strict=False)]
     # 字幕用原文:TTS 文本把数字归一化成了中文读法("六百四十三公里"),
     # 上屏得是"643 公里""kWh",观众才能扫读、截图,也才和画面上的大字对得上
     used_texts = [pairs[i][0].strip() for i in order]
@@ -542,7 +543,20 @@ _TRIM_SILENCE = (
 )
 
 
-def trim_clip(src: Path, dest: Path) -> Path:
+def sentence_tempos(shot_indices: Sequence[int]) -> list[float]:
+    """每句的语速倍率:第一句(钩子)略快,最后一拍(结论)的各句略慢,其余 1.0。"""
+    if not config.TTS_PROSODY or not shot_indices:
+        return [1.0] * len(shot_indices)
+    last = max(shot_indices)
+    out = [1.0] * len(shot_indices)
+    for k, shot in enumerate(shot_indices):
+        if shot == last and k > 0:
+            out[k] = config.TTS_CLOSE_TEMPO
+    out[0] = config.TTS_HOOK_TEMPO
+    return [min(1.15, max(0.85, t)) for t in out]
+
+
+def trim_clip(src: Path, dest: Path, tempo: float = 1.0) -> Path:
     """裁掉首尾静音,存成 wav。失败或裁完几乎没剩就原样用 src。
     必须在量时长之前做:字幕和画面时间轴按这里的实际时长累加,和拼接用的是同一份文件。"""
     if not config.FFMPEG_PATH:
@@ -552,7 +566,8 @@ def trim_clip(src: Path, dest: Path) -> Path:
     try:
         proc = subprocess.run(
             [str(config.FFMPEG_PATH), "-y", "-v", "error", "-i", str(src),
-             "-af", _TRIM_SILENCE, "-ar", "48000", str(dest)],
+             "-af", _TRIM_SILENCE + (f",atempo={tempo:.3f}" if abs(tempo - 1.0) > 0.005 else ""),
+             "-ar", "48000", str(dest)],
             capture_output=True, text=True, timeout=120)
     except Exception:  # noqa: BLE001
         return src
