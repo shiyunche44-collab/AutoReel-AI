@@ -570,3 +570,17 @@ def test_cut_lead_never_exceeds_the_pause():
     cues = [SubtitleCue(index=1, start=0.0, end=2.0, text="a", shot_idx=0),
             SubtitleCue(index=2, start=2.05, end=4.0, text="b", shot_idx=1)]
     assert timing.cut_leads(cues, 2)[1] <= 0.05 * timing.CUT_LEAD_OF_GAP + 1e-9
+
+
+def test_jcut_info_beat_gets_bigger_lead_and_lcut_after_info():
+    from app.pipeline.explainer import timing
+    cues = [SubtitleCue(index=1, start=0.0, end=2.0, text="a", shot_idx=0),
+            SubtitleCue(index=2, start=2.1, end=4.0, text="b", shot_idx=1),
+            SubtitleCue(index=3, start=4.1, end=6.0, text="c", shot_idx=2)]
+    base = explainer.beat_durations(cues, 3)
+    leads = timing.cut_leads(cues, 3, ["highlight", "concept", "highlight"])
+    assert leads[1] == pytest.approx(timing.JCUT_INFO_MAX)   # 信息拍:图先到,超过停顿也行
+    assert leads[2] == pytest.approx(-timing.LCUT_LAG)       # 信息拍之后:晚切
+    out = timing.apply_cut_leads(list(base), leads)
+    assert sum(out) == pytest.approx(sum(base))
+    assert out[2] == pytest.approx(base[2] - timing.LCUT_LAG)

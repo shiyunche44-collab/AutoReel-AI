@@ -37,7 +37,7 @@ from typing import Any, Sequence  # noqa: F401
 from ... import config, db  # noqa: F401
 from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
-from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, outro, overlays, rhythm  # noqa: F401
+from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, intro, outro, overlays, rhythm  # noqa: F401
 from .. import render as render_mod  # noqa: F401
 from ..grounding import numbers_in  # noqa: F401
 
@@ -647,6 +647,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
     durations = [s.duration for s in beats]
     card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
+    badge = intro.build(project_dir, size)
     if card:
         shots.append(card[0])
         durations.append(card[1])
@@ -658,6 +659,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
+        intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -723,6 +725,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
     durations = [s.duration for s in beats]
     card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
+    badge = intro.build(project_dir, size)
     if card:
         shots.append(card[0])
         durations.append(card[1])
@@ -734,6 +737,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
+        intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))

@@ -377,8 +377,13 @@ def compose(
     layer_path: Path | None = None,
     sfx_path: Path | None = None,
     tail_silent: bool = False,
+    intro_path: Path | None = None,
+    intro_seconds: float = 0.0,
 ) -> RenderResult:
     """主合成入口。
+
+    `intro_path` = 片头品牌条(带透明通道的 PNG,见 intro.py):叠在画面上前 `intro_seconds`
+    秒,淡入淡出;不占时长、不挡旁白,叠失败时整次合成退回不带它的版本。
 
     `tail_silent` = 最后一个镜头是片尾卡(没有旁白):混音补静音到总长,BGM 托底并淡出。
 
@@ -449,14 +454,25 @@ def compose(
     if ass_filter:
         vf_parts.append(ass_filter)
     vf = ",".join(vf_parts)
+    nxt = 2 if mix_path else 1
+    chain = f"[0:v]{vf}[v0]"
     if use_layer:
         # 花字层是 vp8+alpha:ffmpeg 自带的 vp8 解码器会丢掉 alpha,必须指定 libvpx
-        layer_idx = 2 if mix_path else 1
         inputs += ["-c:v", "libvpx", "-i", str(layer_path)]
-        filters = (f"[0:v]{vf}[vbase];"
-                   f"[vbase][{layer_idx}:v]overlay=eof_action=pass:format=auto,format=yuv420p[vout]")
+        chain += f";[v0][{nxt}:v]overlay=eof_action=pass:format=auto[v1]"
+        nxt += 1
     else:
-        filters = f"[0:v]{vf}[vout]"
+        chain += ";[v0]null[v1]"
+    use_intro = bool(intro_path and Path(intro_path).is_file() and intro_seconds > 0)
+    if use_intro:
+        fo = max(0.0, intro_seconds - 0.4)
+        inputs += ["-loop", "1", "-t", f"{intro_seconds:.3f}", "-i", str(intro_path)]
+        chain += (f";[{nxt}:v]format=rgba,fade=t=in:st=0:d=0.3:alpha=1,"
+                  f"fade=t=out:st={fo:.3f}:d=0.4:alpha=1[intro];"
+                  "[v1][intro]overlay=eof_action=pass:format=auto[v2]")
+    else:
+        chain += ";[v1]null[v2]"
+    filters = chain + ";[v2]format=yuv420p[vout]"
     if mix_path:
         audio_map = "1:a"
     else:
@@ -503,7 +519,7 @@ def compose(
                 ass_path=ass_path, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, layer_path=None, sfx_path=sfx_path,
-                tail_silent=tail_silent,
+                tail_silent=tail_silent, intro_path=intro_path, intro_seconds=intro_seconds,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry
@@ -516,6 +532,7 @@ def compose(
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, tail_silent=tail_silent,
+                intro_path=intro_path, intro_seconds=intro_seconds,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry

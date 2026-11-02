@@ -37,12 +37,22 @@ CUT_LEAD_MAX = 0.12
 CUT_LEAD_OF_GAP = 0.6
 
 
-def cut_leads(cues: Sequence[Any], count: int) -> dict[int, float]:
-    """每一拍的画面比旁白早切多少秒(拍序号 → 秒;第一拍没有,不在字典里)。
+#: 下一拍是信息画面(动画 / 数据卡)时,画面最多比旁白早切这么多秒:观众先看到图,再听到讲它
+JCUT_INFO_MAX = 0.30
+#: 上一拍是信息画面、下一拍是实拍时,画面晚切这么多秒(L-cut):让上一张图的动画收完再走
+LCUT_LAG = 0.15
+_INFO_LAYOUTS = ("concept", "card", "stat")
 
-    旁白是一条连续的轨,切点完全由画面决定:把切点从"下一句开口的那一刻"
-    提前到上一句尾音之后的停顿中间,就是剪辑里的 J-cut 的最小形式,
-    去掉"声音和画面同一帧切"的机械感。总时长不变。"""
+
+def cut_leads(cues: Sequence[Any], count: int, layouts: Sequence[str] | None = None
+              ) -> dict[int, float]:
+    """每一拍的画面比旁白早切多少秒(拍序号 → 秒;正 = J-cut 画面先到,负 = L-cut 画面留一会儿)。
+
+    旁白是一条连续的轨,切点完全由画面决定,所以音画各自的偏移就是切点相对"下一句开口"的偏移。
+    默认把切点提前到上一句尾音后的停顿里(最多 CUT_LEAD_MAX);给了 `layouts` 就按内容分工:
+    - 下一拍是信息画面:J-cut 加大到 JCUT_INFO_MAX,不再受停顿长度限制(图先出现);
+    - 上一拍是信息画面、下一拍是实拍:L-cut,晚切 LCUT_LAG,动画收完再走。
+    总时长不变;第一拍没有,不在字典里。"""
     first: dict[int, Any] = {}
     last: dict[int, Any] = {}
     for c in cues:
@@ -50,23 +60,32 @@ def cut_leads(cues: Sequence[Any], count: int) -> dict[int, float]:
             first.setdefault(c.shot_idx, c)
             last[c.shot_idx] = c
     order = sorted(first)
+
+    def kind(k: int) -> str:
+        return layouts[k] if layouts is not None and k < len(layouts) else ""
+
     leads: dict[int, float] = {}
-    for prev, cur in zip(order, order[1:]):
+    for prev, cur in zip(order, order[1:], strict=False):
         gap = first[cur].start - last[prev].end
         lead = min(CUT_LEAD_MAX, CUT_LEAD_OF_GAP * gap)
-        if lead >= 0.02:
+        if kind(cur) in _INFO_LAYOUTS:
+            lead = max(lead, JCUT_INFO_MAX)
+        elif kind(prev) in _INFO_LAYOUTS and kind(cur):
+            lead = -LCUT_LAG
+        if abs(lead) >= 0.02:
             leads[cur] = round(lead, 3)
     return leads
 
 
 def apply_cut_leads(durations: list[float], leads: dict[int, float]) -> list[float]:
-    """把各拍提前量折进时长:拍 k 的开头提前 L_k,上一拍就少 L_k,总长不变。
-    折完某一拍会不到原来的 80%(极短的拍)就放弃这次调整。"""
+    """把各拍提前量折进时长:拍 k 的开头提前 L_k(L<0 是推后),上一拍就少 L_k,总长不变。
+    折完被缩短的那一拍会不到原来的 80%(极短的拍)就放弃这次调整。"""
     order = [k for k, d in enumerate(durations) if d > 0]
     out = list(durations)
-    for prev, cur in zip(order, order[1:]):
+    for prev, cur in zip(order, order[1:], strict=False):
         lead = leads.get(cur, 0.0)
-        if lead and out[prev] - lead >= durations[prev] * 0.8:
+        shrink = prev if lead > 0 else cur
+        if lead and out[shrink] - abs(lead) >= durations[shrink] * 0.8:
             out[prev] = round(out[prev] - lead, 3)
             out[cur] = round(out[cur] + lead, 3)
         else:
@@ -96,7 +115,7 @@ def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
     durations = beat_durations(nar.cues, len(specs))
     leads: dict[int, float] = {}
     if config.CUT_LEAD_ENABLED:
-        leads = cut_leads(nar.cues, len(specs))
+        leads = cut_leads(nar.cues, len(specs), [s.layout for s in specs])
         durations = apply_cut_leads(durations, leads)
     for s, d in zip(specs, durations):
         s.duration = d

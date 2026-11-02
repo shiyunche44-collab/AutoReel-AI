@@ -357,6 +357,9 @@ COVER_AI_CAR_CANDIDATES = max(1, int(os.getenv("COVER_AI_CAR_CANDIDATES", "4") o
 COVER_BRAND = os.getenv("COVER_BRAND", "").strip()
 #: 片尾卡:成片末尾接一张静态结尾卡(行动号召 + 账号署名),旁白已经说完,BGM 托底并淡出。
 #: 加在旁白之后,不动前面任何一拍的时间。默认关;OUTRO_ENABLED=1 开
+#: 片头品牌条:前几秒左上角叠一枚署名小标(不另加一段、不占时长)。默认关;INTRO_ENABLED=1 开
+INTRO_ENABLED = os.getenv("INTRO_ENABLED", "0") == "1"
+INTRO_SECONDS = float(os.getenv("INTRO_SECONDS", "2.5"))
 OUTRO_ENABLED = os.getenv("OUTRO_ENABLED", "0") == "1"
 OUTRO_SECONDS = float(os.getenv("OUTRO_SECONDS", "2.5"))
 OUTRO_TEXT = os.getenv("OUTRO_TEXT", "关注我,看更多真实数据解读").strip()
