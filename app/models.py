@@ -278,6 +278,8 @@ class SubtitleCue(BaseModel):
     end: float
     text: str
     shot_idx: int
+    #: 原文每个字相对本句开头的起始秒(逐字字幕用);没量过为 None
+    char_t: list[float] | None = None
 
 
 class JobEvent(BaseModel):

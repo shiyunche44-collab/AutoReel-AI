@@ -20,7 +20,7 @@ from typing import Any, Sequence
 from .. import config, db
 from ..models import SubtitleCue
 from ..providers import audio
-from . import knobs, looks
+from . import knobs, looks, word_timing
 from .timeline import (
     build_subtitle_cues,
     format_ass,
@@ -247,6 +247,9 @@ def build(
 
     # ---- 字幕时间轴 ----
     cues = build_subtitle_cues(used_texts, durations, shot_indices=used_shots)
+    for cue, ct in zip(cues, word_timing.measure(result.audio_paths, used_texts, durations),
+                       strict=False):
+        cue.char_t = ct
     result.cues = cues
     result.total_duration = cues[-1].end if cues else 0.0
 

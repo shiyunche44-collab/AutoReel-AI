@@ -134,6 +134,8 @@ TTS_SPEED = float(os.getenv("TTS_SPEED", "1.12"))
 TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
 #: 按句子在片里的角色微调语速(TTS 之后用 atempo 处理,不动 TTS 调用与缓存):
 #: 开场第一句略快、有冲击;结论段略慢、有分量。1.0 = 不调;TTS_PROSODY=0 整个关掉
+#: 字幕逐字时间:用 faster-whisper 量出每个字实际念到的时刻(需已装;失败退回字数比例)
+CAPTION_WORD_TIMING = os.getenv("CAPTION_WORD_TIMING", "1") != "0"
 TTS_PROSODY = os.getenv("TTS_PROSODY", "1") != "0"
 TTS_HOOK_TEMPO = float(os.getenv("TTS_HOOK_TEMPO", "1.05"))
 TTS_CLOSE_TEMPO = float(os.getenv("TTS_CLOSE_TEMPO", "0.95"))

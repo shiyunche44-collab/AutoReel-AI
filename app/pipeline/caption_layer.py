@@ -93,10 +93,31 @@ def build_layer(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: i
         total = sum(len(p) for p in pieces)
         if not pieces or end <= start or total <= 0:
             continue
-        t = start
+        char_t = cue.get("char_t")
+        text = str(cue.get("text") or "")
+        if not (char_t and len(char_t) == len(text)):
+            char_t = None  # 没量过,或改字后长度对不上:按字数比例估
+        pos = 0
+        spans = []
         for p in pieces:
+            at = text.find(p, pos)
+            at = pos if at < 0 else at
+            spans.append(at)
+            pos = at + len(p)
+        t = start
+        for k, p in enumerate(pieces):
             d = (end - start) * len(p) / total
-            words = [{**w, "start": round(t + w["at"] * d, 3)} for w in mark_words(p)]
+            if char_t:
+                t = start + char_t[spans[k]]
+                nxt = start + char_t[spans[k + 1]] if k + 1 < len(pieces) else end
+                d = max(0.05, nxt - t)
+            words = []
+            for w in mark_words(p):
+                if char_t:
+                    ws = start + char_t[min(len(text) - 1, spans[k] + round(w["at"] * len(p)))]
+                else:
+                    ws = t + w["at"] * d
+                words.append({**w, "start": round(max(t, ws), 3)})
             for w in words:
                 w.pop("at")
             shown.append({"start": round(t, 3), "end": round(t + d, 3), "words": words})
