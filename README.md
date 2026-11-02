@@ -54,7 +54,9 @@ copy .env.example .env
 | `TEAM_DAILY_SLOTS` / `TEAM_SLOT_TIMES` | `1` / `18:30` | 每天出几条、几点发 |
 | `TEAM_ASPECT` / `TEAM_DURATION` | `16:9` / `240` | 团队选题默认的画幅和时长 |
 | `COVER_BRAND` | 空 | 封面右下角的账号署名 |
-| `BGM_ENABLED` | `1` | 成片是否配 BGM（混音时对旁白做侧链闪避） |
+| `BGM_ENABLED` | `1` | 成片是否配 BGM（混音时对旁白做侧链闪避；开头淡入 1.5 秒、结尾淡出 2.5 秒） |
+| `OPENFILM_ENABLED` | `0` | 成片闸上的「精修」按钮（见下文「成片精修」）。首次要下载约 100 MB 无头浏览器 |
+| `CACHE_TTS_MAX_MB` / `CACHE_MOTION_MAX_MB` | `100` / `500` | TTS 与概念动画缓存的体积上限（超出按最久未用淘汰） |
 | `PIPELINE_CONCURRENCY` | `1` | 同时推进几个项目。内存吃紧就保持 1 |
 | `YTDLP_PROXY` / `YTDLP_COOKIES` | 空 | 国内访问 YouTube / TikTok 要配代理；B站高清和抖音下载要配 cookies |
 | `HYPERFRAMES_BROWSER_PATH` / `MOTION_NODE` | 自动找 | 概念动画用的 Chrome 和 node 22+（nvm 全局是旧版本时手动指定） |
@@ -73,6 +75,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 - 要长期运行就用 `serve.ps1`：它会起一个独立进程，日志写到 `data/logs/server-*.log`。直接运行 `python run.py` 的话，进程会被托管任务的 1 小时上限一起收走。
 - `serve.ps1` 会先**杀掉已经占用该端口的进程**，启动前先确认端口上没有正在渲染的服务。
 - **只能跑一个服务。** 两个服务连同一个库时，两边的调度器会同时推进同一个项目，结果是重复渲染、成片损坏。开发调试用 `.claude/launch.json` 里的 `AutoReel-AI-dev`（端口 8849），并且要另配 `DATA_DIR`。
+- 给 AI 助手和协作者的避坑规则（服务器与调度器、测试隔离、Git 习惯、平台抓取限制）集中在 [CLAUDE.md](CLAUDE.md)。
 
 ### 4. 出第一条片
 
@@ -140,6 +143,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 - 门禁 B 审已经渲好的各拍，不满意的可以点「换背景重拍」。
 - 合成时先单独混出音频 `_render/mix.wav`，再交给主命令。原因是 loudnorm 和视频编码放在同一条命令里时，ffmpeg 会掉 3 秒左右的音频块。出片前会数音频包，发现空洞就不放行。
+- **成片级 QA**（`final_qa.py`）：出片后用一遍 ffmpeg 测综合响度（偏离目标超过 1.5 LU）、真峰值（高于 -1 dBTP）、黑场（≥0.5 秒）和画面静止（≥4 秒）。结果只写进 `RenderResult.warnings`，**不拦成片**：转场和静态数据卡上的黑场、静止可能是有意的，由人看警告决定。
 - 语音质检（`voice_qa.py`）：所有句子做信号检查（哑音、过轻、语速离群），可疑的句子再用 whisper 转写，核对它念的是不是本句。不合格的句子自动重新合成，最多 `VOICE_QA_RETRY_ROUNDS` 轮。
 
 ---
@@ -185,10 +189,10 @@ python tests/test_profile_vocab.py --regen
 ### 不让每条片子都长一个样
 
 - **变体**（`pipeline/variety.py`）：每个项目选一种开场（冲突三段式 / 问题 / 场景冷开 / 破除说法 / 硬数字）和一种结尾（提问或预告 / 二选一 / 下期预告 / 一句判决 / 决策卡），会避开同品类最近 4 条用过的组合。有打法手册时按效果加权。
-- **视觉包**（`pipeline/looks.py`）：工程 HUD（默认）、暗场电影、工程蓝图、杂志编排。每个包整套换掉面板、字幕、broll 样式、概念模版和 BGM 曲风。在项目页挑选，样图在 `app/web/static/looks/`。
+- **视觉包**（`pipeline/looks.py`）：工程 HUD（默认）、暗场电影、工程蓝图、杂志编排，另有只能手动指定的「轻包装」（无常驻章节条、白字描边字幕、信息靠口播）。每个包整套换掉面板、字幕、broll 样式、概念模版和 BGM 曲风。在项目页挑选，样图在 `app/web/static/looks/`。
 - **热点选题**（`pipeline/topics.py` + `providers/trends.py`）：4 个热点源各自独立失败、缓存 2 小时。只推荐出现在热点里的车，并附上证据。证据会随项目进入事实采集。
 
-### 脚本规则（`pipeline/script_gen.py`）
+### 脚本规则（`pipeline/script_gen/`）
 
 - **开头三段式**（默认开场）：0–3 秒抛冲突（第一句不超过 18 字，不许用套话），3–10 秒兑现那个数字，10–15 秒亮出处（全片只说一次）。
 - **每个数字后面要跟一句「所以呢」**，并给出立场；结尾必须有提问或预告。
@@ -199,7 +203,7 @@ python tests/test_profile_vocab.py --regen
 
 ## 画面
 
-### 版式（`pipeline/explainer.py`）
+### 版式（`pipeline/explainer/`）
 
 | 版式 | 画面 |
 |---|---|
@@ -226,7 +230,7 @@ python tests/test_profile_vocab.py --regen
 
 **先攒、再切、再看、最后铺**，按车型存在 `data/library/<车型>/`，跨项目复用。
 
-1. **攒**：**官方号优先**。用 B站空间接口按官方账号拉投稿（`official.bilibili_official`），官方源最多 8 个；有 4 个以上官方源时，第三方源限 3 个。再加上手动贴的链接和官方图库。
+1. **攒**：**官方号优先**。用 B站空间接口按官方账号拉投稿（`official.bilibili_official`），官方源最多 8 个；有 4 个以上官方源时，第三方源限 3 个。再加上手动贴的链接和官方图库。另有**官网发布会回放**：YAML 的 `launch` 登记回放页（或 `launch_list` 登记官网直播列表，自动找标题含车型名的发布会），解析出 1080p 无水印的 m3u8 直链。回放是舞台讲解加 PPT 加官方渲染片，选料时会避开大字 PPT 页、讲解口播段和黑场。
 2. **切**：用 ffmpeg 场景检测，按原片自己的剪辑点切段。
 3. **看**：每段抽一帧给视觉模型打标签，标视角、是不是这台车、有没有字幕、水印或主持人。为了省钱，废段率高的源提前停，可用背景攒够就停，近重复的段直接继承标签。
 4. **铺**（`library.fill`）：2–4 秒一刀，排序依次是确认本车的干净视频、官图、带字幕的段（裁掉底部）、有主持人的段。第三方视频裁掉四角的水印。开场钩子只用确认本车的素材。近重复簇在最近 6 刀里不复用，不连续两刀同一视角。旁白点名某个部件时，不配其它部件的特写。
@@ -251,7 +255,7 @@ python -m app.pipeline.library license 小米YU7 --source <id|地址> --status a
 
 懂车帝图库从 2026-10 起需要登录：在素材库页点「登录懂车帝」，登录态存在 `data/_browser/dongchedi.json`。
 
-### 封面（`pipeline/cover_art.py`）
+### 封面（`pipeline/cover_art/`）
 
 全站只有一套版式，方便观众认出是同一个号：浅色影棚底、左上角超大粗黑主标题、强调色带副标题（主论点）、车名胶囊、右下角署名。横屏出图后，自动再补一张 3:4（小红书 / 抖音网格）和一张 4:3。
 
@@ -270,8 +274,22 @@ python -m app.pipeline.cover_art --all
 
 ### 旁白与 BGM（`pipeline/narration.py`）
 
-- TTS 逐句缓存在 `data/_cache/tts/`，门禁 A 改几句再确认时，只为改动的句子付钱。字幕用原稿（阿拉伯数字、kWh），TTS 用规范化后的文本，并按 `vocab.pronounce` 纠正读音。
+- TTS 不做句子缓存，每次确认都整段重新合成（缓存会把语气不对的音频一直复用）。字幕用原稿（阿拉伯数字、kWh），TTS 用规范化后的文本，并按 `vocab.pronounce` 纠正读音。
 - BGM 来源：方舟套餐没有音乐模型，所以从 Mixkit 自动收集免费可商用的曲子，放在 `data/bgm/<品类>/`，许可证记在 `_licenses.json`。也可以把自己的曲子放进 `BGM_DIR`。`BGM_AUTO_COLLECT=0` 关闭自动收集。
+
+### 磁盘与缓存（`app/maintenance.py`）
+
+`data/` 只会涨。TTS 和概念动画缓存有体积上限（LRU）；成片、封面、脚本、分镜永不自动删，素材池只能显式驱逐，共享 BGM 曲库默认不清。
+
+```bash
+python -m app.maintenance report          # 看体积分布
+python -m app.maintenance prune           # 按策略清理（缓存按龄 + 临时物）
+python -m app.maintenance prune --dry-run # 只报告不删
+```
+
+### 成片精修（`pipeline/refine.py`，默认关）
+
+`OPENFILM_ENABLED=1` 后，成片闸上可以把成片导出成 OpenFilm 项目，在 Studio 里改字幕，再读回改动：应用时改 `narration.json` 和 ASS 里的字，用我们自己的合成重出成片，OpenFilm 不参与渲染。
 
 ---
 
@@ -343,30 +361,35 @@ LLM 偶尔整篇用中文数字写稿来绕过数字 lint，所以 lint 前会�
 
 ```
 app/
-  main.py            FastAPI 应用、页面路由、项目调度器
+  main.py            FastAPI 应用装配与页面路由
+  routes/            按领域拆出的路由：projects / library / publish / team
+  scheduler.py       项目调度器 Scheduler 与 AUTO_ADVANCE_STATES
+  maintenance.py     磁盘与缓存清理
   config.py          配置（.env）
   models.py / state.py / db.py   领域模型、状态机、SQLite（运行态）+ JSON（可编辑内容）
   costs.py           等效用量估算与额度
   llm/               LLM 抽象（DeepSeek）
   providers/         外部通道：cli / direct / 素材源 / 热点 trends / 车型表 car_lineup / BGM / 浏览器抓取
-  categories/        品类 Profile 加载、段落铺展、校验（profiles/*.yaml）
+  categories/        品类规格 spec、Profile、构建与校验 build（profiles/*.yaml）
   pipeline/
     orchestrator.py      流水线编排与门禁
     topics.py            热点选题
     intake.py / derive.py / grounding.py   事实采集、推算、数字与口径工具
-    script_gen.py        脚本生成 + 全部 lint
-    explainer.py         逐拍版式、核对、时长、渲染、合成
+    script_gen/          脚本生成 + 全部 lint（prompt / hook / segments / lint_*）
+    explainer/           逐拍版式、核对、时长、渲染、合成（planning_a/b / beat_render / ffmpeg 等）
     rhythm.py            节奏体检
     variety.py / looks.py   开场结尾变体、视觉包
     cards.py / overlays.py / overlays_portrait.py / hud.py   本地绘制的叠加层
     motion.py / motion_assets.py / concept_styles.py         概念动画
     library/ / vision_verdict.py / logo_detect.py            素材池（含授权闸门 licensing.py）
-    narration.py / voice_qa.py / render.py / timeline.py     旁白、质检、ffmpeg 合成、字幕
-    cover_art.py / packaging.py / repurpose.py               封面、标题包装、一稿多发
+    narration.py / voice_qa.py / render.py / final_qa.py / timeline.py   旁白、质检、ffmpeg 合成、成片 QA、字幕
+    refine.py            成片精修（OpenFilm）
+    cover_art/ / packaging.py / repurpose.py                 封面、标题包装、一稿多发
     aspect.py            画幅规格（横 / 竖的唯一来源）
   team/              AI 团队：13 个角色 + scheduler + features/stats/playbook（复盘统计）+ views
   publish/           多平台发布：适配器契约、账号、文案、发布任务、浏览器会话、platforms/
   metrics/           数据抓取、快照、聚合
+  db/                SQLite 访问层（按表拆分）
   web/               Jinja2 模板 + 原生 ES Module（零构建）
 motion/              HyperFrames 子工程：_shell.html / _lib.js / _viz.js / scenes / templates / regress
 scripts/             serve.ps1、motion_regress.py、look_samples.py、reset_to_gate.py 等
