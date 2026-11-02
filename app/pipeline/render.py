@@ -21,6 +21,7 @@ from typing import Any, Sequence
 
 from .. import config
 from ..models import SubtitleCue
+from . import final_qa
 from . import timeline as timeline_mod
 
 log = logging.getLogger(__name__)
@@ -232,6 +233,19 @@ BGM_DUCK_RATIO = 12
 BGM_DUCK_THRESHOLD = 0.01
 
 
+#: BGM 淡入 / 淡出秒数。片太短(不够淡出)或不知道总时长时只淡入
+BGM_FADE_IN = 1.5
+BGM_FADE_OUT = 2.5
+
+
+def _bgm_fades(seconds: float) -> str:
+    """BGM 首尾淡入淡出的滤镜片段(含前导逗号)。只作用在 BGM,不碰旁白。"""
+    fades = f",afade=t=in:st=0:d={BGM_FADE_IN}"
+    if seconds >= BGM_FADE_IN + BGM_FADE_OUT + 3:
+        fades += f",afade=t=out:st={seconds - BGM_FADE_OUT:.2f}:d={BGM_FADE_OUT}"
+    return fades
+
+
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
     has_sfx: bool = False,
@@ -259,7 +273,7 @@ def _build_audio_graph(
         bgm_index = first_input + 1 if has_narration else first_input
         filters.append(
             f"[{bgm_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}[bgmraw]"
+            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}{_bgm_fades(narration_duration)}[bgmraw]"
         )
     if has_narration and has_bgm:
         filters.append("[narr0]asplit=2[narr][narrsc]")
@@ -320,7 +334,7 @@ def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: floa
     has_sfx = bool(sfx_path and Path(sfx_path).is_file())
     if has_sfx:
         inputs += ["-i", str(sfx_path)]
-    graph, label = _build_audio_graph(has_narration, has_bgm, 0.0, first_input=0, has_sfx=has_sfx)
+    graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx)
     dest.parent.mkdir(parents=True, exist_ok=True)
     proc = _run(
         ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
@@ -492,6 +506,8 @@ def compose(
     duration = timeline_mod.probe_safe(output, default=0.0)
     if duration <= 0:
         warnings.append("成片时长探测失败")
+    if mix_path:
+        warnings.extend(final_qa.inspect(output))
 
     return RenderResult(
         ok=True, output_path=output, duration=duration, warnings=warnings,
