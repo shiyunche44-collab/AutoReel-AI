@@ -127,6 +127,10 @@ PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "")
 MAX_TTS_CHARS = 30
 #: 画面比旁白早切一点(切在换气停顿里,J-cut 的最小形式),CUT_LEAD_ENABLED=0 关
 CUT_LEAD_ENABLED = os.getenv("CUT_LEAD_ENABLED", "1") != "0"
+#: 跨项目镜头去重:新项目首次渲染前,把同主体近几个已完成项目用过的素材记成"用过",
+#: 排到后面(只排序不过滤,池子小也铺得满)。CROSS_PROJECT_DEDUP=0 关
+CROSS_PROJECT_DEDUP = os.getenv("CROSS_PROJECT_DEDUP", "1") != "0"
+CROSS_PROJECT_RECENT = int(os.getenv("CROSS_PROJECT_RECENT", "3"))
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
 #: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪默认 happy(试听选定;设成空 = 不传)

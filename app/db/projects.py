@@ -78,6 +78,16 @@ def recent_variants(category: str, limit: int = 4) -> list[dict[str, Any]]:
     return out
 
 
+def recent_done_ids(subject: str, exclude_id: str, limit: int = 3) -> list[str]:
+    """同主体最近完成的几个项目(新的在前,不含 `exclude_id`),跨项目镜头去重用。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "SELECT id FROM projects WHERE subject = ? AND state = 'DONE' AND id != ? "
+            "ORDER BY updated_at DESC LIMIT ?", (subject, exclude_id, limit))
+        return [str(r[0]) for r in cur.fetchall()]
+
+
 def recent_themes(category: str, limit: int = 2) -> list[str]:
     """同品类最近建的几个项目的片型(新的在前)。"""
     init_db()

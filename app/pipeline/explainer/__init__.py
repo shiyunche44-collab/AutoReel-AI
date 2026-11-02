@@ -302,6 +302,21 @@ def _load_recent(project_id: str) -> list[str]:
     return list(db.read_json(project_id, "beats_recent.json", []) or [])
 
 
+def cross_project_seed(project_id: str, subject: str) -> dict[str, int]:
+    """同主体近几个已完成项目用过的素材(item_id → 几个项目用过)。
+
+    新项目从零开始挑,同一个池子每次都会选出同一批最优片段;把近期成片用过的先记成"用过"
+    (只影响排序,`library.fill` 不过滤,池子再小也铺得满)。卡片底图(item_id=bg)不算。"""
+    if not config.CROSS_PROJECT_DEDUP or config.CROSS_PROJECT_RECENT <= 0 or not subject:
+        return {}
+    seed: dict[str, int] = {}
+    for pid in db.recent_done_ids(subject, project_id, config.CROSS_PROJECT_RECENT):
+        pieces = (db.read_json(pid, "materials_used.json", None) or {}).get("pieces") or []
+        for iid in {str(p.get("item_id")) for p in pieces if p.get("item_id")} - {"bg"}:
+            seed[iid] = seed.get(iid, 0) + 1
+    return seed
+
+
 def card_backgrounds(subject: str) -> list[Path]:
     """数据卡的底图候选:池子里干净的主视角官图(汽车是外观;虚化压暗后做底),
     按视角散开排 —— 各张卡按拍号轮换,不再全片共用一张。
@@ -364,7 +379,12 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     todo = [s for s in specs if s.duration > 0
             and rows.get(s.idx, {}).get("status") != "succeeded"][:limit]
     chapters, where = chapters_of(specs)
-    used = _load_used(project_id)
+    own_used = _load_used(project_id)
+    # 排序用的 used = 本项目已用 + 近期其他项目用过的;种子只参与挑选,写回前扣掉
+    seed = cross_project_seed(project_id, subject)
+    used = dict(own_used)
+    for k, n in seed.items():
+        used[k] = used.get(k, 0) + n
     recent = _load_recent(project_id)
     beats_dir(project_id)  # 每拍的背景片段记录放这里
     # 成品放 drafts/:审片页按 /media/{项目}/drafts/{文件} 取草稿预览
@@ -441,7 +461,9 @@ def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                        provider_task_id=None, error=None, est_cost=0.0,
                        consistency="card" if s.layout in ("card", "concept") else "real")
         done.append(s.idx)
-    db.write_json(project_id, "beats_used.json", used)
+    own_used = {k: n - seed.get(k, 0) for k, n in used.items()
+                if n - seed.get(k, 0) > 0 or k in own_used}
+    db.write_json(project_id, "beats_used.json", own_used)
     db.write_json(project_id, "beats_recent.json", recent)
     try:
         materials_used(project_id, specs)
