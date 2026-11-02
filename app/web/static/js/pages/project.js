@@ -493,6 +493,67 @@ function observeVideos() {
   vids.forEach((v) => io.observe(v));
 }
 
+// 门禁 B 逐拍标记:勾「不满意」存到服务端,「重拍所选」只重渲这几拍
+const flagBoxes = /** @type {HTMLInputElement[]} */ ($$('#shot-grid .js-flag'));
+const rerenderBtn = /** @type {HTMLButtonElement|null} */ ($('#btn-rerender-flagged'));
+function paintFlags(flagged) {
+  const set = new Set(flagged.map(String));
+  for (const box of flagBoxes) {
+    box.checked = set.has(box.dataset.idx);
+    box.closest('.shot').classList.toggle('is-flagged', box.checked);
+  }
+  if (rerenderBtn) {
+    rerenderBtn.disabled = set.size === 0;
+    $('#flagged-count').textContent = String(set.size);
+  }
+  if (btnGateB) btnGateB.disabled = set.size > 0;
+}
+function flaggedIdxs() {
+  return flagBoxes.filter((b) => b.checked).map((b) => Number(b.dataset.idx));
+}
+if (flagBoxes.length) {
+  api.get(`/api/projects/${PID}/review`).then((r) => paintFlags(r.flagged || [])).catch(() => {});
+  for (const box of flagBoxes) {
+    // 勾选框在可点开详情的卡片里:不能让点击冒泡成"打开详情"
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('keydown', (e) => e.stopPropagation());
+    box.addEventListener('change', async () => {
+      try {
+        const r = await api.patch(`/api/projects/${PID}/review`, {
+          idxs: [Number(box.dataset.idx)],
+          flagged: box.checked,
+        });
+        paintFlags(r.flagged || []);
+      } catch (err) {
+        box.checked = !box.checked;
+        toast(err.message, { type: 'danger', title: '标记失败' });
+      }
+    });
+  }
+}
+if (rerenderBtn) {
+  rerenderBtn.addEventListener('click', async () => {
+    const idxs = flaggedIdxs();
+    if (!idxs.length) return;
+    const ok = await confirmDialog({
+      title: `重拍 ${idxs.length} 拍?`,
+      body: `第 ${idxs.join('、')} 拍会换一组背景画面重新渲染,其他拍不动,不消耗生成额度。`,
+      confirmText: '重拍所选',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    await withLoading(rerenderBtn, async () => {
+      try {
+        await api.post(`/api/projects/${PID}/review/rerender`, { idxs });
+        toast(`已重新排队 ${idxs.length} 拍`);
+        setTimeout(reloadPreserving, 700);
+      } catch (err) {
+        toast(err.message, { type: 'danger', title: '重拍失败' });
+      }
+    });
+  });
+}
+
 let lightboxOpen = false;
 function openShot(idx) {
   const visible = shots.filter((s) => !s.classList.contains('hidden'));

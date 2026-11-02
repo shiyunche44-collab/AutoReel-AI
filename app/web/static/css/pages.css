@@ -426,6 +426,8 @@
 .shot:hover .shot-zoom { opacity: 1; transform: none; }
 .shot-foot { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 10px; }
 .shot-foot .badge { height: 20px; font-size: 11px; padding: 0 7px; }
+.shot-flag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; }
+.shot.is-flagged { outline: 2px solid var(--danger, #d33); outline-offset: -2px; }
 
 /* 镜头详情弹窗 */
 .lightbox { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 0; }

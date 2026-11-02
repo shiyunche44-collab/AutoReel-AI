@@ -415,7 +415,10 @@
         <button class="chip" type="button" data-f="failed" aria-pressed="false">失败 <span class="count" data-c="failed">0</span></button>
         <button class="chip" type="button" data-f="pending" aria-pressed="false">待提交 <span class="count" data-c="pending">0</span></button>
       </div>
-      <span class="subtle small hide-sm">点击查看详情</span>
+      {% if p.state == 'GATE_B' %}
+      <button class="btn btn-danger btn-sm" id="btn-rerender-flagged" type="button" disabled>{{ m.icon("refresh", "i-sm") }}重拍所选 <span class="count" id="flagged-count">0</span></button>
+      {% endif %}
+      <span class="subtle small hide-sm">点击查看详情{% if p.state == 'GATE_B' %} · 勾选「不满意」后重拍所选{% endif %}</span>
     </div>
     <div class="shot-grid" id="shot-grid">
       {% for s in p.shots %}
@@ -439,6 +442,9 @@
         <div class="shot-foot">
           {{ m.shot_badge(s.status) }}
           <span class="subtle small num">{{ s.spec.layout }}</span>
+          {% if p.state == 'GATE_B' and s.status == 'succeeded' %}
+          <label class="shot-flag" title="标记不满意,稍后一起重拍"><input type="checkbox" class="js-flag" data-idx="{{ s.idx }}">不满意</label>
+          {% endif %}
         </div>
         <template class="shot-detail">
           <div class="lb-meta">

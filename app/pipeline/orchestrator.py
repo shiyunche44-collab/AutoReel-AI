@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .. import config, costs, db
 from ..categories import ProfileError, load_profile
@@ -720,7 +720,12 @@ def confirm_gate(project_id: str, request: GateRequest) -> dict[str, Any]:
     if state != expected:
         raise PipelineError(f"当前状态 {state} 不在门禁 {request.gate}")
     if expected == State.GATE_B:
-        _save_review_state(project_id, {"cursor": 1,
+        flagged = _review_flagged(project_id)
+        if flagged:
+            raise PipelineError(
+                f"第 {', '.join(str(i) for i in flagged)} 拍标了「不满意」还没重拍:"
+                "先「重拍所选」,或取消标记再确认")
+        _save_review_state(project_id, {"cursor": 1, "flagged": [],
                                         "approved": list(range(len(_specs(project_id))))})
     kwargs: dict[str, Any] = {"confirmed": True}
     if request.force:
@@ -751,13 +756,66 @@ def review_progress(project_id: str) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - 读不到就当没这条信息,别拦审片
         coverage = {}
     return {"total_batches": len(batches), "cursor": int(saved.get("cursor", 0)),
-            "approved": sorted(approved), "batches": [batch] if batch else [],
+            "approved": sorted(approved), "flagged": _review_flagged(project_id),
+            "batches": [batch] if batch else [],
             "batch_list": batches, "pending_total": len(pending),
             "coverage": coverage}
 
 
 def _save_review_state(project_id: str, state: dict[str, Any]) -> None:
     db.write_json(project_id, "review_state.json", state)
+
+
+def _review_flagged(project_id: str) -> list[int]:
+    """门禁 B 上标了「不满意」、还没重拍的拍号。"""
+    saved = db.read_json(project_id, "review_state.json", None) or {}
+    return sorted({int(i) for i in saved.get("flagged", []) or []})
+
+
+def _gate_b_beats(project_id: str, idxs: Sequence[int]) -> list[int]:
+    """校验:项目在门禁 B,拍号都存在。返回去重排序后的拍号。"""
+    project = db.get_project(project_id)
+    if not project:
+        raise PipelineError("项目不存在")
+    if State(project["state"]) != State.GATE_B:
+        raise PipelineError("只有审片(门禁 B)阶段可以标记 / 重拍")
+    known = {s.idx for s in _specs(project_id) if s.duration > 0}
+    bad = sorted({int(i) for i in idxs} - known)
+    if bad:
+        raise PipelineError(f"没有这几拍:{bad}")
+    return sorted({int(i) for i in idxs})
+
+
+def flag_beats(project_id: str, idxs: Sequence[int], flagged: bool = True) -> list[int]:
+    """门禁 B 逐拍标记「不满意」(flagged=False 取消)。返回当前全部已标记的拍号。"""
+    with locks.require_project_lock(project_id):
+        idxs = _gate_b_beats(project_id, idxs)
+        saved = db.read_json(project_id, "review_state.json", None) or {}
+        now = set(_review_flagged(project_id))
+        now = now | set(idxs) if flagged else now - set(idxs)
+        saved["flagged"] = sorted(now)
+        _save_review_state(project_id, saved)
+        return sorted(now)
+
+
+def rerender_beats(project_id: str, idxs: Sequence[int]) -> dict[str, Any]:
+    """门禁 B「重拍所选」:只把这几拍换一组背景重渲,其余拍不动,渲完自己回到门禁 B。
+
+    顺序不能反:`DRAFT_RENDERING` 在 `AUTO_ADVANCE_STATES` 里,**先**切状态调度器就会抢着渲
+    还没置 pending 的拍。所以先逐拍置 pending、清标记,**最后**一次切状态。"""
+    with locks.require_project_lock(project_id):
+        idxs = _gate_b_beats(project_id, idxs)
+        if not idxs:
+            raise PipelineError("没有选中要重拍的拍")
+        for idx in idxs:
+            explainer.rerender(project_id, idx)
+        saved = db.read_json(project_id, "review_state.json", None) or {}
+        saved["flagged"] = sorted(set(_review_flagged(project_id)) - set(idxs))
+        saved["approved"] = sorted({int(i) for i in saved.get("approved", []) or []} - set(idxs))
+        _save_review_state(project_id, saved)
+        _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
+                   reason=f"重拍第 {', '.join(str(i) for i in idxs)} 拍(换背景)")
+        return {"rerender": idxs}
 
 
 def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[ShotSpec]:
@@ -851,6 +909,10 @@ def retry(project_id: str, idx: int, stage: str) -> None:
             raise PipelineError("项目不存在")
         explainer.rerender(project_id, idx)
         if State(project["state"]) == State.GATE_B:
+            saved = db.read_json(project_id, "review_state.json", None) or {}
+            if idx in _review_flagged(project_id):
+                saved["flagged"] = sorted(set(_review_flagged(project_id)) - {idx})
+                _save_review_state(project_id, saved)
             _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
                        reason=f"重拍第 {idx} 拍(换背景)")
 

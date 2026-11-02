@@ -134,6 +134,34 @@ def review(project_id: str):
     return orchestrator.review_progress(project_id)
 
 
+class ReviewFlagRequest(BaseModel):
+    idxs: list[int]
+    flagged: bool = True
+
+
+class ReviewRerenderRequest(BaseModel):
+    idxs: list[int]
+
+
+@router.patch("/api/projects/{project_id}/review")
+def review_flag(project_id: str, payload: ReviewFlagRequest):
+    """门禁 B 逐拍标记 / 取消「不满意」。"""
+    try:
+        flagged = orchestrator.flag_beats(project_id, payload.idxs, payload.flagged)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"flagged": flagged}
+
+
+@router.post("/api/projects/{project_id}/review/rerender")
+def review_rerender(project_id: str, payload: ReviewRerenderRequest):
+    """门禁 B「重拍所选」:只重渲选中的几拍。"""
+    try:
+        return orchestrator.rerender_beats(project_id, payload.idxs)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.patch("/api/projects/{project_id}/script")
 def patch_script(project_id: str, payload: ScriptPatch):
     project = db.get_project(project_id)
@@ -161,7 +189,10 @@ def patch_shots(project_id: str, payload: ShotPatch):
 @router.post("/api/projects/{project_id}/shots/{idx}/retry")
 def retry_shot(project_id: str, idx: int, payload: RetryRequest | None = None):
     stage = (payload.stage if payload else "final")
-    orchestrator.retry(project_id, idx, stage)
+    try:
+        orchestrator.retry(project_id, idx, stage)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
 
 
