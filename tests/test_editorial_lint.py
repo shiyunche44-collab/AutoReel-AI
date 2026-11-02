@@ -510,3 +510,40 @@ def test_new_lints_regressions_from_live_run():
     # 说了年款就清楚了
     named = [_seg(0, "版本选择", "2025款标准版835公里续航。", ["f_o"])]
     assert script_gen.conflict_lint(named, [old, new]) == []
+
+
+# ------------------------------------------------------------------ P2:钩子兑现与信息密度
+def test_hook_payoff_flags_unrelated_second_sentence():
+    from app.pipeline.script_gen.hook import hook_payoff_lint
+
+    off = [_seg(0, "开场", "多花3万,买的到底是什么。小米成立于2010年,总部在北京。")]
+    issues = hook_payoff_lint(off)
+    assert [i.severity for i in issues] == ["warning"] and "承接" in issues[0].message
+    # 复述关键词 / 带数字 / 带事实引用,都算兑现
+    assert hook_payoff_lint([_seg(0, "开场", "多花3万,买的到底是什么。买的是快充,不是续航。")]) == []
+    assert hook_payoff_lint([_seg(0, "开场", "多花3万,买的到底是什么。答案在800V平台。")]) == []
+    assert hook_payoff_lint([_seg(0, "开场", "多花3万,买的到底是什么。先看配置。", ["f1"]),
+                             ]) == []
+    # 不是开场段 / 只有一句且没有下一段:不查
+    assert hook_payoff_lint([_seg(0, "使用成本", "先搞清楚电费。今天天气好。")]) == []
+    assert hook_payoff_lint([_seg(0, "开场", "多花3万,买的到底是什么。")]) == []
+    # 单句开场时看下一段第一句
+    two = [_seg(0, "开场", "多花3万,买的到底是什么。"), _seg(1, "外观", "先说一下车身颜色。")]
+    assert hook_payoff_lint(two)
+
+
+def test_density_lint_too_thin_too_dense_and_number_overload(auto):
+    from app.pipeline.script_gen.lint_checks import density_lint
+
+    facts = [_f(f"f{i}", f"事实{i}") for i in range(40)]
+    body = "这是一句用来凑字数的口播内容,没有任何具体信息。" * 3
+    thin = [_seg(i, "外观设计", body, ["f0"]) for i in range(6)]
+    msgs = [i.message for i in density_lint(thin, auto, facts)]
+    assert any("偏稀" in m for m in msgs)
+    dense = [_seg(i, "外观设计", body, [f"f{i * 6 + k}" for k in range(6)]) for i in range(6)]
+    assert any("过密" in i.message for i in density_lint(dense, auto, facts))
+    ok = [_seg(i, "外观设计", body, [f"f{i * 2}", f"f{i * 2 + 1}"]) for i in range(6)]
+    assert density_lint(ok, auto, facts) == []
+    heavy = [_seg(0, "外观设计", "车长4999,车宽1996,车高1600,轴距3000,整备2000。", ["f0"])]
+    assert any("5 个不同数字" in i.message for i in density_lint(heavy, auto, facts))
+    assert density_lint([], auto, facts) == []

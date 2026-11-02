@@ -370,3 +370,45 @@ def duplicate_lint(
             issues.append(LintIssue(idxs[0], "warning",
                                     f"数字 {n} 在第 {where} 段反复出现,考虑删掉重复的一次"))
     return issues
+
+
+#: 事实密度(每分钟引用多少条不同事实)。太稀是在讲空话,太密观众记不住
+FACTS_PER_MIN_LOW = 2.5
+FACTS_PER_MIN_HIGH = 14.0
+#: 一段(一拍)里同时出现的不同数字超过这个数,观众跟不上
+NUMBERS_PER_BEAT_MAX = 4
+
+
+def density_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile,
+                 facts: Sequence[Fact]) -> list[LintIssue]:
+    """信息密度(warning):每分钟事实数、每拍数字数。
+
+    分钟数按字数除以横屏语速估算(脚本阶段还没有真实时长);只提醒,不拦流程。
+    """
+    from .fit import LANDSCAPE_CHARS_PER_SECOND
+
+    if not segments:
+        return []
+    known = {f.id for f in facts}
+    principle_ids = {p.id for p in profile.principles}
+    cited = {r for s in segments for r in s.fact_refs if r in known and r not in principle_ids}
+    chars = sum(len(s.text or "") for s in segments)
+    minutes = chars / LANDSCAPE_CHARS_PER_SECOND / 60 if chars else 0.0
+    issues: list[LintIssue] = []
+    if minutes >= 1.0:
+        rate = len(cited) / minutes
+        if rate < FACTS_PER_MIN_LOW:
+            issues.append(LintIssue(segments[0].idx, "warning",
+                                    f"信息偏稀:约 {minutes:.1f} 分钟只引用了 {len(cited)} 条事实"
+                                    f"(每分钟 {rate:.1f} 条,建议不少于 {FACTS_PER_MIN_LOW})"))
+        elif rate > FACTS_PER_MIN_HIGH:
+            issues.append(LintIssue(segments[0].idx, "warning",
+                                    f"信息过密:约 {minutes:.1f} 分钟引用了 {len(cited)} 条事实"
+                                    f"(每分钟 {rate:.1f} 条,建议不超过 {FACTS_PER_MIN_HIGH:.0f})"))
+    for s in segments:
+        n = len(numbers_in(s.text or ""))
+        if n > NUMBERS_PER_BEAT_MAX:
+            issues.append(LintIssue(s.idx, "warning",
+                                    f"这一段塞了 {n} 个不同数字(建议不超过 {NUMBERS_PER_BEAT_MAX}),"
+                                    "观众来不及消化,拆成两拍或挑最关键的"))
+    return issues

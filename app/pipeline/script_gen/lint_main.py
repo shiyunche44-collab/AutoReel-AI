@@ -9,8 +9,8 @@ from .. import variety
 
 from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
 from .scrub import _BENIGN_FIRST_RE, _COMPETITOR_MARKERS, _DISPARAGING_TERMS, _is_comparison_section, vendor_attribution
-from .hook import hook_lint, stance_lint
-from .lint_checks import conflict_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, hero_lint, meaning_lint, range_lint, rival_lint, term_lint, thesis_lint
+from .hook import hook_lint, hook_payoff_lint, stance_lint
+from .lint_checks import conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, hero_lint, meaning_lint, range_lint, rival_lint, term_lint, thesis_lint
 from .spoken import spoken_lint
 
 
@@ -163,6 +163,8 @@ def compliance_lint(
 
     issues.extend(hook_lint(segments))
     issues.extend(stance_lint(segments, variety.opening(variant, theme)))
+    issues.extend(hook_payoff_lint(segments))
+    issues.extend(density_lint(segments, profile, facts))
     issues.extend(meaning_lint(segments))
     issues.extend(depth_lint(segments, profile, facts))
     issues.extend(term_lint(segments, profile))

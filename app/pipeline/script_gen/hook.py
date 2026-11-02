@@ -127,3 +127,47 @@ def stance_lint(segments: Sequence[ScriptSegment],
     return [LintIssue(segments[0].idx, "warning",
                       "开场像选题说明,不像立场:给一个有取舍、有人会不同意的判断"
                       f"(「多花的那几万买的不是配置,是省心」这种):{first_sentence(text)}")]
+
+
+#: 第 2 句承接第 1 句时,两句至少共享这么长的连续字(排除下面的虚词)
+_PAYOFF_GRAM = 2
+_PAYOFF_STOP = set("的了是我你他她它这那有在就都也还和与及但而吗呢吧啊么什为个一不要会能可")
+
+
+def _grams(text: str) -> set[str]:
+    chars = [c for c in re.sub(r"[^一-鿿A-Za-z0-9]", "", text or "")]
+    return {"".join(chars[i:i + _PAYOFF_GRAM]) for i in range(len(chars) - _PAYOFF_GRAM + 1)
+            if not set(chars[i:i + _PAYOFF_GRAM]) <= _PAYOFF_STOP}
+
+
+def _second_sentence(segments: Sequence[ScriptSegment]) -> tuple[str, ScriptSegment] | None:
+    """开场的第 2 句:同一段里第一句之后的那句,没有就取下一段的第一句。"""
+    seg = segments[0]
+    parts = [p.strip() for p in re.split(r"[。!?!?;;\n]", (seg.text or "").strip()) if p.strip()]
+    if len(parts) >= 2:
+        return parts[1], seg
+    if len(segments) >= 2:
+        return first_sentence(segments[1].text), segments[1]
+    return None
+
+
+def hook_payoff_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+    """钩子有没有兑现(warning):第 2 句要承接第 1 句抛出的悬念。
+
+    规则版,只报 warning:第 2 句既没有复述第 1 句的关键词、也没有数字或事实引用,
+    多半是另起炉灶 —— 抛了钩子却不接,观众刚被勾起来就被带去讲别的。
+    """
+    if not segments or not _is_hook_section(segments[0].section):
+        return []
+    first = first_sentence(segments[0].text)
+    nxt = _second_sentence(segments)
+    if not first or nxt is None:
+        return []
+    second, seg = nxt
+    if not second:
+        return []
+    if (_grams(first) & _grams(second)) or has_numeric_claim(second) or seg.fact_refs:
+        return []
+    return [LintIssue(seg.idx, "warning",
+                      f"开场第 2 句没有承接第 1 句的悬念:「{first}」→「{second}」"
+                      "(第 2 句应直接兑现:给出依据、数字或原因)")]
