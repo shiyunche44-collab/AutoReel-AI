@@ -427,11 +427,9 @@ def wav_duration_hint(audio_path: str | Path) -> float:
         return 0.0
 
 
-def narration_budget_chars(duration_seconds: float, chars_per_second: float = 5.8) -> int:
-    """按中文口播语速估算一段视频能承载的字数。
-
-    5.8 字/秒 ≈ 每分钟 350 字,是口播视频的常见密度。
-    """
+def narration_budget_chars(duration_seconds: float, chars_per_second: float) -> int:
+    """按中文口播语速估算一段视频能承载的字数。语速必须由调用方给:
+    横屏 / 竖屏的实测值在 `script_gen.fit`(LANDSCAPE / PORTRAIT_CHARS_PER_SECOND)。"""
     return int(duration_seconds * chars_per_second)
 
 

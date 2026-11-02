@@ -139,9 +139,9 @@ def test_subtitle_cues_carry_shot_index():
 
 
 def test_narration_budget_scales_with_duration():
-    assert narration_budget_chars(60) == 348
-    assert narration_budget_chars(120) == 696
-    assert narration_budget_chars(60) < narration_budget_chars(180)
+    assert narration_budget_chars(60, 5.8) == 348
+    assert narration_budget_chars(120, 5.8) == 696
+    assert narration_budget_chars(60, 5.8) < narration_budget_chars(180, 5.8)
 
 
 # --------------------------------------------------------------------------

@@ -30,6 +30,9 @@ LLM_CALL_PRICE = 0.01
 VLM_CALL_PRICE = 0.003
 #: 解说轨每条片子固定的 LLM 调用:事实抽取、脚本、逐拍版式
 EXPLAINER_LLM_CALLS = 3
+#: 估算 TTS 字数用的语速。有意比实测(横屏 5.5 / 竖屏 4.7,见 script_gen.fit)快,
+#: 估算只许偏贵、不许偏便宜
+COST_CHARS_PER_SECOND = 5.8
 
 
 class BudgetExceeded(RuntimeError):
@@ -91,7 +94,7 @@ def estimate_explainer(duration: int, *, cached_ratio: float = 0.0,
     素材池(打标签)是每台车一次性的,不摊进单条片子,另由 `estimate_library` 给。
     """
     ratio = min(1.0, max(0.0, float(cached_ratio)))
-    tts = estimate_tts(int(duration * 5.8 * (1 - ratio)))
+    tts = estimate_tts(int(duration * COST_CHARS_PER_SECOND * (1 - ratio)))
     bgm = 0.0 if bgm_cached else MUSIC_PRICE
     llm = round(EXPLAINER_LLM_CALLS * LLM_CALL_PRICE, 4)
     raw = round(tts + bgm + llm, 4)

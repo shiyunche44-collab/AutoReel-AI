@@ -7,6 +7,7 @@ from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment, ShotSpec
 from .. import looks
 
+from ..script_gen.fit import PORTRAIT_CHARS_PER_SECOND
 from .consts import BROLL_STYLES, KEYWORD_CHARS, LAYOUTS, MAX_CARD_RUN, MAX_CONCEPT, SAFE_LAYOUT
 from .text import _as_panel_overlay, _hint, ground_keywords
 from .planning_a import facts_for
@@ -45,7 +46,7 @@ def add_keyword_beats(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
     """
     if llm is None or not specs:
         return specs
-    cps = 4.7 if portrait else QUIET_CPS
+    cps = PORTRAIT_CHARS_PER_SECOND if portrait else QUIET_CPS
     quiet = 0.0
     picks: list[int] = []
     for n, spec in enumerate(specs):

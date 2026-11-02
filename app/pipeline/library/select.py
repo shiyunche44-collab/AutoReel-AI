@@ -390,7 +390,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
          recent: list[str] | None = None, detail: str = "", role: str = "body") -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
-    和 `candidates()` 的根本区别:这里不要求画面对上旁白,也不要求单段撑满时长 ——
+    这里不要求画面对上旁白,也不要求单段撑满时长 ——
     背景只需要"是这台车、画面干净"。快剪广告里 1.3–3 秒的短段正好拿来连拼,
     不再因为凑不满 6 秒窗口而被浪费。
 

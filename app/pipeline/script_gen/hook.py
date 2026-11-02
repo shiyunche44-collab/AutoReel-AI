@@ -14,7 +14,7 @@ from .lint_base import LintIssue, forbidden_in, has_numeric_claim
 _BASIS_WINDOW = 40
 
 
-#: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.8 字/秒)与禁用的开场套话
+#: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.5–5.8 字/秒)与禁用的开场套话
 HOOK_MAX_CHARS = 18
 #: 开场套话。命中即判定为"没抛钩子" —— 这些是自我介绍,不是钩子。
 #:
