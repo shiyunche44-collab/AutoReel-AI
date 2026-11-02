@@ -109,7 +109,7 @@ def _ark_tts_item(req: dict, timeout: float) -> str:
                        .encode("utf-8")).hexdigest()
     dest = config.DATA_DIR / "_cache" / "ark_tts_raw" / f"{key}.mp3"
     ark_tts.synthesize_to_file(req["text"], voice_id=voice, speed=req.get("speed", 1.0),
-                               dest=dest, timeout=timeout)
+                               dest=dest, timeout=timeout, emotion=req.get("emotion", ""))
     return "url:" + dest.resolve().as_uri()
 
 

@@ -50,7 +50,7 @@ def speech_rate(speed: float) -> int:
 
 
 def synthesize(text: str, *, voice_id: str, speed: float = 1.0, timeout: float = 120,
-               retries: int = 2) -> bytes:
+               retries: int = 2, emotion: str = "", emotion_scale: int = 4) -> bytes:
     if not config.ARK_API_KEY:
         raise ConnectorError(TOOL, "未配置 ARK_API_KEY(方舟 Agent Plan 专属 API Key)")
     headers = {
@@ -63,6 +63,10 @@ def synthesize(text: str, *, voice_id: str, speed: float = 1.0, timeout: float =
     rate = speech_rate(speed)
     if rate:
         audio_params["speech_rate"] = rate
+    if emotion:
+        # 只有多情感音色认;不认的音色接口照常出声,不会因此失败
+        audio_params["emotion"] = emotion
+        audio_params["emotion_scale"] = emotion_scale
     body = {"user": {"uid": "aimovice"},
             "req_params": {"text": text, "speaker": resolve_voice(voice_id),
                            "audio_params": audio_params}}
@@ -106,7 +110,8 @@ def _stream(headers: dict, body: dict, timeout: float) -> tuple[bytes, str, int]
 
 
 def synthesize_to_file(text: str, *, voice_id: str, speed: float, dest: Path,
-                       timeout: float = 120) -> Path:
+                       timeout: float = 120, emotion: str = "") -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(synthesize(text, voice_id=voice_id, speed=speed, timeout=timeout))
+    dest.write_bytes(synthesize(text, voice_id=voice_id, speed=speed, timeout=timeout,
+                                emotion=emotion))
     return dest
