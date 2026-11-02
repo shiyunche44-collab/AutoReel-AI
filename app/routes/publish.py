@@ -1,6 +1,7 @@
 """分发:多平台发布、账号、成片包装、数据看板。"""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,6 +17,8 @@ from ..publish import metadata as publish_metadata
 from ..publish import service as publish_service
 from ..publish.registry import PLATFORMS, platforms_info
 from ..templating import templates
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -146,7 +149,7 @@ def publish_login(platform: str):
         try:
             publish_browser.login(platform, urls[platform])
         except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
-            pass
+            log.warning("登录失败由用户看浏览器", exc_info=True)
 
     import threading
 
@@ -178,7 +181,7 @@ def browser_unblock(payload: UnblockPayload):
         try:
             browser_fetch.unblock(payload.url)
         except Exception:  # noqa: BLE001 - 失败由用户看浏览器
-            pass
+            log.warning("失败由用户看浏览器", exc_info=True)
 
     import threading
 

@@ -701,8 +701,8 @@ def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
     try:
         out += [{"code": "rhythm", "message": f"画面节奏:{m}"}
                 for m in rhythm.blockers(_specs(project_id), timed=False)]
-    except Exception:  # noqa: BLE001 - 读不到分镜就别拦
-        pass
+    except Exception as exc:  # noqa: BLE001 - 读不到分镜就别拦
+        log.warning("读不到分镜就别拦: %s", exc)
     return out
 
 

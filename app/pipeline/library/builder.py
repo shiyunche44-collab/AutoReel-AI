@@ -1,17 +1,35 @@
 """增量构建、后台线程与池状态。"""
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
 from ... import config
 from ...providers import official
-
-from .model import CONFIRMED_VIDEO_TARGET, EARLY_STOP_SAMPLE, ENOUGH_USABLE_SECONDS, Item, LAUNCH_MAX_TAGGED, Library, MAX_AUTO_SOURCES, MAX_TAGGED_PER_SOURCE, REDISCOVER_MIN_GAP, REDISCOVER_SECONDS, REDISCOVER_THIN_SECONDS, confirmed_seconds, profile_of, slug
-from .sources import discover
 from .ingest import check_logos, ingest_gallery, ingest_source
+from .model import (
+    CONFIRMED_VIDEO_TARGET,
+    EARLY_STOP_SAMPLE,
+    ENOUGH_USABLE_SECONDS,
+    LAUNCH_MAX_TAGGED,
+    MAX_AUTO_SOURCES,
+    MAX_TAGGED_PER_SOURCE,
+    REDISCOVER_MIN_GAP,
+    REDISCOVER_SECONDS,
+    REDISCOVER_THIN_SECONDS,
+    Item,
+    Library,
+    confirmed_seconds,
+    profile_of,
+    slug,
+)
+from .sources import discover
 from .tagging import _same_frame, mark_official_duplicates, tag_items
+
+log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -121,8 +139,8 @@ def build_async(subject: str, *, on_done: Any = None, **kwargs: Any) -> bool:
             if on_done is not None:
                 try:
                     on_done(stats)
-                except Exception:  # noqa: BLE001 - 记账失败不该影响建池
-                    pass
+                except Exception as exc:  # noqa: BLE001 - 记账失败不该影响建池
+                    log.warning("记账失败不该影响建池: %s", exc)
         finally:
             with _running_lock:
                 _running.discard(key)
@@ -150,8 +168,8 @@ def build_many_async(subjects: list[str], **kwargs: Any) -> list[str]:
         for name in mine:
             try:
                 build(name, **kwargs)
-            except Exception:  # noqa: BLE001 - 一台车失败不能让后面的车永远卡在"在建"
-                pass
+            except Exception as exc:  # noqa: BLE001 - 一台车失败不能让后面的车永远卡在"在建"
+                log.warning("一台车失败不能让后面的车永远卡在'在建': %s", exc)
             finally:
                 with _running_lock:
                     _running.discard(slug(name))

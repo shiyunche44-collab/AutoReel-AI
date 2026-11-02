@@ -8,11 +8,14 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 from .. import config, db
 from . import store
+
+log = logging.getLogger(__name__)
 
 #: 循环的最小间隔(秒)。实际间隔由配置决定,这里只是兜底。
 TICK_SECONDS = 30
@@ -28,7 +31,7 @@ def _loop() -> None:
         try:
             _tick()
         except Exception:  # noqa: BLE001 - 后台线程不能因单次异常退出
-            pass
+            log.warning("后台线程不能因单次异常退出", exc_info=True)
         _stop.wait(TICK_SECONDS)
 
 

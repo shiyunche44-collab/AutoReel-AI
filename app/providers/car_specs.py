@@ -10,12 +10,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Any
 
 from . import browser_fetch, webassets
 from .facts import RawDoc
+
+log = logging.getLogger(__name__)
 
 TOOL = "autohome.specs"
 _FIND_API = "https://www.autohome.com.cn/ashx/AjaxIndexCarFind.ashx"
@@ -93,8 +96,8 @@ def _brand_from_rank(subject: str) -> str:
                     m = re.search(r":(\S+) ", item.title)
                     if m:
                         return m.group(1)
-        except Exception:  # noqa: BLE001 - 榜单不可用就算了
-            pass
+        except Exception as exc:  # noqa: BLE001 - 榜单不可用就算了
+            log.warning("榜单不可用就算了: %s", exc)
     return ""
 
 

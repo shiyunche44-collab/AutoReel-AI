@@ -595,8 +595,8 @@ def build_cover(video_path: str | Path, title: str, dest: str | Path,
         try:
             make_cover(video_path, title, path, subtitle, size=sz, still=still, kicker=kicker,
                        layout=layout, hook=hook)
-        except Exception:  # noqa: BLE001 - 补的封面失败不能拦住成片
-            pass
+        except Exception as exc:  # noqa: BLE001 - 补的封面失败不能拦住成片
+            log.warning("补的封面失败不能拦住成片: %s", exc)
         # 竖屏分支会顺手多写一张 `<名>_3x4`,这里只要主文件
         extra = cover_3x4_path(path)
         if extra != path:

@@ -290,14 +290,14 @@ class Scheduler:
             try:
                 await asyncio.wait_for(asyncio.shield(w), timeout=60)
             except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+                log.debug("停机时 worker 未能干净退出", exc_info=True)
         self._workers.clear()
         if self._task:
             self._task.cancel()
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+                log.debug("停机时扫描任务被取消", exc_info=True)
         # 不 wait:在途的那一拍让它跑完(它写的是自己那一拍的文件)
         pool, self._pool = self._pool, None
         if pool is not None:
@@ -563,7 +563,7 @@ def source_login_dongchedi():
             publish_browser.login(official.DCD_LOGIN_KEY, "https://www.dongchedi.com/",
                                   timeout=900, done_cookie=official.DCD_LOGIN_COOKIE)
         except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
-            pass
+            log.warning("登录失败由用户看浏览器", exc_info=True)
 
     import threading
 
@@ -580,7 +580,7 @@ def source_login_douyin():
             publish_browser.login(official.DOUYIN_LOGIN_KEY, "https://www.douyin.com/",
                                   timeout=900, done_cookie=official.DOUYIN_LOGIN_COOKIE)
         except Exception:  # noqa: BLE001 - 登录失败由用户看浏览器
-            pass
+            log.warning("登录失败由用户看浏览器", exc_info=True)
 
     import threading
 

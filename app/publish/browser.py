@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from pathlib import Path
@@ -24,6 +25,8 @@ from typing import Any, Sequence
 
 from .. import config
 from ..publish.base import PublishError
+
+log = logging.getLogger(__name__)
 
 
 class BrowserUnavailable(RuntimeError):
@@ -135,7 +138,8 @@ def _resolve_real_ip(host: str) -> str:
                 if ips:
                     ip = str(ips[0])
                     break
-            except Exception:  # noqa: BLE001 - 换下一个 DoH
+            except Exception as exc:  # noqa: BLE001 - 换下一个 DoH
+                log.debug("换下一个 DoH: %s", exc)
                 continue
     except Exception:  # noqa: BLE001 - httpx 不可用就算了,走原来的路
         return ""

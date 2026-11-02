@@ -11,12 +11,15 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any
 
 from . import webassets
 from .facts import RawDoc
+
+log = logging.getLogger(__name__)
 
 TOOL = "dongchedi.lineup"
 _CAR_LIST_API = "https://www.dongchedi.com/motor/pc/car/series/car_list"
@@ -63,8 +66,8 @@ def series_id(subject: str) -> tuple[int, str]:
                 score = _match_score(subject, item.car) if sid.isdigit() else 0
                 if score > best[0]:
                     best = (score, int(sid), item.car)
-        except Exception:  # noqa: BLE001 - 榜单不可用就走搜索
-            pass
+        except Exception as exc:  # noqa: BLE001 - 榜单不可用就走搜索
+            log.warning("榜单不可用就走搜索: %s", exc)
     if best[0] == 2:
         return best[1], best[2]
     resp = httpx.get(_SEARCH_API, params={"keyword": subject, "offset": 0, "count": 10,

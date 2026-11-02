@@ -20,6 +20,7 @@ pending ──► uploading ──► submitted ──► published
 from __future__ import annotations
 
 import json
+import logging
 import random
 import threading
 import time
@@ -32,6 +33,8 @@ from . import accounts as accounts_mod
 from . import metadata as md
 from .base import Account, PlatformRef, PublishError, PublishRequest, PublishResult
 from .registry import LANDSCAPE, adapter_for, rule_for
+
+log = logging.getLogger(__name__)
 
 #: 单条发布最多尝试几次(含首次)
 MAX_ATTEMPTS = 3
@@ -90,8 +93,8 @@ def build_context(project_id: str) -> md.ContentContext:
         profile = load_profile(row.get("category") or "auto_long")
         disclaimers = list(profile.required_disclaimers)
         subject_label = profile.vocab.subject_label
-    except Exception:  # noqa: BLE001 - 品类配置坏了不该拦住发布
-        pass
+    except Exception as exc:  # noqa: BLE001 - 品类配置坏了不该拦住发布
+        log.warning("品类配置坏了不该拦住发布: %s", exc)
     topics: list[str] = []
     for fact in facts:
         topic = str((fact or {}).get("topic") or "").strip()
@@ -125,8 +128,8 @@ def forbidden_hits(text: str, category: str, theme: str = "") -> list[str]:
     try:
         spec = profile.theme_spec(theme or None)
         terms.update(spec.extra_forbidden_terms)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log.warning("service:128 的可忽略异常: %s", exc)
     return sorted(t for t in terms if t and t in text)
 
 
@@ -336,8 +339,8 @@ def _request_for(row: dict[str, Any], account: Account) -> PublishRequest:
         """上传会话落库 —— 进程重启后能接着传,不用从头再来。"""
         try:
             db.update_publication(pub_id, upload_id=session[:4000])
-        except Exception:  # noqa: BLE001 - 存不下也不该让发布失败
-            pass
+        except Exception as exc:  # noqa: BLE001 - 存不下也不该让发布失败
+            log.warning("存不下也不该让发布失败: %s", exc)
 
     return PublishRequest(
         project_id=project_id,
@@ -546,8 +549,8 @@ def _loop() -> None:
     while not _stop.is_set():
         try:
             _sweep()
-        except Exception:  # noqa: BLE001 - 后台线程不能因单次异常而退出
-            pass
+        except Exception as exc:  # noqa: BLE001 - 后台线程不能因单次异常而退出
+            log.warning("后台线程不能因单次异常而退出: %s", exc)
         _stop.wait(TICK_SECONDS)
 
 

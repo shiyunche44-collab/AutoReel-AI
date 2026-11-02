@@ -96,7 +96,8 @@ def _guard(session: Any) -> None:
                 raise VerificationNeeded("抖音弹了二次验证,需要人工过一下")
         except VerificationNeeded:
             raise
-        except Exception:  # noqa: BLE001 - 查不到就当没有
+        except Exception as exc:  # noqa: BLE001 - 查不到就当没有
+            log.debug("查不到就当没有: %s", exc)
             continue
     body = _page_text(session)
     if any(t in body for t in _VERIFY_TEXTS):
@@ -115,7 +116,8 @@ def _dismiss_guide(session: Any) -> None:
                 btn.first.click()
                 session.page.wait_for_timeout(1200)
                 return
-        except Exception:  # noqa: BLE001 - 关不掉就算了,靠 force 点击
+        except Exception as exc:  # noqa: BLE001 - 关不掉就算了,靠 force 点击
+            log.debug("关不掉就算了,靠 force 点击: %s", exc)
             continue
 
 

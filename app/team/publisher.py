@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import threading
 import time
 from typing import Any
@@ -19,6 +20,8 @@ from typing import Any
 from .. import config, db
 from . import Skip, chief, compliance, preference, repurpose
 from .plan import PlanError
+
+log = logging.getLogger(__name__)
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
 MIN_AHEAD = 120.0
@@ -70,8 +73,8 @@ def _titles(item: dict[str, Any]) -> tuple[str, list[str]]:
     pkg = None
     try:
         pkg = packaging.load(pid)
-    except Exception:  # noqa: BLE001 - 包装坏了就只用项目标题
-        pass
+    except Exception as exc:  # noqa: BLE001 - 包装坏了就只用项目标题
+        log.warning("包装坏了就只用项目标题: %s", exc)
     titles = [t.text for t in (pkg.titles if pkg else []) if getattr(t, "text", "")]
     try:
         picked = packaging.publish_choice(pid).get("title") or ""

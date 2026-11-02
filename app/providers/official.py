@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import time
 import urllib.parse
@@ -36,6 +37,8 @@ from typing import Any, Callable, Iterable, Sequence
 from .. import config
 from . import browser_fetch, clips, platform_video, webassets
 from .images import ImageRef
+
+log = logging.getLogger(__name__)
 
 #: 页面上明显不是车照的图:站点 logo、图标、头像、二维码、占位图
 _IMG_JUNK = ("logo", "icon", "avatar", "qrcode", "qr_code", "qr-", "sprite", "btn",
@@ -778,7 +781,8 @@ def autohome_images(subject: str, *, per_category: int = 6,
         page = f"https://car.autohome.com.cn/pic/series/{series}-{cat}.html"
         try:
             body = webassets._http_text(page, referer="https://www.autohome.com.cn/")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("official:781 的可忽略异常: %s", exc)
             continue
         for url in parse_autohome_images(body)[:per_category]:
             refs.append(ImageRef(
@@ -957,7 +961,8 @@ def dongchedi_images(subject: str, *, limit: int = 12, require_login: bool = Fal
     for page in (f"https://m.dongchedi.com/auto/series/{series}/images",):
         try:
             body = webassets._http_text(page, referer="https://m.dongchedi.com/")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("official:960 的可忽略异常: %s", exc)
             continue
         # 未登录拿到的可能是同一个空壳页(哪个车系都一样的一批图):
         # 页面里没出现这个车系 ID 就当没有,不能把别的车的图当成这台车

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -28,6 +29,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .. import config
+
+log = logging.getLogger(__name__)
 
 #: 直连拿到这些状态码才值得用浏览器再试:都是「认出你是脚本」的典型回应。
 #: 404 / 500 这种换浏览器也一样,不试。
@@ -214,8 +217,8 @@ def _browser_get(url: str, *, referer: str | None, timeout: int) -> bytes:
         if "html" in ctype:
             try:  # 等前端把数据渲染出来;等不到也照样拿当前 DOM
                 page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                log.debug("browser_fetch:217 的可忽略异常: %s", exc)
             html = page.content()
             reason = looks_blocked(html)
             if reason:
@@ -286,8 +289,8 @@ def capture_json(page_url: str, url_pattern: str, *, timeout: int = 30) -> list[
             return
         try:
             hits.append(resp.json())
-        except Exception:  # noqa: BLE001 - 不是 JSON 就不要
-            pass
+        except Exception as exc:  # noqa: BLE001 - 不是 JSON 就不要
+            log.debug("不是 JSON 就不要: %s", exc)
 
     with _lock:
         _throttle(host)
@@ -302,8 +305,8 @@ def capture_json(page_url: str, url_pattern: str, *, timeout: int = 30) -> list[
             try:
                 page.goto(page_url, wait_until="domcontentloaded", timeout=timeout * 1000)
                 page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:  # noqa: BLE001 - 超时也看看已经截到了什么
-                pass
+            except Exception as exc:  # noqa: BLE001 - 超时也看看已经截到了什么
+                log.debug("超时也看看已经截到了什么: %s", exc)
             reason = looks_blocked(page.content())
             if reason and not hits:
                 mark_blocked(page_url, reason)

@@ -60,7 +60,8 @@ def _card_of(page: Any, title: str) -> Any:
         card = cards.nth(i)
         try:
             text = card.inner_text() or ""
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("douyin_cover:63 的可忽略异常: %s", exc)
             continue
         if title and title[:12] in text:
             return card
@@ -79,7 +80,8 @@ def _cover_slot(page: Any, tip: str) -> Any:
         slot = slots.nth(i)
         try:
             text = (slot.inner_text() or "").strip()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("douyin_cover:82 的可忽略异常: %s", exc)
             continue
         if text == tip:
             return slot
@@ -117,8 +119,8 @@ def _wait_until(fn: Any, *, timeout: float, gap: float = 0.5) -> bool:
         try:
             if fn():
                 return True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("douyin_cover:120 的可忽略异常: %s", exc)
         time.sleep(gap)
     return False
 
@@ -132,7 +134,8 @@ def _dismiss_tips(page: Any) -> None:
                 tip.first.click()
                 page.wait_for_timeout(500)
                 return
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("douyin_cover:135 的可忽略异常: %s", exc)
             continue
 
 
@@ -190,8 +193,8 @@ def _upload_to_slot(page: Any, tip: str, path: Path) -> str:
     if not _wait_until(lambda: page.locator("[role=dialog]:visible").count() == 0, timeout=20):
         try:
             page.keyboard.press("Escape")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("douyin_cover:193 的可忽略异常: %s", exc)
         raise PublishError(f"「{tip}」的弹窗没关掉,没敢往下走", retryable=False)
     after = _slot_src(page, tip)
     log.info("「%s」换上:页面上的图 %s -> %s", tip, before[-40:], after[-40:])
@@ -261,8 +264,8 @@ def replace_covers(*, project_id: str, title: str = "", cover: Path | None = Non
                     shot.parent.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(shot), full_page=True)
                     log.info("演练截图:%s", shot)
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("douyin_cover:264 的可忽略异常: %s", exc)
                 session.save_state()
                 return "演练完成(没提交):" + ";".join(notes)
             # 提交修改 —— 这一步消耗平台的修改次数,不重试
@@ -288,8 +291,8 @@ def replace_covers(*, project_id: str, title: str = "", cover: Path | None = Non
                 shot = Path("data/_cache") / f"douyin_cover_submitted_{project_id}.png"
                 shot.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(shot), full_page=True)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                log.debug("douyin_cover:291 的可忽略异常: %s", exc)
             session.save_state()
     except browser.BrowserUnavailable as exc:
         raise PublishError(str(exc), retryable=False) from exc

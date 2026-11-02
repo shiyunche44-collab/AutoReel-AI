@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,6 +23,8 @@ from PIL import Image
 from .. import config, db
 from ..models import ShotSpec
 from . import library, motion, motion_assets
+
+log = logging.getLogger(__name__)
 
 SIZE = (1920, 1080)
 #: 示例图存成这个宽度的 jpg(页面上最多显示到 ~400px 宽,留两倍余量放大看)
@@ -105,9 +108,8 @@ def concept_beats(project_id: str) -> list[ShotSpec]:
 
 
 def project_status(project_id: str) -> dict[str, Any]:
-    from .explainer import concept_style_of
-
     from . import aspect
+    from .explainer import concept_style_of
 
     chosen = (db.read_json(project_id, "concept_style.json", {}) or {}).get("style")
     style = concept_style_of(project_id)
@@ -131,7 +133,8 @@ def _sample_photo() -> motion_assets.Cutout | None:
             continue
         try:
             lib = library.Library.load(d.name)
-        except Exception:  # noqa: BLE001 - 坏的库跳过
+        except Exception as exc:  # noqa: BLE001 - 坏的库跳过
+            log.warning("坏的库跳过: %s", exc)
             continue
         if lib.category and not lib.category.startswith("auto"):
             continue  # 示例是"电池与续航",只用车的图

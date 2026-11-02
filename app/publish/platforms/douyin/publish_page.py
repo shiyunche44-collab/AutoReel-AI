@@ -1,11 +1,14 @@
 """发布页的其余操作:等上传 / 发布、简介、自主声明、点发布。"""
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from .consts import DESC_SELECTORS, PUBLISH_DONE_TEXTS
 from .cover import dismiss_cover_prompt
+
+log = logging.getLogger(__name__)
 
 
 def wait_publish_ready(session: Any, timeout_ms: int = 300000) -> bool:
@@ -25,8 +28,8 @@ def wait_publish_ready(session: Any, timeout_ms: int = 300000) -> bool:
         try:
             if btn.count() and btn.is_visible() and btn.is_enabled():
                 return True
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("publish_page:28 的可忽略异常: %s", exc)
         dismiss_cover_prompt(session)
         page.wait_for_timeout(2000)
     return False
@@ -114,7 +117,8 @@ def click_publish(session: Any) -> str:
         try:
             if not session.exists(selector, timeout=1500):
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("publish_page:117 的可忽略异常: %s", exc)
             continue
         try:
             session.click(selector)
@@ -174,7 +178,8 @@ def set_description(session: Any, description: str, hashtags: str = "") -> str:
             got = (loc.inner_text() or "").strip()
             if got:
                 return f"简介已填 {len(got)} 字"
-        except Exception:  # noqa: BLE001 - 换下一个选择器
+        except Exception as exc:  # noqa: BLE001 - 换下一个选择器
+            log.debug("换下一个选择器: %s", exc)
             continue
     return "简介没填上(作品描述框找不到,页面改版了?)"
 
@@ -202,8 +207,8 @@ def _declaration_trigger(page: Any) -> Any:
             inner = row.locator("[class*='selectText']")
             if inner.count():
                 return inner.first
-    except Exception:  # noqa: BLE001 - 换下一种找法
-        pass
+    except Exception as exc:  # noqa: BLE001 - 换下一种找法
+        log.debug("换下一种找法: %s", exc)
     try:
         loc = page.get_by_text("请选择自主声明", exact=True)
         return loc.first if loc.count() else None

@@ -1,10 +1,13 @@
 """发布页的封面位:各传哪张图、遮挡检测、封面弹窗。"""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from .consts import COVER_INPUT, COVER_SLOTS
+
+log = logging.getLogger(__name__)
 
 
 def cover_files(cover: Path | None) -> list[tuple[str, str, Path]]:
@@ -64,8 +67,8 @@ def clear_topic_popup(page: Any, slot: Any) -> bool:
             box = page.locator("[contenteditable=true]").first.bounding_box()
             if box:
                 page.mouse.click(box["x"] + 30, box["y"] + 8)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("cover:67 的可忽略异常: %s", exc)
         page.wait_for_timeout(700)
     return not slot_covered(slot)
 
@@ -85,7 +88,8 @@ def dismiss_cover_prompt(session: Any) -> bool:
                 btn.first.click(timeout=5000)
                 page.wait_for_timeout(1200)
                 return True
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.debug("cover:88 的可忽略异常: %s", exc)
             continue
     return False
 
@@ -104,13 +108,13 @@ def close_cover_editor(session: Any) -> None:
             btn.first.click(timeout=5000)
             page.wait_for_timeout(1200)
             return
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("cover:107 的可忽略异常: %s", exc)
     try:
         page.keyboard.press("Escape")
         page.wait_for_timeout(800)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("cover:112 的可忽略异常: %s", exc)
 
 
 def set_covers(session: Any, cover: Path | None) -> str:
@@ -137,8 +141,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
         try:
             page.keyboard.press("Escape")
             page.wait_for_timeout(300)
-        except Exception:  # noqa: BLE001 - 关不掉就靠 force 点击
-            pass
+        except Exception as exc:  # noqa: BLE001 - 关不掉就靠 force 点击
+            log.debug("关不掉就靠 force 点击: %s", exc)
         for tip, _step, path in files:
             step = f"找封面位「{tip}」"
             slot = page.locator("[class*=coverControl]", has_text=tip).first
@@ -151,8 +155,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
             try:
                 slot.scroll_into_view_if_needed(timeout=8000)
                 page.wait_for_timeout(600)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                log.debug("cover:154 的可忽略异常: %s", exc)
             step = f"点开「{tip}」的封面弹窗"
             if not clear_topic_popup(page, slot.locator("[class*=cover-]").first):
                 return f"封面位「{tip}」被浮层盖住,没敢点,用平台自动截帧"
@@ -201,8 +205,8 @@ def set_covers(session: Any, cover: Path | None) -> str:
             if dialog is not None and dialog.count():
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(1000)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            log.debug("cover:204 的可忽略异常: %s", exc)
         return f"封面没设上({step}:{type(exc).__name__}),用平台自动截帧"
     return ""
 
