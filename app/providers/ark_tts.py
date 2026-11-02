@@ -30,7 +30,10 @@ _RETRY_HTTP = (429, 500, 502, 503, 504)
 
 #: 已在文档里核对过的豆包 2.0 音色(`speaker`)。没有列表接口,设置页的音色下拉读这张表
 VOICES = [
-    {"voice_id": "zh_male_m191_uranus_bigtts", "voice_name": "男声(默认)"},
+    {"voice_id": "zh_male_dayi_uranus_bigtts", "voice_name": "大壹(默认)"},
+    {"voice_id": "zh_male_liufei_uranus_bigtts", "voice_name": "刘飞(备选)"},
+    {"voice_id": "zh_female_mizai_uranus_bigtts", "voice_name": "黑猫侦探社咪仔(备选)"},
+    {"voice_id": "zh_male_m191_uranus_bigtts", "voice_name": "云舟(原默认)"},
     {"voice_id": "zh_female_gaolengyujie_uranus_bigtts", "voice_name": "高冷御姐"},
     {"voice_id": "zh_female_vv_uranus_bigtts", "voice_name": "Vivi"},
 ]

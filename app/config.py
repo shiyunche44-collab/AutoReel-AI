@@ -319,7 +319,7 @@ def motion_status() -> tuple[bool, str]:
 ARK_API_KEY = os.getenv("ARK_API_KEY", "").strip()
 ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3").rstrip("/")
 #: 旁白音色(豆包 seed-tts-2.0 的 speaker)
-ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_m191_uranus_bigtts").strip()
+ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_dayi_uranus_bigtts").strip()
 #: 看图用的模型
 ARK_VLM_MODEL = os.getenv("ARK_VLM_MODEL", "doubao-seed-2.1-pro").strip()
 

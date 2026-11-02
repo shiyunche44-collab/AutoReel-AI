@@ -48,7 +48,7 @@ def _is_rate_limited(exc: Exception) -> bool:
 MIN_CLIP_SECONDS = 0.15
 
 #: 默认中文解说音色。可在设置页切换。
-DEFAULT_VOICE_ID = "zh_male_m191_uranus_bigtts"   # 豆包 2.0 男声(与 config.ARK_TTS_VOICE 默认一致)
+DEFAULT_VOICE_ID = "zh_male_dayi_uranus_bigtts"   # 豆包 2.0 大壹(与 config.ARK_TTS_VOICE 默认一致)
 FEMALE_VOICE_ID = "zh_female_gaolengyujie_uranus_bigtts"  # 豆包 2.0 高冷御姐
 
 
