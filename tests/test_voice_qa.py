@@ -152,32 +152,3 @@ def test_time_beats_blocks_gate_a_on_failed_qa(monkeypatch, tmp_path):
     monkeypatch.setattr(explainer.aspect, "line_chars", lambda p: 16)
     with pytest.raises(RuntimeError, match="旁白质检未通过.*第 2 句 读错词或音频错位"):
         explainer.time_beats("p_qa", _specs(), None)
-
-
-def test_cache_hits_are_rechecked_until_verified(monkeypatch, tmp_path):
-    """带毒的缓存:命中后转写复核判错 → 清缓存 → 重合成;核对过的再命中就不再转写。"""
-    monkeypatch.setattr(config, "VOICE_QA", True)
-    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
-    specs = _specs()
-    texts = [narration.normalize_for_tts(f"第{i}拍的旁白说明。", None) for i in range(4)]
-    voice, speed = narration.audio.DEFAULT_VOICE_ID, config.TTS_SPEED
-    cache = narration.tts_cache_dir()
-    cache.mkdir(parents=True)
-    for i, t in enumerate(texts):
-        _wav(cache / f"{narration._tts_key(t, voice, speed, config.TTS_EMOTION)}.wav", 1.0)
-
-    seen: list[str] = []
-
-    def asr(p: Path) -> str:
-        seen.append(p.name)
-        return "天地玄黄宇宙洪荒日月盈昃"          # 缓存里的音频全是错位的
-
-    monkeypatch.setattr(voice_qa, "load_asr", lambda: asr)
-    monkeypatch.setattr(voice_qa, "asr_available", lambda: True)
-    synth = []
-    monkeypatch.setattr(narration.audio, "synthesize_batch",
-                        lambda ts, **kw: synth.append(list(ts)) or [])
-    res = narration.build("p_qa", specs, with_bgm=False)
-    assert seen, "命中缓存的句子必须被转写复核"
-    assert synth and res.qa_failed        # 清了缓存、重合成没拿到音频、最终报不合格
-    assert not list(cache.glob("*.wav"))   # 毒缓存已经清掉

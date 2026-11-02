@@ -24,7 +24,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 ## 测试
 
 - 测试里调用 `orchestrator.create_project` 等会写库的函数,**必须用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的 `data/aimovice.db`。
-- `tests/conftest.py` 已把 TTS 句子缓存、BGM 曲库重定向到 tmp,别绕开。
+- `tests/conftest.py` 已把 BGM 曲库重定向到 tmp,别绕开。
 - 提示词有黄金快照 `tests/golden/auto_long_prompts.json`。改 prompt 后用 `tests/test_profile_vocab.py` 里的 `regen_golden` 重生成,并在 diff 里确认只有预期变化。
 - `playbook.install()` 只在 `team.scheduler.start()` 里调用,所以测试和黄金快照不受学习权重影响。别在别处调用它。
 - 不要给临时脚本起标准库同名(`tokenize.py` 之类):会遮蔽 stdlib,曾导致迁移被重跑。

@@ -538,8 +538,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         qa_note = (f",语音质检 {qa['sentences']} 句"
                    + (f"重做 {len(qa['redone'])} 句" if qa.get("redone") else "全部通过")
                    ) if qa.get("sentences") else ""
-        cache_note = (f",{nar.cached_sentences} 句命中缓存" if nar.cached_sentences else "") + \
-            (",BGM 复用曲库" if nar.bgm_reused else "") + qa_note
+        cache_note = (",BGM 复用曲库" if nar.bgm_reused else "") + qa_note
         _set_state(project_id, state, State.ASSETS_READY,
                    reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
                           + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))

@@ -313,7 +313,6 @@ def test_gate_a_force_overrides(monkeypatch):
 
 
 class _FakeNarration:
-    cached_sentences = 0
     bgm_reused = False
     warnings: list[str] = []
     sentences: list[str] = []

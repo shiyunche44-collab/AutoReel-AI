@@ -210,7 +210,7 @@ def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# 句子缓存与 BGM 曲库
+# 重建与 BGM 曲库
 # --------------------------------------------------------------------------
 def _recording_tts(tmp_path, calls):
     from app.providers.audio import AudioAsset
@@ -226,39 +226,18 @@ def _recording_tts(tmp_path, calls):
     return fake
 
 
-def test_rebuild_only_synthesizes_changed_sentences(monkeypatch, tmp_path):
-    from app.models import ShotSpec
-
+def test_rebuild_always_resynthesizes_every_sentence(monkeypatch, tmp_path):
+    """不做句子缓存:同样的稿子再确认一次,也整段重新合成(语气不对的音频不会被复用)。"""
     calls: list[list[str]] = []
     monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
     monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
 
     first = narration.build("p1", _three_specs(), with_bgm=False)
-    assert len(calls[0]) == 3 and first.cached_sentences == 0
-    assert first.synth_chars == sum(len(t) for t in calls[0])
-
-    specs = _three_specs()
-    specs[1] = ShotSpec(idx=1, visual_zh="v", narration_zh="改过的第一拍旁白。")
-    again = narration.build("p1", specs, with_bgm=False)
-    assert len(calls[1]) == 1 and "改过" in calls[1][0]
-    assert again.cached_sentences == 2
-    assert [c.shot_idx for c in again.cues] == [0, 1, 2]
-    assert again.cues[1].text == calls[1][0]
-
-    # 别的项目同样的句子也直接命中
+    again = narration.build("p1", _three_specs(), with_bgm=False)
     other = narration.build("p2", _three_specs(), with_bgm=False)
-    assert len(calls) == 2 and other.cached_sentences == 3 and other.synth_chars == 0
-
-
-def test_tts_cache_is_per_voice(monkeypatch, tmp_path):
-    calls: list[list[str]] = []
-    monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
-    monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
-    narration.build("p1", _three_specs(), with_bgm=False, voice_id="a")
-    narration.build("p1", _three_specs(), with_bgm=False, voice_id="b")
-    assert len(calls) == 2 and len(calls[1]) == 3
+    assert [len(c) for c in calls] == [3, 3, 3]
+    assert first.synth_chars == again.synth_chars == other.synth_chars == sum(len(t) for t in calls[0])
 
 
 def test_bgm_reuses_project_track_and_rotates_library(monkeypatch, tmp_path):
@@ -320,25 +299,6 @@ def test_normalize_years_percent_thousands_and_ranges():
     assert normalize_for_tts("1,299台") == "一千二百九十九台"
     assert normalize_for_tts("增长12.5%") == "增长百分之十二点五"
     assert normalize_for_tts("50-60公里") == "五十到六十公里"
-
-
-def test_tts_key_changes_with_speed_and_emotion():
-    a = narration._tts_key("你好", "v", 1.0, "")
-    assert a != narration._tts_key("你好", "v", 1.12, "")
-    assert a != narration._tts_key("你好", "v", 1.0, "happy")
-
-
-def test_cached_clip_with_no_sound_is_not_reused(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
-    cache = narration.tts_cache_dir()
-    cache.mkdir(parents=True)
-    bad = cache / (narration._tts_key("你好", "v", 1.0, "") + ".mp3")
-    bad.write_bytes(b"x")
-    monkeypatch.setattr(narration, "probe_safe", lambda *a, **k: 0.02)
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    assert narration.cached_tts(["你好"], voice_id="v", speed=1.0, dest_dir=dest) == {}
-    assert not bad.exists()
 
 
 def test_synthesize_batch_retries_rate_limited_batch_and_keeps_done(monkeypatch, tmp_path):
