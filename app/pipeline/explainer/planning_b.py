@@ -187,7 +187,8 @@ def fallback_beats(*, subject: str, profile: CategoryProfile,
                             visual_zh=f"[{SAFE_LAYOUT}] {sec.beat or seg.subject or subject}",
                             narration_zh=seg.text, angle=sec.angle, layout=SAFE_LAYOUT,
                             chapter=seg.heading or seg.subject or sec.chapter or sec.name,
-                            view=_hint(sec.angle, "", profile.vocab), subject=seg.subject))
+                            view=_hint(sec.angle, "", profile.vocab), subject=seg.subject,
+                            intensity=seg.intensity))
     return assign_broll_styles(out)
 
 

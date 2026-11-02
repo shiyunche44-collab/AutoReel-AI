@@ -79,6 +79,8 @@ class ScriptSegment(BaseModel):
     subject: str = ""
     #: 脚本给的章节名(问答式的问题、槽点式的争议);空 = 用段落配置的章节名
     heading: str = ""
+    #: 情绪强度 1 缓 / 2 中 / 3 强;0 = 没标(旧项目、模型没给),渲染时按角色兜底。见 pipeline/intensity.py
+    intensity: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -121,6 +123,8 @@ class ShotSpec(BaseModel):
     view: str = ""
     #: 多车横评:这一拍讲哪台车(背景素材、叠加层车名、事实核对都按它);空串 = 共用拍
     subject: str = ""
+    #: 情绪强度(来自脚本段),0 = 没标;渲染联动见 pipeline/intensity.py
+    intensity: int = 0
 
 
 class Shot(BaseModel):

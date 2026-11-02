@@ -85,6 +85,7 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
                 spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
             else:
                 spec.overlay = {**ov, "lines": []}
+        spec.intensity = seg.intensity
         out.append(spec)
     return out
 
@@ -207,7 +208,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         angle=sec.angle, on_screen_text=[],
         card=card, layout=layout, overlay=overlay,
         chapter=seg.heading or seg.subject or sec.chapter or sec.name, view=view,
-        subject=seg.subject,
+        subject=seg.subject, intensity=seg.intensity,
     )
 
 

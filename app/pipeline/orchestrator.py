@@ -862,6 +862,7 @@ def update_script(project_id: str, segments: list[ScriptSegment],
             if prev is not None and prev.section == seg.section:
                 seg.subject = seg.subject or prev.subject
                 seg.heading = seg.heading or prev.heading
+                seg.intensity = seg.intensity or prev.intensity
         # 先同步再落盘:同步不过(段落数对不上、大字全废)就别改坏现有状态
         _sync_storyboard(project_id, segments)
         _save_script(project_id, segments)
