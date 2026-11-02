@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Sequence
 from ... import config
 from .. import aspect, library, looks
-from .. import intensity as intensity_mod
 from .. import render as render_mod
 
 from .consts import STILL_MOTIONS, XFADE, XFADE_KINDS, _ENC
@@ -146,13 +145,13 @@ def xfade_offsets(lengths: Sequence[float]) -> list[float]:
 
 
 def _xfade(parts: Sequence[Path], lengths: Sequence[float], seconds: float, dest: Path,
-           seed: int, kinds: Sequence[str] = XFADE_KINDS) -> Path:
+           seed: int) -> Path:
     inputs: list[str] = []
     for p in parts:
         inputs += ["-i", str(p)]
     chain, prev = [], "[0:v]"
     for k, offset in enumerate(xfade_offsets(lengths), start=1):
-        kind = kinds[(seed + k) % len(kinds)]
+        kind = XFADE_KINDS[(seed + k) % len(XFADE_KINDS)]
         label = f"[x{k}]"
         chain.append(f"{prev}[{k}:v]xfade=transition={kind}:duration={XFADE}:offset={offset:.3f}{label}")
         prev = label
@@ -165,10 +164,9 @@ def _xfade(parts: Sequence[Path], lengths: Sequence[float], seconds: float, dest
 
 
 def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple[int, int],
-                    work: Path, motion_seed: int = 0, level: int = 0) -> Path:
+                    work: Path, motion_seed: int = 0) -> Path:
     """把几段背景拼成一条定长背景:段与段之间 xfade 转场(失败退回硬切拼接)。
-    没有片段时给纯色底(不应发生,但不能卡死流水线)。
-    `level` = 情绪强度(1-3,0 = 不联动):强段用利落的推拉 / 滑动,缓段用柔和的淡入淡出。"""
+    没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
     work.mkdir(parents=True, exist_ok=True)
     dest = work / "bg.mp4"
     if not pieces:
@@ -187,8 +185,7 @@ def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple
         return dest
     if blend:
         try:
-            return _xfade(parts, lengths, seconds, dest, motion_seed,
-                          intensity_mod.XFADE_POOL.get(level, XFADE_KINDS))
+            return _xfade(parts, lengths, seconds, dest, motion_seed)
         except render_mod.RenderError:
             pass  # 退回硬切:每段多出的 XFADE 秒被 -t 截在结尾,画面只是略早切
     listing = render_mod.timeline_mod.concat_list_file(parts, work / "pieces.txt")

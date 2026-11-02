@@ -261,32 +261,9 @@ def _bgm_fades(seconds: float) -> str:
     return fades
 
 
-def bgm_curve(durations: Sequence[float], levels: Sequence[float] | None) -> str:
-    """BGM 按拍起伏的 `volume` 滤镜片段(含前导逗号;没有起伏返回空串)。
-
-    `levels[k]` 是第 k 拍的电平倍率(1 = 不变),比 `durations` 短的部分按 1 算(片尾卡)。
-    相邻同倍率的拍并成一段;表达式是「1 加各段的偏移」,段与段不重叠,所以不会双倍叠加。
-    只作用在 BGM(进侧链之前),旁白不碰。"""
-    if not levels:
-        return ""
-    spans: list[list[float]] = []
-    t = 0.0
-    for k, d in enumerate(durations):
-        g = float(levels[k]) if k < len(levels) else 1.0
-        if spans and abs(spans[-1][2] - g) < 1e-6 and abs(spans[-1][1] - t) < 1e-6:
-            spans[-1][1] = t + d
-        else:
-            spans.append([t, t + d, g])
-        t += d
-    terms = [f"{g - 1:+.3f}*gte(t,{a:.2f})*lt(t,{b:.2f})" for a, b, g in spans if abs(g - 1) > 1e-6]
-    if not terms:
-        return ""
-    return ",volume='1" + "".join(terms) + "':eval=frame"
-
-
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
-    has_sfx: bool = False, pad_to: float = 0.0, bgm_levels: str = "",
+    has_sfx: bool = False, pad_to: float = 0.0,
 ) -> tuple[str, str]:
     """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
 
@@ -299,7 +276,6 @@ def _build_audio_graph(
     `pad_to`:大于 0 时把混音补静音到这个总长(片尾卡在旁白之后,BGM 以外是静音)。
     `has_sfx`:音效轨(sfx.build_track),输入序号排在旁白、BGM 之后,不进侧链,
     直接和旁白 / BGM 一起 amix 再过 loudnorm。
-    `bgm_levels`:`bgm_curve` 的结果,BGM 随情绪曲线起伏(在侧链之前,不影响旁白)。
     """
     filters: list[str] = []
     tail = f",apad=whole_dur={pad_to:.3f}" if pad_to > 0 else ""
@@ -314,8 +290,7 @@ def _build_audio_graph(
         bgm_index = first_input + 1 if has_narration else first_input
         filters.append(
             f"[{bgm_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}{bgm_levels}"
-            f"{_bgm_fades(narration_duration)}[bgmraw]"
+            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}{_bgm_fades(narration_duration)}[bgmraw]"
         )
     if has_narration and has_bgm:
         filters.append("[narr0]asplit=2[narr][narrsc]")
@@ -354,8 +329,7 @@ def _build_audio_graph(
 
 
 def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: float,
-               dest: Path, sfx_path: Path | None = None, pad: bool = False,
-               bgm_levels: str = "") -> tuple[Path | None, str]:
+               dest: Path, sfx_path: Path | None = None, pad: bool = False) -> tuple[Path | None, str]:
     """旁白 + BGM 单独混成一条 wav,返回 (路径, 错误信息)。
 
     **不能**跟视频放在同一条 ffmpeg 里混:2026-10-23 实测(ffmpeg 9.0.2),
@@ -378,7 +352,7 @@ def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: floa
     if has_sfx:
         inputs += ["-i", str(sfx_path)]
     graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx,
-                                      pad_to=seconds if pad else 0.0, bgm_levels=bgm_levels)
+                                      pad_to=seconds if pad else 0.0)
     dest.parent.mkdir(parents=True, exist_ok=True)
     proc = _run(
         ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
@@ -405,7 +379,6 @@ def compose(
     tail_silent: bool = False,
     intro_path: Path | None = None,
     intro_seconds: float = 0.0,
-    bgm_levels: Sequence[float] | None = None,
 ) -> RenderResult:
     """主合成入口。
 
@@ -415,8 +388,6 @@ def compose(
     `tail_silent` = 最后一个镜头是片尾卡(没有旁白):混音补静音到总长,BGM 托底并淡出。
 
     `sfx_path` = 音效轨(sfx.build_track),和旁白 / BGM 一起混音;混失败自动不带音效重混。
-
-    `bgm_levels` = 逐镜头的 BGM 电平倍率(情绪曲线,与 `durations` 对齐);不给 = BGM 平着铺。
 
     `layer_path` = 带透明通道的花字字幕层(webm,见 caption_layer):给了就 overlay 它,
     不再烧 ASS;overlay 这一遍失败会退回 ASS 字幕重合。
@@ -461,15 +432,10 @@ def compose(
     total_seconds = sum(durations) if durations else config.SHOT_GRID_SECONDS * len(normalised)
 
     # 音频先单独混好(原因见 _mix_audio),主命令只负责视频 + 封装现成的音轨
-    curve = bgm_curve(durations, bgm_levels) if durations else ""
     mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
-                                   sfx_path=sfx_path, pad=tail_silent, bgm_levels=curve)
+                                   sfx_path=sfx_path, pad=tail_silent)
     if mix_err and sfx_path:
         warnings.append("音效混入失败,改为不带音效")
-        mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
-                                       pad=tail_silent, bgm_levels=curve)
-    if mix_err and curve:
-        warnings.append("BGM 起伏混入失败,改为平铺")
         mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
                                        pad=tail_silent)
     if mix_err:
@@ -554,7 +520,6 @@ def compose(
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, layer_path=None, sfx_path=sfx_path,
                 tail_silent=tail_silent, intro_path=intro_path, intro_seconds=intro_seconds,
-                bgm_levels=bgm_levels,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry
@@ -567,7 +532,7 @@ def compose(
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, tail_silent=tail_silent,
-                intro_path=intro_path, intro_seconds=intro_seconds, bgm_levels=bgm_levels,
+                intro_path=intro_path, intro_seconds=intro_seconds,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry

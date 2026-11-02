@@ -131,8 +131,6 @@ CUT_LEAD_ENABLED = os.getenv("CUT_LEAD_ENABLED", "1") != "0"
 #: 排到后面(只排序不过滤,池子小也铺得满)。CROSS_PROJECT_DEDUP=0 关
 CROSS_PROJECT_DEDUP = os.getenv("CROSS_PROJECT_DEDUP", "1") != "0"
 CROSS_PROJECT_RECENT = int(os.getenv("CROSS_PROJECT_RECENT", "3"))
-#: 情绪曲线联动:按每拍的强度调拍内换刀间隔、转场样式、BGM 起伏。INTENSITY_CURVE=0 关
-INTENSITY_CURVE = os.getenv("INTENSITY_CURVE", "1") != "0"
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
 #: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪默认 happy(试听选定;设成空 = 不传)
