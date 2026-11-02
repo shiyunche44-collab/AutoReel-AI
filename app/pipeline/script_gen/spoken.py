@@ -109,8 +109,7 @@ def clean_spoken(segments: Sequence[ScriptSegment],
             merged = first.model_copy(update={
                 "text": _join_spoken(first.text, second.text),
                 "fact_refs": list(dict.fromkeys([*first.fact_refs, *second.fact_refs])),
-                "heading": first.heading or second.heading,
-                "intensity": max(first.intensity, second.intensity)})
+                "heading": first.heading or second.heading})
             lo = min(k, j)
             out[lo:lo + 2] = [merged]
             k = max(1, lo)

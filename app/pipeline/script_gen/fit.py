@@ -96,7 +96,6 @@ def _shorten_once(segments: list[ScriptSegment], budget: int, llm,
     known = {s.section for s in segments}
     # 压缩稿不带 heading(只删不加的提示词里没有它),按段落名从原稿搬回来
     headings = {s.section: s.heading for s in segments if s.heading}
-    intensities = {s.section: s.intensity for s in segments if s.intensity}
     out: list[ScriptSegment] = []
     for item in data.get("segments") or []:
         if not isinstance(item, dict):
@@ -109,8 +108,7 @@ def _shorten_once(segments: list[ScriptSegment], budget: int, llm,
         refs = [refs] if isinstance(refs, str) else refs
         out.append(ScriptSegment(idx=len(out), section=section, text=text,
                                  fact_refs=[str(r) for r in refs if str(r)],
-                                 heading=headings.get(section, ""),
-                                 intensity=intensities.get(section, 0)))
+                                 heading=headings.get(section, "")))
     if keep_count and len(out) != len(segments):
         log.warning("脚本压缩改变了段数(%d → %d),用原稿", len(segments), len(out))
         return None

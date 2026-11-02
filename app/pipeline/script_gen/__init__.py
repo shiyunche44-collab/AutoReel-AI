@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence  # noqa: F401
 from ...categories import CategoryProfile, Slot, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment  # noqa: F401
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band  # noqa: F401
-from .. import intensity, knobs, variety  # noqa: F401
+from .. import knobs, variety  # noqa: F401
 from ..timeline import narration_budget_chars  # noqa: F401
 
 from .lint_base import (  # noqa: E402,F401
@@ -291,7 +291,6 @@ def generate(
                 text=text,
                 fact_refs=[str(r) for r in refs if str(r)],
                 heading=heading,
-                intensity=intensity.clamp(item.get("intensity")),
             )
         )
 
@@ -304,7 +303,6 @@ def generate(
     else:
         segments = fit_length(segments, budget, llm, tolerance=LANDSCAPE_LENGTH_TOLERANCE,
                               keep_count=True)
-    intensity.normalize(segments)
     return segments, title, thesis
 
 

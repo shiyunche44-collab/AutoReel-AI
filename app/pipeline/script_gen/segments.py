@@ -56,7 +56,6 @@ def normalize_segments(
         merged = out[-2].text.rstrip() + out[-1].text
         out[-2].text = merged
         out[-2].fact_refs = list(dict.fromkeys(out[-2].fact_refs + out[-1].fact_refs))
-        out[-2].intensity = max(out[-2].intensity, out[-1].intensity)
         out.pop()
     # 段落过少:复制最后一段占位,后续由用户/分镜阶段修正
     while len(out) < len(plan):
@@ -67,7 +66,6 @@ def normalize_segments(
                 section=plan[len(out)] if len(out) < len(plan) else "",
                 text=template.text,
                 fact_refs=list(template.fact_refs),
-                intensity=template.intensity,
             )
         )
     unify_headings(out)
@@ -183,5 +181,5 @@ def split_segments(segments: Sequence[ScriptSegment],
         for p in parts:
             out.append(ScriptSegment(idx=len(out), section=seg.section, text=p,
                                      fact_refs=list(seg.fact_refs), subject=seg.subject,
-                                     heading=seg.heading, intensity=seg.intensity))
+                                     heading=seg.heading))
     return out
