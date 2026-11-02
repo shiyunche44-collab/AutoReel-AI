@@ -129,9 +129,9 @@ MAX_TTS_CHARS = 30
 CUT_LEAD_ENABLED = os.getenv("CUT_LEAD_ENABLED", "1") != "0"
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
-#: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪空 = 不传(试听后再定)
+#: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪默认 happy(试听选定;设成空 = 不传)
 TTS_SPEED = float(os.getenv("TTS_SPEED", "1.12"))
-TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
+TTS_EMOTION = os.getenv("TTS_EMOTION", "happy").strip()
 #: 按句子在片里的角色微调语速(TTS 之后用 atempo 处理,不动 TTS 调用与缓存):
 #: 开场第一句略快、有冲击;结论段略慢、有分量。1.0 = 不调;TTS_PROSODY=0 整个关掉
 #: 字幕逐字时间:用 faster-whisper 量出每个字实际念到的时刻(需已装;失败退回字数比例)
