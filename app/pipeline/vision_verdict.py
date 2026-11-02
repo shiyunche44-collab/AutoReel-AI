@@ -32,7 +32,7 @@ from typing import Any, Sequence
 from ..providers import images
 
 #: 逐张提问的并发数。视觉问答走 CLI 子进程,开太多会被限流
-WORKERS = 4
+WORKERS = 8
 
 
 def parse_verdicts(text: str) -> list[dict[str, Any]]:

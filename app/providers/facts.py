@@ -429,8 +429,13 @@ def dongchedi_lineup(subject: str, project_dir: Path | None = None) -> RawDoc:
 #: 品类 Profile 里可以直接引用的来源名 → 函数
 def autohome_specs(subject: str, project_dir: Path | None = None) -> RawDoc:
     """参数配置表(整备质量、悬架、轮胎、电芯、离地间隙…),见 car_specs。"""
-    from . import car_specs
+    from . import ark_datapro, car_specs
 
+    # 配了方舟 Key 先走官方专业数据集;取不到(没收录 / 接口异常)降级到汽车之家
+    if ark_datapro.enabled():
+        doc = ark_datapro.specs(subject, project_dir)
+        if doc.ok:
+            return doc
     return car_specs.specs(subject, project_dir)
 
 

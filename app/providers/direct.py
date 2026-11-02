@@ -21,6 +21,7 @@ mcode-tools 的登录由 MiniMax Code 应用托管(shared-broker),离开那个�
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import time
@@ -35,6 +36,7 @@ from .cli import ConnectorError
 
 #: 网络搜索替代了哪个来源 —— 事实的 source_tool 要如实写成它,而不是同花顺
 WEB_SEARCH_LABEL = "minimax.web_search"
+ARK_SEARCH_LABEL = "ark.web_search"
 
 _IMAGE_SUFFIXES = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".webp": "webp"}
 #: data URI 图片的最长边。首帧 / 参考图 / 质检帧都不需要更大,请求体也小
@@ -171,10 +173,34 @@ def _audio_node(data: dict) -> str | None:
     return None
 
 
+def _ark_tts_item(req: dict, timeout: float) -> str:
+    """豆包 seed-tts-2.0 合成一句,落成本地文件,返回 `url:file://…`(与 MiniMax 的结果同形)。"""
+    from . import ark_tts
+
+    voice = req.get("voice_id") or ""
+    key = hashlib.sha1(f"{ark_tts.resolve_voice(voice)}|{req.get('speed', 1)}|{req['text']}"
+                       .encode("utf-8")).hexdigest()
+    dest = config.DATA_DIR / "_cache" / "ark_tts_raw" / f"{key}.mp3"
+    if not dest.is_file() or dest.stat().st_size == 0:
+        ark_tts.synthesize_to_file(req["text"], voice_id=voice, speed=req.get("speed", 1.0),
+                                   dest=dest, timeout=timeout)
+    return "url:" + dest.resolve().as_uri()
+
+
 def tts_batch(args: dict, timeout: float) -> dict:
     """逐条合成。失败条目占位为 node_id=None:调用方按位置对齐,不能让后面的条目前移。"""
     items: list[dict] = []
     errors: list[str] = []
+    if config.TTS_PROVIDER == "ark":
+        for req in args.get("requests") or []:
+            try:
+                node = _ark_tts_item(req, timeout)
+            except ConnectorError as exc:
+                node, errors = None, errors + [exc.message]
+            items.append({"node_id": node, "file_name": req.get("output_file", "")})
+        if not any(i["node_id"] for i in items) and errors:
+            raise ConnectorError("ark_tts", errors[0])
+        return {"success_items": items}
     for req in args.get("requests") or []:
         voice = {"voice_id": req.get("voice_id"), "speed": req.get("speed", 1),
                  "vol": req.get("volume", 1), "pitch": config.TTS_PITCH}
@@ -241,10 +267,42 @@ def voice_list(args: dict, timeout: float) -> dict:
 # --------------------------------------------------------------------------
 # 理解
 # --------------------------------------------------------------------------
+def _ark_vlm(image_url: str, prompt: str, timeout: float) -> str:
+    """方舟 Agent Plan 的豆包看图(OpenAI 兼容 chat/completions)。429 / 5xx / 网络错误重试。"""
+    if not config.ARK_API_KEY:
+        raise _Unsupported("describe_images", "未配置 ARK_API_KEY")
+    body = {"model": config.ARK_VLM_MODEL, "max_tokens": 4000,
+            "messages": [{"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": prompt}]}]}
+    last: ConnectorError | None = None
+    for attempt in range(3):
+        try:
+            resp = httpx.post(f"{config.ARK_BASE_URL}/chat/completions", json=body, timeout=timeout,
+                              headers={"Authorization": f"Bearer {config.ARK_API_KEY}"})
+        except httpx.HTTPError as exc:
+            last = ConnectorError("describe_images", f"网络错误:{type(exc).__name__}: {exc}")
+        else:
+            if resp.status_code == 200:
+                try:
+                    return str(resp.json()["choices"][0]["message"]["content"] or "")
+                except (ValueError, KeyError, IndexError, TypeError):
+                    raise ConnectorError("describe_images", f"方舟返回格式不对:{resp.text[:200]}")
+            last = ConnectorError("describe_images", f"HTTP {resp.status_code}:{resp.text[:200]}",
+                                  code=resp.status_code)
+            if resp.status_code not in (429, 500, 502, 503, 504):
+                raise last
+        time.sleep(3 * (attempt + 1))
+    assert last is not None
+    raise last
+
+
 def vlm(image_url: str, prompt: str, timeout: float) -> str:
     """M Plan 的图片理解。只收 data URI,外链先下载再编码。"""
     if not image_url.startswith("data:"):
         image_url = image_data_uri(_fetch_bytes(image_url))
+    if config.VLM_PROVIDER == "ark":
+        return _ark_vlm(image_url, prompt, timeout)
     data = request("POST", "/v1/coding_plan/vlm", tool="describe_images",
                    json_body={"prompt": prompt, "image_url": image_url}, timeout=timeout)
     return str(data.get("content") or "")
@@ -292,12 +350,22 @@ def web_search_news(args: dict, timeout: float) -> dict:
     query = str(args.get("query", "")).strip()
     if not query:
         raise ConnectorError("search_news", "查询串为空")
+    size = int(args.get("size") or 10)
+    if config.SEARCH_PROVIDER == "ark":
+        from . import ark_search
+
+        rows = ark_search.search(
+            query, count=size, timeout=timeout,
+            time_range=ark_search.time_range(args.get("time_start"), args.get("time_end")))
+        if not rows:
+            raise ConnectorError("search_news", f"豆包搜索无结果:{query}")
+        return {"data": rows}
     data = request("POST", "/v1/coding_plan/search", tool="web_search",
                    json_body={"q": query}, timeout=timeout)
     rows = parse_search(data)
     if not rows:
         raise ConnectorError("search_news", f"网络搜索无结果:{json.dumps(data, ensure_ascii=False)[:200]}")
-    return {"data": rows[: int(args.get("size") or 10)]}
+    return {"data": rows[:size]}
 
 
 # --------------------------------------------------------------------------
@@ -316,7 +384,9 @@ HANDLERS: dict[str, Callable[[dict, float], Any]] = {
 
 def source_label(tool: str) -> str:
     """事实来源的真实名字:直连时 search_news 实际是网络搜索。"""
-    return WEB_SEARCH_LABEL if tool == "connector__thsifind__search_news" else tool
+    if tool != "connector__thsifind__search_news":
+        return tool
+    return ARK_SEARCH_LABEL if config.SEARCH_PROVIDER == "ark" else WEB_SEARCH_LABEL
 
 
 def call(tool: str, args: dict, *, timeout: float) -> Any:

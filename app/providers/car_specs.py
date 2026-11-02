@@ -168,9 +168,9 @@ def _with_unit(name: str, value: str) -> tuple[str, str]:
 
 
 def render(series: str, rows: list[tuple[str, dict[str, str]]], trims: list[str],
-           date: str) -> str:
+           date: str, source: str = "汽车之家车型库") -> str:
     """给事实抽取读的正文:一个参数一行,取值相同的版本合并;所有版本一样就写「全系」。"""
-    lines = [f"{series} 参数配置表(汽车之家车型库,{date} 取数,在售 {len(trims)} 个版本:"
+    lines = [f"{series} 参数配置表({source},{date} 取数,在售 {len(trims)} 个版本:"
              + "、".join(trims) + "):"]
     for name, vals in rows:
         groups: dict[str, list[str]] = {}

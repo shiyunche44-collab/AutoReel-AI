@@ -369,7 +369,7 @@ def extract_facts(
 #: 在售版本清单的来源名(providers.car_lineup.TOOL)
 LINEUP_TOOL = "dongchedi.lineup"
 #: 只列在售版本的来源(在售清单、参数配置表):它们写的旧年款版本还在卖
-ON_SALE_TOOLS = (LINEUP_TOOL, "autohome.specs")
+ON_SALE_TOOLS = (LINEUP_TOOL, "autohome.specs", "ark.datapro.specs")
 #: 最新年款至少要有这么多条产品事实,才去屏蔽旧款(只有一两条新款时,旧款可能才是主力)
 STALE_MIN_CURRENT = 3
 

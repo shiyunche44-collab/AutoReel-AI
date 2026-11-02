@@ -273,6 +273,15 @@ def _download(url: str, dest: Path) -> None:
     import httpx
 
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if url.startswith("file:"):
+        import shutil
+
+        from .direct import _local_path
+
+        shutil.copyfile(_local_path(url), dest)
+        if dest.stat().st_size == 0:
+            raise RuntimeError(f"下载到空文件: {dest}")
+        return
     with httpx.stream("GET", url, timeout=300, follow_redirects=True) as resp:
         resp.raise_for_status()
         with dest.open("wb") as fh:

@@ -286,7 +286,7 @@ BGM_LIBRARY_SIZE = 3
 
 
 def _tts_key(text: str, voice_id: str, speed: float, emotion: str = "") -> str:
-    raw = f"{config.TTS_MODEL}|{voice_id}|{speed:.3f}|{emotion}|{config.TTS_PITCH}|{text}"
+    raw = f"{config.tts_tag()}|{voice_id}|{speed:.3f}|{emotion}|{config.TTS_PITCH}|{text}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 

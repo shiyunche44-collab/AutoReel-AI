@@ -313,6 +313,32 @@ CONNECTOR_BACKEND = (
 #: 直连后端用到的模型(mcode 后端由 Connector 自己选)
 TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
 MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
+#: 火山方舟 Agent Plan 专属 API Key。配了就用豆包 seed-tts-2.0 做旁白(TTS_PROVIDER=minimax 可强制回 MiniMax)
+ARK_API_KEY = os.getenv("ARK_API_KEY", "").strip()
+ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_m191_uranus_bigtts").strip()
+TTS_PROVIDER = (os.getenv("TTS_PROVIDER", "").strip().lower()
+                or ("ark" if ARK_API_KEY else "minimax"))
+
+
+#: 方舟 Agent Plan 的对话接口(OpenAI 兼容)。看图用 doubao-seed-2.1-pro;VLM_PROVIDER=minimax 强制回 MiniMax
+ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3").rstrip("/")
+ARK_VLM_MODEL = os.getenv("ARK_VLM_MODEL", "doubao-seed-2.1-pro").strip()
+VLM_PROVIDER = (os.getenv("VLM_PROVIDER", "").strip().lower()
+                or ("ark" if ARK_API_KEY else "minimax"))
+
+
+#: 火山方舟「豆包搜索 Custom 版」。Agent Plan 的 Key 可直接用,单独建了搜索 Key 就配 ARK_SEARCH_API_KEY。
+#: SEARCH_PROVIDER=minimax 强制回 MiniMax 网络搜索
+ARK_SEARCH_API_KEY = os.getenv("ARK_SEARCH_API_KEY", "").strip() or ARK_API_KEY
+ARK_SEARCH_URL = os.getenv("ARK_SEARCH_URL", "https://open.feedcoopapi.com/search_api/web_search").strip()
+SEARCH_PROVIDER = (os.getenv("SEARCH_PROVIDER", "").strip().lower()
+                   or ("ark" if ARK_SEARCH_API_KEY else "minimax"))
+
+
+def tts_tag() -> str:
+    """进 TTS 缓存键:换了引擎 / 默认音色,旧缓存不能再命中。"""
+    return f"ark:seed-tts-2.0:{ARK_TTS_VOICE}" if TTS_PROVIDER == "ark" else TTS_MODEL
+
 #: 自备 BGM 目录(放 mp3/m4a/wav)。MiniMax 音乐接口已对新用户关闭(HTTP 410),有曲子就优先用这里的
 #: 是否给成片配 BGM。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
 BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"

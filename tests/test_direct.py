@@ -31,6 +31,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(direct, "request", fake)
     monkeypatch.setattr(config, "CONNECTOR_BACKEND", "direct")
     monkeypatch.setattr(config, "MINIMAX_PLAN_KEY", "sk-cp-test")
+    monkeypatch.setattr(config, "SEARCH_PROVIDER", "minimax")  # 本机配了 ARK_API_KEY 也不漂移
     log.replies = replies
     return log
 
