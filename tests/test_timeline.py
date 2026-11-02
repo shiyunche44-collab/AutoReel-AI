@@ -226,3 +226,10 @@ def test_cues_use_punctuation_gaps_by_default():
     cues = build_subtitle_cues(["第一句。", "但是第二句。"], [1.0, 1.0])
     from app.pipeline.timeline import gap_after
     assert cues[1].start == pytest.approx(1.0 + gap_after("第一句。", "但是第二句。"), abs=1e-3)
+
+
+def test_voltage_unit_after_number_reads_as_fu():
+    assert normalize_for_tts("800V 平台") == "八百伏 平台"
+    assert normalize_for_tts("3.3V") == "三点三伏"
+    # 型号里的 V 不动
+    assert "V" in normalize_for_tts("V6 发动机") and "V" in normalize_for_tts("VW 的 8 款")

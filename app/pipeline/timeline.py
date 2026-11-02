@@ -199,6 +199,8 @@ def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str
     out = out.replace("km/h", "公里每小时").replace("KM/H", "公里每小时")
     out = out.replace("kWh", "千瓦时").replace("KWh", "千瓦时")
     out = out.replace("Wh", "瓦时")
+    # 数字后的电压单位 V:"800V" 若原样交给 TTS 会被读成"副 / 位"(实测),只在紧跟数字时换成"伏"
+    out = re.sub(r"(?<=[零一二三四五六七八九十百千万点])V(?![A-Za-z])", "伏", out)
     # 品类读法表(N·m→牛米、rpm→转):长词优先,免得 "N·m/deg" 先被 "N·m" 吃掉
     for raw in sorted(pronounce or {}, key=len, reverse=True):
         out = out.replace(raw, pronounce[raw])
