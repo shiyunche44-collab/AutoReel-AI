@@ -125,6 +125,8 @@ PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "")
 # --------------------------------------------------------------------------
 #: 单条 TTS 文本的最大汉字数。过长会导致语调疲劳与断句错误。
 MAX_TTS_CHARS = 30
+#: 画面比旁白早切一点(切在换气停顿里,J-cut 的最小形式),CUT_LEAD_ENABLED=0 关
+CUT_LEAD_ENABLED = os.getenv("CUT_LEAD_ENABLED", "1") != "0"
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
 #: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪空 = 不传(试听后再定)
@@ -346,6 +348,11 @@ COVER_AI_CAR = os.getenv("COVER_AI_CAR", "1") not in ("0", "false", "False")
 COVER_AI_CAR_CANDIDATES = max(1, int(os.getenv("COVER_AI_CAR_CANDIDATES", "4") or 4))
 #: 封面角落的账号署名(如「柒哥&车」),每张封面同一个位置,主页一排看过去认得出是同一个号;空 = 不署名
 COVER_BRAND = os.getenv("COVER_BRAND", "").strip()
+#: 片尾卡:成片末尾接一张静态结尾卡(行动号召 + 账号署名),旁白已经说完,BGM 托底并淡出。
+#: 加在旁白之后,不动前面任何一拍的时间。默认关;OUTRO_ENABLED=1 开
+OUTRO_ENABLED = os.getenv("OUTRO_ENABLED", "0") == "1"
+OUTRO_SECONDS = float(os.getenv("OUTRO_SECONDS", "2.5"))
+OUTRO_TEXT = os.getenv("OUTRO_TEXT", "关注我,看更多真实数据解读").strip()
 #: Connector 调用的默认超时
 CONNECTOR_TIMEOUT_DEFAULT = 180
 

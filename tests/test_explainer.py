@@ -547,3 +547,26 @@ def test_beat_role_follows_chapter_position():
 def test_layout_filter_highlight_without_pip_is_fullscreen():
     f = explainer.layout_filter("highlight", (1920, 1080), True, pip=False)
     assert "pad=" not in f and "scale=" not in f and "[2:v]" in f and f.endswith("[out]")
+
+
+def test_cut_leads_move_cut_into_the_pause_and_keep_total():
+    from app.pipeline.explainer import timing
+    cues = [SubtitleCue(index=1, start=0.0, end=2.0, text="a", shot_idx=0),
+            SubtitleCue(index=2, start=2.3, end=4.3, text="b", shot_idx=1),
+            SubtitleCue(index=3, start=4.55, end=6.0, text="c", shot_idx=2)]
+    base = explainer.beat_durations(cues, 3)
+    leads = timing.cut_leads(cues, 3)
+    assert set(leads) == {1, 2}
+    assert leads[1] == pytest.approx(0.12) and leads[2] == pytest.approx(0.12)
+    out = timing.apply_cut_leads(list(base), leads)
+    assert sum(out) == pytest.approx(sum(base))
+    assert out[0] == pytest.approx(base[0] - 0.12)
+    assert out[1] == pytest.approx(base[1])  # 前后各挪 0.12,中间的拍不变
+    assert out[2] == pytest.approx(base[2] + 0.12)
+
+
+def test_cut_lead_never_exceeds_the_pause():
+    from app.pipeline.explainer import timing
+    cues = [SubtitleCue(index=1, start=0.0, end=2.0, text="a", shot_idx=0),
+            SubtitleCue(index=2, start=2.05, end=4.0, text="b", shot_idx=1)]
+    assert timing.cut_leads(cues, 2)[1] <= 0.05 * timing.CUT_LEAD_OF_GAP + 1e-9

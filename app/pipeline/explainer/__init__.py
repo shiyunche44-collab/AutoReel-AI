@@ -37,7 +37,7 @@ from typing import Any, Sequence  # noqa: F401
 from ... import config, db  # noqa: F401
 from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
-from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, overlays, rhythm  # noqa: F401
+from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, outro, overlays, rhythm  # noqa: F401
 from .. import render as render_mod  # noqa: F401
 from ..grounding import numbers_in  # noqa: F401
 
@@ -644,14 +644,20 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     shutil.rmtree(project_dir / "_render", ignore_errors=True)
     layer_path = _caption_layer(project_dir, nar, size, sum(s.duration for s in beats))
     sfx_path = _sfx_track(project_dir, nar, size, beats, sum(s.duration for s in beats))
+    shots = [Path(rows[s.idx]["final_path"]) for s in beats]
+    durations = [s.duration for s in beats]
+    card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
+    if card:
+        shots.append(card[0])
+        durations.append(card[1])
     result = render_mod.compose(
-        project_id, [Path(rows[s.idx]["final_path"]) for s in beats],
+        project_id, shots,
         ass_path=Path(nar["ass_path"]) if nar.get("ass_path") else None,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
         bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
-        size=size, durations=[s.duration for s in beats],
+        size=size, durations=durations,
         output_name=aspect.output_name(project),
-        layer_path=layer_path, sfx_path=sfx_path,
+        layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -714,14 +720,20 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     total = sum(s.duration for s in beats)
     layer_path = _caption_layer(project_dir, nar, size, total)
     sfx_path = _sfx_track(project_dir, nar, size, beats, total)
+    shots = [Path(rows[s.idx]["final_path"]) for s in beats]
+    durations = [s.duration for s in beats]
+    card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
+    if card:
+        shots.append(card[0])
+        durations.append(card[1])
     result = render_mod.compose(
-        project_id, [Path(rows[s.idx]["final_path"]) for s in beats],
+        project_id, shots,
         ass_path=Path(nar["ass_path"]) if nar.get("ass_path") else None,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
         bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
-        size=size, durations=[s.duration for s in beats],
+        size=size, durations=durations,
         output_name=aspect.output_name(project),
-        layer_path=layer_path, sfx_path=sfx_path,
+        layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))

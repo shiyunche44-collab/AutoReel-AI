@@ -263,7 +263,7 @@ def _bgm_fades(seconds: float) -> str:
 
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
-    has_sfx: bool = False,
+    has_sfx: bool = False, pad_to: float = 0.0,
 ) -> tuple[str, str]:
     """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
 
@@ -273,10 +273,12 @@ def _build_audio_graph(
 
     `first_input`:旁白(没旁白时是 BGM)的输入序号。单独混音时是 0,
     跟视频同一条命令时视频占了 0,就是 1。
+    `pad_to`:大于 0 时把混音补静音到这个总长(片尾卡在旁白之后,BGM 以外是静音)。
     `has_sfx`:音效轨(sfx.build_track),输入序号排在旁白、BGM 之后,不进侧链,
     直接和旁白 / BGM 一起 amix 再过 loudnorm。
     """
     filters: list[str] = []
+    tail = f",apad=whole_dur={pad_to:.3f}" if pad_to > 0 else ""
     sfx_index = first_input + int(has_narration) + int(has_bgm)
     sfx_mix = ""
     if has_sfx and (has_narration or has_bgm):
@@ -299,15 +301,15 @@ def _build_audio_graph(
         )
         filters.append(
             f"[narr][bgm]{sfx_mix}amix=inputs={3 if sfx_mix else 2}:duration=first:dropout_transition=0:normalize=0,"
-            f"loudnorm={TARGET_LOUDNESS}[aout]"
+            f"loudnorm={TARGET_LOUDNESS}{tail}[aout]"
         )
     elif has_narration or has_bgm:
         main = "[narr0]" if has_narration else "[bgmraw]"
         if sfx_mix:
             filters.append(f"{main}{sfx_mix}amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-                           f"loudnorm={TARGET_LOUDNESS}[aout]")
+                           f"loudnorm={TARGET_LOUDNESS}{tail}[aout]")
         else:
-            filters.append(f"{main}loudnorm={TARGET_LOUDNESS}[aout]")
+            filters.append(f"{main}loudnorm={TARGET_LOUDNESS}{tail}[aout]")
     else:
         # **既没旁白也没 BGM**:TTS 全失败 + BGM 也失败时就是这种。
         #
@@ -327,7 +329,7 @@ def _build_audio_graph(
 
 
 def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: float,
-               dest: Path, sfx_path: Path | None = None) -> tuple[Path | None, str]:
+               dest: Path, sfx_path: Path | None = None, pad: bool = False) -> tuple[Path | None, str]:
     """旁白 + BGM 单独混成一条 wav,返回 (路径, 错误信息)。
 
     **不能**跟视频放在同一条 ffmpeg 里混:2026-10-23 实测(ffmpeg 9.0.2),
@@ -349,7 +351,8 @@ def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: floa
     has_sfx = bool(sfx_path and Path(sfx_path).is_file())
     if has_sfx:
         inputs += ["-i", str(sfx_path)]
-    graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx)
+    graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx,
+                                      pad_to=seconds if pad else 0.0)
     dest.parent.mkdir(parents=True, exist_ok=True)
     proc = _run(
         ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
@@ -373,8 +376,11 @@ def compose(
     durations: Sequence[float] | None = None,
     layer_path: Path | None = None,
     sfx_path: Path | None = None,
+    tail_silent: bool = False,
 ) -> RenderResult:
     """主合成入口。
+
+    `tail_silent` = 最后一个镜头是片尾卡(没有旁白):混音补静音到总长,BGM 托底并淡出。
 
     `sfx_path` = 音效轨(sfx.build_track),和旁白 / BGM 一起混音;混失败自动不带音效重混。
 
@@ -422,10 +428,11 @@ def compose(
 
     # 音频先单独混好(原因见 _mix_audio),主命令只负责视频 + 封装现成的音轨
     mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
-                                   sfx_path=sfx_path)
+                                   sfx_path=sfx_path, pad=tail_silent)
     if mix_err and sfx_path:
         warnings.append("音效混入失败,改为不带音效")
-        mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav")
+        mix_path, mix_err = _mix_audio(narration_path, bgm_path, total_seconds, work_dir / "mix.wav",
+                                       pad=tail_silent)
     if mix_err:
         warnings.append(f"旁白/BGM 混音失败,成片将没有声音:{mix_err}")
 
@@ -496,6 +503,7 @@ def compose(
                 ass_path=ass_path, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, layer_path=None, sfx_path=sfx_path,
+                tail_silent=tail_silent,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry
@@ -507,7 +515,7 @@ def compose(
                 project_id, shot_paths,
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
-                size=size, durations=durations,
+                size=size, durations=durations, tail_silent=tail_silent,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry

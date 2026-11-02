@@ -323,6 +323,27 @@ def _detail_conflict(item: Item, want_detail: set[str], vocab: Vocab) -> bool:
     return not (shown & want_detail)
 
 
+_NOT_WORD = re.compile(r"[^一-鿿A-Za-z0-9]+")
+#: 重合度封顶:再多的字面重合也不该压过视角、水印、用过没有这些硬指标
+OVERLAP_CAP = 3
+
+
+def _bigrams(text: str) -> set[str]:
+    """文本去掉标点后的相邻两字(中文)/ 两字符(英文数字)集合。"""
+    chars = _NOT_WORD.sub("", text or "")
+    return {chars[k:k + 2] for k in range(len(chars) - 1)}
+
+
+def _desc_overlap(item: Item, text: str) -> int:
+    """素材描述和这一拍旁白(或画面提示)有几处字面重合,0–OVERLAP_CAP。
+
+    只做排序里的软偏好:旁白说"后排空间",描述写着"后排座椅"的片段就排前面。
+    `_detail_fit` 只认词表里的部件,这里补上词表之外的说法。"""
+    if not text or not item.desc:
+        return 0
+    return min(len(_bigrams(item.desc) & _bigrams(text)), OVERLAP_CAP)
+
+
 def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
     """这条素材和这一拍讲的细节有多合。数字越小越合。
 
@@ -459,7 +480,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         return (stage(i, n), tier, i.view == "people", _audience(i), i.target != "yes", i.low_bitrate, _branded_still(i),
                 group[i.id] in recent_groups,
                 bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
-                _dirt(i), fit, _detail_conflict(i, want_detail, vocab),
+                _dirt(i), fit, -_desc_overlap(i, detail), _detail_conflict(i, want_detail, vocab),
                 not i.official, -i.length)
 
     out: list[Piece] = []
