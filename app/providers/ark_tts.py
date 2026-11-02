@@ -28,8 +28,16 @@ _DONE = 20000000
 _RETRY_HTTP = (429, 500, 502, 503, 504)
 
 
+#: 已在文档里核对过的豆包 2.0 音色(`speaker`)。没有列表接口,设置页的音色下拉读这张表
+VOICES = [
+    {"voice_id": "zh_male_m191_uranus_bigtts", "voice_name": "男声(默认)"},
+    {"voice_id": "zh_female_gaolengyujie_uranus_bigtts", "voice_name": "高冷御姐"},
+    {"voice_id": "zh_female_vv_uranus_bigtts", "voice_name": "Vivi"},
+]
+
+
 def resolve_voice(voice_id: str) -> str:
-    """profile / 旋钮里的音色是 MiniMax 的名字(male-qn-jingying);不是豆包音色就换成默认。"""
+    """旧版 profile / 旋钮里留着的音色名不是豆包音色(不以 _bigtts 结尾),换成默认。"""
     return voice_id if voice_id.endswith("_bigtts") else config.ARK_TTS_VOICE
 
 

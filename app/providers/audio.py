@@ -1,4 +1,4 @@
-"""音频 Provider:TTS 配音、BGM、语音识别质检。
+"""音频 Provider:TTS 配音(方舟豆包 seed-tts-2.0)。BGM 来自自备曲库 / Mixkit,套餐没有音乐模型。
 
 解说视频的旁白必须逐字准确(车型名、"702 公里"、"3.8 秒"),因此单独成轨、
 在合成阶段混音。
@@ -17,8 +17,6 @@ from . import cli
 log = logging.getLogger(__name__)
 
 TTS_TOOL = "connector__matrix__batch_text_to_audio"
-MUSIC_TOOL = "connector__matrix__batch_text_to_music"
-LISTEN_TOOL = "connector__matrix__listen_audio"
 
 #: 批量 TTS 单次调用上限
 TTS_BATCH_LIMIT = 10
@@ -48,12 +46,10 @@ def _is_rate_limited(exc: Exception) -> bool:
     return "rate limit" in msg or "1002" in msg
 #: 短于这个时长(秒)的一句话当作没合成出来:有文件但几乎没声音,那一拍就是哑的
 MIN_CLIP_SECONDS = 0.15
-#: 批量音乐单次调用上限
-MUSIC_BATCH_LIMIT = 5
 
 #: 默认中文解说音色。可在设置页切换。
-DEFAULT_VOICE_ID = "male-qn-jingying"   # 精英青年音色
-FEMALE_VOICE_ID = "female-yujie"        # 御姐音色
+DEFAULT_VOICE_ID = "zh_male_m191_uranus_bigtts"   # 豆包 2.0 男声(与 config.ARK_TTS_VOICE 默认一致)
+FEMALE_VOICE_ID = "zh_female_gaolengyujie_uranus_bigtts"  # 豆包 2.0 高冷御姐
 
 
 @dataclass
@@ -189,69 +185,6 @@ def synthesize_batch(
                            index=start + offset)
             )
     return assets
-
-
-# --------------------------------------------------------------------------
-# BGM
-# --------------------------------------------------------------------------
-def generate_music(
-    prompt: str,
-    *,
-    lyrics: str | None = None,
-    output_dir: str | Path | None = None,
-    output_file: str = "bgm.mp3",
-    timeout: int = 600,
-) -> AudioAsset | None:
-    """生成背景音乐。失败返回 None —— BGM 是锦上添花,不应阻断流水线。"""
-    request: dict[str, Any] = {"prompt": prompt}
-    if lyrics:
-        request["lyrics"] = lyrics
-    if output_dir:
-        request["output_file"] = output_file
-    try:
-        result = cli.call(MUSIC_TOOL, {"requests": [request]}, timeout=timeout)
-    except cli.ConnectorError:
-        return None
-
-    items = _extract_success_items(result)
-    if not items:
-        return None
-    node_id = items[0].get("node_id")
-    if not node_id:
-        return None
-    try:
-        url = cli.get_asset_url(str(node_id))
-    except cli.ConnectorError:
-        return None
-    if not output_dir:
-        return AudioAsset(text=prompt, local_path=Path(output_file), node_id=str(node_id))
-    dest = Path(output_dir) / output_file
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        _download(url, dest)
-    except Exception:
-        return None
-    return AudioAsset(text=prompt, local_path=dest, node_id=str(node_id))
-
-
-# --------------------------------------------------------------------------
-# 质检
-# --------------------------------------------------------------------------
-def transcribe(audio_path: str | Path, *, prompt: str = "请逐字转写这段音频内容。",
-               timeout: int = 180) -> str:
-    """语音识别。用于抽检 TTS 是否把数字/型号读错。"""
-    local = Path(audio_path)
-    try:
-        url = local.as_uri() if local.is_absolute() else str(local)
-        if not local.exists():
-            url = cli.upload_temp_url(local)
-    except Exception:
-        url = str(audio_path)
-    try:
-        result = cli.call(LISTEN_TOOL, {"url": url, "prompt": prompt}, timeout=timeout)
-    except cli.ConnectorError:
-        return ""
-    return _flatten_text(result)
 
 
 def _flatten_text(result: Any) -> str:

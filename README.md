@@ -32,7 +32,7 @@
 | Python 3.12 | 是 | `pip install -r requirements.txt`；连测试工具一起装用 `pip install -e ".[dev]"`（清单的单一来源是 `pyproject.toml`） |
 | ffmpeg | 是 | 本机装在 `C:\ffmpeg\bin`，不在系统 PATH，在 `.env` 的 `FFMPEG_BIN` 里指定 |
 | DeepSeek API Key | 是 | 事实抽取、脚本、逐拍版式、团队各角色的文字工作都用它 |
-| M Plan 订阅 Key（或 `mcode-tools`） | 是 | 语音、生图、图片理解、网络搜索的通道。见下文「接口后端」 |
+| 火山方舟 Agent Plan 专属 Key | 是 | 语音、生图、图片理解、搜索、专业数据集的通道。见下文「接口后端」 |
 | yt-dlp | 是 | 素材池从 B站 / YouTube / TikTok 拉片。YouTube 还需要 PATH 上有 node 或 deno |
 | node 22+ 和 HyperFrames | 可选 | 概念动画用。在 `motion/` 下运行 `npm install`。没装时这类拍退回数据卡 |
 | playwright | 发布和数据用 | 只装 Python 包，复用本机 Chrome / Edge，**不用** `playwright install` |
@@ -44,7 +44,7 @@
 copy .env.example .env
 ```
 
-至少填 `DEEPSEEK_API_KEY` 和 `MINIMAX_PLAN_KEY`，其余都有默认值。常改的几项：
+至少填 `DEEPSEEK_API_KEY` 和 `ARK_API_KEY`，其余都有默认值。常改的几项：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -58,7 +58,7 @@ copy .env.example .env
 | `PIPELINE_CONCURRENCY` | `1` | 同时推进几个项目。内存吃紧就保持 1 |
 | `YTDLP_PROXY` / `YTDLP_COOKIES` | 空 | 国内访问 YouTube / TikTok 要配代理；B站高清和抖音下载要配 cookies |
 | `HYPERFRAMES_BROWSER_PATH` / `MOTION_NODE` | 自动找 | 概念动画用的 Chrome 和 node 22+（nvm 全局是旧版本时手动指定） |
-| `PLAN_EXPIRES_ON` | `2026-10-31` | M Plan 到期日，界面上会显示提醒 |
+| `PLAN_EXPIRES_ON` | 空 | 方舟套餐到期日（如 `2026-12-31`），填了界面上会显示提醒 |
 
 完整清单见 `.env.example`。
 
@@ -257,7 +257,7 @@ python -m app.pipeline.library license 小米YU7 --source <id|地址> --status a
 
 车的图片有三级来源：
 
-1. **真车抠图（首选）**：用素材池里的白底棚拍官图抠出车身，放到 MiniMax 生成的空影棚底上。影棚底按色调和画幅缓存，所有项目共用。
+1. **真车抠图（首选）**：用素材池里的白底棚拍官图抠出车身，放到方舟 Seedream 生成的空影棚底上。影棚底按色调和画幅缓存，所有项目共用。
 2. **AI 生图兜底**（`COVER_AI_CAR`）：拿官方图做参照，图生图出一台白底车，过四道质检门（能抠图 / 朝向对 / 画面干净 / 和官方图是同一款），任何一道拿不到结论都判不通过。用了 AI 车的项目，简介里会自动加一句声明。
 3. **老模板**（`narration.make_cover`）：只用来保证封面永远不会拦住成片。
 
@@ -271,7 +271,7 @@ python -m app.pipeline.cover_art --all
 ### 旁白与 BGM（`pipeline/narration.py`）
 
 - TTS 逐句缓存在 `data/_cache/tts/`，门禁 A 改几句再确认时，只为改动的句子付钱。字幕用原稿（阿拉伯数字、kWh），TTS 用规范化后的文本，并按 `vocab.pronounce` 纠正读音。
-- BGM 来源：MiniMax 音乐接口对新用户返回 410，所以改为从 Mixkit 自动收集免费可商用的曲子，放在 `data/bgm/<品类>/`，许可证记在 `_licenses.json`。也可以把自己的曲子放进 `BGM_DIR`。`BGM_AUTO_COLLECT=0` 关闭自动收集。
+- BGM 来源：方舟套餐没有音乐模型，所以从 Mixkit 自动收集免费可商用的曲子，放在 `data/bgm/<品类>/`，许可证记在 `_licenses.json`。也可以把自己的曲子放进 `BGM_DIR`。`BGM_AUTO_COLLECT=0` 关闭自动收集。
 
 ---
 
@@ -326,13 +326,14 @@ LLM 偶尔整篇用中文数字写稿来绕过数字 lint，所以 lint 前会�
 
 ## 接口后端与成本
 
-所有外部能力都走 `providers/cli.call(工具名, 参数)`，由 `CONNECTOR_BACKEND` 决定实际去向：
+所有外部能力都走 `providers/cli.call(工具名, 参数)`，实际去向是火山方舟 Agent Plan（`providers/direct.py`），用专属 `ARK_API_KEY`：
 
-- **`direct`**：用 M Plan 订阅 Key 直连 MiniMax 开放平台，覆盖配音、音乐、生图、图片理解和新闻检索。图片检索走 Bing。同花顺和企查查不支持，这两个来源会记为失败，其余照常。
-- **`mcode`**：`mcode-tools` CLI，只能在 MiniMax Code 里用，可以调用同花顺、企查查和图生图。
-- 留空时，有订阅 Key 且找不到 `mcode-tools` 就自动走 direct。自检命令：`python -m tests.verify_direct`。
+- **配音**：豆包 seed-tts-2.0（`ark_tts.py`）。**生图**：Seedream（`ark_image.py`，模型 `IMAGE_MODEL`，默认 `doubao-seedream-5-0-flash`，封面影棚底、AI 车、图生图参考图都走它）。**图片理解**：`ARK_VLM_MODEL`。**搜索**：豆包搜索（`ark_search.py`），**专业数据集**：`ark_datapro.py`。
+- 图片检索走 Bing。同花顺、企查查、音乐、语音识别套餐里没有，这几个来源会记为失败，其余照常。BGM 见上文。
+- LLM（脚本、事实抽取）用 DeepSeek 自己的 Key：方舟文档明确文本模型不得用于非 AI 工具的 API 调用，所以不把它们接进来。
+- 自检命令：`python -m tests.verify_direct`（方舟各能力各发一次）。
 
-⚠️ TTS、图片理解和搜索都依赖 `MINIMAX_PLAN_KEY`（套餐接口），**M Plan 到期前必须续费**。
+⚠️ 套餐接口的路径里带 `/plan`，不要和按量接口混用，否则会产生额外费用。
 
 **成本**：界面上的金额是按标价折算的**等效用量**（`costs.py`），不是账单。每个项目有额度上限（`quota_budget`），花钱的步骤在调用前先预留额度，超限时项目转入 `PAUSED_BUDGET`，不算失败。在项目页提高上限后，项目会接着跑。
 
@@ -346,7 +347,7 @@ app/
   config.py          配置（.env）
   models.py / state.py / db.py   领域模型、状态机、SQLite（运行态）+ JSON（可编辑内容）
   costs.py           等效用量估算与额度
-  llm/               LLM 抽象（DeepSeek；MiniMax 可选，未验证）
+  llm/               LLM 抽象（DeepSeek）
   providers/         外部通道：cli / direct / 素材源 / 热点 trends / 车型表 car_lineup / BGM / 浏览器抓取
   categories/        品类 Profile 加载、段落铺展、校验（profiles/*.yaml）
   pipeline/
@@ -381,7 +382,7 @@ data/                运行数据（gitignore）：projects / library / _cache /
 python -m pytest tests/ -q                     # 单元测试，不联网、不花额度
 python -m pytest tests/test_full_pipeline.py -q   # 端到端：走真的状态机与 lint
 python -m tests.verify_llm                     # 真实 LLM 自检（花额度）
-python -m tests.verify_direct                  # direct 后端自检（花少量额度）
+python -m tests.verify_direct                  # 方舟自检（花少量额度）
 python -m tests.verify_number_grounding        # 核对脚本数字是否真在引用的事实里
 ruff check app tests
 npm run check                                  # 前端：eslint + tsc(checkJs) + vitest

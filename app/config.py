@@ -117,7 +117,7 @@ LIBRARY_BUILD_BUDGET = int(os.getenv("LIBRARY_BUILD_BUDGET", "1800"))
 # 配额
 # --------------------------------------------------------------------------
 DEFAULT_QUOTA_BUDGET = float(os.getenv("DEFAULT_QUOTA_BUDGET", "40"))
-PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "2026-10-31")
+PLAN_EXPIRES_ON = os.getenv("PLAN_EXPIRES_ON", "")
 
 
 # --------------------------------------------------------------------------
@@ -297,56 +297,35 @@ def motion_status() -> tuple[bool, str]:
 # --------------------------------------------------------------------------
 # 生成通道
 # --------------------------------------------------------------------------
-MCODE_TOOLS = os.getenv("MCODE_TOOLS") or shutil.which("mcode-tools") or ""
-
-#: M Plan 订阅 Key(sk-cp-…)。配了它就能不经 mcode-tools、直连 MiniMax 开放平台
-#: (语音 / 音乐 / 生图 / 图片理解 / 网络搜索),额度从订阅套餐里扣。
-MINIMAX_PLAN_KEY = os.getenv("MINIMAX_PLAN_KEY", "").strip()
-MINIMAX_API_HOST = os.getenv("MINIMAX_API_HOST", "https://api.minimax.cn").rstrip("/")
-
-#: 接口后端:`mcode` = 经 MiniMax Code 托管的 mcode-tools;`direct` = 用订阅 Key 直连。
-#: 不填时:有订阅 Key 且找不到 mcode-tools 就走 direct,否则走 mcode。
-CONNECTOR_BACKEND = (
-    os.getenv("CONNECTOR_BACKEND", "").strip().lower()
-    or ("direct" if MINIMAX_PLAN_KEY and not MCODE_TOOLS else "mcode")
-)
-#: 直连后端用到的模型(mcode 后端由 Connector 自己选)
-TTS_MODEL = os.getenv("TTS_MODEL", "speech-2.8-hd")
-MUSIC_MODEL = os.getenv("MUSIC_MODEL", "music-2.6")
-#: 火山方舟 Agent Plan 专属 API Key。配了就用豆包 seed-tts-2.0 做旁白(TTS_PROVIDER=minimax 可强制回 MiniMax)
+#: 火山方舟 Agent Plan 专属 API Key:旁白 TTS、生图、看图、专业数据集、豆包搜索都用它。
+#: 路径里带 /plan 的才是套餐接口,不要和按量的接口混用。
 ARK_API_KEY = os.getenv("ARK_API_KEY", "").strip()
-ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_m191_uranus_bigtts").strip()
-TTS_PROVIDER = (os.getenv("TTS_PROVIDER", "").strip().lower()
-                or ("ark" if ARK_API_KEY else "minimax"))
-
-
-#: 方舟 Agent Plan 的对话接口(OpenAI 兼容)。看图用 doubao-seed-2.1-pro;VLM_PROVIDER=minimax 强制回 MiniMax
 ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3").rstrip("/")
+#: 旁白音色(豆包 seed-tts-2.0 的 speaker)
+ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_m191_uranus_bigtts").strip()
+#: 看图用的模型
 ARK_VLM_MODEL = os.getenv("ARK_VLM_MODEL", "doubao-seed-2.1-pro").strip()
-VLM_PROVIDER = (os.getenv("VLM_PROVIDER", "").strip().lower()
-                or ("ark" if ARK_API_KEY else "minimax"))
 
-
-#: 火山方舟「豆包搜索 Custom 版」。Agent Plan 的 Key 可直接用,单独建了搜索 Key 就配 ARK_SEARCH_API_KEY。
-#: SEARCH_PROVIDER=minimax 强制回 MiniMax 网络搜索
+#: 「豆包搜索 Custom 版」。Agent Plan 的 Key 可直接用,单独建了搜索 Key 就配 ARK_SEARCH_API_KEY
 ARK_SEARCH_API_KEY = os.getenv("ARK_SEARCH_API_KEY", "").strip() or ARK_API_KEY
 ARK_SEARCH_URL = os.getenv("ARK_SEARCH_URL", "https://open.feedcoopapi.com/search_api/web_search").strip()
-SEARCH_PROVIDER = (os.getenv("SEARCH_PROVIDER", "").strip().lower()
-                   or ("ark" if ARK_SEARCH_API_KEY else "minimax"))
 
 
 def tts_tag() -> str:
     """进 TTS 缓存键:换了引擎 / 默认音色,旧缓存不能再命中。"""
-    return f"ark:seed-tts-2.0:{ARK_TTS_VOICE}" if TTS_PROVIDER == "ark" else TTS_MODEL
+    return f"ark:seed-tts-2.0:{ARK_TTS_VOICE}"
 
-#: 自备 BGM 目录(放 mp3/m4a/wav)。MiniMax 音乐接口已对新用户关闭(HTTP 410),有曲子就优先用这里的
-#: 是否给成片配 BGM。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
+
+#: 是否给成片配 BGM。方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
 BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"
 #: 自备目录没曲子时,是否按 profile.bgm_genres 从 Mixkit 自动收一批
 BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None
-IMAGE_MODEL = os.getenv("IMAGE_MODEL", "image-01")
-#: 统一风格封面:MiniMax 生成的浅色影棚底 + 官图抠出的真车 + 大字标题。生图/抠图不成自动退回老封面;COVER_ART=0 关
+#: 方舟 Agent Plan 的生图模型。旧 .env 里留着 MiniMax 的 image-01 时忽略它(方舟不认),用默认
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "")
+if "seedream" not in IMAGE_MODEL:
+    IMAGE_MODEL = "doubao-seedream-5-0-flash"
+#: 统一风格封面:Seedream 生成的浅色影棚底 + 官图抠出的真车 + 大字标题。生图/抠图不成自动退回老封面;COVER_ART=0 关
 COVER_ART = os.getenv("COVER_ART", "1") not in ("0", "false", "False")
 #: 素材池里**没有白底棚拍官图**时(抠不出车),用生图模型按车名生成一台车再抠图,
 #: 凑进同一套版式。⚠️ 生成的车型可能与实车有出入,所以封面会带 AI 披露;

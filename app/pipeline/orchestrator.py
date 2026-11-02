@@ -19,7 +19,6 @@ from typing import Any
 from .. import config, costs, db
 from ..categories import ProfileError, load_profile
 from ..llm.deepseek import DeepSeekProvider
-from ..llm.minimax import MiniMaxProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
 from . import (aspect, concept_styles, explainer, intake, knobs, library, locks, looks, motion,
@@ -44,10 +43,7 @@ class StateRaced(PipelineError):
 # 工具
 # --------------------------------------------------------------------------
 def _llm():
-    """取可用的 LLM:MiniMax 优先,回退 DeepSeek。两者都没有则返回 None。"""
-    minimax = MiniMaxProvider()
-    if minimax.available():
-        return minimax
+    """取可用的 LLM(DeepSeek)。没配 Key 返回 None。"""
     deepseek = DeepSeekProvider()
     if deepseek.available():
         return deepseek

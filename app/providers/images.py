@@ -154,85 +154,47 @@ def _iter_images(result: Any) -> Iterable[dict[str, Any]]:
 def generate(prompt: str, *, output_file: str = "gen.png",
              input_urls: list[str] | None = None,
              aspect_ratio: str | None = None,
-             seed: int | None = None,
              n: int = 1,
-             timeout: int = 300,
-             backend: str = "") -> ImageRef | None:
+             timeout: int = 300) -> ImageRef | None:
     """文生图 / 图生图。返回含 URL 的 ImageRef,失败返回 None(不抛异常,由调用方决定降级)。"""
     refs = generate_many(prompt, output_file=output_file, input_urls=input_urls,
-                         aspect_ratio=aspect_ratio, seed=seed, n=n, timeout=timeout,
-                         backend=backend)
+                         aspect_ratio=aspect_ratio, n=n, timeout=timeout)
     return refs[0] if refs else None
 
 
 def generate_many(prompt: str, *, output_file: str = "gen.png",
                   input_urls: list[str] | None = None,
                   aspect_ratio: str | None = None,
-                  seed: int | None = None,
                   n: int = 1,
-                  timeout: int = 300,
-                  backend: str = "") -> list[ImageRef]:
+                  timeout: int = 300) -> list[ImageRef]:
     """一次生多个候选。返回所有成功的 ImageRef,失败返回空列表。
 
-    `seed` 固定下来同样的提示词能复现同一批图 —— 封面那台"AI 车"靠它做幂等:
-    改了提示词或换了种子,缓存自然失效,不会混用两套车图。
-
-    ⚠️ 参考图(`input_urls`)只有 Connector 后端认;直连的 MiniMax 开放平台
-    `subject_reference` 只支持 `type="character"`(人像),**车用不了**,
-    所以车只能靠文字提示 + 事后与官方图比对来保证车型。
-
-    ⚠️ 两条后端的"多候选"写法不同,别混:
-    - 直连(`/v1/image_generation`):一次请求带 `n`;但**传了 seed,n 张内容趋同**,
-      要多张不同图就别传 seed。
-    - Connector(`connector__matrix__generate_image`):schema 是封闭的,
-      **只认 `prompt` / `input_urls` / `aspect_ratio` / `output_file` / `resolution`**,
-      传 `n` 或 `seed` 会被整个请求拒掉。多候选靠 `requests` 数组里放多条同提示词的请求
-      —— 服务端逐条随机生成,每条给不同的 `output_file` 以免下载时互相覆盖。
+    走方舟 Seedream。接口没有 seed:同一提示词每次出的图不同,要复现就缓存(封面那台
+    "AI 车"按提示词哈希缓存目录)。`input_urls` 是参考图(公网 URL 或 data URI)做图生图。
     """
-    requests: list[dict[str, Any]] = []
-    if backend == "mcode":
-        # Connector:请求数组逐条随机,每条一个候选
-        base = output_file.rsplit(".", 1)[0] if "." in output_file else output_file
-        for i in range(max(1, int(n))):
-            req: dict[str, Any] = {"prompt": prompt}
-            if input_urls:
-                req["input_urls"] = input_urls
-            if aspect_ratio:
-                req["aspect_ratio"] = aspect_ratio
-            req["output_file"] = f"{base}_{i}.png"
-            requests.append(req)
-    else:
-        request: dict[str, Any] = {"prompt": prompt, "output_file": output_file}
-        if n and int(n) > 1:
-            request["n"] = int(n)
-        if seed is not None:
-            request["seed"] = int(seed)
-        if input_urls:
-            request["input_urls"] = input_urls
-        if aspect_ratio:
-            request["aspect_ratio"] = aspect_ratio
-        requests.append(request)
+    request: dict[str, Any] = {"prompt": prompt, "output_file": output_file}
+    if n and int(n) > 1:
+        request["n"] = int(n)
+    if input_urls:
+        request["input_urls"] = input_urls
+    if aspect_ratio:
+        request["aspect_ratio"] = aspect_ratio
 
     try:
-        result = cli.call(GENERATE_TOOL, {"requests": requests}, timeout=timeout,
-                          backend=backend)
+        result = cli.call(GENERATE_TOOL, {"requests": [request]}, timeout=timeout)
     except cli.ConnectorError:
         return []
 
     items = result.get("success_items") if isinstance(result, dict) else None
-    if isinstance(result, list) and result:
-        items = result
-    if not items:
+    if not items or not isinstance(items, list):
         return []
-    if not isinstance(items, list):
-        items = [items]
     refs: list[ImageRef] = []
     for item in items:
         node_id = item.get("node_id") if isinstance(item, dict) else None
         if not node_id:
             continue
         try:
-            url = cli.get_asset_url(str(node_id), backend=backend)
+            url = cli.get_asset_url(str(node_id))
         except cli.ConnectorError:
             continue
         refs.append(ImageRef(url=url, origin="generate", note=prompt[:120]))

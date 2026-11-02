@@ -101,8 +101,6 @@ def test_search_news_routes_to_ark_with_window_and_label(monkeypatch, tmp_path):
         seen.update(query=query, **kw)
         return ark_search.parse(REPLY)
 
-    monkeypatch.setattr(config, "SEARCH_PROVIDER", "ark")
-    monkeypatch.setattr(config, "CONNECTOR_BACKEND", "direct")
     monkeypatch.setattr(ark_search, "search", fake)
     doc = facts.ifind_product_news("小米YU7", project_dir=tmp_path)
     assert doc.ok and "835" in doc.text

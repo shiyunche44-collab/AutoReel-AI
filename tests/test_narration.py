@@ -123,7 +123,6 @@ def test_build_warns_when_narration_concat_fails(monkeypatch, tmp_path):
 
     monkeypatch.setattr(narration.audio, "synthesize_batch",
                         lambda texts, **kw: [_Asset(i, t) for i, t in enumerate(texts)])
-    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
 
     def boom(paths, dest):
@@ -262,41 +261,25 @@ def test_tts_cache_is_per_voice(monkeypatch, tmp_path):
     assert len(calls) == 2 and len(calls[1]) == 3
 
 
-def test_bgm_library_fills_then_reuses(monkeypatch, tmp_path):
-    from app.providers.audio import AudioAsset
-
-    made: list[str] = []
-
-    def gen(prompt, output_dir, output_file, **kw):
-        made.append(output_file)
-        dest = Path(output_dir) / output_file
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"music")
-        return AudioAsset(text=prompt, local_path=dest)
-
-    monkeypatch.setattr(narration.audio, "generate_music", gen)
-    for n in range(5):
-        d = tmp_path / f"proj{n}"
-        d.mkdir()
-        path, reused = narration.library_bgm("轻快电子", d, f"proj{n}")
-        assert path == d / "bgm.mp3" and path.read_bytes() == b"music"
-        assert reused == (n >= narration.BGM_LIBRARY_SIZE)
-    assert len(made) == narration.BGM_LIBRARY_SIZE
-
-    # 同一项目重新确认:直接用已有的,不生成
-    path, reused = narration.library_bgm("轻快电子", tmp_path / "proj0", "proj0")
-    assert reused and len(made) == narration.BGM_LIBRARY_SIZE
-
-
-def test_bgm_falls_back_to_library_when_generation_fails(monkeypatch, tmp_path):
+def test_bgm_reuses_project_track_and_rotates_library(monkeypatch, tmp_path):
+    monkeypatch.setattr(narration, "_own_bgm", lambda pid, profile=None: None)
     lib = narration.bgm_library_dir("轻快电子")
     lib.mkdir(parents=True)
     (lib / "00.mp3").write_bytes(b"old")
-    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
-    path, reused = narration.library_bgm("轻快电子", tmp_path, "p")
-    assert reused and path.read_bytes() == b"old"
-    empty, _ = narration.library_bgm("没生成过的风格", tmp_path / "x", "p")
-    assert empty is None
+    d = tmp_path / "proj"
+    d.mkdir()
+    path, reused = narration.library_bgm("轻快电子", d, "proj")
+    assert reused and path == d / "bgm.mp3" and path.read_bytes() == b"old"
+    # 同一项目重新确认:直接用已有的
+    (d / "bgm.mp3").write_bytes(b"mine")
+    path, reused = narration.library_bgm("轻快电子", d, "proj")
+    assert reused and path.read_bytes() == b"mine"
+
+
+def test_bgm_none_when_no_tracks(monkeypatch, tmp_path):
+    monkeypatch.setattr(narration, "_own_bgm", lambda pid, profile=None: None)
+    empty, reused = narration.library_bgm("没缓存过的风格", tmp_path / "x", "p")
+    assert empty is None and not reused
 
 
 # --------------------------------------------------------------------------

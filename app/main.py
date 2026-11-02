@@ -30,7 +30,6 @@ from pydantic import BaseModel
 from . import config, costs, db, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
-from .llm.minimax import MiniMaxProvider
 from .models import (
     GateRequest,
     ProjectCreate,
@@ -332,7 +331,6 @@ async def lifespan(app: FastAPI):
     cli_ok, cli_msg = cli.health_check()
     motion_ok, motion_msg = config.motion_status()
     deepseek = DeepSeekProvider()
-    minimax = MiniMaxProvider()
     HEALTH.update(
         {
             "ffmpeg": {"ok": ffmpeg_ok, "message": ffmpeg_msg},
@@ -340,9 +338,7 @@ async def lifespan(app: FastAPI):
             "motion": {"ok": motion_ok, "message": motion_msg},
             "llm": {
                 "deepseek": deepseek.available(),
-                "minimax": minimax.available(),
-                "active": "minimax" if minimax.available()
-                          else ("deepseek" if deepseek.available() else None),
+                "active": "deepseek" if deepseek.available() else None,
             },
             "plan_expires_on": config.PLAN_EXPIRES_ON,
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),

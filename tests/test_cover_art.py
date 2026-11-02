@@ -204,7 +204,7 @@ def _ai_env(monkeypatch, tmp_path, *, clean="NO", same="YES"):
                         lambda subject, exclude=(): (car, "白色比亚迪唐右前45度白底定妆照"))
     patch_in_package(monkeypatch, cover_art, "_ask_ref_attributes",
                         lambda ref: {"model": "BYD Tang", "color": "silver", "body": "SUV"})
-    # 生图模式固定成"只走文字生图":图生图那条路要 mcode-tools CLI,在场,
+    # 生图模式固定成"只走文字生图":图生图那条路要方舟 Key,
     # 跑测试的机器不一定有 —— 模式表由 cover_art._car_modes 决定,这里钉死它。
     patch_in_package(monkeypatch, cover_art, "_car_modes", lambda: ("t2i",))
     return calls
@@ -291,7 +291,7 @@ def test_cover_ai_car_switch_off(art, tmp_path, monkeypatch):
 
 
 def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
-    """图生图:把官方参照图传进生图接口,并且强制走 Connector 后端(直连不支持参考图)。"""
+    """图生图:把官方参照图传进生图接口,走 Seedream 的 image= 参考图。"""
     calls = _ai_env(monkeypatch, tmp_path)
     patch_in_package(monkeypatch, cover_art, "pick_car", lambda subject, exclude=(): None)
     patch_in_package(monkeypatch, cover_art, "_car_modes", lambda: ("ref",))
@@ -300,7 +300,6 @@ def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
 
     def fake_upload(path, **kw):
         uploaded["path"] = str(path)
-        uploaded["backend"] = kw.get("backend")
         return "https://example.invalid/ref.jpg"
 
     monkeypatch.setattr("app.providers.cli.upload_temp_url", fake_upload)
@@ -308,12 +307,10 @@ def test_ref_mode_uses_reference_image(art, tmp_path, monkeypatch):
                           subject="比亚迪大唐")
     assert got and got["car_source"] == "ai_generated"
     assert got["car_mode"] == "ref"
-    # 参照图确实上传了,而且走的是 mcode(直连给的是 data URI,远端生图服务拿不到)
-    assert uploaded["backend"] == "mcode"
+    # 参照图确实转成了 data URI
     assert uploaded["path"].endswith("ai_car.png")
     # 生图请求带了参考图
     assert calls["kw"].get("input_urls") == ["https://example.invalid/ref.jpg"]
-    assert calls["kw"].get("backend") == "mcode"
 
 
 def test_car_facing_must_match_cover_direction(art, tmp_path, monkeypatch):

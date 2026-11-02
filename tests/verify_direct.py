@@ -1,6 +1,6 @@
-"""直连后端真实调用自检(要联网,消耗少量 M Plan 额度)。
+"""方舟 Agent Plan 真实调用自检(要联网,消耗少量套餐额度)。
 
-默认只跑便宜的几项:音色列表、网络搜索、图片理解、一句 TTS。
+跑便宜的几项:音色列表、豆包搜索、图片理解、一句 TTS、一张 Seedream 生图。
 
 用法:
     python -m tests.verify_direct
@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app import config  # noqa: E402
-from app.providers import audio, cli, direct, facts, images  # noqa: E402
+from app.providers import ark_image, audio, cli, direct, facts, images  # noqa: E402
 
 
 def step(name: str, fn) -> bool:
@@ -31,11 +31,10 @@ def step(name: str, fn) -> bool:
 
 
 def main() -> int:
-    if not cli.is_direct():
-        print(f"当前后端是 {config.CONNECTOR_BACKEND!r}。请在 .env 填 MINIMAX_PLAN_KEY,"
-              "并设 CONNECTOR_BACKEND=direct(或留空且不配 MCODE_TOOLS)。")
+    if not cli.connector_available():
+        print("未配置 ARK_API_KEY。请在 .env 填方舟 Agent Plan 的专属 API Key。")
         return 2
-    print(f"后端:direct → {config.MINIMAX_API_HOST}\n")
+    print(f"方舟 -> {config.ARK_BASE_URL}")
     ok = True
     def voices():
         n = len(audio.list_voices())  # list_voices 吞掉错误返回 [],0 个就当失败
@@ -54,7 +53,9 @@ def main() -> int:
     def vlm():
         ref = next((p for p in sorted((ROOT / "data" / "projects").glob("*/refs/ref_00.jpg"))), None)
         if ref is None:
-            raise RuntimeError("没有现成的参考图可测")
+            import httpx
+            ref = Path(tempfile.gettempdir()) / "verify_direct_car.jpg"
+            ref.write_bytes(httpx.get(ark_image.generate_one("一台银色轿车,白底"), timeout=60).content)
         text = images.describe([cli.upload_temp_url(ref)], "图里是什么品牌什么车型?一句话回答。")
         if not text:
             raise RuntimeError("返回为空")
@@ -67,8 +68,12 @@ def main() -> int:
                                             output_dir=tmp)
             if not assets:
                 raise RuntimeError("没有产出音频")
-            return f"{assets[0].local_path.stat().st_size} 字节 mp3({config.TTS_MODEL})"
+            return f"{assets[0].local_path.stat().st_size} 字节 mp3(seed-tts-2.0)"
     ok &= step("语音合成", tts)
+
+    def image():
+        return ark_image.generate("一台银色轿车的影棚照,纯白背景", n=1, aspect_ratio="16:9")[0][:80]
+    ok &= step("文生图", image)
 
     print("\n全部通过" if ok else "\n有失败项,见上")
     return 0 if ok else 1

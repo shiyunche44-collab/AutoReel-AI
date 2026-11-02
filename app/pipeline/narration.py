@@ -281,8 +281,6 @@ def build(
 # --------------------------------------------------------------------------
 # 缓存:逐句 TTS 与共享 BGM 曲库(跨项目,放在 data/_cache 下)
 # --------------------------------------------------------------------------
-#: 同一条 BGM 提示词最多攒几首。攒满后只复用不再生成,按项目轮换免得每片同一首
-BGM_LIBRARY_SIZE = 3
 
 
 def _tts_key(text: str, voice_id: str, speed: float, emotion: str = "") -> str:
@@ -441,7 +439,7 @@ def run_voice_qa(project_id: str, texts: Sequence[str], originals: Sequence[str]
 
 
 def bgm_library_dir(prompt: str) -> Path:
-    key = hashlib.sha1(f"{config.MUSIC_MODEL}|{prompt}".encode("utf-8")).hexdigest()[:12]
+    key = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:12]
     return cache_root() / "bgm" / key
 
 
@@ -483,8 +481,8 @@ def library_bgm(prompt: str, audio_dir: Path, project_id: str, profile: Any = No
     """给项目一首 BGM。返回 (路径, 是否复用)。
 
     - 这个项目已经有 bgm.mp3(门禁 A 重新确认)→ 原样复用;
-    - 曲库没攒满 → 生成一首新的放进曲库;生成失败退回曲库里已有的;
-    - 曲库攒满 → 按项目 id 轮换挑一首。
+    - 自备 / Mixkit 曲库有曲子 → 按项目 id 轮换挑一首;
+    - 都没有 → 退回 `bgm_library_dir` 里更早缓存的曲子(方舟套餐没有音乐模型,不再生成)。
     """
     dest = audio_dir / "bgm.mp3"
     if dest.is_file() and dest.stat().st_size > 0:
@@ -498,25 +496,14 @@ def library_bgm(prompt: str, audio_dir: Path, project_id: str, profile: Any = No
         return dest, True
     lib = bgm_library_dir(prompt)
     tracks = sorted(p for p in lib.glob("*.mp3") if p.stat().st_size > 0) if lib.is_dir() else []
-    reused = True
-    if len(tracks) < BGM_LIBRARY_SIZE:
-        made = audio.generate_music(prompt=prompt, output_dir=lib,
-                                    output_file=f"{len(tracks):02d}.mp3")
-        if made and Path(made.local_path).is_file():
-            reused = False
-            tracks.append(Path(made.local_path))
     if not tracks:
         return None, False
-    if reused:
-        n = int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)
-        pick = tracks[n]
-    else:
-        pick = tracks[-1]
+    pick = tracks[int(hashlib.sha1(project_id.encode("utf-8")).hexdigest(), 16) % len(tracks)]
     try:
         shutil.copyfile(pick, dest)
     except OSError:
-        return pick, reused
-    return dest, reused
+        return pick, True
+    return dest, True
 
 
 def audio_duration_fallback(path: str | Path, default: float = 2.5) -> float:

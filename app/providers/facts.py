@@ -508,12 +508,12 @@ def health_check() -> dict[str, bool]:
     """连通性自检:iFinD 与企查查各探一个最轻的调用。"""
     status: dict[str, bool] = {}
     try:
-        cli.call(IFIND["stock_summary"], {"query": "测试连通性"}, timeout=30, retries=0)
+        cli.call(IFIND["stock_summary"], {"query": "测试连通性"}, timeout=30)
         status["ifind"] = True
     except Exception:
         status["ifind"] = False
     try:
-        cli.call(QCC["company_profile"], {"searchKey": "测试"}, timeout=30, retries=0)
+        cli.call(QCC["company_profile"], {"searchKey": "测试"}, timeout=30)
         status["qichacha"] = True
     except Exception:
         status["qichacha"] = False

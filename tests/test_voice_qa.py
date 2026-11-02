@@ -103,7 +103,6 @@ def _specs():
 def _setup(monkeypatch, tmp_path, make):
     monkeypatch.setattr(config, "VOICE_QA", True)
     monkeypatch.setattr(voice_qa, "load_asr", lambda: None)
-    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
     calls: list[list[str]] = []
 
@@ -158,7 +157,6 @@ def test_time_beats_blocks_gate_a_on_failed_qa(monkeypatch, tmp_path):
 def test_cache_hits_are_rechecked_until_verified(monkeypatch, tmp_path):
     """带毒的缓存:命中后转写复核判错 → 清缓存 → 重合成;核对过的再命中就不再转写。"""
     monkeypatch.setattr(config, "VOICE_QA", True)
-    monkeypatch.setattr(narration.audio, "generate_music", lambda **kw: None)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
     specs = _specs()
     texts = [narration.normalize_for_tts(f"第{i}拍的旁白说明。", None) for i in range(4)]

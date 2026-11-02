@@ -353,15 +353,11 @@ SYSTEM = """你是中文{domain}短视频账号的运营,负责给一条已经�
 
 
 def default_llm():
-    """取可用的 LLM(MiniMax 优先,回退 DeepSeek);都没有返回 None。"""
+    """取可用的 LLM(DeepSeek);没配 Key 返回 None。"""
     from ..llm.deepseek import DeepSeekProvider
-    from ..llm.minimax import MiniMaxProvider
 
-    for cls in (MiniMaxProvider, DeepSeekProvider):
-        provider = cls()
-        if provider.available():
-            return provider
-    return None
+    provider = DeepSeekProvider()
+    return provider if provider.available() else None
 
 
 def _fact_value(fact: Any, key: str, default: Any = "") -> Any:

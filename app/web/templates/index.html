@@ -22,8 +22,8 @@
   </summary>
   <ul>
     {% if not health.ffmpeg.ok %}<li><strong>ffmpeg</strong>:{{ health.ffmpeg.message }} <span class="subtle">· 安装 ffmpeg 并确保在 PATH 中</span></li>{% endif %}
-    {% if not health.connector.ok %}<li><strong>生成通道</strong>:{{ health.connector.message }} <span class="subtle">· 检查 .env 中的 MiniMax Key</span></li>{% endif %}
-    {% if not health.llm.active %}<li><strong>LLM</strong>:未配置可用的模型 Key,脚本生成与提示词编译无法工作 <span class="subtle">· 在 .env 中配置 MINIMAX 或 DEEPSEEK_API_KEY</span></li>{% endif %}
+    {% if not health.connector.ok %}<li><strong>生成通道</strong>:{{ health.connector.message }} <span class="subtle">· 检查 .env 中的 ARK_API_KEY</span></li>{% endif %}
+    {% if not health.llm.active %}<li><strong>LLM</strong>:未配置可用的模型 Key,脚本生成与提示词编译无法工作 <span class="subtle">· 在 .env 中配置 DEEPSEEK_API_KEY</span></li>{% endif %}
   </ul>
 </details>
 {% endif %}

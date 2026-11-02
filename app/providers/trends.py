@@ -2,7 +2,7 @@
 
 四路来源,各自独立失败:
 - 懂车帝:月销量榜(rank_data_type=11)与热度榜(=1,按关注度)—— 只有汽车有
-- 新闻:走现有 iFinD search_news 通道(direct 模式下是 MiniMax 网络搜索);
+- 新闻:走现有 iFinD search_news 通道(实际是豆包搜索);
   没有公开榜单的品类(母婴),标题带「榜」的新闻就是它的榜单信号
 - 抖音热榜:公开热搜,只留与本品类相关的词条
 - B 站:近 N 天按播放量排序的品类视频
@@ -202,7 +202,7 @@ def auto_news(days: int = 7, size: int = 8,
             try:
                 raw = cli.call(IFIND["search_news"],
                                {"query": f"{q} {end[:7]}", "size": size,
-                                "time_start": start, "time_end": end}, timeout=60, retries=1)
+                                "time_start": start, "time_end": end}, timeout=60)
             except Exception as exc:  # noqa: BLE001 - 一条查询失败不连坐
                 errors.append(str(exc)[:80])
                 continue

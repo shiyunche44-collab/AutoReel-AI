@@ -194,8 +194,7 @@ def _car_trace(meta: dict[str, Any]) -> dict[str, Any]:
 def _car_modes() -> tuple[str, ...]:
     """生图模式的尝试顺序。图生图优先,文字生图兜底。
 
-    图生图只有 Connector 后端有(直连的 `subject_reference` 只认人像),而
-    `mcode-tools` 只在 MiniMax Code 运行时里存在 —— CLI 不在就只剩文字生图那条路。"""
+    图生图走方舟 Seedream 的 `image` 参考图,没配方舟 Key 就只剩文字生图那条路。"""
     from ...providers import cli
 
     if cli.connector_available():
@@ -207,22 +206,20 @@ def _generate_with_reference(prompt: str, ref: Path, *, n: int,
                              aspect_ratio: str = "16:9") -> list[Any]:
     """以官方参照图做图生图,返回候选图 URL 列表。
 
-    参照图必须先上传成**公网可达**的临时地址 —— 生图服务在远端,拿不到本机文件。
-    直连后端的 `upload_temp_url` 给的是 data URI,只对同一次直连请求里的图片理解有效,
-    所以这里强制走 Connector 的上传。
+    参照图以 data URI 随请求带过去(Seedream 的 `image` 收 `data:image/…;base64,…`)。
     """
     from ...providers import cli, images
 
     if not cli.connector_available():
-        log.info("封面:图生图要 mcode-tools,当前不可用")
+        log.info("封面:图生图要方舟 ARK_API_KEY,当前未配置")
         return []
     try:
-        ref_url = cli.upload_temp_url(ref, backend="mcode")
+        ref_url = cli.upload_temp_url(ref)
     except Exception as exc:  # noqa: BLE001
         log.info("封面:参照图上传失败:%s", exc)
         return []
     return images.generate_many(prompt, input_urls=[ref_url], aspect_ratio=aspect_ratio,
-                                n=n, output_file="car.png", backend="mcode")
+                                n=n, output_file="car.png")
 
 
 def _ai_car_pass(subject: str, ref: Path, attrs: dict[str, str], prompt: str,
@@ -263,11 +260,8 @@ def _ai_car_pass(subject: str, ref: Path, attrs: dict[str, str], prompt: str,
     if mode == "ref":
         refs = _generate_with_reference(prompt, ref, n=n_cand)
     else:
-        # ⚠️ **多候选时不要传 seed**:接口文档写明"传 seed 则 n 张内容相近, 不传则逐张随机"。
-        # 传了 seed,n=4 会生成四张几乎一样的车,多候选就白费了 —— 实测踩过这个坑。
-        # 幂等不靠 seed,靠上面按提示词哈希建的缓存目录。
-        refs = images.generate_many(prompt, aspect_ratio="16:9", n=n_cand,
-                                    seed=seed if n_cand <= 1 else None, output_file="car.png")
+        # 方舟生图没有 seed,n 张逐张随机;幂等靠上面按提示词哈希建的缓存目录。
+        refs = images.generate_many(prompt, aspect_ratio="16:9", n=n_cand, output_file="car.png")
     if not refs:
         log.warning("封面:%s %s 生图失败", subject, mode)
         _write_json(meta_path, {"status": "error", "prompt": prompt, "mode": mode,
