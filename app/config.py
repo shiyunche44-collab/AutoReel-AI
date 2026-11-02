@@ -326,6 +326,9 @@ def tts_tag() -> str:
 
 #: 是否给成片配 BGM。方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
 BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"
+#: 成片统一调色(轻微对比 / 饱和 + 极轻颗粒),抹平官方片、第三方片、静图之间的色差。
+#: 没在真实成片上对比过观感,默认关;GRADE_ENABLED=1 开
+GRADE_ENABLED = os.getenv("GRADE_ENABLED", "0") == "1"
 #: 自备目录没曲子时,是否按 profile.bgm_genres 从 Mixkit 自动收一批
 BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None

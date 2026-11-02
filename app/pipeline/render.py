@@ -72,6 +72,11 @@ def _run(args: Sequence[str], *, timeout: int = 1800, cwd: Path | None = None) -
     )
 
 
+#: 统一调色:对比 +4%、饱和 +6%,轻微时域颗粒(盖住压缩的色带)。幅度刻意小,
+#: 只为让不同来源的素材看起来像同一支片,不改变车漆等产品颜色的判断
+GRADE_FILTER = "eq=contrast=1.04:saturation=1.06,noise=alls=3:allf=t"
+
+
 def _fontsdir_arg() -> str | None:
     """构造 libass 的 fontsdir 参数,转义 Windows 盘符冒号。"""
     fonts = Path(config.FONTS_DIR)
@@ -137,6 +142,15 @@ STILL_MOTIONS: tuple[str, ...] = ("zoom_in", "pan_right", "zoom_out", "pan_left"
                                   "push_diag", "punch_in", "pan_up", "drift_zoom")
 
 
+def ease_expr(frames: int) -> str:
+    """zoompan 用的进度表达式 0→1:线性与 smoothstep 各占一半。
+
+    起步缓、收尾不停死:全程 ease-in-out 会在硬切前慢下来,像卡了一下;
+    半线性半缓动保留切点处的动势,同时去掉机械的匀速感。"""
+    t = f"on/{frames}"
+    return f"(0.5*{t}+0.25*(1-cos(PI*{t})))"
+
+
 def still_filter(motion: str, seconds: float, size: tuple[int, int] | None = None) -> str:
     """静图 → 9:16 动效镜头的滤镜图。
 
@@ -148,25 +162,26 @@ def still_filter(motion: str, seconds: float, size: tuple[int, int] | None = Non
     """
     w, h = _size(size)
     frames = max(1, int(round(seconds * FPS)))
+    e = ease_expr(frames)
     center_x, center_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
     if motion == "zoom_out":
-        z, x, y = f"1.15-0.15*on/{frames}", center_x, center_y
+        z, x, y = f"1.15-0.15*{e}", center_x, center_y
     elif motion == "pan_left":
-        z, x, y = "1.12", f"(iw-iw/zoom)*on/{frames}", center_y
+        z, x, y = "1.12", f"(iw-iw/zoom)*{e}", center_y
     elif motion == "pan_right":
-        z, x, y = "1.12", f"(iw-iw/zoom)*(1-on/{frames})", center_y
+        z, x, y = "1.12", f"(iw-iw/zoom)*(1-{e})", center_y
     elif motion == "pan_up":
-        z, x, y = "1.12", center_x, f"(ih-ih/zoom)*(1-on/{frames})"
+        z, x, y = "1.12", center_x, f"(ih-ih/zoom)*(1-{e})"
     elif motion == "push_diag":
-        z, x, y = f"1.04+0.16*on/{frames}", f"(iw-iw/zoom)*on/{frames}", f"(ih-ih/zoom)*on/{frames}"
+        z, x, y = f"1.04+0.16*{e}", f"(iw-iw/zoom)*{e}", f"(ih-ih/zoom)*{e}"
     elif motion == "punch_in":
         punch = max(1, min(frames, int(round(FPS * 0.45))))
         z = f"1+0.28*(1-pow(1-min(1,on/{punch}),3))"
         x, y = center_x, center_y
     elif motion == "drift_zoom":
-        z, x, y = f"1.06+0.12*on/{frames}", f"(iw-iw/zoom)*(0.2+0.6*on/{frames})", center_y
+        z, x, y = f"1.06+0.12*{e}", f"(iw-iw/zoom)*(0.2+0.6*{e})", center_y
     else:  # zoom_in
-        z, x, y = f"1+0.15*on/{frames}", center_x, center_y
+        z, x, y = f"1+0.15*{e}", center_x, center_y
     return (
         f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
         f"boxblur=24:2,setsar=1[bg];"
@@ -420,6 +435,8 @@ def compose(
 
     # 视频滤镜链:拼接后的视频 → 归一化 → 可选烧字幕
     vf_parts = [f"scale={w}:{h}", f"fps={FPS}", "setsar=1", "format=yuv420p"]
+    if config.GRADE_ENABLED:
+        vf_parts.append(GRADE_FILTER)
     use_layer = bool(layer_path and Path(layer_path).is_file())
     ass_filter = None if use_layer else _build_ass_filter(ass_path, project_dir)
     if ass_filter:

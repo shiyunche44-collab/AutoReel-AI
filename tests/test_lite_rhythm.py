@@ -41,7 +41,7 @@ def test_audio_graph_sfx_is_extra_amix_input():
 
 def test_push_filter_kinds():
     assert "on/" in ef.push_filter("zoom_in", 4.0, (1920, 1080))
-    assert "1-on/" in ef.push_filter("zoom_out", 4.0, (1920, 1080))
+    assert "1-(0.5*on/" in ef.push_filter("zoom_out", 4.0, (1920, 1080))
     assert "pow(" in ef.push_filter("punch_in", 4.0, (1920, 1080))
 
 

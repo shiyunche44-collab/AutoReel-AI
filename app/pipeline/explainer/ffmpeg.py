@@ -92,9 +92,9 @@ def push_filter(motion: str, seconds: float, size: tuple[int, int]) -> str:
         punch = max(1, min(frames, int(round(render_mod.FPS * PUNCH_SECONDS))))
         z = f"1+{PUSH_PUNCH}*(1-pow(1-min(1,on/{punch}),3))"
     elif motion == "zoom_out":
-        z = f"1+{PUSH_SLOW}*(1-on/{frames})"
+        z = f"1+{PUSH_SLOW}*(1-{render_mod.ease_expr(frames)})"
     else:
-        z = f"1+{PUSH_SLOW}*on/{frames}"
+        z = f"1+{PUSH_SLOW}*{render_mod.ease_expr(frames)}"
     return (f"scale={w * 2}:{h * 2},zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
             f":d=1:s={w}x{h}:fps={render_mod.FPS},setsar=1,format=yuv420p")
 
