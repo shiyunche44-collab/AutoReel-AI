@@ -257,3 +257,6 @@ class Scheduler:
         pool, self._pool = self._pool, None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+
+
+scheduler = Scheduler()
