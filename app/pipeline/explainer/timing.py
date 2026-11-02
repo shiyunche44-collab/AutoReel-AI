@@ -5,7 +5,7 @@ from typing import Any, Sequence
 from ... import config, db
 from ...categories import CategoryProfile
 from ...models import ShotSpec
-from .. import aspect, motion, narration
+from .. import aspect, motion, narration, timeline
 
 
 # --------------------------------------------------------------------------
@@ -17,11 +17,17 @@ def beat_durations(cues: Sequence[Any], count: int, gap: float | None = None) ->
     与 `narration._concat_audio` 同口径:旁白轨 = Σ(句长 + 停顿),所以
     Σ 各拍时长 == 旁白轨总长,画面和声音不会越走越偏。
     """
-    gap_s = config.SENTENCE_GAP_MS / 1000.0 if gap is None else gap
     out = [0.0] * count
-    for c in cues:
-        if 0 <= c.shot_idx < count:
-            out[c.shot_idx] += (c.end - c.start) + gap_s
+    for i, c in enumerate(cues):
+        if not 0 <= c.shot_idx < count:
+            continue
+        if gap is not None:
+            span = (c.end - c.start) + gap
+        elif i + 1 < len(cues):
+            span = cues[i + 1].start - c.start  # 句长 + 这一句后面实际留的停顿
+        else:
+            span = (c.end - c.start) + timeline.gap_after(c.text)
+        out[c.shot_idx] += span
     return [round(x, 3) for x in out]
 
 

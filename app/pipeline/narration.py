@@ -24,6 +24,7 @@ from . import knobs, looks
 from .timeline import (
     build_subtitle_cues,
     format_ass,
+    gap_after,
     normalize_for_tts,
     probe_safe,
     split_sentences,
@@ -257,7 +258,9 @@ def build(
 
     # ---- 拼接旁白为单轨 ----
     narration_path = audio_dir / "narration.wav"
-    ok, concat_err = _concat_audio(result.audio_paths, narration_path)
+    gaps = [gap_after(t, used_texts[k + 1] if k + 1 < len(used_texts) else "")
+            for k, t in enumerate(used_texts)]
+    ok, concat_err = _concat_audio(result.audio_paths, narration_path, gaps)
     if ok:
         result.narration_path = narration_path
     else:
@@ -560,7 +563,8 @@ def trim_clip(src: Path, dest: Path) -> Path:
     return dest
 
 
-def _concat_audio(paths: Sequence[Path], dest: Path) -> tuple[bool, str]:
+def _concat_audio(paths: Sequence[Path], dest: Path,
+                  gaps: Sequence[float] | None = None) -> tuple[bool, str]:
     """把逐句音频拼成单轨,句间插入静音。返回 (是否成功, 失败原因)。
 
     句间停顿是长稿节奏的关键:没有间隔的连续拼接听起来像机关枪。
@@ -574,7 +578,7 @@ def _concat_audio(paths: Sequence[Path], dest: Path) -> tuple[bool, str]:
     if not config.FFMPEG_PATH:
         return False, "ffmpeg 不可用"
 
-    gap = config.SENTENCE_GAP_MS / 1000.0
+    default_gap = config.SENTENCE_GAP_MS / 1000.0
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     inputs: list[str] = []
@@ -582,6 +586,7 @@ def _concat_audio(paths: Sequence[Path], dest: Path) -> tuple[bool, str]:
     concat_labels = ""
     for i, p in enumerate(paths):
         inputs += ["-i", str(p)]
+        gap = gaps[i] if gaps and i < len(gaps) else default_gap
         # 每条输入链只产出**一个**流:归一格式后直接在链尾补静音。
         #
         # 之前有两个错误叠在一起:

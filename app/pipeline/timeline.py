@@ -209,6 +209,26 @@ def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str
 # --------------------------------------------------------------------------
 # 字幕
 # --------------------------------------------------------------------------
+#: 句末是这些标点时停顿拉长:句号 / 问号 / 叹号后观众要一口气消化,逗号后只是换气
+_STRONG_END = "。.!?！？…"
+_WEAK_END = "，,、"
+#: 下一句以转折开头时,前面多留一拍,让反转有"落差"
+_TURN_WORDS = ("但", "可是", "然而", "不过", "只是")
+GAP_MAX = 0.5
+
+
+def gap_after(text: str, nxt: str = "") -> float:
+    """这一句之后的停顿(秒):基准是 `SENTENCE_GAP_MS`,按句末标点和下一句是否转折调整。
+
+    字幕时间轴、各拍时长、旁白拼接三处必须用同一个函数算,三者才对得上。"""
+    base = config.SENTENCE_GAP_MS / 1000.0
+    tail = text.rstrip()[-1:]
+    gap = base * (1.25 if tail in _STRONG_END else 0.7 if tail in _WEAK_END else 1.0)
+    if nxt.lstrip().startswith(_TURN_WORDS):
+        gap *= 1.5
+    return min(gap, GAP_MAX)
+
+
 def build_subtitle_cues(
     sentences: Sequence[str],
     audio_durations: Sequence[float],
@@ -221,7 +241,6 @@ def build_subtitle_cues(
     用 TTS **实际输出**的时长而不是预估 —— 预估必然漂移,长视频里累积误差
     会让后半段字幕整体失准。
     """
-    gap_s = (gap if gap is not None else config.SENTENCE_GAP_MS / 1000.0)
     cues: list[SubtitleCue] = []
     cursor = 0.0
     for i, (text, dur) in enumerate(zip(sentences, audio_durations)):
@@ -231,7 +250,11 @@ def build_subtitle_cues(
         cues.append(
             SubtitleCue(index=i + 1, start=start, end=end, text=text, shot_idx=shot_idx)
         )
-        cursor = end + gap_s
+        if gap is not None:
+            cursor = end + gap
+        else:
+            nxt = sentences[i + 1] if i + 1 < len(sentences) else ""
+            cursor = end + gap_after(text, nxt)
     return cues
 
 

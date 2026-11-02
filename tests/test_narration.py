@@ -125,7 +125,7 @@ def test_build_warns_when_narration_concat_fails(monkeypatch, tmp_path):
                         lambda texts, **kw: [_Asset(i, t) for i, t in enumerate(texts)])
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
 
-    def boom(paths, dest):
+    def boom(paths, dest, gaps=None):
         return False, "模拟失败"
 
     monkeypatch.setattr(narration, "_concat_audio", boom)
@@ -161,7 +161,7 @@ def test_tts_mid_failure_is_retried_and_keeps_shot_mapping(monkeypatch, tmp_path
 
     monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
     result = narration.build("p_test", _three_specs(), with_bgm=False)
     assert [c[1] for c in calls] == ["tts", "tts_retry"]
     assert calls[1][0] == [calls[0][0][1]]  # 只补跑丢掉的那一句
@@ -184,7 +184,7 @@ def test_subtitles_keep_arabic_numbers_while_tts_reads_chinese(monkeypatch, tmp_
 
     monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
     specs = [ShotSpec(idx=0, visual_zh="v", narration_zh="CLTC 续航 643 公里,电池 73kWh。")]
     result = narration.build("p_num", specs, with_bgm=False)
     assert "六百四十三" in sent[0] and "千瓦时" in sent[0]
@@ -203,7 +203,7 @@ def test_tts_still_missing_is_reported_without_shifting(monkeypatch, tmp_path):
 
     monkeypatch.setattr(narration.audio, "synthesize_batch", fake)
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
     result = narration.build("p_test", _three_specs(), with_bgm=False)
     assert result.missing_sentences == [1]
     assert [c.shot_idx for c in result.cues] == [0, 2]
@@ -232,7 +232,7 @@ def test_rebuild_only_synthesizes_changed_sentences(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
 
     first = narration.build("p1", _three_specs(), with_bgm=False)
     assert len(calls[0]) == 3 and first.cached_sentences == 0
@@ -255,7 +255,7 @@ def test_tts_cache_is_per_voice(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     monkeypatch.setattr(narration.audio, "synthesize_batch", _recording_tts(tmp_path, calls))
     monkeypatch.setattr(narration.config, "project_dir", lambda pid: tmp_path / pid)
-    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest: (True, ""))
+    monkeypatch.setattr(narration, "_concat_audio", lambda paths, dest, gaps=None: (True, ""))
     narration.build("p1", _three_specs(), with_bgm=False, voice_id="a")
     narration.build("p1", _three_specs(), with_bgm=False, voice_id="b")
     assert len(calls) == 2 and len(calls[1]) == 3
@@ -387,3 +387,13 @@ def test_synthesize_batch_maps_partial_batch_by_file_name_not_position(monkeypat
     assert [a.local_path.read_bytes() for a in got] == [b"n_\xe7\x94\xb2\xe3\x80\x82",
                                                        b"n_\xe4\xb8\x99\xe3\x80\x82",
                                                        b"n_\xe4\xb8\x81\xe3\x80\x82"]
+
+
+def test_concat_audio_honours_per_sentence_gaps(tmp_path):
+    """每句后的停顿各不相同时,总长 = Σ(句长 + 该句停顿),与字幕 / 各拍时长同口径。"""
+    a = _make_tone(tmp_path / "a.wav", 0.4)
+    b = _make_tone(tmp_path / "b.wav", 0.4)
+    dest = tmp_path / "narration.wav"
+    ok, err = narration._concat_audio([a, b], dest, gaps=[0.1, 0.5])
+    assert ok, err
+    assert _wav_duration(dest) == pytest.approx(0.4 + 0.1 + 0.4 + 0.5, abs=0.05)

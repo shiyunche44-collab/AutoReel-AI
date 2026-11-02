@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from app import config
+
 from app.pipeline.timeline import (
     build_subtitle_cues,
     format_ass,
@@ -208,3 +210,19 @@ def test_normalize_for_tts_applies_pronounce_table_longest_first():
     assert normalize_for_tts("28000rpm、450kW", table) == "二万八千转、四百五十千瓦"
     # kWh 先按内置规则读成千瓦时,不会被 kW 拆坏
     assert normalize_for_tts("73kWh", table) == "七十三千瓦时"
+
+
+def test_gap_after_follows_punctuation_and_turns():
+    from app.pipeline.timeline import gap_after
+    base = config.SENTENCE_GAP_MS / 1000.0
+    assert gap_after("这是一句话。") > base
+    assert gap_after("先说这个,") < base
+    assert gap_after("平平无奇") == pytest.approx(base)
+    assert gap_after("好处很多。", "但是有个问题") > gap_after("好处很多。", "再看第二点")
+    assert gap_after("好处很多。", "但是有个问题") <= 0.5
+
+
+def test_cues_use_punctuation_gaps_by_default():
+    cues = build_subtitle_cues(["第一句。", "但是第二句。"], [1.0, 1.0])
+    from app.pipeline.timeline import gap_after
+    assert cues[1].start == pytest.approx(1.0 + gap_after("第一句。", "但是第二句。"), abs=1e-3)
