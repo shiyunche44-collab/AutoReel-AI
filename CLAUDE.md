@@ -17,7 +17,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 - **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/aimovice.db`。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。启动前先确认端口。
 - `scripts/serve.ps1` 会**杀掉已在监听该端口的进程**。曾因此中断用户正在渲染的项目。先用 `curl --noproxy '*' http://127.0.0.1:<port>/` 探测(不加 `--noproxy` 会走代理返回 000)。
-- `app/main.py` 的 `Scheduler` 每 20 秒自动推进 `AUTO_ADVANCE_STATES`(DRAFT_RENDERING / FINAL_RENDERING / COMPOSING / QA_PASSED 等)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
+- `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`(DRAFT_RENDERING / FINAL_RENDERING / COMPOSING / QA_PASSED 等)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
 - 新增会自动推进的状态,必须加进 `AUTO_ADVANCE_STATES`,漏了就是"静静卡住",没有报错。
 - `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
 
