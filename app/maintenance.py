@@ -139,17 +139,64 @@ def _age_days(path: Path) -> float:
         return 0.0
 
 
+def _last_used(p: Path) -> float:
+    """最近一次用到的时刻:mtime 与 atime 里较新的那个(atime 在 Windows 上可能被关掉)。"""
+    try:
+        st = p.stat()
+    except OSError:
+        return 0.0
+    return max(st.st_mtime, st.st_atime)
+
+
+def _lru_trim(target: Path, max_bytes: int) -> tuple[int, int]:
+    """目录超过 `max_bytes` 时,从最久没用的文件开始删,直到回到限额内。
+
+    返回 (删了几个, 腾出字节)。
+    """
+    files: list[tuple[float, int, Path]] = []
+    total = 0
+    for p in target.rglob("*"):
+        try:
+            if p.is_file():
+                size = p.stat().st_size
+                files.append((_last_used(p), size, p))
+                total += size
+        except OSError:
+            continue
+    if total <= max_bytes:
+        return 0, 0
+    files.sort(key=lambda t: t[0])
+    removed = 0
+    freed = 0
+    for _, size, p in files:
+        if total <= max_bytes:
+            break
+        try:
+            p.unlink()
+        except OSError:
+            continue
+        total -= size
+        freed += size
+        removed += 1
+    return removed, freed
+
+
 def prune_caches(max_age_days: int = DEFAULT_CACHE_MAX_AGE_DAYS, *,
-                 dry_run: bool = False, include_bgm: bool = False) -> dict[str, Any]:
-    """按龄清理可重建的缓存。
+                 dry_run: bool = False, include_bgm: bool = False,
+                 max_bytes: dict[str, int] | None = None) -> dict[str, Any]:
+    """清理可重建的缓存:先按龄,再按体积上限(最久没用的先走)。
 
     `include_bgm=True` 才会动共享曲库 —— 默认不动(重建曲库要花钱)。
+    `max_bytes` 缺省取 `config.CACHE_MAX_BYTES`;没配上限的目录只按龄清。
+    dry-run 只报告按龄的结果,体积上限那一步以真跑为准。
     """
     cache = config.DATA_DIR / "_cache"
+    limits = config.CACHE_MAX_BYTES if max_bytes is None else max_bytes
     dirs = list(PRUNABLE_CACHE_DIRS) + (["bgm"] if include_bgm else [])
     freed = 0
     removed = 0
     kept = 0
+    lru_removed = 0
     for name in dirs:
         target = cache / name
         if not target.is_dir():
@@ -171,8 +218,15 @@ def prune_caches(max_age_days: int = DEFAULT_CACHE_MAX_AGE_DAYS, *,
                     continue
             freed += size
             removed += 1
+        limit = limits.get(name)
+        if limit is not None and not dry_run:
+            n, size = _lru_trim(target, limit)
+            lru_removed += n
+            removed += n
+            freed += size
+            kept = max(0, kept - n)
     return {"removed": removed, "kept": kept, "freed": freed, "freed_human": human(freed),
-            "dry_run": dry_run, "max_age_days": max_age_days}
+            "lru_removed": lru_removed, "dry_run": dry_run, "max_age_days": max_age_days}
 
 
 def prune_temp(*, dry_run: bool = False) -> dict[str, Any]:
@@ -234,6 +288,141 @@ def prune_project(project_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         removed.append(name)
     return {"project": project_id, "removed": removed, "freed": freed,
             "freed_human": human(freed), "dry_run": dry_run}
+
+
+# --------------------------------------------------------------------------
+# 已完成项目 / 浏览器备份 / 调试残留
+# --------------------------------------------------------------------------
+def prune_finished_projects(older_than_days: int = 14, *,
+                            dry_run: bool = False) -> dict[str, Any]:
+    """给已完成(DONE)且超龄的项目瘦身:只清中间产物,成片、脚本、封面保留。
+
+    只认终态 DONE;生成中、卡在关口、失败待重试的项目一律不动。
+    """
+    from . import db
+    from .state import State
+
+    cutoff = time.time() - older_than_days * 86400
+    freed = 0
+    touched: list[str] = []
+    for row in db.list_projects(limit=100000):
+        if row.get("state") != State.DONE.value:
+            continue
+        if float(row.get("updated_at") or 0) > cutoff:
+            continue
+        out = prune_project(str(row["id"]), dry_run=dry_run)
+        if out["freed"]:
+            freed += out["freed"]
+            touched.append(str(row["id"]))
+    return {"projects": touched, "freed": freed, "freed_human": human(freed),
+            "dry_run": dry_run, "older_than_days": older_than_days}
+
+
+#: Chrome profile 里可再生的缓存目录(不含 Cookies / Local Storage / 登录态)
+BROWSER_CACHE_DIRS = ("Cache", "Code Cache", "GPUCache")
+
+
+def _profile_in_use(profile: Path) -> bool:
+    """Chrome 开着时 profile 里有 SingletonLock,Windows 上 `lockfile` 被独占。"""
+    if (profile / "SingletonLock").exists():
+        return True
+    lock = profile / "lockfile"
+    if lock.exists():
+        try:
+            with open(lock, "ab"):
+                pass
+        except OSError:
+            return True
+    return False
+
+
+def prune_browser(*, keep_backups: int = 1, clean_live_cache: bool = True,
+                  dry_run: bool = False) -> dict[str, Any]:
+    """清浏览器 profile 里能再生的东西。
+
+    - `profiles/*.bak-*`:旧备份,只留最近的 `keep_backups` 个;
+    - 活 profile(`douyin` 等)只清 `Default/Cache`、`Code Cache`、`GPUCache`,
+      并且浏览器正开着时跳过。
+
+    **只匹配 `.bak-` 后缀**:活 profile 本体与 `_browser/*.json` 登录态永不被整目录删除。
+    """
+    root = config.DATA_DIR / "_browser" / "profiles"
+    freed = 0
+    removed: list[str] = []
+    skipped: list[str] = []
+    if not root.is_dir():
+        return {"removed": removed, "skipped": skipped, "freed": 0, "freed_human": human(0),
+                "dry_run": dry_run}
+    backups = sorted((d for d in root.iterdir() if d.is_dir() and ".bak-" in d.name),
+                     key=lambda d: d.stat().st_mtime, reverse=True)
+    for d in backups[max(0, keep_backups):]:
+        size = dir_size(d)
+        if not dry_run:
+            shutil.rmtree(d, ignore_errors=True)
+        freed += size
+        removed.append(d.name)
+    if clean_live_cache:
+        for d in root.iterdir():
+            if not d.is_dir() or ".bak-" in d.name:
+                continue
+            if _profile_in_use(d):
+                skipped.append(d.name)
+                continue
+            for sub in BROWSER_CACHE_DIRS:
+                target = d / "Default" / sub
+                if not target.is_dir():
+                    continue
+                size = dir_size(target)
+                if not dry_run:
+                    shutil.rmtree(target, ignore_errors=True)
+                freed += size
+                removed.append(f"{d.name}/Default/{sub}")
+    return {"removed": removed, "skipped": skipped, "freed": freed,
+            "freed_human": human(freed), "dry_run": dry_run}
+
+
+#: 调试残留的最小龄(天):新的可能还在用
+SCRATCH_AGE_DAYS = 7
+BACKUP_AGE_DAYS = 14
+
+
+def prune_scratch(*, include_scripts: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    """清调试残留:`data/_cache/*.png|jpg|mp4`、`_cache/*_backup_*`、`data/_*.png|jpg`。
+
+    `data/_*.py` 可能是还在用的脚本,默认**不动**,`include_scripts=True` 才删。
+    """
+    data = config.DATA_DIR
+    cache = data / "_cache"
+    freed = 0
+    removed = 0
+    victims: list[Path] = []
+    if cache.is_dir():
+        for p in cache.iterdir():
+            if (p.is_file() and p.suffix.lower() in (".png", ".jpg", ".mp4")
+                    and _age_days(p) >= SCRATCH_AGE_DAYS):
+                victims.append(p)
+            elif p.is_dir() and "_backup_" in p.name and _age_days(p) >= BACKUP_AGE_DAYS:
+                victims.append(p)
+    if data.is_dir():
+        exts = (".png", ".jpg") + ((".py",) if include_scripts else ())
+        for p in data.iterdir():
+            if (p.is_file() and p.name.startswith("_") and p.suffix.lower() in exts
+                    and _age_days(p) >= SCRATCH_AGE_DAYS):
+                victims.append(p)
+    for p in victims:
+        size = dir_size(p)
+        if not dry_run:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                try:
+                    p.unlink()
+                except OSError:
+                    continue
+        freed += size
+        removed += 1
+    return {"removed": removed, "freed": freed, "freed_human": human(freed),
+            "dry_run": dry_run}
 
 
 # --------------------------------------------------------------------------
@@ -313,6 +502,13 @@ def _main() -> None:
     p.add_argument("--age-days", type=int, default=DEFAULT_CACHE_MAX_AGE_DAYS,
                    help=f"缓存保留天数(默认 {DEFAULT_CACHE_MAX_AGE_DAYS})")
     p.add_argument("--pool", default="", help="额外驱逐某个车型的素材池")
+    p.add_argument("--projects", action="store_true", help="给已完成且超龄的项目瘦身")
+    p.add_argument("--project-age-days", type=int, default=14,
+                   help="项目瘦身的最小龄(默认 14)")
+    p.add_argument("--browser", action="store_true", help="清浏览器旧备份与可再生缓存")
+    p.add_argument("--scratch", action="store_true", help="清调试残留(含 data/_*.py)")
+    p.add_argument("--max-motion-mb", type=int, default=None,
+                   help="本次覆盖 motion 缓存上限")
     args = ap.parse_args()
 
     if args.cmd == "report":
@@ -328,9 +524,23 @@ def _main() -> None:
 
     if args.cmd == "prune":
         tmp = prune_temp(dry_run=args.dry_run)
-        caches = prune_caches(args.age_days, dry_run=args.dry_run, include_bgm=args.all)
+        limits = dict(config.CACHE_MAX_BYTES)
+        if args.max_motion_mb is not None:
+            limits["motion"] = args.max_motion_mb * 1024 ** 2
+        caches = prune_caches(args.age_days, dry_run=args.dry_run, include_bgm=args.all,
+                              max_bytes=limits)
         print(f"临时物:删 {tmp['removed']} 项,腾出 {tmp['freed_human']}")
         print(f"缓存:删 {caches['removed']} 项,留 {caches['kept']} 项,腾出 {caches['freed_human']}")
+        if args.projects:
+            pr = prune_finished_projects(args.project_age_days, dry_run=args.dry_run)
+            print(f"项目瘦身:{len(pr['projects'])} 个项目,腾出 {pr['freed_human']}")
+        if args.browser:
+            br = prune_browser(dry_run=args.dry_run)
+            print(f"浏览器:删 {len(br['removed'])} 项,腾出 {br['freed_human']}"
+                  + (f",跳过使用中的 {br['skipped']}" if br["skipped"] else ""))
+        if args.scratch:
+            sc = prune_scratch(include_scripts=True, dry_run=args.dry_run)
+            print(f"调试残留:删 {sc['removed']} 项,腾出 {sc['freed_human']}")
         if args.pool:
             out = evict_pool(args.pool, dry_run=args.dry_run)
             print(f"素材池 {out.get('slug')}:{'已删 ' + out.get('freed_human', '') if out.get('ok') else out.get('reason')}")

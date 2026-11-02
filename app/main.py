@@ -325,6 +325,13 @@ async def lifespan(app: FastAPI):
         maintenance.prune_temp()
     except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
         log.warning("清理临时目录失败", exc_info=True)
+    try:
+        # 缓存按龄 + 体积上限(motion 的文件都很新,光按龄清不动它)
+        pruned = maintenance.prune_caches()
+        if pruned["removed"]:
+            log.info("缓存清理:删 %d 项,腾出 %s", pruned["removed"], pruned["freed_human"])
+    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
+        log.warning("清理缓存失败", exc_info=True)
 
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()

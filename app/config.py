@@ -229,6 +229,14 @@ PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
 #: data/ 体积超过这个值就在首页提示(字节)。默认 10 GB。
 DATA_SIZE_WARN_BYTES = int(os.getenv("DATA_SIZE_WARN_BYTES", str(10 * 1024 ** 3)))
 
+#: 可再生缓存的体积上限(字节),按 `data/_cache/<名>` 分别限额。
+#: 按龄清理对 motion 无效 —— 它的文件都是新近生成的,一个月内就能攒到 1 GB+,
+#: 所以超限时按"最久没用"淘汰(`maintenance.prune_caches`)。
+CACHE_MAX_BYTES = {
+    "motion": int(os.getenv("CACHE_MOTION_MAX_MB", "500")) * 1024 ** 2,
+    "tts": int(os.getenv("CACHE_TTS_MAX_MB", "100")) * 1024 ** 2,
+}
+
 
 #: 成片精修(OpenFilm Studio)的 npm 版本。固定,不用 @latest:格式还在变,升级前先跑 refine 的往返测试
 OPENFILM_VERSION = os.getenv("OPENFILM_VERSION", "0.2.7").strip() or "0.2.7"

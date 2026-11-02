@@ -190,3 +190,133 @@ def test_report_lists_sizes(store):
     assert info["total_bytes"] >= 100
     assert "projects" in info["parts"]
     assert info["total"].endswith(("B", "KB", "MB", "GB"))
+
+
+# --------------------------------------------------------------------------
+# 体积上限(LRU)
+# --------------------------------------------------------------------------
+def test_prune_caches_lru_trims_to_limit_oldest_first(store):
+    """motion 缓存的文件都是新的,按龄清不动 —— 超限时按最久没用的淘汰。"""
+    d = config.DATA_DIR / "_cache" / "motion"
+    for i, days in enumerate((5, 4, 3, 2, 1)):
+        f = d / f"{i}.mp4"
+        _write(f, "x" * 100)
+        _aged(f, days)
+
+    out = maintenance.prune_caches(max_age_days=30, max_bytes={"motion": 250})
+    left = sorted(p.name for p in d.iterdir())
+    assert left == ["3.mp4", "4.mp4"], "超限就从最旧的删到限额内"
+    assert out["lru_removed"] == 3
+
+
+def test_prune_caches_under_limit_untouched(store):
+    f = config.DATA_DIR / "_cache" / "motion" / "a.mp4"
+    _write(f, "x" * 100)
+    maintenance.prune_caches(max_age_days=30, max_bytes={"motion": 1000})
+    assert f.exists()
+
+
+def test_prune_caches_lru_dry_run_deletes_nothing(store):
+    f = config.DATA_DIR / "_cache" / "motion" / "a.mp4"
+    _write(f, "x" * 100)
+    maintenance.prune_caches(max_age_days=30, dry_run=True, max_bytes={"motion": 1})
+    assert f.exists()
+
+
+# --------------------------------------------------------------------------
+# 浏览器 profile
+# --------------------------------------------------------------------------
+def test_prune_browser_keeps_live_profile_and_newest_backup(store):
+    root = config.DATA_DIR / "_browser" / "profiles"
+    live_cookies = root / "douyin" / "Default" / "Cookies"
+    live_cache = root / "douyin" / "Default" / "Cache" / "f_1"
+    old_bak = root / "douyin.bak-1" / "Default" / "Cookies"
+    new_bak = root / "douyin.bak-2" / "Default" / "Cookies"
+    for p in (live_cookies, live_cache, old_bak, new_bak):
+        _write(p)
+    _aged(old_bak.parent.parent, 30)
+    _aged(old_bak.parent, 30)
+    login_json = config.DATA_DIR / "_browser" / "douyin.json"
+    _write(login_json)
+
+    out = maintenance.prune_browser(keep_backups=1)
+    assert live_cookies.exists(), "活 profile 的登录态绝不能动"
+    assert login_json.exists()
+    assert not live_cache.exists(), "活 profile 只清可再生的缓存"
+    assert new_bak.exists()
+    assert not (root / "douyin.bak-1").exists()
+    assert "douyin.bak-1" in out["removed"]
+
+
+def test_prune_browser_dry_run_deletes_nothing(store):
+    root = config.DATA_DIR / "_browser" / "profiles"
+    bak = root / "douyin.bak-1" / "Default" / "Cookies"
+    cache = root / "douyin" / "Default" / "Cache" / "f_1"
+    _write(bak)
+    _write(cache)
+    _write(root / "douyin.bak-2" / "x")
+    maintenance.prune_browser(keep_backups=0, dry_run=True)
+    assert bak.exists() and cache.exists()
+
+
+def test_prune_browser_skips_profile_in_use(store):
+    root = config.DATA_DIR / "_browser" / "profiles"
+    cache = root / "douyin" / "Default" / "Cache" / "f_1"
+    _write(cache)
+    _write(root / "douyin" / "SingletonLock")
+    out = maintenance.prune_browser()
+    assert cache.exists(), "浏览器开着时不动它的缓存"
+    assert "douyin" in out["skipped"]
+
+
+# --------------------------------------------------------------------------
+# 调试残留
+# --------------------------------------------------------------------------
+def test_prune_scratch_respects_age_and_scripts(store):
+    data = config.DATA_DIR
+    old_png = data / "_cache" / "_dy_draft.png"
+    new_png = data / "_cache" / "_dy_new.png"
+    old_script = data / "_probe_thing.py"
+    shot = data / "_after.png"
+    for p in (old_png, new_png, old_script, shot):
+        _write(p)
+    for p in (old_png, old_script, shot):
+        _aged(p, 30)
+
+    maintenance.prune_scratch()
+    assert not old_png.exists()
+    assert not shot.exists()
+    assert new_png.exists(), "新的可能还在用"
+    assert old_script.exists(), "脚本默认不删"
+
+    maintenance.prune_scratch(include_scripts=True)
+    assert not old_script.exists()
+
+
+# --------------------------------------------------------------------------
+# 已完成项目瘦身
+# --------------------------------------------------------------------------
+def test_prune_finished_projects_only_done_and_old(store):
+    from app.state import State
+
+    def _mk(pid, state, age_days):
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO projects (id, title, subject, duration, state, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (pid, "t", "s", 60, state, time.time() - age_days * 86400,
+                 time.time() - age_days * 86400))
+        root = config.project_dir(pid)
+        _write(root / "output.mp4")
+        _write(root / "drafts" / "0.mp4", "x" * 50)
+
+    _mk("p_old_done", State.DONE.value, 30)
+    _mk("p_new_done", State.DONE.value, 1)
+    _mk("p_old_failed", State.FAILED.value, 30)
+
+    out = maintenance.prune_finished_projects(older_than_days=14)
+    assert out["projects"] == ["p_old_done"]
+    assert (config.project_dir("p_old_done") / "output.mp4").exists()
+    assert not (config.PROJECTS_DIR / "p_old_done" / "drafts" / "0.mp4").exists()
+    assert (config.PROJECTS_DIR / "p_new_done" / "drafts" / "0.mp4").exists()
+    assert (config.PROJECTS_DIR / "p_old_failed" / "drafts" / "0.mp4").exists()
