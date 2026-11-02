@@ -38,6 +38,7 @@ from ... import config, db  # noqa: F401
 from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
 from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, intro, outro, overlays, rhythm  # noqa: F401
+from .. import intensity  # noqa: F401
 from .. import render as render_mod  # noqa: F401
 from ..grounding import numbers_in  # noqa: F401
 
@@ -300,6 +301,16 @@ def _load_used(project_id: str) -> dict[str, int]:
 
 def _load_recent(project_id: str) -> list[str]:
     return list(db.read_json(project_id, "beats_recent.json", []) or [])
+
+
+def _bgm_levels(beats: Sequence[ShotSpec]) -> list[float] | None:
+    """逐拍 BGM 电平倍率(情绪曲线);关了开关、或全片都是「中」= 没有起伏,返回 None。"""
+    if not config.INTENSITY_CURVE or not beats:
+        return None
+    chapters, where = chapters_of(beats)
+    levels = [intensity.BGM_GAIN.get(intensity.of(b, beat_role(where, n, len(chapters))), 1.0)
+              for n, b in enumerate(beats)]
+    return levels if any(abs(v - 1.0) > 1e-6 for v in levels) else None
 
 
 def cross_project_seed(project_id: str, subject: str) -> dict[str, int]:
@@ -668,6 +679,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     sfx_path = _sfx_track(project_dir, nar, size, beats, sum(s.duration for s in beats))
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
     durations = [s.duration for s in beats]
+    bgm_levels = _bgm_levels(beats)
     card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
     badge = intro.build(project_dir, size)
     if card:
@@ -682,6 +694,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
+        bgm_levels=bgm_levels,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -746,6 +759,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     sfx_path = _sfx_track(project_dir, nar, size, beats, total)
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
     durations = [s.duration for s in beats]
+    bgm_levels = _bgm_levels(beats)
     card = outro.build(project_dir, size)  # 没开 / 失败都是 None,成片照出
     badge = intro.build(project_dir, size)
     if card:
@@ -760,6 +774,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
+        bgm_levels=bgm_levels,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))

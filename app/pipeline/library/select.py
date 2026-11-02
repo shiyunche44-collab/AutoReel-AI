@@ -387,7 +387,8 @@ def _chunk_videos(pool: list[Item], group: dict[str, str], members: dict[str, li
 
 
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
-         recent: list[str] | None = None, detail: str = "", role: str = "body") -> list[Piece]:
+         recent: list[str] | None = None, detail: str = "", role: str = "body",
+         pace: float = 1.0) -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -405,6 +406,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
       —— 开头观众只确认"是不是我要看的那台车",结尾是片子的落点,都不能挂别人的画面;
     - body:第三方视频只在**没用过的**一方素材铺不满这一拍时才进候选,且源必须已测过台标、
       能裁掉(`_third_party_ok`);进了也排在没用过的一方素材后面、用过的前面。
+    `pace`:一刀最长几秒的倍率(情绪曲线:强段 <1 换刀快,缓段 >1 换刀慢),默认 1。
     返回空列表表示池子里什么都没有。
     """
     if role not in ROLES:
@@ -449,7 +451,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     # 第三方兜底:没用过的一方素材够铺这一拍,第三方就不进候选
     video_first = looks.current().video_first and not strict
     # 一刀最长几秒跟着项目的剪辑节奏旋钮走;没设 = FILL_MAX_PIECE
-    max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]
+    max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"] * pace
     if video_first:
         pool = _chunk_videos(pool, group, members, by_id, max_piece)
     fallback = video_first or         _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
@@ -535,7 +537,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         while rest > 0.05 and spare:
             i = spare[k % len(spare)]
             k += 1
-            take = min(rest, FILL_MAX_PIECE)
+            take = min(rest, FILL_MAX_PIECE * pace)
             out.append(Piece(item_id=i.id, kind="still", path=clean_still(i), start=0.0,
                              length=round(take, 3), **_trace(book, i)))
             used[i.id] = used.get(i.id, 0) + 1

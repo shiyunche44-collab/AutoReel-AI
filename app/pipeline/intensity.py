@@ -56,3 +56,14 @@ def normalize(segments: Sequence[ScriptSegment]) -> None:
             break
         s.intensity = MID
         strong.remove(s)
+
+
+#: 拍内一刀最长几秒的倍率:强段换刀快(4.5s → 约 3s),缓段慢(→ 约 6s)
+PIECE_PACE = {CALM: 4 / 3, MID: 1.0, STRONG: 2 / 3}
+#: BGM 相对电平的倍率:强段略抬,缓段略压(±2dB 以内,过侧链后旁白照样压得住)
+BGM_GAIN = {CALM: 0.8, MID: 1.0, STRONG: 1.25}
+#: 拍内转场样式池:强段干脆利落的推拉 / 滑动,缓段柔和的淡入淡出,中段用原有的整套
+XFADE_POOL: dict[int, tuple[str, ...]] = {
+    CALM: ("fade", "dissolve"),
+    STRONG: ("slideleft", "smoothleft", "zoomin", "circleopen"),
+}

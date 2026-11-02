@@ -5,9 +5,9 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
-from ... import db
+from ... import config, db
 from ...models import ShotSpec
-from .. import aspect, cards, library, looks, motion, motion_assets, overlays
+from .. import aspect, cards, intensity, library, looks, motion, motion_assets, overlays
 from .. import render as render_mod
 
 from .consts import HOOK_CUT, HOOK_CUT_RETRIES, HOOK_SECONDS, SAFE_LAYOUT, SPLIT_MIN_SECONDS, _ENC, _log
@@ -128,33 +128,34 @@ def concept_card(overlay: dict) -> dict:
 
 def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
                 used: dict[str, int], recent: list[str], card_bg: Path | None,
-                role: str = "body") -> tuple[Path, list[library.Piece]]:
+                role: str = "body", level: int = 0) -> tuple[Path, list[library.Piece]]:
     """broll / panel / highlight / stat 的背景。分屏样式铺 2–3 条不同的背景再并排。
 
     `detail` 把这一拍的旁白交给素材池:讲刹车时别配一个门把手特写
     (特写太抢戏,观众会以为屏幕上那个部件就是正在讲的东西)。
     """
     detail = spec.narration_zh or spec.visual_zh or ""
+    pace = intensity.PIECE_PACE.get(level, 1.0)  # 情绪曲线:强段换刀快、缓段慢
     if broll_style(spec) == "split" and seconds >= SPLIT_MIN_SECONDS:
         count = 3 if seconds <= 5 else 2
         clips, pieces = [], []
         for k in range(count):
             got = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
-                               detail=detail, role=role)
+                               detail=detail, role=role, pace=pace)
             if not got:
                 break
             pieces += got
             clips.append(background_clip(got, seconds, size, work / f"panel_{k}",
-                                         motion_seed=spec.idx * 7 + k))
+                                         motion_seed=spec.idx * 7 + k, level=level))
         if len(clips) >= 2:
             return split_clip(clips, seconds, size, work / "split.mp4"), pieces
         if clips:
             return clips[0], pieces
     pieces = library.fill(subject, seconds, hint=spec.view, used=used, recent=recent,
-                          detail=detail, role=role)
+                          detail=detail, role=role, pace=pace)
     if not pieces and card_bg:
         pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
-    return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
+    return background_clip(pieces, seconds, size, work, motion_seed=spec.idx, level=level), pieces
 
 
 def hook_background(subject: str, seconds: float, size: tuple[int, int], work: Path,
@@ -329,8 +330,9 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
     else:
+        level = intensity.of(spec, role) if config.INTENSITY_CURVE else 0
         base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg,
-                                   role=role)
+                                   role=role, level=level)
         base = _framed(base, size, work)
 
     # 竖屏标题区:大标题让位时只留章节进度
