@@ -50,8 +50,8 @@ def test_pick_avoids_recent(auto):
 
 
 def test_pick_all_used_falls_back_to_oldest(auto):
-    theme = auto.theme_spec("qa")  # 开头只有 question / scene / number
-    recent = [{"opening": "question"}, {"opening": "scene"}, {"opening": "number"}]
+    theme = auto.theme_spec("qa")  # 开头只有 question / number / myth
+    recent = [{"opening": "question"}, {"opening": "myth"}, {"opening": "number"}]
     assert variety.pick(theme, "p_x", recent)["opening"] == "number"
 
 
@@ -188,7 +188,7 @@ def test_create_project_stores_and_rotates_variant(fresh_db):
 
 
 def test_suggest_theme_avoids_recent(auto):
-    assert suggest_theme(auto, []) == "buyguide"
-    got = suggest_theme(auto, ["buyguide"])
-    assert got != "buyguide" and not auto.theme_spec(got).multi
+    assert suggest_theme(auto, []) == "review"
+    got = suggest_theme(auto, ["review"])
+    assert got != "review" and not auto.theme_spec(got).multi
     assert not auto.theme_spec(got).requires_angle

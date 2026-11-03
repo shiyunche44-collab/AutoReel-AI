@@ -321,8 +321,10 @@ class CategoryProfile:
     def _expand_blocks(self, theme: ThemeSpec, duration: int,
                        portrait: bool = False,
                        variant: Mapping[str, Any] | None = None) -> tuple[str, ...]:
-        blocks = self.shed_blocks(self.variant_blocks(theme, variant),
-                                  self.section_capacity(duration, portrait))
+        capacity = self.section_capacity(duration, portrait)
+        if theme.shots_per_section:
+            capacity = min(capacity, max(1, self.shots_for(duration) // theme.shots_per_section))
+        blocks = self.shed_blocks(self.variant_blocks(theme, variant), capacity)
         counts = self._allocate(blocks, duration)
         out: list[str] = []
         for block, count in zip(blocks, counts):

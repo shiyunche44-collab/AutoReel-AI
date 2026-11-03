@@ -161,9 +161,9 @@ def wired(monkeypatch):
 # --------------------------------------------------------------------------
 # 全链路
 # --------------------------------------------------------------------------
-def _create(subject: str = "测试车型") -> str:
+def _create(subject: str = "测试车型", theme: str | None = None) -> str:
     return orchestrator.create_project(
-        ProjectCreate(subject=subject, category="auto_long", duration=240))
+        ProjectCreate(subject=subject, category="auto_long", duration=240, theme=theme))
 
 
 def test_full_chain_reaches_done(store, wired):
@@ -248,7 +248,7 @@ def test_chain_to_done_and_events_are_legal(store, wired):
 
 def test_chain_is_idempotent(store, wired):
     """重跑同一阶段不重复消耗。"""
-    pid = _create()
+    pid = _create(theme="buyguide")  # 数 LLM 调用次数:默认片型写稿前还多一次分析
     orchestrator.advance(pid)                      # → FACTS_RESOLVED
     spent = db.get_project(pid)["spent_cost"]
     calls = len(wired.calls)
@@ -261,7 +261,7 @@ def test_chain_is_idempotent(store, wired):
 
 def test_reaching_a_stage_twice_does_not_redo_it(store, wired):
     """阶段是幂等的:产物已存在就不重做。"""
-    pid = _create()
+    pid = _create(theme="buyguide")
     orchestrator.advance(pid)          # FACTS_RESOLVED
     orchestrator.advance(pid)          # SCRIPT_READY
     script_before = db.read_json(pid, "script.json")

@@ -60,6 +60,18 @@ def list_projects(limit: int = 100) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def subject_theses(subject: str, category: str, exclude_id: str = "",
+                   limit: int = 5) -> list[dict[str, str]]:
+    """同一台车已经做过的片子(新的在前):写新一条时要换论点。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "SELECT id, thesis FROM projects WHERE subject = ? AND category = ? AND id != ? "
+            "AND COALESCE(thesis, '') != '' ORDER BY created_at DESC LIMIT ?",
+            (subject, category, exclude_id, limit))
+        return [{"id": r[0], "thesis": r[1]} for r in cur.fetchall()]
+
+
 def recent_variants(category: str, limit: int = 4) -> list[dict[str, Any]]:
     """同品类最近建的几个项目的变体(新的在前),建项目挑变体时用来避开重复。"""
     init_db()

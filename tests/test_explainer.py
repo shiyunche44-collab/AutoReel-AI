@@ -40,14 +40,14 @@ def test_auto_long_is_landscape_and_self_contained():
     assert p.frame_size == (1920, 1080)
     # 原先从竖屏 auto 继承的官方渠道、合规词表、BGM 现在直接写在 auto_long 里
     assert "xiaomi" in p.official_sites and p.forbidden_terms and p.music_prompt
-    assert set(p.themes) == {"buyguide", "roundup", "priceband", "deepdive", "qa", "pk", "debate"}
+    assert set(p.themes) == {"review", "buyguide", "roundup", "priceband", "deepdive", "qa", "pk", "debate"}
     for d in p.supported_durations():
         assert len(p.plan_for(d)) == p.shots_for(d)
 
 
 def test_every_explainer_section_declares_layouts():
     p = load_profile("auto_long")
-    for name in p.themes["buyguide"].blocks:
+    for name in (*p.themes["buyguide"].blocks, *p.themes["review"].blocks):
         sec = p.section(name["section"])
         assert sec.layouts, sec.name
         assert set(sec.layouts) <= set(explainer.LAYOUTS)
@@ -68,7 +68,7 @@ def test_keywords_reject_invented_numbers_and_model_names():
 
 
 def _segments(profile) -> list[ScriptSegment]:
-    plan = profile.plan_for(120)
+    plan = profile.plan_for(120, "buyguide")
     return [ScriptSegment(idx=i, section=s, text=f"第{i}段旁白,讲讲这台车。") for i, s in enumerate(plan)]
 
 

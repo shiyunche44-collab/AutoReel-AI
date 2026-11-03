@@ -34,6 +34,7 @@ from .prompt import (  # noqa: E402,F401
     CONTROVERSY_TOPIC,
     HEADING_MAX_CHARS,
     QUALITY_TOPIC,
+    REVIEW_TOPIC,
     ROUNDUP_SCOPE_LINE,
     SYSTEM,
     _QUALITY_RULE,
@@ -49,9 +50,17 @@ from .prompt import (  # noqa: E402,F401
     _theme_rules,
     _title_policy,
     matched_principles,
+    persona_rules,
     roster_line,
     roundup_facts_payload,
     usable_facts,
+)
+from .brief import (  # noqa: E402,F401
+    BRIEF_SYSTEM,
+    align_slots,
+    argument_slots,
+    outline_block,
+    write_brief,
 )
 from .fit import (  # noqa: E402,F401
     FIT_PASSES,
@@ -100,16 +109,20 @@ from .lint_checks import (  # noqa: E402,F401
     _is_conclusion_section,
     _names_year,
     _rival_aliases,
+    attribution_lint,
     conflict_lint,
     depth_lint,
     derived_lint,
     duplicate_lint,
     ending_lint,
+    firsthand_lint,
     hero_lint,
     is_hero,
     meaning_lint,
+    number_source_lint,
     range_lint,
     rival_lint,
+    stock_phrase_lint,
     term_lint,
     thesis_lint,
 )
@@ -167,6 +180,7 @@ def generate(
     hook: str = "",
     variant: Mapping[str, Any] | None = None,
     hook_locked: bool = False,
+    brief: Mapping[str, Any] | None = None,
 ) -> tuple[list[ScriptSegment], str, str]:
     """生成解说脚本。返回 (段落列表, 标题, 主论点)。
 
@@ -175,6 +189,7 @@ def generate(
     `portrait`:竖屏项目多一组短视频规则;横屏时 prompt 与旧版逐字一致。
     `variant`:开头 / 结尾写法(见 variety)。不传 = 片型默认变体,提示词与以前逐字一致。
     `hook_locked`:`hook` 是 `choose_hook` 挑出来的,第一句直接用。
+    `brief`:`write_brief` 的分析结果,作为论证大纲传入(只对 reviewer 片型生效)。
     没挂 `learned_hint`(测试、脚本)时提示词与以前逐字一致。
     """
     roundup = bool(subjects)
@@ -197,6 +212,8 @@ def generate(
             tags += " · topic=quality"
         elif f.topic == CONTROVERSY_TOPIC:
             tags += " · 争议"
+        elif f.topic == REVIEW_TOPIC:
+            tags += " · 体验转述"
         if f.compare_with:
             tags += f" · 对比[{f.compare_with}]"
         if is_hero(f, vocab):
@@ -220,10 +237,16 @@ def generate(
         for p in matched_principles(profile, facts)
     ) or "(无)"
 
+    reviewer = bool(getattr(theme, "reviewer", False))
+    per_shot = max(20, budget // shot_count)
+    # 只换这两个占位符:别的品类的 script_style 里可能有花括号,不走 str.format
+    style = ((vocab.reviewer_voice if reviewer else profile.script_style) or "口语化,克制,有画面感"
+             ).replace("{chars}", str(budget)).replace("{per_shot}", str(per_shot))
+
     user = (
         f"Product subject: {subject}\n"
         f"Category: {profile.label}\n"
-        f"Script style: {profile.script_style or '口语化,克制,有画面感'}\n"
+        f"Script style: {style}\n"
         f"Total duration: {duration} seconds\n"
         f"Target total characters: {budget}\n"
         + (f"Topic angle: {angle}\n" if angle else "")
@@ -234,18 +257,19 @@ def generate(
     )
 
     system = SYSTEM.format(
-        domain=vocab.domain,
+        **persona_rules(theme, profile),
+        outline=outline_block(brief, plan, profile) if reviewer else "",
         number_examples=vocab.number_examples,
         subject_noun=vocab.subject_noun,
-        category=profile.label,
         chars=budget,
-        per_shot=max(20, budget // shot_count),
+        per_shot=per_shot,
         facts=facts_payload,
         principles=principles_payload,
         plan="\n".join(f"{i + 1}. {s}" for i, s in enumerate(plan_lines)),
         scope_line=(ROUNDUP_SCOPE_LINE if roundup else
                     f"只讲{vocab.subject_noun}/这个品牌本身,不评价其他无关产品。"),
-        keywords=", ".join(profile.visual_keywords[:4]),
+        # 车评稿不硬塞品类词:模型真照做,就会写出「这台新能源汽车」「不管原先看轿车还是 SUV」
+        keywords_line="" if reviewer else f"必需关键词: {', '.join(profile.visual_keywords[:4])}",
         theme_intent=f"   {theme.intent}" if theme is not None and theme.intent
         else "   按品类惯例组织叙事。",
         theme_rules=_theme_rules(theme, facts, [_heading_rule(profile, plan),
@@ -299,10 +323,10 @@ def generate(
     if not roundup:
         segments = strip_foreign_comparison_refs(segments, facts)
     if portrait:
-        segments = fit_length(segments, budget, llm)
+        segments = fit_length(segments, budget, llm, reviewer=reviewer)
     else:
         segments = fit_length(segments, budget, llm, tolerance=LANDSCAPE_LENGTH_TOLERANCE,
-                              keep_count=True)
+                              keep_count=True, reviewer=reviewer)
     return segments, title, thesis
 
 
@@ -332,16 +356,19 @@ def learned() -> str:
 
 
 def choose_hook(*, subject: str, profile: CategoryProfile, facts: Sequence[Fact], llm,
-                n: int = 3, angle: str = "", hook: str = "") -> dict[str, Any] | None:
+                n: int = 3, angle: str = "", hook: str = "",
+                tension: str = "") -> dict[str, Any] | None:
     """先写 `n` 版第一句,再让评审按账号经验打分,挑最高的那句。
 
     返回 {chosen, candidates: [{text, fact_refs, score, why}]};能用的不到两版、
-    或者 LLM 出错 → None(照常写脚本,不挑)。多两次短 LLM 调用。"""
+    或者 LLM 出错 → None(照常写脚本,不挑)。多两次短 LLM 调用。
+    `tension`:车评分析得出的核心矛盾,开场围绕它写。"""
     facts = [f for f in usable_facts(facts) if not f.compare_with]
     fact_ids = {f.id for f in facts}
     hint = learned()
     extra = "".join((
         f"- 选题角度:{angle}\n" if angle else "",
+        f"- 这台车的核心矛盾(开场围绕它写):{tension}\n" if tension else "",
         f"- 选题策划给的参考钩子:「{hook}」(可以当其中一版,也可以都写得更好)\n" if hook else "",
         f"- 本账号的经验:\n{hint}\n" if hint else "",
     ))

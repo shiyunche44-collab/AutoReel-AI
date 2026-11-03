@@ -237,6 +237,26 @@ def has_controversy(source_docs: Sequence[dict[str, Any]] | None) -> bool:
     return any(any(m in str(d.get("query", "")) for m in CONTROVERSY_MARKERS) for d in source_docs or [])
 
 
+#: 体验转述类事实的主题标签。脚本只能转述它,并说明是谁说的
+REVIEW_TOPIC = script_gen.REVIEW_TOPIC
+
+#: 材料里有评测 / 口碑检索(专业车评片型)时追加的抽取规则
+REVIEW_RULE = """
+16. Some material reports hands-on impressions (media test drives, measured results, owner feedback).
+    Keep each impression as its own fact: WHO says it (a named outlet, "媒体实测", "有车主反映"), WHAT they
+    observed, and any number and test condition the material gives
+    (e.g. "有媒体实测高速 120 km/h 续航约 480 公里"). Set topic to "体验" and source_kind to "media".
+    Keep the attribution inside the claim. Only keep what the material actually reports; maker
+    marketing copy and press-release adjectives are not impressions."""
+
+#: 评测检索词里的标志词(见 providers.facts.ifind_review_news)
+REVIEW_MARKERS = ("评测", "试驾", "口碑")
+
+
+def has_review(source_docs: Sequence[dict[str, Any]] | None) -> bool:
+    return any(any(m in str(d.get("query", "")) for m in REVIEW_MARKERS) for d in source_docs or [])
+
+
 EXTRACT_USER = """Product subject: {subject}
 Category: {category}
 Today: {today}
@@ -304,6 +324,8 @@ def extract_facts(
         system += QUALITY_RULE
     if has_controversy(source_docs):
         system += CONTROVERSY_RULE
+    if has_review(source_docs):
+        system += REVIEW_RULE
     data = llm.structured(
         system,
         EXTRACT_USER.format(

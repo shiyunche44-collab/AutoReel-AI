@@ -5,11 +5,11 @@ import re
 from typing import Sequence
 from ...categories import CategoryProfile, Vocab
 from ...models import Fact, ScriptSegment
-from ..grounding import YEAR_RE, differing_measures, numbers_in
+from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in
 from .. import variety
 
-from .lint_base import LintIssue, _YEAR_RE, has_numeric_claim
-from .prompt import matched_principles, usable_facts
+from .lint_base import LintIssue, _MODEL_CODE_RE, _YEAR_RE, has_numeric_claim
+from .prompt import REVIEW_TOPIC, matched_principles, usable_facts
 from .scrub import _is_comparison_section
 from .hook import _BASIS_WINDOW
 
@@ -303,6 +303,109 @@ def thesis_lint(segments: Sequence[ScriptSegment], thesis: str) -> list[LintIssu
                      f"结论段没有回扣主论点「{thesis}」——"
                      f"全片每一段都为它服务,最后一段要把它落地"
                      f"(原样写进结论即可):{ends[-1].text[:40]}")]
+
+
+#: 第一人称声称亲身体验的通用说法(品类词在 vocab.firsthand_terms)
+_FIRSTHAND_TERMS = ("亲测", "亲身体验", "我亲自", "我实测", "我用下来", "我体验过")
+_FIRSTHAND_DENIED_RE = re.compile(r"(?:不是|并非|没有|没)我?(?:亲测|亲身体验|亲自|实测|开过|试驾)")
+
+
+def firsthand_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile) -> list[LintIssue]:
+    """第一人称假体验(error):账号没开过这台车,这么写就是撒谎。转述要说明是谁的体验。"""
+    terms = (*_FIRSTHAND_TERMS, *profile.vocab.firsthand_terms)
+    issues: list[LintIssue] = []
+    for seg in segments:
+        # 「这不是我亲测」是在交代来源,不算假体验
+        text = _FIRSTHAND_DENIED_RE.sub("", seg.text or "")
+        hit = next((t for t in terms if t in text), None)
+        if hit:
+            issues.append(LintIssue(seg.idx, "error",
+                                    f"第一人称声称亲身体验「{hit}」:没有开过不许这么写,"
+                                    f"改成转述并说明来源,或删掉:{seg.text[:40]}"))
+    return issues
+
+
+def attribution_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile,
+                     facts: Sequence[Fact]) -> list[LintIssue]:
+    """引用了体验转述事实,却没说是谁说的(warning):听起来就成了作者自己的体验。"""
+    reviews = {f.id for f in facts if f.topic == REVIEW_TOPIC}
+    words = profile.vocab.attribution_words
+    # 按段落查:拆拍时每一拍都带着整段的引用,来源通常只在其中一拍说一次
+    by_section: dict[str, list[ScriptSegment]] = {}
+    for seg in segments:
+        by_section.setdefault(seg.section, []).append(seg)
+    issues: list[LintIssue] = []
+    for group in by_section.values():
+        text = "".join(s.text or "" for s in group)
+        if any(reviews.intersection(s.fact_refs) for s in group) and not any(w in text for w in words):
+            issues.append(LintIssue(group[0].idx, "warning",
+                                    f"引用了体验转述事实却没说来源,补上是谁说的:{text[:40]}"))
+    return issues
+
+
+#: 个位数多半是「3 个版本」「第 2 点」这种计数,报出来全是噪声
+_NUMBER_SOURCE_MIN = 10
+
+
+def _plain_numbers(text: str) -> list[float]:
+    """文本里的数值(年款和型号代号不算)。"""
+    stripped = _MODEL_CODE_RE.sub("", _YEAR_RE.sub("", arabicize(text or "")))
+    return [float(x) for x in re.findall(r"\d+(?:\.\d+)?", stripped)]
+
+
+def _spellings(value: float) -> set[str]:
+    """一个数算出来后可能的写法:取整、留一到两位,再去掉小数点(和 numbers_in 同一口径)。"""
+    forms = {f"{value:.0f}", f"{value:.1f}", f"{value:.2f}"}
+    return {(f.rstrip("0").rstrip(".") if "." in f else f).replace(".", "") for f in forms}
+
+
+def _backed_numbers(values: Sequence[float]) -> set[str]:
+    """引用事实里的数,以及它们的换算、差值、比值、百分比。"""
+    known: set[str] = set()
+    for a in values:
+        known |= _spellings(a) | _spellings(a / 1000) | _spellings(a / 10000)
+        for b in values:
+            if a > b > 0:
+                known |= _spellings(a - b) | _spellings(a / b) | _spellings(b / a * 100)
+                known |= _spellings((a - b) / a * 100) | _spellings((a - b) / b * 100)
+    return known
+
+
+def number_source_lint(segments: Sequence[ScriptSegment], facts: Sequence[Fact]) -> list[LintIssue]:
+    """数字有引用,但引用的事实里没有这个数(warning)。
+
+    合规 lint 只查"带数字的句子有没有引用",查不出「每天通勤 50 公里」挂着一条无关事实。
+    差值、比值、换算算有来源:算账是分析的一部分。先观察,误报少再升 error。"""
+    by_id = {f.id: f for f in facts}
+    issues: list[LintIssue] = []
+    for seg in segments:
+        said = [v for v in _plain_numbers(seg.text) if v >= _NUMBER_SOURCE_MIN]
+        if not said:
+            continue
+        cited = [by_id[r] for r in seg.fact_refs if r in by_id]
+        if not cited:
+            continue  # 完全没引用的情况规则 1 已经拦了
+        known = _backed_numbers([v for f in cited for v in _plain_numbers(f"{f.claim} {f.basis}")])
+        loose = sorted({f"{v:g}" for v in said if not _spellings(v) & known})
+        if loose:
+            issues.append(LintIssue(seg.idx, "warning",
+                                    f"数字 {'、'.join(loose)} 在引用的事实里找不到,"
+                                    f"也不是它们的差值或比值,核对出处:{(seg.text or '')[:40]}"))
+    return issues
+
+
+def stock_phrase_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile) -> list[LintIssue]:
+    """换了车还在说的套话和念出来的提纲词(warning):听多了就是模板。"""
+    whole = "\n".join(s.text or "" for s in segments)
+    issues: list[LintIssue] = []
+    for word in profile.vocab.scaffold_words:
+        if word in whole:
+            issues.append(LintIssue(0, "warning", f"提纲用语「{word}」念出来了,换成自然的说法"))
+    for phrase in profile.vocab.stock_phrases:
+        count = whole.count(phrase)
+        if count > 1:
+            issues.append(LintIssue(0, "warning", f"套话「{phrase}」全片用了 {count} 次,最多一次"))
+    return issues
 
 
 def ending_lint(segments: Sequence[ScriptSegment],

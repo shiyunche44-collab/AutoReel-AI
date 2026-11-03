@@ -193,6 +193,8 @@ class ProjectCreate(BaseModel):
     angle_evidence: list[str] | None = Field(default=None, max_length=12)
     #: 热点选题给的开场钩子(18 字内):写脚本时作为第一句的参考
     hook: str | None = Field(default=None, max_length=40)
+    #: 选题依据(为什么现在做这一条):写稿前的分析要回答它
+    angle_why: str | None = Field(default=None, max_length=300)
     #: 开头 / 结尾写法(pipeline/variety.py 的 id)。为空 = 自动挑,避开最近几条用过的
     opening: str | None = Field(default=None, max_length=20)
     ending: str | None = Field(default=None, max_length=20)

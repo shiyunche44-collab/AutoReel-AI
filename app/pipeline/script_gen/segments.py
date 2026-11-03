@@ -6,6 +6,8 @@ from ...categories import CategoryProfile, Slot
 from ...models import ScriptSegment
 from ..grounding import arabicize
 
+from .hook import HOOK_MAX_CHARS
+
 
 def ensure_disclaimers(
     segments: list[ScriptSegment],
@@ -88,9 +90,13 @@ PORTRAIT_SHOOT_CHARS_MAX = 22
 #: 拆出来的碎块太短就别单独成拍(2 个字的一拍纯属浪费画面)
 MIN_PART_CHARS = 8
 #: 句子边界(标点跟着前一句)
-_SENT_END = "。!?!?;；\n"
+_SENT_END = "。!?！？;；\n"
 #: 次级边界:逗号、顿号、冒号
 _CLAUSE_END = "，,、：:"
+#: 切在这些标点上句子最断气(「音响或电池规格分级。」),除非放不下,否则不切
+_SOFT_END = "、：:"
+#: 切在 `_SOFT_END` 上的代价,和「这一拍空出多少字」的平方比:约等于空出 20 字
+_SOFT_CUT_PENALTY = 400
 
 
 def _split_keep(text: str, chars: str) -> list[str]:
@@ -125,35 +131,64 @@ def _hard_cut(text: str, max_chars: int) -> list[str]:
     return out
 
 
-def _split_text(text: str, max_chars: int) -> list[str]:
-    """把一段话切成每块不超过 `max_chars` 字的几块,尽量断在句末标点上。"""
+def _pack_clauses(sent: str, max_chars: int, hard_max: int) -> list[str]:
+    """把一个长句的分句装进尽量少、尽量匀的几拍。
+
+    每个逗号都切一刀的话,一句话会变成三四拍短句,每拍都带句号,推理读起来全是断的。
+    """
+    clauses: list[str] = []
+    for clause in _split_keep(sent, _CLAUSE_END):
+        # 连逗号都没有:稍长一点(1.5 倍内)整句留着 —— 硬切会把词劈开
+        # (实测「激光雷 / 达」);再长才硬切,优先切在空格上,宁可切坏也不能留一个 30 秒的拍
+        clauses.extend([clause] if len(clause) <= hard_max * 1.5
+                       else _hard_cut(clause, hard_max))
+    # best[i] = 前 i 个分句的最小代价;cut[i] = 对应的上一刀位置
+    best = [0.0] + [float("inf")] * len(clauses)
+    cut = [0] * (len(clauses) + 1)
+    for i in range(1, len(clauses) + 1):
+        for j in range(i - 1, -1, -1):
+            size = sum(len(c) for c in clauses[j:i])
+            if size > max_chars and i - j > 1:
+                break
+            cost = best[j] + max(0, max_chars - size) ** 2
+            if i < len(clauses) and clauses[i - 1][-1] in _SOFT_END:
+                cost += _SOFT_CUT_PENALTY
+            if cost < best[i]:
+                best[i], cut[i] = cost, j
     parts: list[str] = []
-    for sent in _split_keep(text, _SENT_END):
-        if len(sent) <= max_chars:
-            parts.append(sent)
-            continue
-        # 一句太长:再按逗号切
-        for clause in _split_keep(sent, _CLAUSE_END):
-            if len(clause) <= max_chars:
-                parts.append(clause)
-                continue
-            # 连逗号都没有:稍长一点(1.5 倍内)整句留着 —— 硬切会把词劈开
-            # (实测「激光雷 / 达」);再长才硬切,优先切在空格上,宁可切坏也不能留一个 30 秒的拍
-            if len(clause) <= max_chars * 1.5:
-                parts.append(clause)
-                continue
-            parts.extend(_hard_cut(clause, max_chars))
+    i = len(clauses)
+    while i > 0:
+        parts.append("".join(clauses[cut[i]:i]))
+        i = cut[i]
+    return parts[::-1]
+
+
+def _split_text(text: str, max_chars: int, first_max: int | None = None,
+                keep_chars: int = 0) -> list[str]:
+    """把一段话切成每块不超过 `max_chars` 字的几块,尽量断在句末标点上。
+
+    `first_max`:第一句的上限(钩子段的第一句要守黄金三秒,不能被装成一个长句)。
+    `keep_chars`:一句不超过这么多字就整句留着,不从中间切(0 = 同 `max_chars`)。
+    """
+    parts: list[str] = []
+    for n, sent in enumerate(_split_keep(text, _SENT_END)):
+        limit = first_max if n == 0 and first_max else max_chars
+        keep = limit if n == 0 and first_max else max(max_chars, keep_chars)
+        parts.extend([sent] if len(sent) <= keep else _pack_clauses(sent, limit, max_chars))
     # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话。
     # 先并再换标点 —— 并回去的逗号仍是逗号,不会冒出「我的判断是。YU7……」
     merged: list[str] = []
     for p in parts:
+        # 钩子第一句并上下一块就破了黄金三秒的字数
+        cap = first_max if first_max and len(merged) == 1 else max_chars
         if merged and (len(p) < MIN_PART_CHARS or len(merged[-1]) < MIN_PART_CHARS) \
-                and len(merged[-1]) + len(p) <= max_chars:
+                and len(merged[-1]) + len(p) <= cap:
             merged[-1] += p
             continue
         merged.append(p)
+    cap = first_max if first_max and len(merged) == 2 else max_chars
     if len(merged) > 1 and len(merged[-1]) < MIN_PART_CHARS and \
-            len(merged[-2]) + len(merged[-1]) <= max_chars:
+            len(merged[-2]) + len(merged[-1]) <= cap:
         merged[-2] += merged[-1]
         merged.pop()
     # 切在逗号上的块,句尾那个逗号换成句号:字幕末尾挂半个标点不像话,
@@ -162,7 +197,8 @@ def _split_text(text: str, max_chars: int) -> list[str]:
 
 
 def split_segments(segments: Sequence[ScriptSegment],
-                   max_chars: int = SHOOT_CHARS_MAX) -> list[ScriptSegment]:
+                   max_chars: int = SHOOT_CHARS_MAX,
+                   keep_chars: int = 0) -> list[ScriptSegment]:
     """把过长的段落拆成句子级的小段 —— 一段 = 一拍,拍太长就没有画面变化。
 
     拆在句末标点;一句太长再拆到逗号。拆出来的每一段保留原来的段落名、
@@ -177,7 +213,9 @@ def split_segments(segments: Sequence[ScriptSegment],
         text = (seg.text or "").strip()
         if not text:
             continue
-        parts = _split_text(text, max_chars) if len(text) > max_chars else [text]
+        first_max = HOOK_MAX_CHARS if not out else None
+        parts = (_split_text(text, max_chars, first_max, keep_chars)
+                 if len(text) > max_chars else [text])
         for p in parts:
             out.append(ScriptSegment(idx=len(out), section=seg.section, text=p,
                                      fact_refs=list(seg.fact_refs), subject=seg.subject,

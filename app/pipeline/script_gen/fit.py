@@ -52,17 +52,18 @@ FIT_PASSES = 4
 
 def fit_length(segments: list[ScriptSegment], budget: int, llm,
                tolerance: float = PORTRAIT_LENGTH_TOLERANCE,
-               keep_count: bool = False) -> list[ScriptSegment]:
+               keep_count: bool = False, reviewer: bool = False) -> list[ScriptSegment]:
     """超出目标字数 `tolerance` 倍时让 LLM 删,一遍不够就再删(最多 `FIT_PASSES` 遍)。
 
-    某一遍压坏了(空、没变短、丢了开场或结论)就丢掉那一遍、接着下一遍,全都坏了就用原稿。"""
+    某一遍压坏了(空、没变短、丢了开场或结论)就丢掉那一遍、接着下一遍,全都坏了就用原稿。
+    `reviewer`:车评稿先删次要参数,判断和推理链留着。"""
     if not segments or budget <= 0:
         return segments
     misses = 0
     for _ in range(FIT_PASSES):
         if spoken_chars(segments) <= budget * tolerance:
             break
-        shorter = _shorten_once(segments, budget, llm, keep_count, misses)
+        shorter = _shorten_once(segments, budget, llm, keep_count, misses, reviewer)
         if shorter is None:
             misses += 1
             continue    # 这一遍没压好,下一遍重来(温度 0.3,换次采样常能过)
@@ -71,7 +72,8 @@ def fit_length(segments: list[ScriptSegment], budget: int, llm,
 
 
 def _shorten_once(segments: list[ScriptSegment], budget: int, llm,
-                  keep_count: bool, misses: int = 0) -> list[ScriptSegment] | None:
+                  keep_count: bool, misses: int = 0,
+                  reviewer: bool = False) -> list[ScriptSegment] | None:
     """让 LLM 压一遍;结果不可用返回 None。"""
     have = spoken_chars(segments)
     draft = json.dumps({"segments": [{"section": s.section, "text": s.text, "fact_refs": s.fact_refs}
@@ -82,6 +84,9 @@ def _shorten_once(segments: list[ScriptSegment], budget: int, llm,
     if keep_count:
         system += (f"\n- 本稿必须保持恰好 {len(segments)} 段、顺序不变:不许删段或合并,"
                    "每段都只缩短(压到只剩最硬的一个数字加一句观点)。")
+    if reviewer:
+        system += ("\n- 这是一条车评稿,观众要听的是判断:先删次要参数和重复解释,"
+                   "每段留住判断和推出它的那条理由,反方能留一句就留一句。")
     if misses:
         system += (f"\n- 上 {misses} 遍你几乎没删(或删坏了):这遍每段都砍掉约三分之一,宁可少说一个参数;"
                    + ("" if keep_count else "同一 section 里相邻的短句可以合并成一句。"))

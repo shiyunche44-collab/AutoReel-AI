@@ -86,10 +86,51 @@ def pack_consumption(fact: Fact) -> list[Fact]:
                         f"每百公里约用 {_fmt(kwh / km * 100)} 度电", "电耗")]
 
 
+def wheelbase_ratio(fact: Fact) -> list[Fact]:
+    """同一条事实里的车长和轴距 → 轴距占车长的比例(空间取向看这个,不看绝对值)。"""
+    wheelbase = re.search(r"轴距[^\d,,。;;]{0,6}(\d{4})", fact.claim)
+    length = re.search(r"(?:车长|车身长度|长宽高|长度)[^\d,,。;;]{0,8}(\d{4})", fact.claim) \
+        or re.search(r"长\s*(\d{4})", fact.claim)
+    if not wheelbase or not length or fact.compare_with:
+        return []
+    width, total = float(wheelbase.group(1)), float(length.group(1))
+    if not 0 < width < total:
+        return []
+    return [_make(fact, f"车长 {length.group(1)} 毫米、轴距 {wheelbase.group(1)} 毫米,"
+                        f"轴距约占车长 {_fmt(width / total * 100)}%", "尺寸")]
+
+
+def charge_c_rate(fact: Fact) -> list[Fact]:
+    """同一条事实里的电池容量和峰值充电功率 → 充电倍率。"""
+    kwh = re.search(_NUM + r"\s*(?:kWh|度电)", fact.claim)
+    kw = re.search(_NUM + r"\s*(?:kW(?!h)|千瓦(?!时))", fact.claim)
+    if not kwh or not kw or fact.compare_with or not re.search("充电|快充|补能", fact.claim):
+        return []
+    capacity, power = float(kwh.group(1)), float(kw.group(1))
+    if capacity <= 0 or power <= 0:
+        return []
+    return [_make(fact, f"{kwh.group(1)} 度电池配 {kw.group(1)} 千瓦峰值充电功率,"
+                        f"充电倍率约 {_fmt(power / capacity)}C", "补能")]
+
+
+def trim_gap(fact: Fact) -> list[Fact]:
+    """同一句里恰好两个售价 → 差价。只算同一条事实内的,跨事实容易错配版本和年款。"""
+    if fact.compare_with or not re.search("售价|指导价|价格|起售", fact.claim):
+        return []
+    prices = re.findall(_NUM + r"\s*万(?:元)?(?![辆台公里次人])", fact.claim)
+    if len(prices) != 2 or prices[0] == prices[1]:
+        return []
+    a, b = float(prices[0]), float(prices[1])
+    return [_make(fact, f"{min(a, b):g} 万和 {max(a, b):g} 万相差约 {_fmt(abs(a - b))} 万元", "价格")]
+
+
 RULES: dict[str, Callable[[Fact], list[Fact]]] = {
     "hp_to_kw": hp_to_kw,
     "charge_rate": charge_rate,
     "pack_consumption": pack_consumption,
+    "wheelbase_ratio": wheelbase_ratio,
+    "charge_c_rate": charge_c_rate,
+    "trim_gap": trim_gap,
 }
 
 

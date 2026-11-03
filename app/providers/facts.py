@@ -369,6 +369,19 @@ def ifind_controversy_news(subject: str, project_dir: Path | None = None,
     )
 
 
+def ifind_review_news(subject: str, project_dir: Path | None = None,
+                      size: int = 10, days: int = 365, terms: str = "") -> RawDoc:
+    """专业车评方向:媒体试驾、实测和用户口碑。体感只能转述,这条查询提供可转述的来源。"""
+    end = time.strftime("%Y-%m-%d")
+    start = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+    query = f"{subject} {terms or '评测 实测 体验 口碑'}"
+    return invoke(
+        IFIND["search_news"],
+        {"query": query, "size": size, "time_start": start, "time_end": end},
+        query_label=query, project_dir=project_dir,
+    )
+
+
 def ifind_market_news(topic: str, project_dir: Path | None = None,
                       size: int = 10, days: int = 540, terms: str = "") -> RawDoc:
     """市场观察方向:份额、排名、行业格局、渗透率。"""
@@ -453,6 +466,7 @@ SOURCES = {
     "ifind.cost_news": ifind_cost_news,
     "ifind.tech_news": ifind_tech_news,
     "ifind.controversy_news": ifind_controversy_news,
+    "ifind.review_news": ifind_review_news,
     "ifind.market_news": ifind_market_news,
     "qcc.profile": qcc_profile,
     "qcc.trademark": qcc_trademark,
@@ -501,7 +515,7 @@ def collect(
 #: 接受 `terms`(品类检索词)的来源
 _TERMED = frozenset({"ifind.news", "ifind.product_news", "ifind.iteration_news",
                      "ifind.compare_news", "ifind.cost_news", "ifind.tech_news",
-                     "ifind.controversy_news", "ifind.market_news"})
+                     "ifind.controversy_news", "ifind.review_news", "ifind.market_news"})
 
 
 def health_check() -> dict[str, bool]:

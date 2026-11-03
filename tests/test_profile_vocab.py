@@ -26,6 +26,8 @@ from app.providers import facts as facts_provider
 GOLDEN = Path(__file__).resolve().parent / "golden"
 
 SUBJECTS = {"auto_long": "小米YU7"}
+#: 快照固定片型:默认片型换了,老片型的提示词也不该跟着变
+THEMES = {"auto_long": "buyguide"}
 
 
 class _Capture:
@@ -50,8 +52,8 @@ def _facts() -> list[Fact]:
 
 def render_prompts(category: str, subject: str, monkeypatch) -> dict[str, object]:
     profile = load_profile(category)
-    theme = profile.theme_spec()
-    plan = list(profile.plan_for(profile.supported_durations()[0]))
+    theme = profile.theme_spec(THEMES.get(category))
+    plan = list(profile.plan_for(profile.supported_durations()[0], THEMES.get(category)))
     out: dict[str, object] = {}
 
     llm = _Capture()
@@ -182,7 +184,7 @@ def test_baby_quality_section_is_skipped_without_records():
 
 def test_auto_plan_unaffected_by_fact_topics():
     p = load_profile("auto_long")
-    plan = list(p.plan_for(240))
+    plan = list(p.plan_for(240, "buyguide"))
     assert p.drop_unbacked(plan, []) == plan
 
 

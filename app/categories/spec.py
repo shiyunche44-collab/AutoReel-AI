@@ -56,6 +56,8 @@ class SectionSpec:
     #: 这一段的章节名由脚本给(问答式的"问题"、槽点式的"争议"):脚本多输出一个 `heading`,
     #: 章节条与章节转场显示它,而不是段落名
     heading: bool = False
+    #: 车评片型的论点段:按段落序列里出现的先后,对应分析大纲里的第几条论点
+    argument: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,16 @@ class ThemeSpec:
     #: 有车单的片型在建项目页的选题框标签 / 占位;空 = 前端按横评 / 对决给默认文案
     roster_label: str = ""
     roster_placeholder: str = ""
+    #: 车评人口吻:写稿前先做分析(script_gen.brief),提示词换成判断 + 推理 + 反方的写法
+    reviewer: bool = False
+    #: 车评分析对这个片型的额外要求(论点怎么对应段落):空 = 按通用论点写
+    brief_rule: str = ""
+    #: 分析视角 id(说明在 vocab.lenses)。声明了才会给项目挑一个,见 variety.pick
+    lenses: tuple[str, ...] = ()
+    #: 每章至少几拍,放不下就按 `drop` 砍章(0 = 不限)。车评一章要讲判断和推理,一拍讲不完
+    shots_per_section: int = 0
+    #: 横屏一句不超过这么多字就不从中间切(0 = 按拍长上限切)。推理句切开就读不通了
+    sentence_keep_chars: int = 0
 
     @property
     def multi(self) -> bool:
@@ -238,6 +250,24 @@ class Vocab:
                                      "这句话很重要", "没得说", "吊打", "天花板")
     #: 必须讲原理的段落(depth_lint 检查这些段落有没有引用原理条目)
     depth_sections: tuple[str, ...] = ()
+    #: 车评人的人设(reviewer 片型的角色行与 Script style)
+    reviewer_voice: str = ""
+    #: 分析视角:id -> 这个视角要回答什么
+    lenses: dict[str, str] = field(default_factory=dict)
+    #: 论证手法库:每章换一种,写进分析和脚本提示词
+    review_moves: tuple[str, ...] = ()
+    #: 反复出现就露馅的套话,全片最多一次
+    stock_phrases: tuple[str, ...] = ()
+    #: 提纲里的结构词:念出来就露馅了(「这章判断」「决策卡」),一次也不该有
+    scaffold_words: tuple[str, ...] = ()
+    #: 什么算判断的例子(分析提示词用)。要和具体部位无关,否则会被照抄进每条片子
+    judgment_example: str = ""
+    #: 第一人称声称亲身体验的说法(和 lint 里的通用词合并)。说这些就是撒谎,一律拦下
+    firsthand_terms: tuple[str, ...] = ()
+    #: 转述别人感受时说明来源的词,一个都没有 = 听起来像作者自己的体验
+    attribution_words: tuple[str, ...] = ("媒体", "用户", "报道", "评测", "实测", "反映", "据")
+    #: 转述写法的例子,进提示词
+    attribution_example: str = "「有媒体实测」「不少用户反映」"
     #: 口径词:引用的事实原文里有它、句子里却没说,depth_lint 提醒补口径(如 CLTC)
     basis_terms: tuple[str, ...] = ()
     #: 错误的部件名 → 为什么错。模型压缩句子时会把两个部件并成一个不存在的东西

@@ -100,6 +100,7 @@ def to_payload(item: dict[str, Any]) -> ProjectCreate:
         angle_search=(item.get("search_terms") or "")[:60] or None,
         angle_evidence=(item.get("evidence") or [])[:12] or None,
         hook=(item.get("hook") or "")[:40] or None,
+        angle_why=(item.get("rationale") or "")[:300] or None,
         subjects=[SubjectEntry(name=s[:40]) for s in subjects] or None,
     )
 

@@ -77,6 +77,16 @@ def _set_state(project_id: str, src: State | str, dst: State | str,
         db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost, conn=conn)
 
 
+def _review_history(project: dict[str, Any]) -> list[dict[str, Any]]:
+    """同一台车做过的片子:主论点和章名。写新一条的分析时要换论点。"""
+    out = []
+    for row in db.subject_theses(project["subject"], project["category"], exclude_id=project["id"]):
+        brief = db.read_json(row["id"], "review_brief.json", {}) or {}
+        out.append({"thesis": row["thesis"],
+                    "headings": [a.get("heading", "") for a in brief.get("arguments") or []]})
+    return out
+
+
 def _variant(project: dict | None) -> dict:
     """项目的变体(开头 / 结尾写法、中段顺序)。老项目没有 = {}(片型默认)。"""
     return variety.parse((project or {}).get("variant"))
@@ -234,12 +244,14 @@ def create_project(payload: ProjectCreate) -> str:
     )
     angle = (payload.angle or "").strip()
     hook = (payload.hook or "").strip()
-    if (angle and (payload.angle_search or payload.angle_evidence)) or hook:
+    why = (payload.angle_why or "").strip()
+    if (angle and (payload.angle_search or payload.angle_evidence)) or hook or why:
         db.write_json(project_id, "topic.json", {
             "angle": angle,
             "search": (payload.angle_search or "").strip(),
             "evidence": [str(e)[:300] for e in payload.angle_evidence or []],
             **({"hook": hook} if hook else {}),
+            **({"why": why} if why else {}),
         })
     db.add_event(
         project_id, str(State.DRAFT_INTENT),
@@ -420,13 +432,27 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         hook = str(topic.get("hook") or "")
         # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
         with costs.project_spend(project_id, costs.stage_reserve("script")):
+            # 车评片型:写稿前先做分析,论点和章名都从这台车自己的矛盾里来
+            brief = None
+            if theme.reviewer:
+                brief = script_gen.write_brief(
+                    subject=subject, profile=profile, facts=facts, llm=llm,
+                    n_args=len(script_gen.argument_slots(plan, profile)),
+                    lens=str(_variant(project).get("lens") or ""), angle=angle,
+                    why=str(topic.get("why") or ""), history=_review_history(project),
+                    rule=theme.brief_rule, sections=script_gen.argument_slots(plan, profile))
+                if brief:
+                    db.write_json(project_id, "review_brief.json", brief)
+                    slots = script_gen.align_slots(slots, brief, profile)
+                    plan = [s.section for s in slots]
             # 服务里先写几版第一句、评审挑一句(`script_gen.hook_candidates`,默认不挑);
             # 落选的连分数存下来,复盘时对照
             picked = None
             if script_gen.hook_candidates >= 2:
                 picked = script_gen.choose_hook(subject=subject, profile=profile, facts=facts,
                                                 llm=llm, n=script_gen.hook_candidates,
-                                                angle=angle, hook=hook)
+                                                angle=angle, hook=hook,
+                                                tension=str((brief or {}).get("tension") or ""))
                 if picked:
                     db.write_json(project_id, "hook_candidates.json", picked)
                     hook = picked["chosen"]
@@ -434,14 +460,15 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                 subject=subject, profile=profile, facts=facts, plan=plan,
                 duration=project["duration"], llm=llm, theme=theme, angle=angle,
                 portrait=portrait, hook=hook, variant=_variant(project),
-                hook_locked=bool(picked),
+                hook_locked=bool(picked), brief=brief,
                 **({"slots": slots, "subjects": subjects} if theme.multi else {}),
             )
         segments = script_gen.normalize_segments(segments, slots)
         # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次;竖屏 4–5 秒)。
         # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
         segments = script_gen.split_segments(
-            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
+            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX,
+            keep_chars=0 if portrait else theme.sentence_keep_chars)
         # 口播清洗:去"我没有数字"类自曝句,把碎句和半句并进相邻的拍(拆完再清,否则拆分又造出碎句)
         segments = script_gen.clean_spoken(
             segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)

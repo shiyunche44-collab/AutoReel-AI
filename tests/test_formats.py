@@ -167,15 +167,15 @@ def test_qa_script_carries_heading(auto):
 def test_buyguide_prompt_has_no_heading_rule(auto):
     llm = _ScriptLLM([])
     script_gen.generate(subject="小米YU7", profile=auto, facts=[_fact()],
-                        plan=list(auto.plan_for(120)), duration=120, llm=llm,
-                        theme=auto.theme_spec())
+                        plan=list(auto.plan_for(120, "buyguide")), duration=120, llm=llm,
+                        theme=auto.theme_spec("buyguide"))
     assert "`heading`" not in llm.calls[-1][0]
 
 
 def test_heading_dropped_for_plain_sections(auto):
     llm = _ScriptLLM([{"section": "开场", "heading": "乱给的", "text": "多花三万买快充。"}])
     segs, _, _ = script_gen.generate(subject="小米YU7", profile=auto, facts=[], plan=["开场"],
-                                     duration=120, llm=llm, theme=auto.theme_spec())
+                                     duration=120, llm=llm, theme=auto.theme_spec("buyguide"))
     assert segs[0].heading == ""
 
 

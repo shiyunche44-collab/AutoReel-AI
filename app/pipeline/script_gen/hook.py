@@ -27,7 +27,7 @@ HOOK_FILLER = ("大家好", "大伙好", "朋友们好", "朋友好", "各位好
 
 def first_sentence(text: str) -> str:
     """脚本的第一句(到第一个句末标点为止)。"""
-    return re.split(r"[。!?!?;;\n]", (text or "").strip(), maxsplit=1)[0].strip()
+    return re.split(r"[。!?\uff01\uff1f;\uff1b\n]", (text or "").strip(), maxsplit=1)[0].strip()
 
 
 HOOK_SYSTEM = """你是中文短视频的开场编导。给「{subject}」这期解说写 {n} 版**第一句话**,
@@ -143,7 +143,7 @@ def _grams(text: str) -> set[str]:
 def _second_sentence(segments: Sequence[ScriptSegment]) -> tuple[str, ScriptSegment] | None:
     """开场的第 2 句:同一段里第一句之后的那句,没有就取下一段的第一句。"""
     seg = segments[0]
-    parts = [p.strip() for p in re.split(r"[。!?!?;;\n]", (seg.text or "").strip()) if p.strip()]
+    parts = [p.strip() for p in re.split(r"[。!?\uff01\uff1f;\uff1b\n]", (seg.text or "").strip()) if p.strip()]
     if len(parts) >= 2:
         return parts[1], seg
     if len(segments) >= 2:

@@ -41,7 +41,10 @@ _VENDOR_CLAIM_MARKERS = (
 #: 人名 + 说话的引述句式:"卢伟冰说,……"。
 #:
 #: 动词后必须紧跟标点,否则「这类车说白了就是」会把"这类车"当人名。
-_PERSON_QUOTE_RE = re.compile(r"([一-龥]{2,4})(说|表示|称|指出|坦言)\s*[，,：:]")
+_PERSON_QUOTE_RE = re.compile(r"([一-龥]{2,4})(说|表示|(?<!标)称|指出|坦言)\s*[，,：:]")
+
+#: 转述和替反方说话的主语:「有人会说,」「不少车主说,」不是厂商在说话
+_NOT_A_SPEAKER = ("有人", "车主", "媒体", "用户", "网友", "大家")
 
 #: 不是人名的常见词,别当引述主体
 _NOT_A_NAME = frozenset({
@@ -84,6 +87,6 @@ def vendor_attribution(text: str) -> str:
     if hit:
         return hit
     for m in _PERSON_QUOTE_RE.finditer(text or ""):
-        if m.group(1) not in _NOT_A_NAME:
+        if m.group(1) not in _NOT_A_NAME and not any(w in m.group(1) for w in _NOT_A_SPEAKER):
             return m.group(0).strip()
     return ""

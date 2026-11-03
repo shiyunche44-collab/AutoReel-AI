@@ -97,6 +97,11 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         max_duration=int(raw.get("max_duration", 0) or 0),
         roster_label=str(raw.get("roster_label", "") or ""),
         roster_placeholder=str(raw.get("roster_placeholder", "") or ""),
+        reviewer=bool(raw.get("reviewer", False)),
+        brief_rule=str(raw.get("brief_rule") or "").strip(),
+        lenses=tuple(str(x) for x in (raw.get("lenses") or ())),
+        shots_per_section=int(raw.get("shots_per_section", 0) or 0),
+        sentence_keep_chars=int(raw.get("sentence_keep_chars", 0) or 0),
     )
 
 
@@ -126,6 +131,7 @@ def _build(name: str, raw: dict[str, Any]) -> CategoryProfile:
             chapter=str(value.get("chapter", "") or ""),
             fact_topic=str(value.get("fact_topic", "") or ""),
             heading=bool(value.get("heading", False)),
+            argument=bool(value.get("argument", False)),
         )
         for key, value in (raw.get("sections") or {}).items()
     }
@@ -245,6 +251,9 @@ def _validate(profile: CategoryProfile) -> None:
                 if v not in (_variety.OPENINGS if kind == "opening" else _variety.ENDINGS)]
         if bad:
             raise ProfileError(f"品类 {profile.name} 方向 {tname}: 未知的开头 / 结尾写法 {bad}")
+        bad = [x for x in theme.lenses if x not in profile.vocab.lenses]
+        if bad:
+            raise ProfileError(f"品类 {profile.name} 方向 {tname}: vocab.lenses 里没有分析视角 {bad}")
         if theme.roundup:
             lo, hi = theme.subject_count
             if not 1 <= lo <= hi:

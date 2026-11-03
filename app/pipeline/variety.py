@@ -259,12 +259,17 @@ def pick(theme, project_id: str, recent: Iterable[Mapping[str, Any]] = (),
         rng, openings, (v.get("opening") for v in recent), _weights("opening"))
     chosen_ending = ending or _planned("ending", endings) or _choose(
         rng, endings, (v.get("ending") for v in recent), _weights("ending"))
-    return {
+    out = {
         "opening": chosen_opening,
         "ending": chosen_ending,
         "order_seed": rng.randrange(1, 1 << 30),
         "seed": rng.randrange(1, 1 << 30),
     }
+    # 排在最后抽:没声明 lenses 的片型不多抽随机数,其余取值和以前逐字相同
+    lenses = tuple(getattr(theme, "lenses", ()) or ())
+    if lenses:
+        out["lens"] = _choose(rng, lenses, (v.get("lens") for v in recent))
+    return out
 
 
 def options(theme) -> dict[str, list[dict[str, str]]]:
