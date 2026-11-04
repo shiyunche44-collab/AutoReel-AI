@@ -133,9 +133,16 @@ CROSS_PROJECT_DEDUP = os.getenv("CROSS_PROJECT_DEDUP", "1") != "0"
 CROSS_PROJECT_RECENT = int(os.getenv("CROSS_PROJECT_RECENT", "3"))
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
-#: TTS 语速 / 情绪 / 音高。语速 1.0 配沉稳音色听着像催眠;情绪默认 happy(试听选定;设成空 = 不传)
-TTS_SPEED = float(os.getenv("TTS_SPEED", "1.12"))
-TTS_EMOTION = os.getenv("TTS_EMOTION", "happy").strip()
+#: TTS 语速 / 情绪 / 音高。A/B 试听定的 1.10、不传情绪:1.25 + happy 听着像在赶着报幕
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.10"))
+TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
+#: 写完稿再让 LLM 改一遍口语(script_gen.spoken_pass):只换说法,数字和来源改了就退回原句
+SPOKEN_PASS = os.getenv("SPOKEN_PASS", "1") != "0"
+#: 一口气合成(voice_take):相邻句子合成一条再切开,语气连着。TTS_ONE_TAKE=0 退回逐句
+TTS_ONE_TAKE = os.getenv("TTS_ONE_TAKE", "1") != "0"
+TTS_TAKE_MAX_CHARS = int(os.getenv("TTS_TAKE_MAX_CHARS", "150"))
+#: 句内低电平停顿的上限(秒),超过的部分剪掉。0 = 不压
+TTS_PAUSE_CAP = float(os.getenv("TTS_PAUSE_CAP", "0.35"))
 #: 按句子在片里的角色微调语速(TTS 之后用 atempo 处理,不动 TTS 调用与缓存):
 #: 开场第一句略快、有冲击;结论段略慢、有分量。1.0 = 不调;TTS_PROSODY=0 整个关掉
 #: 字幕逐字时间:用 faster-whisper 量出每个字实际念到的时刻(需已装;失败退回字数比例)

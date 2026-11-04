@@ -42,7 +42,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - 数字一律写阿拉伯数字(`grounding.arabicize` 兜底),字幕用原文、TTS 用 `normalize_for_tts`。
 - 只有 `track: explainer` 一种轨道,横屏 / 竖屏由 `projects.aspect` 决定,创建后不可改,统一走 `pipeline/aspect.py`。竖屏回归时旧的"事后转竖屏"已删除,别重新加回。
 - 品类文本放在 YAML `vocab:`,引擎里不要写死"车"。`auto_long` 的数据在 `app/categories/profiles/`。
-- 压缩时长靠测得的语速:横屏 `LANDSCAPE_CHARS_PER_SECOND`=5.5,竖屏 4.7 字/秒。`costs.py` 仍按 5.8 保守估算。
+- 压缩时长靠测得的语速:横屏 `LANDSCAPE_CHARS_PER_SECOND`=5.7,竖屏 4.7 字/秒。`costs.py` 仍按 5.8 保守估算。
 
 ## 渲染与音频
 

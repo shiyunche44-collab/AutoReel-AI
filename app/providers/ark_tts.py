@@ -87,7 +87,60 @@ def synthesize(text: str, *, voice_id: str, speed: float = 1.0, timeout: float =
     raise last
 
 
-def _stream(headers: dict, body: dict, timeout: float) -> tuple[bytes, str, int]:
+def synthesize_take(ssml: str, *, voice_id: str, speed: float = 1.0, timeout: float = 180,
+                    retries: int = 2, emotion: str = "", emotion_scale: int = 4
+                    ) -> tuple[bytes, list[tuple[str, float, float]]]:
+    """整段 SSML 合成一条,连逐字时间戳一起返回:(音频, [(字, 起, 止)])。时间戳算上了 break。"""
+    if not config.ARK_API_KEY:
+        raise ConnectorError(TOOL, "未配置 ARK_API_KEY(方舟 Agent Plan 专属 API Key)")
+    headers = {
+        "X-Api-Key": config.ARK_API_KEY,
+        "X-Api-Resource-Id": RESOURCE_ID,
+        "X-Api-Connect-Id": str(uuid.uuid4()),
+        "Content-Type": "application/json",
+    }
+    audio_params: dict = {"format": "mp3", "sample_rate": 24000, "enable_subtitle": True}
+    rate = speech_rate(speed)
+    if rate:
+        audio_params["speech_rate"] = rate
+    if emotion:
+        audio_params["emotion"] = emotion
+        audio_params["emotion_scale"] = emotion_scale
+    body = {"user": {"uid": "aimovice"},
+            "req_params": {"ssml": ssml, "speaker": resolve_voice(voice_id),
+                           "audio_params": audio_params}}
+    last: ConnectorError | None = None
+    for attempt in range(retries + 1):
+        sentences: list[dict] = []
+        try:
+            audio, problem, status = _stream(headers, body, timeout, sentences)
+        except httpx.HTTPError as exc:
+            audio, problem, status = b"", f"网络错误:{type(exc).__name__}: {exc}", 0
+        if audio and not problem:
+            return audio, _take_words(sentences)
+        last = ConnectorError(TOOL, problem or "没有返回音频", code=status or None)
+        if status and status not in _RETRY_HTTP:
+            raise last
+        if attempt < retries:
+            time.sleep(3 * (attempt + 1))
+    assert last is not None
+    raise last
+
+
+def _take_words(sentences: list[dict]) -> list[tuple[str, float, float]]:
+    """逐句消息里的 words 接起来。整段汇总的那条消息没有 words,自然被跳过。"""
+    out: list[tuple[str, float, float]] = []
+    for sentence in sentences:
+        for w in sentence.get("words") or []:
+            start, end = w.get("startTime"), w.get("endTime")
+            if w.get("word") and start is not None and end is not None:
+                if not out or float(start) >= out[-1][1]:
+                    out.append((str(w["word"]), float(start), float(end)))
+    return out
+
+
+def _stream(headers: dict, body: dict, timeout: float,
+            sentences: list[dict] | None = None) -> tuple[bytes, str, int]:
     audio = bytearray()
     problem = ""
     with httpx.stream("POST", URL, headers=headers, json=body, timeout=timeout) as resp:
@@ -103,6 +156,8 @@ def _stream(headers: dict, body: dict, timeout: float) -> tuple[bytes, str, int]
                 continue
             if msg.get("data"):
                 audio.extend(base64.b64decode(msg["data"]))
+            if sentences is not None and isinstance(msg.get("sentence"), dict):
+                sentences.append(msg["sentence"])
             code = msg.get("code")
             if code not in (None, 0, _DONE):
                 problem = f"{code}:{msg.get('message')}"

@@ -176,7 +176,6 @@ def _split_text(text: str, max_chars: int, first_max: int | None = None,
         keep = limit if n == 0 and first_max else max(max_chars, keep_chars)
         parts.extend([sent] if len(sent) <= keep else _pack_clauses(sent, limit, max_chars))
     # 太短的碎块并到相邻块:一个 3 字的拍既撑不住画面也不像人话。
-    # 先并再换标点 —— 并回去的逗号仍是逗号,不会冒出「我的判断是。YU7……」
     merged: list[str] = []
     for p in parts:
         # 钩子第一句并上下一块就破了黄金三秒的字数
@@ -191,9 +190,9 @@ def _split_text(text: str, max_chars: int, first_max: int | None = None,
             len(merged[-2]) + len(merged[-1]) <= cap:
         merged[-2] += merged[-1]
         merged.pop()
-    # 切在逗号上的块,句尾那个逗号换成句号:字幕末尾挂半个标点不像话,
-    # TTS 也需要一个明确的断句。
-    return [(p[:-1] + "。" if p and p[-1] in _TRAILING_MARKS else p) for p in merged]
+    # 切在逗号上的块保留逗号:换成句号,一句话会被念成两句,每拍都收一次尾音。
+    # 字幕末尾的逗号由 `timeline.wrap_subtitle` 去掉。
+    return merged
 
 
 def split_segments(segments: Sequence[ScriptSegment],

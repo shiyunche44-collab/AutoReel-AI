@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import subprocess
 from dataclasses import dataclass
@@ -172,6 +173,10 @@ def _decimal_to_chinese(text: str) -> str:
 
 
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+#: 数字 2 后面跟这些量词时读"两"
+_LIANG_MEASURES = ("个", "台", "辆", "款", "种", "倍", "年", "天", "次", "项", "条", "张", "门",
+                   "座", "排", "套", "块", "家", "元", "秒", "分钟", "小时", "公里", "米", "吨",
+                   "升", "周", "只", "组", "位")
 
 
 def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str:
@@ -185,13 +190,26 @@ def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str
 
     def repl(match: re.Match[str]) -> str:
         raw = match.group(0)
-        return _decimal_to_chinese(raw)
+        spoken = _decimal_to_chinese(raw)
+        # 口语读"两":两万八千、两百;"2"单独跟量词也读"两",但"第2个"还是"第二个"
+        if "." not in raw and spoken.startswith("二"):
+            before = match.string[:match.start()]
+            after = match.string[match.end():].lstrip()
+            if spoken[1:2] in ("百", "千", "万", "亿"):
+                return "两" + spoken[1:]
+            if raw == "2" and not before.endswith("第") and after.startswith(_LIANG_MEASURES):
+                return "两"
+        return spoken
 
-    # 千分位去逗号("1,299" 否则读成"一,二百九十九");年份逐位读(2025 → 二零二五);
+    def digits(match: re.Match[str]) -> str:
+        return "".join(_CN_DIGITS[int(c)] for c in match.group(1))
+
+    # 千分位去逗号("1,299" 否则读成"一,二百九十九");年份和年款逐位读(2025款 → 二零二五款);
     # 百分号读"百分之"在数字前;区间 50-60 读"到"
     text = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", text)
-    text = re.sub(r"(?<!\d)((?:19|20)\d{2})(?=年)",
-                  lambda m: "".join(_CN_DIGITS[int(c)] for c in m.group(1)), text)
+    text = re.sub(r"(?<![\d.])((?:19|20)\d{2})(?=\s*[年款])", digits, text)
+    # 两位年款(25款):20 款车型这种是数量,不是年款
+    text = re.sub(r"(?<![\d.])(1[5-9]|2\d)(?=\s*款(?!车|产品|配色|颜色|轮毂))", digits, text)
     text = re.sub(r"(\d+(?:\.\d+)?)\s*[%％]", lambda m: "百分之" + m.group(1), text)
     text = re.sub(r"(?<=\d)\s*[-~～–—]\s*(?=\d)", "到", text)
     out = _NUM_RE.sub(repl, text)
@@ -200,7 +218,9 @@ def normalize_for_tts(text: str, pronounce: dict[str, str] | None = None) -> str
     out = out.replace("kWh", "千瓦时").replace("KWh", "千瓦时")
     out = out.replace("Wh", "瓦时")
     # 数字后的电压单位 V:"800V" 若原样交给 TTS 会被读成"副 / 位"(实测),只在紧跟数字时换成"伏"
-    out = re.sub(r"(?<=[零一二三四五六七八九十百千万点])V(?![A-Za-z])", "伏", out)
+    out = re.sub(r"(?<=[零一二三四五六七八九十百千万点两])V(?![A-Za-z])", "伏", out)
+    # 裸 km:转写里听到的是"千米 / KM",车评口语都说公里
+    out = re.sub(r"(?<=[零一二三四五六七八九十百千万点两])\s*(?:km|KM|Km)(?![A-Za-z/])", "公里", out)
     # 品类读法表(N·m→牛米、rpm→转):长词优先,免得 "N·m/deg" 先被 "N·m" 吃掉
     for raw in sorted(pronounce or {}, key=len, reverse=True):
         out = out.replace(raw, pronounce[raw])
@@ -231,12 +251,58 @@ def gap_after(text: str, nxt: str = "") -> float:
     return min(gap, GAP_MAX)
 
 
+def is_strong_end(text: str) -> bool:
+    return text.rstrip()[-1:] in _STRONG_END
+
+
+#: 变化停顿的基准(秒)。试听反馈"不需要那么多的停顿",所以都偏短:普通句号只留一口气,
+#: 问句和换段才明显停一下
+_PAUSE_WEAK = 0.1
+_PAUSE_STRONG = 0.18
+_PAUSE_QUESTION = 0.32
+_PAUSE_SECTION = 0.45
+PAUSE_MAX = 0.5
+#: 下一句是转折或下判断,前面多留一点,让这句话有落差
+_PAUSE_LIFT = 1.2
+_VERDICT_WORDS = ("所以", "说白了", "结论", "我判断", "一句话", "总之", "归根")
+_PAUSE_JITTER = 0.15
+
+
+def varied_gaps(texts: Sequence[str], seed: str = "",
+                sections: Sequence[str] | None = None) -> list[float]:
+    """每句之后的停顿(秒):按句末、换段、下一句是否转折取值,再用 `seed` 加一点抖动。
+    同一个项目重做得到同样的节奏。
+
+    最后一句没有下一句,用 `gap_after`:`explainer.timing.beat_durations` 收尾时也是它,
+    这样 Σ 各拍时长 == 旁白轨总长。"""
+    rng = random.Random(seed)
+    out: list[float] = []
+    for i, text in enumerate(texts[:-1]):
+        nxt = texts[i + 1].lstrip()
+        tail = text.rstrip()[-1:]
+        if sections is not None and sections[i] != sections[i + 1]:
+            base = _PAUSE_SECTION
+        elif tail in "?？":
+            base = _PAUSE_QUESTION
+        elif tail in _STRONG_END:
+            base = _PAUSE_STRONG
+        else:
+            base = _PAUSE_WEAK
+        if nxt.startswith(_TURN_WORDS + _VERDICT_WORDS):
+            base *= _PAUSE_LIFT
+        out.append(round(min(base * rng.uniform(1 - _PAUSE_JITTER, 1 + _PAUSE_JITTER), PAUSE_MAX), 3))
+    if texts:
+        out.append(gap_after(texts[-1]))
+    return out
+
+
 def build_subtitle_cues(
     sentences: Sequence[str],
     audio_durations: Sequence[float],
     *,
     shot_indices: Sequence[int] | None = None,
     gap: float | None = None,
+    gaps: Sequence[float] | None = None,
 ) -> list[SubtitleCue]:
     """把逐句音频的实际时长累加成字幕时间轴。
 
@@ -252,7 +318,9 @@ def build_subtitle_cues(
         cues.append(
             SubtitleCue(index=i + 1, start=start, end=end, text=text, shot_idx=shot_idx)
         )
-        if gap is not None:
+        if gaps is not None and i < len(gaps):
+            cursor = end + gaps[i]
+        elif gap is not None:
             cursor = end + gap
         else:
             nxt = sentences[i + 1] if i + 1 < len(sentences) else ""
@@ -272,7 +340,8 @@ def _ass_time(seconds: float) -> str:
 def wrap_subtitle(text: str, max_chars: int | None = None) -> str:
     """按字数折行,竖屏小屏上单行太长会顶到画面边缘。"""
     limit = max_chars or config.MAX_SUBTITLE_LINE_CHARS
-    text = (text or "").strip()
+    # 一句话切成两拍时前一拍以逗号结尾,念的时候要它,显示时不要
+    text = (text or "").strip().rstrip(",，、:：;；")
     if len(text) <= limit:
         return text
     # 只超出一点点时从中间断:在上限处切,第二行只剩「里。」「。」这种孤字(竖屏实跑见过)

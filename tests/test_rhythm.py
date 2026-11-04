@@ -138,10 +138,10 @@ def test_long_paragraph_is_split_into_short_beats():
     assert all(len(s.text) <= script_gen.SHOOT_CHARS_MAX for s in out)
     # 拆开不能丢事实引用:数字还得有出处
     assert all(s.fact_refs == ["f_1"] for s in out)
-    # 词一个都不能少(标点会从逗号变成句号,不比标点)
+    # 词一个都不能少
     assert _words("".join(s.text for s in out)) == _words(segs[0].text)
-    # 拆完的块不该挂着半个逗号
-    assert all(not s.text.rstrip().endswith(("，", ",")) for s in out)
+    # 切在逗号上的块保留逗号,念的时候才连着;整段的最后一块还是句末标点
+    assert not out[-1].text.rstrip().endswith(("，", ","))
 
 
 def test_short_paragraph_is_left_alone():
@@ -429,9 +429,9 @@ def test_split_never_breaks_a_word_or_leaves_a_midsentence_period():
     from app.pipeline import script_gen
 
     parts = script_gen._split_text("全系标配700TOPS Thor芯片加激光雷达，HAD终身免费。", 22)
-    assert parts == ["全系标配700TOPS Thor芯片加激光雷达。", "HAD终身免费。"]
+    assert parts == ["全系标配700TOPS Thor芯片加激光雷达，", "HAD终身免费。"]
     parts = script_gen._split_text("我的判断是，YU7不是一台车，是两个价位段的两种车。", 22)
-    assert parts[0] == "我的判断是，YU7不是一台车。"
+    assert parts[0] == "我的判断是，YU7不是一台车，"
     # 真的太长才硬切,且优先切在空格上
     assert script_gen._hard_cut("a" * 15 + " " + "b" * 20, 22) == ["a" * 15, "b" * 20]
 

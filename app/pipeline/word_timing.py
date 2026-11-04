@@ -27,7 +27,7 @@ def _core(text: str) -> list[int]:
 
 
 def char_times(text: str, words: Sequence[tuple[str, float, float]],
-               duration: float) -> list[float] | None:
+               duration: float, *, min_match: float = MIN_MATCH) -> list[float] | None:
     """原文每个字的起始秒(相对本句开头,单调不降)。`words` 是转写出的 (词, 起, 止)。
 
     听到的每个词内部按字数均分时间;原文和听到的内容做字符级对齐,对上的字取听到的时间,
@@ -45,7 +45,7 @@ def char_times(text: str, words: Sequence[tuple[str, float, float]],
     b = "".join(c for c, _ in heard)
     blocks = difflib.SequenceMatcher(None, a, b, autojunk=False).get_matching_blocks()
     matched = sum(m.size for m in blocks)
-    if matched / len(a) < MIN_MATCH:
+    if matched / len(a) < min_match:
         return None
     anchor: dict[int, float] = {}
     for m in blocks:

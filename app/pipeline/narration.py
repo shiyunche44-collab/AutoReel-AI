@@ -15,19 +15,19 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from .. import config, db
 from ..models import SubtitleCue
 from ..providers import audio
-from . import knobs, looks, word_timing
+from . import knobs, looks, voice_take, word_timing
 from .timeline import (
     build_subtitle_cues,
     format_ass,
-    gap_after,
     normalize_for_tts,
     probe_safe,
     split_sentences,
+    varied_gaps,
     wrap_subtitle,
 )
 
@@ -154,6 +154,31 @@ def build(
     by_pos: dict[int, Any] = {}
     # 语音质检要转写复核的句子:补跑批次里的(最易错位)
     qa_hint: set[int] = set()
+    section_of = {spec.idx: getattr(spec, "section", "") or "" for spec in specs}
+    sections = [section_of.get(idx, "") for idx in shot_indices]
+    takes: list[list[int]] = []
+    pauses = varied_gaps(texts, project_id, sections)
+    take_runs = [0]
+
+    def synth_take(positions: list[int]) -> set[int]:
+        """合成一条 take,写进 by_pos,返回这次拿到音频的句子位置。"""
+        take_runs[0] += 1
+        got = voice_take.synthesize(positions, texts, pauses, voice_id=voice_id, speed=speed,
+                                    emotion=emotion or "", output_dir=audio_dir,
+                                    stem=f"take_{positions[0]:03d}_{take_runs[0]}")
+        if got is None:
+            return set()
+        by_pos.update(got.assets)
+        return set(got.assets)
+
+    if config.TTS_ONE_TAKE:
+        takes = voice_take.plan_takes(texts, sections, sentence_tempos(shot_indices))
+        result.synth_chars += sum(len(t) for t in texts)
+        fell_back = [t[0] for t in takes if not synth_take(t)]
+        if fell_back:
+            result.warnings.append(
+                f"整段合成有 {len(fell_back)} 组没成功,这几组退回逐句合成"
+                f"(第 {[i + 1 for i in fell_back[:10]]} 句起)")
     todo = [i for i in range(len(texts)) if i not in by_pos]
     if todo:
         result.synth_chars += sum(len(texts[i]) for i in todo)
@@ -213,14 +238,26 @@ def build(
         return result
 
     if config.VOICE_QA:
+        def retake(bad: Sequence[int]) -> set[int]:
+            """不合格的句子重做它所在的整条 take:只换一句,语气就又断了。"""
+            done: set[int] = set()
+            for take in takes:
+                if set(take) & set(bad) and set(take) <= set(by_pos):
+                    done |= synth_take(take)
+            return done
+
         run_voice_qa(project_id, texts, [t for t, _ in pairs], by_pos, qa_hint, result,
-                     voice_id=voice_id, speed=speed, emotion=emotion, audio_dir=audio_dir)
+                     voice_id=voice_id, speed=speed, emotion=emotion, audio_dir=audio_dir,
+                     retake=retake if takes else None)
 
     order = sorted(by_pos)
     assets = [by_pos[i] for i in order]
     tempos = sentence_tempos([shot_indices[i] for i in order])
-    result.audio_paths = [trim_clip(Path(a.local_path), audio_dir / f"trim_{i:03d}.wav", tempo=t)
-                          for (i, a), t in zip(zip(order, assets, strict=False), tempos, strict=False)]
+    # 整段合成切出来的句子自带前后的停顿,不裁也不加静音;逐句合成的才裁首尾、按 varied_gaps 补
+    from_take = [getattr(a, "node_id", "") == voice_take.TAKE_NODE for a in assets]
+    result.audio_paths = [trim_clip(Path(a.local_path), audio_dir / f"trim_{i:03d}.wav", tempo=t,
+                                    edges=not take)
+                          for i, a, t, take in zip(order, assets, tempos, from_take, strict=False)]
     # 字幕用原文:TTS 文本把数字归一化成了中文读法("六百四十三公里"),
     # 上屏得是"643 公里""kWh",观众才能扫读、截图,也才和画面上的大字对得上
     used_texts = [pairs[i][0].strip() for i in order]
@@ -239,7 +276,12 @@ def build(
         result.warnings.append("部分音频时长探测失败,已按估算值填充")
 
     # ---- 字幕时间轴 ----
-    cues = build_subtitle_cues(used_texts, durations, shot_indices=used_shots)
+    # 字幕时间轴和拼接必须用同一份停顿,旁白才和字幕、拍长对得上
+    gaps = varied_gaps(used_texts, project_id, [sections[i] for i in order])
+    for k in range(len(order) - 1):
+        if from_take[k] and from_take[k + 1]:
+            gaps[k] = 0.0
+    cues = build_subtitle_cues(used_texts, durations, shot_indices=used_shots, gaps=gaps)
     for cue, ct in zip(cues, word_timing.measure(result.audio_paths, used_texts, durations),
                        strict=False):
         cue.char_t = ct
@@ -255,8 +297,6 @@ def build(
 
     # ---- 拼接旁白为单轨 ----
     narration_path = audio_dir / "narration.wav"
-    gaps = [gap_after(t, used_texts[k + 1] if k + 1 < len(used_texts) else "")
-            for k, t in enumerate(used_texts)]
     ok, concat_err = _concat_audio(result.audio_paths, narration_path, gaps)
     if ok:
         result.narration_path = narration_path
@@ -301,7 +341,8 @@ def usable_clips(assets: Sequence[Any]) -> list[Any]:
 
 def run_voice_qa(project_id: str, texts: Sequence[str], originals: Sequence[str],
                  by_pos: dict[int, Any], hint: set[int], result: NarrationResult, *,
-                 voice_id: str, speed: float, emotion: str, audio_dir: Path) -> None:
+                 voice_id: str, speed: float, emotion: str, audio_dir: Path,
+                 retake: Callable[[Sequence[int]], set[int]] | None = None) -> None:
     """语音质检:不合格的句子重合成(最多 VOICE_QA_RETRY_ROUNDS 轮),
     仍不合格的记进 `result.qa_failed`,由 `time_beats` 拦在门禁 A。质检本身出错不拦出片。"""
     from . import voice_qa
@@ -318,6 +359,13 @@ def run_voice_qa(project_id: str, texts: Sequence[str], originals: Sequence[str]
                 break
             log.warning("语音质检:第 %s 句不合格,重合成(第 %d 轮)",
                         [i + 1 for i in bad[:10]], rnd + 1)
+            if retake is not None:
+                done = retake(bad)
+                redone |= done
+                hint |= done
+                bad = [i for i in bad if i not in done]
+                if not bad:
+                    continue
             try:
                 fresh = audio.synthesize_batch(
                     [texts[i] for i in bad], voice_id=voice_id, speed=speed,
@@ -462,17 +510,20 @@ def sentence_tempos(shot_indices: Sequence[int]) -> list[float]:
     return [min(1.15, max(0.85, t)) for t in out]
 
 
-def trim_clip(src: Path, dest: Path, tempo: float = 1.0) -> Path:
-    """裁掉首尾静音,存成 wav。失败或裁完几乎没剩就原样用 src。
+def trim_clip(src: Path, dest: Path, tempo: float = 1.0, *, edges: bool = True) -> Path:
+    """裁掉首尾静音(`edges`),存成 wav。失败或裁完几乎没剩就原样用 src。
     必须在量时长之前做:字幕和画面时间轴按这里的实际时长累加,和拼接用的是同一份文件。"""
     if not config.FFMPEG_PATH:
         return src
     import subprocess
 
+    filters = [_TRIM_SILENCE] if edges else []
+    if abs(tempo - 1.0) > 0.005:
+        filters.append(f"atempo={tempo:.3f}")
     try:
         proc = subprocess.run(
             [str(config.FFMPEG_PATH), "-y", "-v", "error", "-i", str(src),
-             "-af", _TRIM_SILENCE + (f",atempo={tempo:.3f}" if abs(tempo - 1.0) > 0.005 else ""),
+             *(["-af", ",".join(filters)] if filters else []),
              "-ar", "48000", str(dest)],
             capture_output=True, text=True, timeout=120)
     except Exception:  # noqa: BLE001
@@ -508,6 +559,8 @@ def _concat_audio(paths: Sequence[Path], dest: Path,
     for i, p in enumerate(paths):
         inputs += ["-i", str(p)]
         gap = gaps[i] if gaps and i < len(gaps) else default_gap
+        # 整段合成切开的相邻两句可能没有静音,这时不补
+        pad = f",apad=pad_dur={gap}" if gap > 0 else ""
         # 每条输入链只产出**一个**流:归一格式后直接在链尾补静音。
         #
         # 之前有两个错误叠在一起:
@@ -519,8 +572,8 @@ def _concat_audio(paths: Sequence[Path], dest: Path,
         filters.append(
             f"[{i}:a]aresample=48000,"
             f"aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"asetpts=N/SR/TB,"
-            f"apad=pad_dur={gap}[s{i}]"
+            f"asetpts=N/SR/TB"
+            f"{pad}[s{i}]"
         )
         concat_labels += f"[s{i}]"
     filters.append(f"{concat_labels}concat=n={len(paths)}:v=0:a=1[out]")

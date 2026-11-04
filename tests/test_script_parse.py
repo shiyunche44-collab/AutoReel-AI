@@ -437,7 +437,7 @@ def test_clean_spoken_merges_fragment_into_previous_and_keeps_facts():
                  "最后给出结论并请观众留言。")
     out = clean_spoken(segs)
     assert len(out) == 3
-    assert out[1].text == "新能源车的补贴政策分了好几档,价格是阶梯式的。".replace(",", "，")
+    assert out[1].text == "新能源车的补贴政策分了好几档。价格是阶梯式的。"
     assert out[1].fact_refs == ["f1", "f2"]
 
 

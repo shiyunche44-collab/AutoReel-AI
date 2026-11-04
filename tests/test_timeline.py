@@ -207,7 +207,7 @@ def test_normalize_for_tts_applies_pronounce_table_longest_first():
     table = {"N·m/deg": "牛米每度", "N·m": "牛米", "rpm": "转", "kW": "千瓦"}
     assert normalize_for_tts("扭矩528N·m", table) == "扭矩五百二十八牛米"
     assert normalize_for_tts("刚度47610N·m/deg", table) == "刚度四万七千六百一十牛米每度"
-    assert normalize_for_tts("28000rpm、450kW", table) == "二万八千转、四百五十千瓦"
+    assert normalize_for_tts("28000rpm、450kW", table) == "两万八千转、四百五十千瓦"
     # kWh 先按内置规则读成千瓦时,不会被 kW 拆坏
     assert normalize_for_tts("73kWh", table) == "七十三千瓦时"
 
