@@ -46,5 +46,5 @@ def test_push_filter_kinds():
 
 
 def test_only_lite_pushes_and_has_sfx():
-    assert looks.get("lite").cam_push and looks.get("lite").sfx
+    assert looks.get("lite").cam_push and not looks.get("lite").sfx
     assert not any(lk.cam_push or lk.sfx for lk in looks.LOOKS.values() if lk.id != "lite")

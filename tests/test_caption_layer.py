@@ -47,6 +47,6 @@ def test_render_layer_unavailable_returns_none(tmp_path, monkeypatch):
     assert cl.render_layer({"cues": [{"start": 0, "end": 1, "words": []}]}, tmp_path) is None
 
 
-def test_only_lite_uses_layer():
-    assert looks.get("lite").sub_layer is True
-    assert not any(lk.sub_layer for lk in looks.LOOKS.values() if lk.id != "lite")
+def test_no_look_uses_layer_by_default():
+    assert looks.get("lite").sub_layer is False
+    assert not any(lk.sub_layer for lk in looks.LOOKS.values())

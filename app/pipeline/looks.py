@@ -185,7 +185,7 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         paper=(236, 238, 233), ink=(18, 22, 26), key=(61, 68, 76), muted=(93, 101, 110),
         accent=(255, 90, 31),
         subs="outline", concept="studio", chapter_bar=False, video_first=True, panel=False,
-        auto_pick=True, sub_layer=True, cam_push=True, sfx=True, broll_cycle=("plain",),
+        auto_pick=True, sub_layer=False, cam_push=True, sfx=False, broll_cycle=("plain",),
     ),
 )}
 
