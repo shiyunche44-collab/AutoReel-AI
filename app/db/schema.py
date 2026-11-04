@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS projects (
     category        TEXT NOT NULL DEFAULT 'auto_long',
     theme           TEXT NOT NULL DEFAULT '',
     angle           TEXT NOT NULL DEFAULT '',
+    owner_notes     TEXT NOT NULL DEFAULT '',
     -- 项目变体(开头 / 结尾写法、中段顺序种子),JSON。见 pipeline/variety.py
     variant         TEXT NOT NULL DEFAULT '{}',
     thesis          TEXT NOT NULL DEFAULT '',
@@ -409,6 +410,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE projects ADD COLUMN theme TEXT NOT NULL DEFAULT ''")
     if "angle" not in _column_names(conn, "projects"):
         conn.execute("ALTER TABLE projects ADD COLUMN angle TEXT NOT NULL DEFAULT ''")
+    if "owner_notes" not in _column_names(conn, "projects"):
+        conn.execute("ALTER TABLE projects ADD COLUMN owner_notes TEXT NOT NULL DEFAULT ''")
     if "variant" not in _column_names(conn, "projects"):
         conn.execute("ALTER TABLE projects ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
     if "thesis" not in _column_names(conn, "projects"):

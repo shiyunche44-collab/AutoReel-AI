@@ -130,6 +130,10 @@ CONTROVERSY_TOPIC = "争议"
 
 #: 体验转述类事实的主题标签,与 intake.REVIEW_TOPIC 一致:别人的使用感受,只能转述并说明来源
 REVIEW_TOPIC = "体验"
+#: 账号主人自己填的亲身体验。只有引用了它的拍才能用第一人称说亲历
+OWNER_TOPIC = "亲历"
+#: 一个口头禅全片最多说几次
+CATCHPHRASE_MAX = 2
 
 #: heading 段落最多几个字(章节条上要放得下)
 HEADING_MAX_CHARS = 12
@@ -238,6 +242,17 @@ def banned_terms(profile: CategoryProfile) -> str:
     return "、".join(f"「{t}」" for t in dict.fromkeys(terms))
 
 
+def reviewer_identity(vocab) -> str:
+    """车评人的身份描述:通用的诚实底线,加上这个账号自己的人设和口头禅。"""
+    parts = [vocab.reviewer_voice or f"资深{vocab.domain}评论人。"]
+    if vocab.persona:
+        parts.append(vocab.persona)
+    if vocab.catchphrases:
+        said = "、".join(f"「{p}」" for p in vocab.catchphrases)
+        parts.append(f"口头禅偶尔用:{said},每个全片最多 {CATCHPHRASE_MAX} 次,不用也行。")
+    return "".join(parts)
+
+
 def persona_rules(theme, profile: CategoryProfile) -> dict[str, str]:
     """SYSTEM 里随口吻变的几段。没开 reviewer 的片型:和以前逐字相同。"""
     vocab = profile.vocab
@@ -262,7 +277,7 @@ def persona_rules(theme, profile: CategoryProfile) -> dict[str, str]:
     stock = "、".join(f"「{p}」" for p in vocab.stock_phrases)
     scaffold = "、".join(f"「{p}」" for p in vocab.scaffold_words)
     return {
-        "role_line": f"你是{vocab.reviewer_voice or f'资深{vocab.domain}评论人。'}"
+        "role_line": f"你是{reviewer_identity(vocab)}"
                      f"现在写一条{profile.label}品类的解说稿。",
         "principle_rule": (
             "     你由事实推出的判断不算编造,但不许带进事实清单里没有的参数名、配置和技术名词。\n"
@@ -277,6 +292,10 @@ def persona_rules(theme, profile: CategoryProfile) -> dict[str, str]:
             "点明短板和不该买的人,但不能带出事实里没有的新数字;"
             "像一个人在跟朋友聊,该说「我」就说「我」,该说「你」就说「你」;\n"
             f"   - 转述:别人的使用感受,只能来自标了「体验转述」的事实,并说清是谁说的({vocab.attribution_example});\n"
+            "   - 标了「体验转述」的事实有 2 条以上时,全片至少用 2 条:用来印证或反驳你算的账,"
+            "说法要自然(「有车主说」),别成段念评论;\n"
+            "   - 标了「算账」的事实是算好的版本差价账,有的话全片至少用 1 条:差价和每多 1 公里续航多少钱都说出来,"
+            "接着判断这笔钱值不值、对谁值;要说全「每多 1 公里续航」,只说「每公里」会被听成跑一公里的花费;\n"
             "   - **严禁假装亲身使用**:不写「我开了」「我试驾」「坐进去我感觉」;没有转述来源的体感一律不写。\n"
             "   **每章都要有判断和推出它的理由**:参数是证据,一章只挑最能撑住判断的两三个,"
             "别把配置表念一遍,不重要的不提。\n"

@@ -241,7 +241,7 @@ def ground(card: dict[str, Any] | None, facts: Sequence[Fact]
 
 
 #: 来源类型的上屏叫法
-SOURCE_KIND_CN = {"official": "官方", "media": "媒体", "derived": "推算"}
+SOURCE_KIND_CN = {"official": "官方", "media": "媒体", "derived": "推算", "owner": "个人体验"}
 
 
 def basis_tag(fact: Fact) -> str:

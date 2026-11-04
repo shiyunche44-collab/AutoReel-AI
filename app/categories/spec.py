@@ -252,6 +252,10 @@ class Vocab:
     depth_sections: tuple[str, ...] = ()
     #: 车评人的人设(reviewer 片型的角色行与 Script style)
     reviewer_voice: str = ""
+    #: 账号人设:说话习惯、怎么比较、在意和讨厌什么。不写任何虚构经历
+    persona: str = ""
+    #: 人设的口头禅,全片每个最多 CATCHPHRASE_MAX 次,多了就是模板
+    catchphrases: tuple[str, ...] = ()
     #: 分析视角:id -> 这个视角要回答什么
     lenses: dict[str, str] = field(default_factory=dict)
     #: 论证手法库:每章换一种,写进分析和脚本提示词

@@ -53,8 +53,8 @@ class Fact(BaseModel):
     scope: Literal["company", "product", "industry"] = "company"
     #: 口径 / 版本 / 年份(如 "CLTC · 标准版 · 2026款"),上屏时跟着数字走
     basis: str = ""
-    #: 来源类型:official=官方发布/官网,media=媒体报道,derived=由其它事实推算
-    source_kind: Literal["official", "media", "derived", ""] = ""
+    #: 来源类型:official=官方发布/官网,media=媒体报道,derived=由其它事实推算,owner=账号主人亲历
+    source_kind: Literal["official", "media", "derived", "owner", ""] = ""
     #: 多车横评:这条事实属于车单里哪台车;空串 = 单车项目或全片共用
     subject: str = ""
     #: **对比事实**:这条事实讲的是本车与 `compare_with` 这台车的同一维度取值。
@@ -187,6 +187,8 @@ class ProjectCreate(BaseModel):
     #: 选题角度(来自热点选题或手填),如「月销破 3 万背后:它到底赢在哪」。
     #: 只影响事实检索与脚本叙事;subject 仍是干净的车型名,素材池按它建。
     angle: str | None = Field(default=None, max_length=120)
+    #: 账号主人的亲身体验,一行一条;不填照常出片,写稿时只转述别人的体验
+    owner_notes: str | None = Field(default=None, max_length=2000)
     #: 热点选题附带的角度检索词(如「特斯拉 Model Y 召回 2026」);空 = 由角度原句提取
     angle_search: str | None = Field(default=None, max_length=60)
     #: 热点选题依据的热点原文行,作为一份事实素材进入抽取

@@ -20,6 +20,14 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 _NUM = r"(\d+(?:\.\d+)?)"
 
+#: 版本差价账的 topic:写稿要求至少用一条,二改不许删它的钱数
+LEDGER_TOPIC = "算账"
+_TRIM_PRICE_RE = re.compile(r"(\d{3,4})\s*(?:km|公里)\s*([\u4e00-\u9fa5+]{0,8}?版)[^\d,,。;;]{0,8}?"
+                            + _NUM + r"\s*万")
+_RANGE_RE = re.compile(r"(\d{3,4})\s*(?:km|公里)")
+_GAP_RE = re.compile(r"(?:减|差价?|便宜|贵|多花)\D{0,3}" + _NUM + r"\s*(万)?元")
+_LEDGER_RE = re.compile(r"差价 (\d+) 元.*?每多 1 公里续航约 (\d+) 元")
+
 
 def _fmt(x: float) -> str:
     """推算值的写法:≥100 取整,≥10 留一位,更小留两位,末尾 0 去掉。"""
@@ -124,6 +132,51 @@ def trim_gap(fact: Fact) -> list[Fact]:
     return [_make(fact, f"{min(a, b):g} 万和 {max(a, b):g} 万相差约 {_fmt(abs(a - b))} 万元", "价格")]
 
 
+def _ledger(src: Fact, low: int, high: int, gap: int, low_name: str = "", high_name: str = "") -> Fact:
+    more = high - low
+    return _make(src, f"{low}km{low_name}和{high}km{high_name}差价 {gap} 元,续航多 {more}km,"
+                      f"每多 1 公里续航约 {gap / more:.0f} 元", LEDGER_TOPIC)
+
+
+def _listed_ledgers(fact: Fact) -> list[Fact]:
+    """一条事实列了各版本的续航和价格:相邻两档续航,有同名版本比同名的,没有就比最小的那笔加价。"""
+    by_range: dict[int, dict[str, float]] = {}
+    for km, name, price in _TRIM_PRICE_RE.findall(fact.claim):
+        by_range.setdefault(int(km), {})[name] = float(price)
+    out = []
+    levels = sorted(by_range)
+    for low, high in zip(levels, levels[1:], strict=False):
+        lows, highs = by_range[low], by_range[high]
+        same = next((n for n in lows if n in highs), "")
+        low_name = same or max(lows, key=lambda n: lows[n])
+        high_name = same or min(highs, key=lambda n: highs[n])
+        gap = round((highs[high_name] - lows[low_name]) * 10000)
+        if gap > 0:
+            out.append(_ledger(fact, low, high, gap, low_name, high_name))
+    return out
+
+
+def trim_ledger(fact: Fact) -> list[Fact]:
+    """版本之间的差价和每多 1 公里续航多花多少钱。只算同一条事实内的,跨事实容易错配版本和年款。"""
+    if fact.compare_with or not re.search("售价|指导价|价格|起售|权益价|反选", fact.claim):
+        return []
+    listed = _listed_ledgers(fact)
+    if listed:
+        return listed
+    ranges = sorted({int(km) for km in _RANGE_RE.findall(fact.claim)})
+    gap = _GAP_RE.search(fact.claim)
+    if len(ranges) != 2 or not gap:
+        return []
+    yuan = round(float(gap.group(1)) * (10000 if gap.group(2) else 1))
+    return [_ledger(fact, ranges[0], ranges[1], yuan)] if yuan > 0 else []
+
+
+def ledger_numbers(claim: str) -> set[str]:
+    """差价账里观众要听到的两个钱数。"""
+    m = _LEDGER_RE.search(claim)
+    return set(m.groups()) if m else set()
+
+
 RULES: dict[str, Callable[[Fact], list[Fact]]] = {
     "hp_to_kw": hp_to_kw,
     "charge_rate": charge_rate,
@@ -131,6 +184,7 @@ RULES: dict[str, Callable[[Fact], list[Fact]]] = {
     "wheelbase_ratio": wheelbase_ratio,
     "charge_c_rate": charge_c_rate,
     "trim_gap": trim_gap,
+    "trim_ledger": trim_ledger,
 }
 
 

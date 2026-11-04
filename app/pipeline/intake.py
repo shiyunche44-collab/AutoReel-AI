@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ from ..categories import CategoryProfile, Vocab
 from ..models import Fact
 from ..providers import facts as facts_provider
 from . import derive, grounding, script_gen
+
+log = logging.getLogger(__name__)
 
 #: 热点选题依据进事实抽取时的来源名
 HOT_TOPIC_TOOL = "hot_topic.evidence"
@@ -251,6 +254,88 @@ REVIEW_RULE = """
 
 #: 评测检索词里的标志词(见 providers.facts.ifind_review_news)
 REVIEW_MARKERS = ("评测", "试驾", "口碑")
+
+
+#: 口碑抽取看的素材上限(字)。评测检索常有一两万字车主原话,混在总抽取里只分到几千字
+REVIEW_CONTEXT_CHARS = 20_000
+#: 一条片子留多少条体验转述
+MAX_REVIEW_FACTS = 10
+#: 两条转述相邻两字重合超过这个比例就算同一件事
+REVIEW_DUP_OVERLAP = 0.6
+
+REVIEW_SYSTEM = """You pull first-hand impressions of {subject} out of owner reviews and media test drives.
+Return JSON: {{"impressions": [{{"claim": "...", "basis": "..."}}]}}, at most {limit} items, in Chinese.
+
+Each claim is one specific thing someone noticed while using the car: a scene, a sensation, a problem,
+a measured result with its condition. Include complaints as well as praise, and cover different topics.
+- Start the claim with who says it, in plain words ({attribution}). Never use usernames. If several
+  reviewers say the same thing, write 「不少」 and merge them into one item.
+- Keep the reviewer's concrete detail. Every number and its condition must appear in the material.
+- basis: which kind of source, plus the trim if the material names it (e.g. 车主口碑 · 310km版).
+- Skip vague praise (「很好」「挺满意」), maker marketing copy, purchase prices and anything about other cars.
+- Only report what the material says. If nothing qualifies, return an empty list."""
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def extract_reviews(docs: Sequence[facts_provider.RawDoc], *, subject: str, llm, vocab: Vocab,
+                    existing: Sequence[Fact] = ()) -> list[Fact]:
+    """单独把评测检索里的体验抽成转述事实。抽不到不影响出片。"""
+    sources = [d for d in docs if d.ok and d.text and any(m in d.query for m in REVIEW_MARKERS)]
+    if not sources:
+        return []
+    material = "\n\n".join(d.text for d in sources)[:REVIEW_CONTEXT_CHARS]
+    system = REVIEW_SYSTEM.format(subject=subject, limit=MAX_REVIEW_FACTS,
+                                  attribution=vocab.attribution_example or "「有车主说」")
+    try:
+        data = llm.structured(system, material, required_keys=["impressions"], temperature=0.2)
+    except Exception as exc:  # noqa: BLE001 - 口碑抽取失败不拦出片
+        log.warning("口碑抽取失败,跳过:%s", exc)
+        return []
+    known = grounding.numbers_in(material)
+    seen = [_bigrams(f.claim) for f in existing if f.topic == REVIEW_TOPIC]
+    out: list[Fact] = []
+    for item in data.get("impressions") or []:
+        claim = str(item.get("claim") or "").strip() if isinstance(item, dict) else ""
+        if not claim or grounding.numbers_in(claim) - known:
+            continue
+        if not any(w in claim for w in vocab.attribution_words):
+            continue
+        grams = _bigrams(claim)
+        if any(len(grams & s) > REVIEW_DUP_OVERLAP * min(len(grams), len(s)) for s in seen):
+            continue
+        seen.append(grams)
+        out.append(Fact(claim=claim, source_tool=sources[0].tool, source_query=sources[0].query,
+                        retrieved_at=sources[0].retrieved_at, topic=REVIEW_TOPIC, scope="product",
+                        basis=str(item.get("basis") or "").strip(), source_kind="media"))
+    return out[:MAX_REVIEW_FACTS]
+
+
+#: 账号主人亲历事实的来源名
+OWNER_TOOL = "owner.notes"
+#: 亲历最多取几行、每行多长
+OWNER_MAX_LINES = 20
+OWNER_MAX_CHARS = 200
+
+
+def owner_facts(notes: str) -> list[Fact]:
+    """账号主人填的亲身体验:一行一条事实,稿子里只有引用它才能说「我开过」。"""
+    lines = [line.strip() for line in str(notes or "").splitlines() if line.strip()]
+    return [Fact(id=f"f_owner_{n}", claim=line[:OWNER_MAX_CHARS], source_tool=OWNER_TOOL,
+                 topic=script_gen.OWNER_TOPIC, scope="product", basis="个人体验",
+                 source_kind="owner", confidence="high")
+            for n, line in enumerate(lines[:OWNER_MAX_LINES])]
+
+
+def sync_owner_facts(project_id: str, notes: str) -> None:
+    """让 facts.json 里的亲历事实和项目填的内容一致。写稿前调一次。"""
+    facts = [Fact(**d) for d in db.read_json(project_id, "facts.json", []) or []]
+    others = [f for f in facts if f.source_kind != "owner"]
+    wanted = owner_facts(notes)
+    if wanted or len(others) != len(facts):
+        db.write_json(project_id, "facts.json", [f.model_dump() for f in (*others, *wanted)])
 
 
 def has_review(source_docs: Sequence[dict[str, Any]] | None) -> bool:
@@ -488,6 +573,8 @@ def run(
             )
         except Exception as exc:  # noqa: BLE001 - 事实层降级不应中断流水线
             error = str(exc)
+        facts.extend(extract_reviews(collected.docs, subject=subject, llm=llm, vocab=profile.vocab,
+                                     existing=facts))
     stale = mark_stale_years(facts)
     derived = derive.derive(facts, profile.derive)
     facts.extend(derived)

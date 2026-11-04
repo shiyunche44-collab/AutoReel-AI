@@ -18,6 +18,7 @@ from ...models import Fact, ScriptSegment  # noqa: F401
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band  # noqa: F401
 from ... import config  # noqa: F401
 from .. import knobs, variety  # noqa: F401
+from ..derive import LEDGER_TOPIC  # noqa: F401
 from ..timeline import narration_budget_chars  # noqa: F401
 
 from .lint_base import (  # noqa: E402,F401
@@ -35,6 +36,7 @@ from .prompt import (  # noqa: E402,F401
     CONTROVERSY_TOPIC,
     HEADING_MAX_CHARS,
     QUALITY_TOPIC,
+    OWNER_TOPIC,
     REVIEW_TOPIC,
     ROUNDUP_SCOPE_LINE,
     SYSTEM,
@@ -162,6 +164,7 @@ from .spoken import (  # noqa: E402,F401
     ends_dangling,
     spoken_lint,
     strip_self_exposure,
+    strip_source_labels,
 )
 from .spoken_pass import rewrite_spoken  # noqa: E402,F401
 
@@ -216,6 +219,10 @@ def generate(
             tags += " · 争议"
         elif f.topic == REVIEW_TOPIC:
             tags += " · 体验转述"
+        elif f.topic == OWNER_TOPIC:
+            tags += " · 本人亲历,引用它的这句可以说「我开过」"
+        elif f.topic == LEDGER_TOPIC:
+            tags += " · 算账"
         if f.compare_with:
             tags += f" · 对比[{f.compare_with}]"
         if is_hero(f, vocab):

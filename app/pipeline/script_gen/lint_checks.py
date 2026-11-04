@@ -5,11 +5,12 @@ import re
 from typing import Sequence
 from ...categories import CategoryProfile, Vocab
 from ...models import Fact, ScriptSegment
+from ..derive import LEDGER_TOPIC, ledger_numbers
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in
 from .. import variety
 
 from .lint_base import LintIssue, _MODEL_CODE_RE, _YEAR_RE, has_numeric_claim
-from .prompt import REVIEW_TOPIC, matched_principles, usable_facts
+from .prompt import CATCHPHRASE_MAX, REVIEW_TOPIC, matched_principles, usable_facts
 from .scrub import _is_comparison_section
 from .hook import _BASIS_WINDOW
 
@@ -315,11 +316,22 @@ _FIRSTHAND_TERMS = ("亲测", "亲身体验", "我亲自", "我实测", "我用�
 _FIRSTHAND_DENIED_RE = re.compile(r"(?:不是|并非|没有|没)我?(?:亲测|亲身体验|亲自|实测|开过|试驾)")
 
 
-def firsthand_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile) -> list[LintIssue]:
-    """第一人称假体验(error):账号没开过这台车,这么写就是撒谎。转述要说明是谁的体验。"""
+#: 体验转述全片至少引用这么多条
+REVIEW_USE_MIN = 2
+
+
+def firsthand_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile,
+                   facts: Sequence[Fact] = ()) -> list[LintIssue]:
+    """第一人称假体验(error):账号没开过这台车,这么写就是撒谎。转述要说明是谁的体验。
+
+    引用了账号主人自己填的亲历事实的拍除外。
+    """
     terms = (*_FIRSTHAND_TERMS, *profile.vocab.firsthand_terms)
+    owner = {f.id for f in facts if f.source_kind == "owner"}
     issues: list[LintIssue] = []
     for seg in segments:
+        if owner.intersection(seg.fact_refs):
+            continue
         # 「这不是我亲测」是在交代来源,不算假体验
         text = _FIRSTHAND_DENIED_RE.sub("", seg.text or "")
         hit = next((t for t in terms if t in text), None)
@@ -346,6 +358,30 @@ def attribution_lint(segments: Sequence[ScriptSegment], profile: CategoryProfile
             issues.append(LintIssue(group[0].idx, "warning",
                                     f"引用了体验转述事实却没说来源,补上是谁说的:{text[:40]}"))
     return issues
+
+
+def review_use_lint(segments: Sequence[ScriptSegment], facts: Sequence[Fact]) -> list[LintIssue]:
+    """有体验转述可用却几乎没用(warning):全片只剩算账,听不到真实用车的人。"""
+    reviews = {f.id for f in usable_facts(facts) if f.topic == REVIEW_TOPIC}
+    used = reviews.intersection(r for s in segments for r in s.fact_refs)
+    if len(reviews) >= REVIEW_USE_MIN and len(used) < REVIEW_USE_MIN:
+        return [LintIssue(0, "warning", f"有 {len(reviews)} 条体验转述可用,全片只引用了 {len(used)} 条,"
+                                        f"至少用 {REVIEW_USE_MIN} 条")]
+    return []
+
+
+def ledger_use_lint(segments: Sequence[ScriptSegment], facts: Sequence[Fact]) -> list[LintIssue]:
+    """有算好的差价账却没讲清(warning):只说「这笔差价」,观众不知道花多少、换来多少。"""
+    ledgers = {f.id: f for f in usable_facts(facts) if f.topic == LEDGER_TOPIC}
+    if not ledgers:
+        return []
+    said: set[str] = set()
+    for s in segments:
+        said |= numbers_in(s.text or "")
+    if not any(ledger_numbers(ledgers[r].claim) <= said
+               for s in segments for r in s.fact_refs if r in ledgers):
+        return [LintIssue(0, "warning", f"有 {len(ledgers)} 条差价账可用,全片没有把差价和每多 1 公里续航多少钱说出来")]
+    return []
 
 
 #: 个位数多半是「3 个版本」「第 2 点」这种计数,报出来全是噪声
@@ -406,6 +442,11 @@ def stock_phrase_lint(segments: Sequence[ScriptSegment], profile: CategoryProfil
     for word in profile.vocab.scaffold_words:
         if word in whole:
             issues.append(LintIssue(0, "warning", f"提纲用语「{word}」念出来了,换成自然的说法"))
+    for phrase in profile.vocab.catchphrases:
+        count = whole.count(phrase)
+        if count > CATCHPHRASE_MAX:
+            issues.append(LintIssue(0, "warning",
+                                    f"口头禅「{phrase}」全片用了 {count} 次,最多 {CATCHPHRASE_MAX} 次"))
     for phrase in profile.vocab.stock_phrases:
         count = whole.count(phrase)
         if count > 1:

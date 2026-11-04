@@ -352,6 +352,7 @@ if (form) {
           duration: parseInt(String(fd.get('duration')), 10),
           aspect: selectedAspect(),
           angle: String(fd.get('angle') || '').trim() || null,
+          owner_notes: String(fd.get('owner_notes') || '').trim() || null,
           opening: theme ? String(fd.get('opening') || '') || null : null,
           ending: theme ? String(fd.get('ending') || '') || null : null,
           ...(roundup ? { subjects: roster } : {}),

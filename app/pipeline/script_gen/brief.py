@@ -9,13 +9,16 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 from ...categories import CategoryProfile, Slot
 from ...models import Fact
+from ..derive import LEDGER_TOPIC
 
 from .lint_base import log
 from .prompt import (
     COMPARE_TOPIC,
     CONTROVERSY_TOPIC,
     HEADING_MAX_CHARS,
+    OWNER_TOPIC,
     REVIEW_TOPIC,
+    reviewer_identity,
     banned_terms,
     usable_facts,
 )
@@ -31,6 +34,7 @@ BRIEF_SYSTEM = """你是{voice}
 - 不许出现事实清单里没有的数字、配置、技术名词;
 - 别人的使用感受只能来自标了「体验转述」的事实;你没有亲身用过,不许假装用过;
 - 标了「对比」的事实只放进 rival,不放进 arguments;
+- 标了「算账」的事实是算好的版本差价账,有的话至少一条论点要把它写进 fact_refs,reasoning 里说清这笔钱换来什么、值不值;
 - 清单里没写到不等于没有:不许从「没看到差异」推出「没差别、不值、不必买」,资料不全也不算短板,判断和短板都要有写明的事实撑着。
 - 判断、章名、主论点里不许出现这些词:{banned};
 
@@ -60,6 +64,10 @@ def _fact_line(f: Fact) -> str:
         tags.append(f"对比[{f.compare_with}]")
     if f.topic == REVIEW_TOPIC:
         tags.append("体验转述")
+    if f.topic == OWNER_TOPIC:
+        tags.append("本人亲历")
+    if f.topic == LEDGER_TOPIC:
+        tags.append("算账")
     if f.topic == CONTROVERSY_TOPIC:
         tags.append("争议")
     tag = f" [{' · '.join(tags)}]" if tags else ""
@@ -109,7 +117,7 @@ def write_brief(*, subject: str, profile: CategoryProfile, facts: Sequence[Fact]
         if rule and sections else "",
     ))
     system = BRIEF_SYSTEM.format(
-        voice=vocab.reviewer_voice or f"资深{vocab.domain}评论人。",
+        voice=reviewer_identity(vocab),
         company=vocab.company_noun, banned=banned_terms(profile), example=vocab.judgment_example or "判断要有取舍,不是复述参数",
         subject=subject, lens=vocab.lenses.get(lens) or "由你判断这台车最值得从哪个角度讲",
         extra=extra, moves="\n".join(f"- {m}" for m in vocab.review_moves) or "- 替反方说话",

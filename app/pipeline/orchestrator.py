@@ -238,6 +238,7 @@ def create_project(payload: ProjectCreate) -> str:
             "category": payload.category,
             "theme": theme_name,
             "angle": (payload.angle or "").strip(),
+            "owner_notes": (payload.owner_notes or "").strip(),
             "variant": variant,
             "subjects": subjects,
             "duration": payload.duration,
@@ -433,6 +434,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         if llm is None:
             raise PipelineError(LLM_REQUIRED_HINT)
         portrait = aspect.is_portrait(project)
+        intake.sync_owner_facts(project_id, project.get("owner_notes") or "")
         facts = _facts(project_id)
         slots = profile.drop_unbacked_slots(
             profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait,

@@ -23,16 +23,16 @@ def create_project(row: dict[str, Any], conn: sqlite3.Connection | None = None) 
     这样"插项目 + 记事件"可以是一个原子单元。
     """
     init_db()
-    row = {"angle": "", "aspect": "16:9", "variant": {}, **row}
+    row = {"angle": "", "owner_notes": "", "aspect": "16:9", "variant": {}, **row}
     subjects = row.get("subjects") or []
     row["subjects"] = subjects if isinstance(subjects, str) else json.dumps(subjects, ensure_ascii=False)
     if not isinstance(row["variant"], str):
         row["variant"] = json.dumps(row["variant"], ensure_ascii=False)
     sql = (
         """INSERT INTO projects
-           (id, title, subject, category, theme, angle, variant, subjects, duration, shot_count, narration_mode,
+           (id, title, subject, category, theme, angle, owner_notes, variant, subjects, duration, shot_count, narration_mode,
             aspect, state, state_reason, quota_budget, spent_cost, est_cost, created_at, updated_at)
-           VALUES (:id, :title, :subject, :category, :theme, :angle, :variant, :subjects, :duration, :shot_count, :narration_mode,
+           VALUES (:id, :title, :subject, :category, :theme, :angle, :owner_notes, :variant, :subjects, :duration, :shot_count, :narration_mode,
                    :aspect, :state, :state_reason, :quota_budget, :spent_cost, :est_cost,
                    :created_at, :updated_at)"""
     )
