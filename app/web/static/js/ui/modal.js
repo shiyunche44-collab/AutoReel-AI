@@ -1,5 +1,5 @@
 /* 弹窗。替代原生 confirm(),支持 Esc / 点遮罩关闭和焦点回收。 */
-import { h, icon } from './dom.js';
+import { h, icon, removeAfterAnimation } from './dom.js';
 
 const TONE_ICON = { danger: 'alert-triangle', warning: 'alert-triangle', success: 'check-circle', brand: 'info' };
 
@@ -26,7 +26,7 @@ export function openModal(content, { size = '', onClose, label = '对话框' } =
     closed = true;
     document.removeEventListener('keydown', onKey, true);
     backdrop.classList.add('is-leaving');
-    backdrop.addEventListener('animationend', () => backdrop.remove(), { once: true });
+    removeAfterAnimation(backdrop);
     document.body.style.overflow = '';
     if (prevFocus && prevFocus.focus) prevFocus.focus({ preventScroll: true });
     if (onClose) onClose(result);

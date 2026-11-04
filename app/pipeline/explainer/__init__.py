@@ -28,6 +28,7 @@ import functools  # noqa: F401
 import logging  # noqa: F401
 import re  # noqa: F401
 import shutil  # noqa: F401
+import statistics  # noqa: F401
 import subprocess  # noqa: F401
 import time  # noqa: F401
 import zlib  # noqa: F401
@@ -157,6 +158,7 @@ from .beat_render import (  # noqa: E402,F401
 from .footage import (  # noqa: E402,F401
     footage_mix,
     still_warning,
+    footage_source_note,
     materials_used,
     projects_using,
 )
@@ -559,6 +561,8 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
 
     封面上的价格和脚本里的数字一样,必须来自事实层 —— 不能手写"23.35万"。
     取**最低**的那一条:入门价就是最低售价,封面报最高价是误导。
+    「反选后价格减7000元」「差价8000元」「每公里70元」这些金额不是售价,不算候选;
+    换了说法没认出来的,靠下限(`_ENTRY_FLOOR_RATIO`)兜底,封面不能写「7000元起」。
     口径(basis)记在 render.json 里留痕;但**有条件的价**必须带上口径前缀:
     「限时先享价 8.98 万」写成「8.98万元起」,观众会当成常规售价 —— 红线是数字要带口径。
 
@@ -573,13 +577,27 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
     # 事实里说价格的词,不止「售价/价格」:官方口径常写「厂商指导价」「限时先享价」。
     # 只认前两个词,这些事实会被整条丢掉,入门价就只剩某一条新闻里的中段价。
     _PRICE_WORDS = ("售价", "价格", "起售", "定价", "官降", "落地",
-                    "指导价", "先享价", "元起")
+                    "指导价", "先享价", "权益价", "元起")
     # 「9.99 万至 14.19 万元」这种区间:上限那句匹配不上「数字+元」,下限要单独认
     _RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*万\s*(?:至|到|[-~—])\s*\d")
     # 有条件的价:封面得写出来,不然等于报了个假常规价
     _CONDITIONAL = (("限时", ("限时", "先享价")), ("优惠", ("优惠", "促销", "活动价")))
+    # 金额前后这些词说明它是差价 / 减价 / 分期之类,不是售价。「降至 8.98 万元」说的是售价,
+    # 所以「至」「到」「为」不算填充词
+    _NOT_PRICE_BEFORE = re.compile(
+        r"(?:(?:[降减涨加]价|减免?|降|差|省|贵|便宜|优惠|补贴|抵扣|抵|返|送|加|多|少|低|高|让利|下调|上调)"
+        r"(?:了|约|近|达|超|高达|最高|至多)*"
+        r"|(?:差价|价差|差额|月供|日供|首付|定金|订金|每公里|每月|每年|保险|选装|选配)[^,。;,;\d]{0,4})\s*$")
+    _NOT_PRICE_AFTER = re.compile(
+        r"[的\s]*(?:差价|价差|差额|差距|优惠(?!价)|补贴|抵扣|礼金|(?:购车|置换|现金)(?:礼|券|红包))")
+    # 同一款产品的最低价不会比各条价格的中位数低五倍以上,低成这样的是没认出来的零碎金额
+    _ENTRY_FLOOR_RATIO = 0.2
 
-    best: tuple[float, str, str, str, str] | None = None  # (值, 文案, fact id, basis, claim)
+    def is_price(claim: str, m: re.Match[str]) -> bool:
+        return not (_NOT_PRICE_BEFORE.search(claim[:m.start()])
+                    or _NOT_PRICE_AFTER.match(claim, m.end()))
+
+    found: list[tuple[float, str, str, str, str]] = []  # (值, 文案, fact id, basis, claim)
     for f in facts or []:
         if get(f, "enabled", True) in (False, "False", "false", 0, "0"):
             continue
@@ -592,16 +610,20 @@ def _price_of(facts: Sequence[Any]) -> tuple[str, str]:
             continue
         candidates: list[tuple[float, str]] = []
         for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(万)?元", claim):
+            if not is_price(claim, m):
+                continue
             value = float(m.group(1)) * (10000 if m.group(2) else 1)
             candidates.append((value, f"{m.group(1)}{'万' if m.group(2) else ''}元"))
         for m in _RANGE_RE.finditer(claim):
-            candidates.append((float(m.group(1)) * 10000, f"{m.group(1)}万元"))
-        for value, text in candidates:
-            if best is None or value < best[0]:
-                best = (value, text, str(get(f, "id", "")), str(get(f, "basis", "") or ""), claim)
-    if best is None:
+            if is_price(claim, m):
+                candidates.append((float(m.group(1)) * 10000, f"{m.group(1)}万元"))
+        found.extend((value, text, str(get(f, "id", "")), str(get(f, "basis", "") or ""), claim)
+                     for value, text in candidates)
+    if not found:
         return "", ""
-    value, text, fact_id, basis, claim = best
+    floor = statistics.median(c[0] for c in found) * _ENTRY_FLOOR_RATIO
+    value, text, fact_id, basis, claim = min((c for c in found if c[0] >= floor),
+                                             key=lambda c: c[0])
     hay = f"{basis} {claim}"
     qualifier = next((prefix for prefix, marks in _CONDITIONAL
                       if any(m in hay for m in marks)), "")
@@ -714,11 +736,10 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     cover = Path(art["path"]) if art else render_mod.build_cover(
         result.output_path, title, dest_a, subtitle=meta["subtitle"], size=size,
         still=still, kicker=meta["kicker"])
-    source_note = ("画面素材:品牌官方宣传片与官方图片,仅作"
-                   f"{profile.vocab.subject_label}展示")
+    source_note = footage_source_note(project_id, specs, profile.vocab.subject_label)
     if art and art.get("car_source") == "ai_generated":
         # 封面那台车是生图出来的:说清楚,别让人以为是官方实拍
-        source_note += ";封面车型图为 AI 生成示意,以官方图为准"
+        source_note = (source_note + ";封面车型图为 AI 生成示意,以官方图为准").strip(";")
     payload = {**result.to_dict(), "cover": str(cover) if cover else None, "narration": nar,
                "cover_meta": meta, "cover_still": str(still) if still else None,
                "cover_style": "art" if art else "legacy",

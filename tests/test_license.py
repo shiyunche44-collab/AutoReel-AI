@@ -168,3 +168,72 @@ def test_materials_used_record_and_reverse_lookup(pool, monkeypatch, tmp_path):
     assert store[("p1", "materials_used.json")] == rec
     assert footage.projects_using("https://www.bilibili.com/video/BV1xx411c7mD", ["p1", "p2"]) == ["p1"]
     assert footage.projects_using("https://nope", ["p1"]) == []
+
+
+def _note(monkeypatch, pieces):
+    store = {("p1", "beats/001.json"): pieces}
+    monkeypatch.setattr(db, "read_json", lambda pid, name, default=None: store.get((pid, name), default))
+    specs = [ShotSpec(idx=1, visual_zh="x", chapter="外观", duration=12.0)]
+    return footage.footage_source_note("p1", specs, "车型")
+
+
+def _piece(platform, length, kind="still", third_party=False, item_id="x"):
+    return {"item_id": item_id, "kind": kind, "platform": platform, "length": length,
+            "third_party": third_party}
+
+
+def test_source_note_names_galleries_not_official(monkeypatch):
+    """吉利星愿实跑:素材全来自汽车之家、懂车帝,简介却写"品牌官方宣传片与官方图片"。"""
+    note = _note(monkeypatch, [_piece("dongchedi", 3.0), _piece("autohome", 5.0),
+                               _piece("autohome", 4.0)])
+    assert note == "画面素材:汽车之家图库、懂车帝图库,仅作车型展示"
+    assert "官方" not in note
+
+
+def test_source_note_says_official_only_with_evidence(monkeypatch):
+    note = _note(monkeypatch, [_piece("press", 6.0), _piece("site", 3.0, kind="video"),
+                               _piece("bilibili", 2.0, kind="video"),
+                               _piece("bilibili", 1.0, kind="video", third_party=True)])
+    assert note == "画面素材:品牌官方图片、品牌官方视频、哔哩哔哩视频,仅作车型展示"
+    # 老记录没有 third_party / platform 字段:不能算官方
+    old = {"item_id": "x", "kind": "video", "length": 3.0}
+    assert _note(monkeypatch, [old]) == "画面素材:网络公开素材,仅作车型展示"
+
+
+def test_source_note_ignores_card_background_and_empty_project(monkeypatch):
+    assert _note(monkeypatch, [_piece("", 3.0, item_id="bg")]) == ""
+    assert _note(monkeypatch, []) == ""
+
+
+@pytest.mark.parametrize("car_source,expected", [
+    ("official_cutout", "画面素材:懂车帝图库,仅作车型展示"),
+    ("ai_generated", "画面素材:懂车帝图库,仅作车型展示;封面车型图为 AI 生成示意,以官方图为准"),
+])
+def test_compose_writes_source_note_from_actual_footage(monkeypatch, tmp_path, car_source, expected):
+    from types import SimpleNamespace
+
+    from app.categories import load_profile
+    from app.pipeline import cover_art, explainer, packaging
+
+    store: dict[tuple[str, str], object] = {("p1", "beats/001.json"): [_piece("dongchedi", 3.0)]}
+    monkeypatch.setattr(db, "read_json", lambda pid, name, default=None: store.get((pid, name), default))
+    monkeypatch.setattr(db, "write_json", lambda pid, name, data: store.__setitem__((pid, name), data))
+    monkeypatch.setattr(db, "get_project", lambda pid: {"subject": ""})
+    monkeypatch.setattr(db, "get_shots", lambda pid, stage: [{"idx": 1, "final_path": "x.mp4"}])
+    monkeypatch.setattr(config, "project_dir", lambda pid: tmp_path)
+    result = SimpleNamespace(ok=True, output_path=tmp_path / "out.mp4", to_dict=dict, warnings=[])
+    monkeypatch.setattr(explainer.render_mod, "compose", lambda *a, **k: result)
+    monkeypatch.setattr(explainer.outro, "build", lambda *a: None)
+    monkeypatch.setattr(explainer.intro, "build", lambda *a: None)
+    monkeypatch.setattr(explainer, "_make_packaging", lambda *a: None)
+    monkeypatch.setattr(explainer, "_make_cover_b", lambda *a, **k: None)
+    monkeypatch.setattr(explainer, "measured_features", lambda *a: {})
+    monkeypatch.setattr(packaging, "load", lambda pid: None)
+    monkeypatch.setattr(cover_art, "pick_title", lambda pkg, title: title)
+    art = {"path": str(tmp_path / "cover.jpg"), "car_source": car_source}
+    monkeypatch.setattr(cover_art, "build", lambda *a, **k: art)
+
+    specs = [ShotSpec(idx=1, visual_zh="x", chapter="外观", duration=3.0)]
+    payload = explainer.compose("p1", specs, load_profile("auto_long"), "标题")
+    assert payload["source_note"] == expected
+    assert store[("p1", "render.json")]["source_note"] == expected

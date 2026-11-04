@@ -26,6 +26,19 @@ export function icon(name, cls = '') {
   return svg;
 }
 
+/** 离场动画结束后移除元素。animationend 在后台标签页 / 动画被打断时不会触发,留一个定时兜底,
+ *  否则全屏遮罩会残留、挡住整页点击。 */
+export function removeAfterAnimation(el, ms = 400) {
+  let done = false;
+  const go = () => {
+    if (done) return;
+    done = true;
+    el.remove();
+  };
+  el.addEventListener('animationend', go, { once: true });
+  setTimeout(go, ms);
+}
+
 /** 极简元素工厂:h('div', {class: 'x'}, '文本', node)。字符串一律当文本,不会被解析成 HTML。 */
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);

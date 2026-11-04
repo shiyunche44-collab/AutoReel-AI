@@ -78,6 +78,41 @@ def materials_used(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]
     return out
 
 
+#: 这些平台的素材来自车企自己的官网 / 媒体中心,才能说"官方"。图库的 Item.official 也是真,
+#: 那只表示"不算第三方水印片",不代表图是厂家发的
+_OFFICIAL_PLATFORMS = {"site", "official_site", "press"}
+_PLATFORM_NAMES = {"autohome": "汽车之家", "dongchedi": "懂车帝", "yiche": "易车",
+                   "bilibili": "哔哩哔哩", "douyin": "抖音", "youtube": "YouTube",
+                   "tiktok": "TikTok", "vimeo": "Vimeo"}
+
+
+def _source_label(piece: dict[str, Any]) -> str:
+    """一段素材在来源声明里怎么称呼。说不清来自哪就不说官方。"""
+    platform = str(piece.get("platform") or "")
+    video = piece.get("kind") == "video"
+    if platform in _OFFICIAL_PLATFORMS or (video and piece.get("third_party") is False):
+        return "品牌官方视频" if video else "品牌官方图片"
+    name = _PLATFORM_NAMES.get(platform)
+    if name:
+        return name + ("视频" if video else "图库")
+    return "网络公开素材"
+
+
+def footage_source_note(project_id: str, specs: Sequence[ShotSpec], subject_label: str) -> str:
+    """简介里的来源声明:按成片实际用到的素材写(读 beats/NNN.json),用得多的来源在前。
+    一段素材都没用(全是卡片)返回空串。卡片底图 "bg" 不算。"""
+    seconds: dict[str, float] = {}
+    for s in specs:
+        for p in db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []:
+            if p.get("item_id") != "bg":
+                label = _source_label(p)
+                seconds[label] = seconds.get(label, 0.0) + float(p.get("length") or 0.0)
+    if not seconds:
+        return ""
+    labels = sorted(seconds, key=lambda k: -seconds[k])
+    return f"画面素材:{'、'.join(labels)},仅作{subject_label}展示"
+
+
 def projects_using(source_url: str, project_ids: Sequence[str]) -> list[str]:
     """哪些项目的成片用过这个来源地址(读各项目的 materials_used.json)。"""
     return [pid for pid in project_ids

@@ -1,6 +1,7 @@
 """入池:下载、按剪辑点切段、抽帧、台标检测、官图入池。"""
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import time
@@ -8,9 +9,11 @@ from pathlib import Path
 from typing import Sequence
 from ...providers import clips as clips_mod
 from ...providers import images, official, platform_video
-from .. import logo_detect, media_check
+from .. import logo_detect, media_check, watermark_vlm
 
 from .model import Item, LAUNCH_WINDOWS, Library, MIN_TAG_SECONDS, SCENE_THRESHOLD, Source, WHOLE_MAX_SECONDS, WINDOWS_PER_LONG_SOURCE, WINDOW_SECONDS, platform_of, profile_of, short_id
+
+log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -122,6 +125,14 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
         return 0
 
 
+def _scan_frames(segs: Sequence[Item], n: int = watermark_vlm.SAMPLE) -> list[str]:
+    """从源的各段里均匀挑 n 张代表帧(段是按剪辑点切的,不同段 = 不同镜头)。"""
+    frames = [i.frame for i in segs if i.frame and Path(i.frame).is_file()]
+    if len(frames) <= n:
+        return frames
+    return [frames[round(k * (len(frames) - 1) / (n - 1))] for k in range(n)]
+
+
 def check_logos(lib: Library, src: Source) -> list[list[float]] | None:
     """给一个已下载的源做静态角标检测,结果写回源和源里的每一段。
 
@@ -136,8 +147,17 @@ def check_logos(lib: Library, src: Source) -> list[list[float]] | None:
     src.logo_checked = True
     for i in segs:  # 重测时先清掉上一次的结论
         i.logo_crop = -1.0
-        if i.skipped == "logo_uncroppable":
+        if i.skipped in ("logo_uncroppable", "burned_text"):
             i.skipped = ""
+    # 静态检测看不见半透明账号名和烧录字;第三方源再让视觉模型复核
+    seen = watermark_vlm.scan(_scan_frames(segs)) if not src.official else None
+    if seen and seen["frames"]:
+        if seen["burned"] >= watermark_vlm.BURNED_RATIO:
+            for i in segs:
+                i.skipped = i.skipped or "burned_text"
+        if seen["boxes"]:
+            boxes = (boxes or []) + seen["boxes"]
+            log.info("水印复核 %s:%s", src.title[:30] or src.url, seen["texts"])
     if boxes is None:
         src.logo_boxes = []
         return None

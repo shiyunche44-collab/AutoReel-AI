@@ -316,6 +316,43 @@ def test_fill_ranks_presenter_footage_after_cropped_subtitles(pool):
     assert "host1" not in {p.item_id for p in library.fill("测试车", 30.0, used={})}
 
 
+def _spent(**extra):
+    """池子用尽:每条素材都用过一次;`extra` 覆盖个别条目的次数。"""
+    return {"clean1": 1, "clean2": 1, "int1": 1, "sub1": 1, "unknown1": 1, "still1": 1, **extra}
+
+
+def test_fill_spent_pool_still_prefers_video_at_equal_use(pool):
+    """视频优先不能丢:次数差不多时,用过的干净视频仍在用过的静图前面。"""
+    for n in (1, 2):
+        used = _spent(clean1=n, clean2=n, int1=n)
+        first = library.fill("测试车", 2.0, used=used)[0]
+        assert first.kind == "video" and first.item_id != "unknown1"
+
+
+def test_fill_rerender_penalty_pushes_video_behind_reused_still(pool):
+    """重拍给刚用过的段 +3:用过一次的静图要能顶上来,不能又落回同几段视频。"""
+    used = _spent(clean1=4, clean2=4, int1=4, sub1=4)
+    assert library.fill("测试车", 2.0, used=used)[0].item_id == "still1"
+
+
+def test_fill_spent_pool_spreads_repeats_across_beats(pool):
+    """吉利星愿实跑:池子用尽后重渲,很多拍落到同几段短视频上。"""
+    used = _spent()
+    recent: list[str] = []
+    picks = [p.item_id for _ in range(11)
+             for p in library.fill("测试车", 3.0, used=used, recent=recent)]
+    assert "still1" in picks and "sub1" in picks
+    first_party = ("clean1", "clean2", "int1", "sub1", "still1")
+    counts = [used[i] for i in first_party]
+    assert max(counts) - min(counts) <= 3
+
+
+def test_fill_heavy_reuse_never_swaps_in_unconfirmed_footage(pool):
+    """次数再高也只是在确认过的素材里轮换,不能换成可能是别的车型的段。"""
+    used = _spent(clean1=50, clean2=50, int1=50, sub1=50, still1=50)
+    assert library.fill("测试车", 2.0, used=used)[0].item_id != "unknown1"
+
+
 def test_fit_filter_crops_subtitle_band_and_fills_frame():
     plain = explainer._fit_filter(1920, 1080)
     assert "boxblur" in plain and "crop=iw" not in plain

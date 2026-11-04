@@ -221,6 +221,76 @@ def test_price_of_marks_conditional_price_and_leaves_official_price_plain():
     assert explainer._price_of(promo) == ("限时8.98万元起", "b")
 
 
+def _price_fact(id_, claim, basis=""):
+    return {"id": id_, "claim": claim, "basis": basis, "scope": "product", "confidence": "high",
+            "enabled": True}
+
+
+def test_price_of_skips_price_differences_from_real_project():
+    """吉利星愿实跑:「反选后价格减7000元」被当成最低售价,标题和封面成了「限时7000元起」。"""
+    from app.pipeline import explainer, packaging
+
+    facts = [
+        _price_fact("a", "全新吉利星愿410km版型提供310km续航反选权益,反选后价格减7000元。",
+                    "2026年5月上市版 · 限时权益"),
+        _price_fact("b", "同为向往版,310km与410km差价7000元(6.18万元对6.88万元),电池多10.04kWh,"
+                         "CLTC多100km,折算每公里70元(推算)。", "上市权益价 · 向往版"),
+        _price_fact("c", "全新吉利星愿上市限时权益价为6.18万元至9.18万元。", "限时权益价"),
+    ]
+    price, fact_id = explainer._price_of(facts)
+    assert (price, fact_id) == ("限时6.18万元起", "c")
+    title = packaging.fallback_title(packaging.KIND_NUMBER, "吉利星愿", price=price)
+    assert "7000" not in title
+    assert "7000" not in packaging.cover_hook([], price=price)
+
+
+@pytest.mark.parametrize("claim", [
+    "反选后价格减7000元",
+    "两版差价8000元",
+    "价差约1.2万元",
+    "售价比上一代便宜1万元",
+    "官降2万元",
+    "购置税减免3500元",
+    "上市优惠5000元",
+    "售价之外另有7000元差价",
+    "售价之外另有5000元的购车礼",
+    "折算每公里约114元的价格",
+    "月供1999元起",
+    "首付仅3万元起",
+])
+def test_price_of_only_amounts_that_are_not_prices_yield_no_price(claim):
+    """只有差价类金额时宁可不写价格,也不能写「7000元起」。"""
+    from app.pipeline import explainer
+
+    assert explainer._price_of([_price_fact("a", f"售价方面,{claim}")]) == ("", "")
+
+
+@pytest.mark.parametrize("claim,price", [
+    ("官降后售价降至8.98万元", "8.98万元起"),
+    ("优惠后售价8.98万元", "优惠8.98万元起"),
+    ("售价:限时优惠价8.98万元", "限时8.98万元起"),
+    ("减配版售价6.18万元", "6.18万元起"),
+    ("蓝牙耳机售价299元", "299元起"),  # 下限不能写死成车价:别的品类就是几百块
+])
+def test_price_of_keeps_real_prices_next_to_delta_words(claim, price):
+    from app.pipeline import explainer
+
+    assert explainer._price_of([_price_fact("a", claim)]) == (price, "a")
+
+
+def test_price_of_floor_catches_unrecognized_small_amounts():
+    """说法没认出来的零碎金额(选装包价格)也不能压过真正的售价。"""
+    from app.pipeline import explainer
+
+    facts = [
+        _price_fact("a", "座椅升级包价格为6000元"),
+        _price_fact("b", "向往版售价6.48万元"),
+        _price_fact("c", "乘风版售价7.58万元"),
+        _price_fact("d", "探索版售价9.48万元"),
+    ]
+    assert explainer._price_of(facts) == ("6.48万元起", "b")
+
+
 def test_portrait_cover_breaks_title_at_comma_and_relays_3x4(tmp_path):
     """竖屏实跑:「多花15万买GT,值不 / 值?」;3:4 从 9:16 上截,主论点被截掉半行。"""
     from PIL import Image

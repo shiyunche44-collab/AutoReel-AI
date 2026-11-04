@@ -1,5 +1,5 @@
 /* 轻提示。替代原来的 alert() 与操作条里那行小字。 */
-import { h, icon } from './dom.js';
+import { h, icon, removeAfterAnimation } from './dom.js';
 
 const ICONS = { success: 'check-circle', danger: 'alert-circle', warning: 'alert-triangle', brand: 'info' };
 
@@ -50,7 +50,7 @@ export function toast(message, opts = {}) {
   function close() {
     clearTimeout(timer);
     el.classList.add('is-leaving');
-    el.addEventListener('animationend', () => el.remove(), { once: true });
+    removeAfterAnimation(el);
   }
   closeBtn.addEventListener('click', close);
   if (duration > 0) {

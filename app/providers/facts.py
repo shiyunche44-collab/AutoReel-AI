@@ -445,16 +445,30 @@ def autohome_specs(subject: str, project_dir: Path | None = None) -> RawDoc:
     from . import ark_datapro, car_specs
 
     # 配了方舟 Key 先走官方专业数据集;取不到(没收录 / 接口异常)降级到汽车之家
+    dataset_error = ""
     if ark_datapro.enabled():
         doc = ark_datapro.specs(subject, project_dir)
         if doc.ok:
             return doc
-    return car_specs.specs(subject, project_dir)
+        dataset_error = doc.error or ""
+    doc = car_specs.specs(subject, project_dir)
+    # 两边都失败时把数据集的原因也带上:采集报告只记最后这一条,否则看着像只查了汽车之家
+    if not doc.ok and dataset_error:
+        doc.error = f"专业数据集:{dataset_error};{doc.error}"
+    return doc
+
+
+def ark_sales(subject: str, project_dir: Path | None = None) -> RawDoc:
+    """全国月销量(精确值),见 ark_datapro。查到一次 12 AFP。"""
+    from . import ark_datapro
+
+    return ark_datapro.sales(subject, project_dir=project_dir)
 
 
 SOURCES = {
     "dongchedi.lineup": dongchedi_lineup,
     "autohome.specs": autohome_specs,
+    "ark.datapro.sales": ark_sales,
     "ifind.stock_summary": ifind_stock_summary,
     "ifind.financials": ifind_financials,
     "ifind.news": ifind_news,

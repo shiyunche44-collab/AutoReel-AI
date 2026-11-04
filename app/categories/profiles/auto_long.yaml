@@ -55,6 +55,8 @@ themes:
       - ifind.review_news
       # 改款与换代:判断这代车改了什么、为什么改
       - ifind.iteration_news
+      # 精确月销量:判断「车企的赌有没有押中」用新数,别用搜出来的旧销量
+      - ark.datapro.sales
     script_rules:
       - 论点、竞品对照、短板三类段落的 heading 用论证大纲给的章名。同一章拆成多段时 heading 写同一句。
       - 续航、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。

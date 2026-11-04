@@ -241,14 +241,23 @@ def _croppable(item: Item) -> bool:
 FIT_REUSE_MAX = 2
 #: 描述和旁白至少重合这么多处才算贴旁白
 FIT_OVERLAP_MIN = 2
+#: 车型没确认的素材整体后移的档数:要大过任何实际的使用次数罚档,重复再多也不换成别的车
+UNCONFIRMED_TIER = 1000
+
+
+def _reuse_penalty(used: int) -> int:
+    """用过一次以上,每多用一次降一档。池子用尽后所有候选都在"用过"档,光看档位的话
+    用过的视频永远排在用过的静图前面,次数高的段会反复上屏(重拍的 +3 也压不下去)。
+    视频比静图高两档:多用两次才和用过一次的静图同档,视频优先还在。"""
+    return max(0, used - 1)
 
 
 def _fill_tier(item: Item, used: int) -> int:
     """非官方来源、车型没确认(target 不是 yes)的素材整体排到确认过的后面,
     池子里确认过的够用时就不会选到它们(YU7 池里混的 SU7 片段多是这类)。"""
-    base = _fill_tier_base(item, used)
+    base = _fill_tier_base(item, used) + _reuse_penalty(used)
     if not item.official and item.target != "yes":
-        return base + 10
+        return base + UNCONFIRMED_TIER
     return base
 
 
@@ -481,7 +490,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         if fit == 0 and i.kind == "still":
             # 这一拍讲的正是这个部件,那张特写就是最贴的素材 —— 提档到和干净
             # 视频同档。否则永远选不到它:静图本来比视频低一档。
-            tier = 0
+            tier = _reuse_penalty(n)
         # 这一拍讲到的部件排到使用次数前面:画面和口播对得上,比少用一次更要紧
         on_topic = ((fit == 0 or _desc_overlap(i, detail) >= FIT_OVERLAP_MIN)
                     and n < FIT_REUSE_MAX and _confirmed(i) and i.view != "people"

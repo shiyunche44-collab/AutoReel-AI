@@ -1,5 +1,5 @@
 /* 首页:新建项目表单 + 项目列表筛选 / 搜索 / 删除。 */
-import { $, $$, readJSON, withLoading, relTime, debounce, h, icon } from '../ui/dom.js';
+import { $, $$, readJSON, withLoading, relTime, debounce, h, icon, removeAfterAnimation } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 import { confirmDialog } from '../ui/modal.js';
 import { initChrome } from '../ui/chrome.js';
@@ -609,14 +609,8 @@ if (grid) {
         await api.del(`/api/projects/${btn.dataset.id}`);
         const card = btn.closest('.pcard');
         card.classList.add('is-removing');
-        card.addEventListener(
-          'animationend',
-          () => {
-            card.remove();
-            applyFilters();
-          },
-          { once: true },
-        );
+        removeAfterAnimation(card);
+        setTimeout(applyFilters, 420);
         toast('项目已删除');
       } catch (err) {
         toast(err.message, { type: 'danger', title: '删除失败' });
