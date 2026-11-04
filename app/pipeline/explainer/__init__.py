@@ -14,7 +14,7 @@
                "看不见的东西";数字同样只来自核对过的事实,渲染不了退回数据卡)
 
 broll 拍按规则自动轮换三种样式(不经 LLM):全屏 / 左上角角标 / 两三栏分屏。
-拍内各段之间用 xfade 转场,静图运镜按片段散开挑;每章第一拍开头叠 1.2 秒章节标牌。
+镜头之间默认硬切,章节交界才短叠化;静图运镜按片段散开挑;每章第一拍开头叠 1.2 秒章节标牌。
 
 时长不再是 6 秒栅格:门禁 A 确认后**先跑 TTS**,每拍的时长 = 它那几句旁白的实际
 时长(含句间停顿),画面按这个时长去铺。所以字幕、旁白、画面天然对齐。
@@ -57,8 +57,7 @@ from .consts import (  # noqa: E402,F401
     SUBTITLE_LINE_CHARS,
     SYSTEM,
     USER,
-    XFADE,
-    XFADE_KINDS,
+    VIDEO_FIRST_RULE,
     _ENC,
     _log,
 )
@@ -107,6 +106,7 @@ from .planning_b import (  # noqa: E402,F401
     _demote,
     _names_car,
     add_keyword_beats,
+    thin_overlays,
     assign_broll_styles,
     beat_subject,
     broll_style,
@@ -128,7 +128,6 @@ from .ffmpeg import (  # noqa: E402,F401
     _framed,
     _piece_clip,
     _solid,
-    _xfade,
     background_clip,
     band_frame,
     concept_background,
@@ -137,7 +136,6 @@ from .ffmpeg import (  # noqa: E402,F401
     motion_for,
     split_clip,
     split_filter,
-    xfade_offsets,
 )
 from .beat_render import (  # noqa: E402,F401
     _broll_base,
@@ -152,11 +150,13 @@ from .beat_render import (  # noqa: E402,F401
     layout_filter,
     portrait_concept_style,
     render_beat,
+    chapter_starts,
     sting_for,
     with_sting,
 )
 from .footage import (  # noqa: E402,F401
     footage_mix,
+    still_warning,
     materials_used,
     projects_using,
 )
@@ -201,6 +201,7 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             + f": {f.claim}" for f in usable)[:5000] or "(无)"
     vocab = profile.vocab
     from ..script_gen import roster_line
+    lite = looks.current().video_first
     user = USER.format(
         subject_label=vocab.subject_label if not subjects else "横评车单",
         subject=subject if not subjects else roster_line(subjects), count=len(segments),
@@ -217,6 +218,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             concept_guide=concept_guide(vocab, len(segments)))
         if subjects:
             system = system.replace("\n\n必需键: beats", ROUNDUP_BEAT_RULE + "\n\n必需键: beats")
+        if lite:
+            system = system.replace("\n\n必需键: beats", VIDEO_FIRST_RULE + "\n\n必需键: beats")
         if hint := _layout_hint():
             system = system.replace("\n\n必需键: beats",
                                     f"\n\n本账号已发作品的逐拍数据(挑版式时参考):{hint}\n\n必需键: beats")
@@ -238,12 +241,17 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
                           card_log)
              for i, seg in enumerate(segments)]
     # broll 兜底:这一拍讲的数字还有事实支撑,就把它放上屏(见 rescue_broll)
-    specs = rescue_broll(specs, segments, facts, profile)
+    # 视频优先的视觉包不跑这两步:broll 就是它的主画面,转成面板正好相反
+    if not lite:
+        specs = rescue_broll(specs, segments, facts, profile)
     specs = enforce_rhythm(specs, profile)
     # broll 仍超三成:对超出的拍强制上屏它引用过的事实(见 enforce_broll_cap)
-    specs = enforce_broll_cap(specs, segments, facts, profile)
+    if not lite:
+        specs = enforce_broll_cap(specs, segments, facts, profile)
     # 概念动画是全片视觉质量最高的部分,太少了就补(见 promote_concepts)
     specs = promote_concepts(specs, profile)
+    if lite:
+        specs = thin_overlays(specs)
     return assign_broll_styles(specs)
 
 
@@ -343,7 +351,10 @@ def card_background(subject: str) -> Path | None:
 
 
 def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
-    """门禁 A 之后:清掉两档旧记录,按当前分镜重建 shots 行(全部 pending)。"""
+    """门禁 A 之后:清掉两档旧记录,按当前分镜重建 shots 行(全部 pending)。
+    素材用量也清零:全片重渲,上一轮的次数留着只会把用过的视频一路压到静图后面。"""
+    db.write_json(project_id, "beats_used.json", {})
+    db.write_json(project_id, "beats_recent.json", [])
     for stage in ("draft", "final"):
         db.delete_shots(project_id, stage)
         db.upsert_shots(project_id, [
@@ -681,6 +692,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
+        dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
     )
     if not result.ok or not result.output_path:
@@ -759,6 +771,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
+        dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
     )
     if not result.ok or not result.output_path:

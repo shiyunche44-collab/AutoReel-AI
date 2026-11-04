@@ -225,6 +225,8 @@ def test_card_run_demotes_to_panel_when_the_section_allows_it():
     card = {"kind": "spec", "title": "t", "columns": [], "source": "官方",
             "rows": [{"label": "续航", "values": ["643公里"], "fact_id": "f_1"}]}
     specs = [_spec(i, "card", section="三电性能", card=dict(card)) for i in range(3)]
+    for s in specs:
+        s.narration_zh = "续航643公里。"
     out = explainer.enforce_rhythm(specs, p)
     assert out[2].layout == "panel"
     assert out[2].overlay["rows"][0]["values"] == ["643公里"]

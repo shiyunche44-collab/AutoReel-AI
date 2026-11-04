@@ -11,6 +11,17 @@ from .beat_render import beat_role, chapters_of
 # --------------------------------------------------------------------------
 # 接入流水线
 # --------------------------------------------------------------------------
+#: 静图时长超过这个比例就提醒:这一版画面基本是幻灯片
+STILL_RATIO_WARN = 0.5
+
+
+def still_warning(mix: dict[str, Any]) -> str:
+    ratio = mix.get("still_ratio") or 0.0
+    if ratio <= STILL_RATIO_WARN:
+        return ""
+    return f"静图占背景时长 {ratio:.0%},超过 {STILL_RATIO_WARN:.0%}:这台车能用的视频不够"
+
+
 def footage_mix(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     """已渲染各拍的背景构成(读 beats/NNN.json):总秒数、静图占比、第三方视频占比,
     以及开场 / 结论段里的第三方秒数(应当是 0)。一拍都没渲过返回空字典。"""

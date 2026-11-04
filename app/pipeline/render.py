@@ -238,6 +238,31 @@ def normalise_all(shot_paths: Sequence[Path], work_dir: Path, *,
     return ok, warnings
 
 
+#: 章节交界短叠化的秒数
+DISSOLVE_SECONDS = 0.25
+
+
+def _dissolve_heads(clips: Sequence[Path], starts: Sequence[int], work_dir: Path) -> list[Path]:
+    """这几个镜头的开头从上一镜最后一帧叠化进来。不改任何镜头的时长,旁白和字幕不受影响;
+    只动画面,静音音轨原样带过。某一处做失败就留硬切,不拦成片。"""
+    out = list(clips)
+    for k in starts:
+        if not 0 < k < len(clips):
+            continue
+        dest = work_dir / f"dissolve_{k:03d}.mp4"
+        graph = (f"[0:v]tpad=stop_mode=clone:stop_duration=1,trim=duration={DISSOLVE_SECONDS},"
+                 f"setpts=PTS-STARTPTS[a];[a][1:v]xfade=transition=fade:"
+                 f"duration={DISSOLVE_SECONDS}:offset=0,format=yuv420p[v]")
+        proc = _run(["-y", "-v", "error", "-sseof", "-0.1", "-i", str(clips[k - 1]),
+                     "-i", str(clips[k]), "-filter_complex", graph, "-map", "[v]", "-map", "1:a:0",
+                     "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "copy", str(dest)])
+        if proc.returncode == 0 and dest.is_file():
+            out[k] = dest
+        else:
+            log.warning("章节叠化失败,留硬切: %s", (proc.stderr or "")[-200:])
+    return out
+
+
 # --------------------------------------------------------------------------
 # 第二段:拼接 + 字幕 + 混音
 # --------------------------------------------------------------------------
@@ -379,11 +404,14 @@ def compose(
     tail_silent: bool = False,
     intro_path: Path | None = None,
     intro_seconds: float = 0.0,
+    dissolve_into: Sequence[int] = (),
 ) -> RenderResult:
     """主合成入口。
 
     `intro_path` = 片头品牌条(带透明通道的 PNG,见 intro.py):叠在画面上前 `intro_seconds`
     秒,淡入淡出;不占时长、不挡旁白,叠失败时整次合成退回不带它的版本。
+
+    `dissolve_into` = 这几个镜头开头从上一镜的最后一帧短叠化进来(章节交界),其余硬切。
 
     `tail_silent` = 最后一个镜头是片尾卡(没有旁白):混音补静音到总长,BGM 托底并淡出。
 
@@ -428,6 +456,8 @@ def compose(
     elif not Path(narration_path).is_file():
         warnings.append(f"旁白文件不存在,成片将没有解说声:{narration_path}")
 
+    if len(normalised) == len(shot_paths):
+        normalised = _dissolve_heads(normalised, dissolve_into, work_dir)
     concat_file = timeline_mod.concat_list_file(normalised, work_dir / "concat.txt")
     total_seconds = sum(durations) if durations else config.SHOT_GRID_SECONDS * len(normalised)
 

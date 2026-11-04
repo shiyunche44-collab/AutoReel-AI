@@ -25,12 +25,13 @@ MAX_CONCEPT = 6
 MAX_BROLL_RUN = 3
 #: broll 拍的样式,按出现顺序轮换(见 assign_broll_styles)
 BROLL_STYLES: tuple[str, ...] = ("plain", "lower_third", "split")
+#: 视频优先的视觉包追加给分镜的规则,盖过 broll 上限
+VIDEO_FIRST_RULE = """
+
+本片走轻包装,这条优先于上面的 broll 上限:大多数拍选 broll,让实拍画面撑场;
+不用 panel;highlight 和 stat 只给最关键的判断和数字,全片隔很久才出现一次。"""
 #: 分屏至少要这么长,太短的拍几栏还没滑完就切走了
 SPLIT_MIN_SECONDS = 2.5
-#: 拍内相邻两段之间的转场时长与样式(按段号轮换)
-XFADE = 0.3
-XFADE_KINDS: tuple[str, ...] = ("fade", "smoothleft", "slideleft", "circleopen", "zoomin",
-                                "fadewhite")
 #: 关键词每行最多几个字
 KEYWORD_CHARS = 12
 #: 横屏字幕单行字数。竖屏是 15 —— 两者都定义在 `aspect.LINE_CHARS`,按项目取用 `aspect.line_chars`

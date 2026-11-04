@@ -16,12 +16,17 @@
 **broll 占比 = 两个口径都给**
     拍数口径给审片的人看(一眼能数),秒数口径给观众看(他占的是时间)。
     两个口径都超三成才算超标 —— 只看拍数会被"短 broll + 长面板"糊弄过去。
+
+**视频优先的视觉包(`Look.video_first`)是另一套口径**
+    画面靠实拍撑,换镜头就算画面变化,broll 占比和静默都不再是问题。
+    反过来要看信息叠加别太满:带叠加的时长超过 `INFO_RATIO_MAX` 才提示,不设拦截线。
 """
 from __future__ import annotations
 
 from typing import Any, Sequence
 
 from ..models import ShotSpec
+from . import looks
 
 #: 相邻两次画面变化之间最长允许多少秒(复盘要求 5–6 秒一次)
 MAX_CHANGE_GAP = 6.0
@@ -31,6 +36,10 @@ BROLL_RATIO_MAX = 0.30
 MAX_SAME_RUN = 2
 #: 冷开场前几秒每 1 秒一刀硬切 —— 这几秒算"一直在变"
 HOOK_CHANGE_SECONDS = 3.0
+#: 视频优先的视觉包:带信息叠加的时长占比上限
+INFO_RATIO_MAX = 0.35
+#: 算信息叠加的版式;panel 只在视觉包画面板时算
+INFO_LAYOUTS = ("hook", "highlight", "stat", "card", "concept")
 
 
 #: 以上是"建议值",超了只提示;下面三条是"拦截线",超了门禁 A 不放行(显式选择"仍然继续"才过)。
@@ -51,7 +60,9 @@ def _overlay_signature(spec: ShotSpec) -> tuple:
         ov = spec.card
     rows = ov.get("rows") or []
     lines = ov.get("lines") or []
-    return (spec.layout, spec.chapter or spec.section,
+    # 视频优先:每拍都换镜头,没有两拍算同一屏
+    shot = spec.idx if looks.current().video_first else None
+    return (shot, spec.layout, spec.chapter or spec.section,
             tuple(r.get("fact_id", "") for r in rows if isinstance(r, dict)),
             tuple(str(x) for x in lines))
 
@@ -71,6 +82,15 @@ def broll_seconds_ratio(specs: Sequence[ShotSpec]) -> tuple[float, float]:
         return broll_ratio(specs), 0.0
     broll = sum(float(s.duration or 0) for s in specs if s.layout == "broll")
     return broll / total, total
+
+
+def info_seconds_ratio(specs: Sequence[ShotSpec]) -> float:
+    """带信息叠加的时长占全片的比例。时长还没回填时按拍数算。"""
+    kinds = (*INFO_LAYOUTS, "panel") if looks.current().panel else INFO_LAYOUTS
+    total = sum(float(s.duration or 0) for s in specs)
+    if total <= 0:
+        return sum(s.layout in kinds for s in specs) / len(specs) if specs else 0.0
+    return sum(float(s.duration or 0) for s in specs if s.layout in kinds) / total
 
 
 def change_points(specs: Sequence[ShotSpec]) -> list[tuple[float, int]]:
@@ -175,6 +195,7 @@ def report(specs: Sequence[ShotSpec]) -> dict[str, Any]:
         "longest_beat_idx": longest_idx,
         "same_run": run,
         "same_run_start": run_start,
+        "info_second_ratio": round(info_seconds_ratio(specs), 4),
         "problems": problems(specs),
     }
 
@@ -186,7 +207,7 @@ def blockers(specs: Sequence[ShotSpec], *, timed: bool = True) -> list[str]:
     不查"几秒没变化"和秒数占比 —— 那两条要等时长出来才有意义。
     """
     out: list[str] = []
-    if not specs:
+    if not specs or looks.current().video_first:
         return out
     beat_ratio = broll_ratio(specs)
     if beat_ratio > BROLL_RATIO_BLOCK + 1e-6:
@@ -212,6 +233,11 @@ def problems(specs: Sequence[ShotSpec]) -> list[str]:
     """超标项。空列表 = 节奏达标。"""
     out: list[str] = []
     if not specs:
+        return out
+    if looks.current().video_first:
+        info = info_seconds_ratio(specs)
+        if info > INFO_RATIO_MAX + 1e-6:
+            out.append(f"信息叠加占全片 {info:.0%} 的时长,超过 {INFO_RATIO_MAX:.0%}")
         return out
     beat_ratio = broll_ratio(specs)
     if beat_ratio > BROLL_RATIO_MAX + 1e-6:

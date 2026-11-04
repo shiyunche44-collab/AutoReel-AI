@@ -86,7 +86,7 @@ def test_every_look_renders(tmp_path, look_id, size):
 
 def test_looks_render_differently(tmp_path):
     seen = set()
-    auto = [k for k, lk in looks.LOOKS.items() if lk.auto_pick]  # lite 面板沿用 hud 配色,区别在章节条
+    auto = [k for k in looks.LOOKS if k != "lite"]  # lite 面板沿用 hud 配色,区别在章节条
     for lk in auto:
         with looks.use(lk):
             p = overlays.panel(PANEL, "小米YU7", LAND, tmp_path / f"{lk}.png")
@@ -115,25 +115,19 @@ def test_samples_exist_for_every_look():
 # --------------------------------------------------------------------------
 # 挑选 / 存取
 # --------------------------------------------------------------------------
-def test_pick_is_reproducible_and_avoids_recent():
-    assert looks.pick("p_a") == looks.pick("p_a")
-    recent = [{"look": "hud"}, {"look": "cinema"}, {"look": "blueprint"}]
-    assert all(looks.pick(f"p_{i}", recent) == "editorial" for i in range(10))
-    # 全用过:挑最久没用的(recent 新的在前)
-    assert looks.pick("p_x", [{"look": "editorial"}, *recent]) == "blueprint"
+def test_new_projects_default_to_lite_others_are_manual():
+    recent = [{"look": "lite"}, {"look": "hud"}]
+    assert all(looks.pick(f"p_{i}", recent) == "lite" for i in range(10))
     assert looks.pick("p_x", recent, chosen="cinema") == "cinema"
     with pytest.raises(ValueError):
         looks.pick("p_x", chosen="nope")
 
 
-def test_create_project_rotates_look(fresh_db):
+def test_create_project_defaults_to_lite(fresh_db):
     from app.pipeline import orchestrator
 
-    seen = []
-    for _ in range(4):
-        pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240))
-        seen.append(looks.of_project(pid).id)
-    assert sorted(seen) == sorted(k for k, lk in looks.LOOKS.items() if lk.auto_pick)
+    pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240))
+    assert looks.of_project(pid).id == "lite"
 
     pid = orchestrator.create_project(ProjectCreate(subject="小米YU7", duration=240, look="cinema"))
     assert looks.of_project(pid).id == "cinema"
@@ -181,4 +175,3 @@ def test_lite_look_has_no_chapter_bar(tmp_path):
     assert bar.getbbox() is not None and lite.getchannel("A").getbbox() is None
     assert looks.LOOKS["lite"].panel is False and looks.LOOKS["hud"].panel is True
     assert looks.pick("p_x", chosen="lite") == "lite"
-    assert all(looks.pick(f"p_{i}") != "lite" for i in range(30))

@@ -118,11 +118,11 @@ SPAN_DARK_RATIO = 0.3
 
 
 @functools.lru_cache(maxsize=4096)
-def _span_dark(path: str, start: float, length: float) -> bool:
+def _span_dark(path: str, start: float, length: float, launch: bool = True) -> bool:
     stats = media_check.frame_stats(path, start, start + length)
     if not stats:
         return False
-    dark = sum(1 for luma, sharp in stats if media_check.is_dark_frame(luma, sharp, launch=True))
+    dark = sum(1 for luma, sharp in stats if media_check.is_dark_frame(luma, sharp, launch=launch))
     return dark / len(stats) >= SPAN_DARK_RATIO
 
 
@@ -235,6 +235,12 @@ ROLES = ("hook", "body", "ending")
 def _croppable(item: Item) -> bool:
     """只有烧录字幕、没有主持人的视频段:裁掉底部就是干净画面。"""
     return item.kind == "video" and item.problem == "subtitle" and not _has_host(item)
+
+
+#: 贴旁白的素材优先,但同一簇用到这么多次就不再插队,免得一个特写反复上屏
+FIT_REUSE_MAX = 2
+#: 描述和旁白至少重合这么多处才算贴旁白
+FIT_OVERLAP_MIN = 2
 
 
 def _fill_tier(item: Item, used: int) -> int:
@@ -476,8 +482,12 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             # 这一拍讲的正是这个部件,那张特写就是最贴的素材 —— 提档到和干净
             # 视频同档。否则永远选不到它:静图本来比视频低一档。
             tier = 0
+        # 这一拍讲到的部件排到使用次数前面:画面和口播对得上,比少用一次更要紧
+        on_topic = ((fit == 0 or _desc_overlap(i, detail) >= FIT_OVERLAP_MIN)
+                    and n < FIT_REUSE_MAX and _confirmed(i) and i.view != "people"
+                    and not _audience(i) and group[i.id] not in recent_groups)
         # 码率不够的视频同档里往后排(不降档:AV1 官方片普遍码率低,降档就全让给静图了)
-        return (stage(i, n), tier, i.view == "people", _audience(i), i.target != "yes", i.low_bitrate, _branded_still(i),
+        return (not on_topic, stage(i, n), tier, i.view == "people", _audience(i), i.target != "yes", i.low_bitrate, _branded_still(i),
                 group[i.id] in recent_groups,
                 bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
                 _dirt(i), fit, -_desc_overlap(i, detail), _detail_conflict(i, want_detail, vocab),
@@ -507,7 +517,9 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             start = i.start + skip
         if take < min(FILL_MIN_PIECE, remaining):
             continue
-        if i.launch and i.kind == "video" and _span_dark(i.path, start, take):
+        # 视频优先时官方预告的黑底片名、暗场过渡也会被挑中,这截一样不要
+        if i.kind == "video" and (i.launch or looks.current().video_first) and _span_dark(
+                i.path, start, take, launch=i.launch):
             continue
         out.append(Piece(item_id=i.id, kind=i.kind, path=clean_still(i), start=start, length=round(take, 3),
                          crop_bottom=SUBTITLE_CROP if _croppable(i) else AUDIENCE_CROP if _audience(i) else 0.0,

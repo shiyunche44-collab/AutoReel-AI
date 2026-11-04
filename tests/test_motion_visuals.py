@@ -113,15 +113,6 @@ def test_motion_for_never_repeats_previous_cut():
     assert len({explainer.motion_for(f"id{k}", 0) for k in range(30)}) >= 5
 
 
-def test_xfade_offsets_keep_total_length():
-    lengths = [3.0, 2.5, 4.0]
-    offsets = explainer.xfade_offsets(lengths)
-    assert offsets == [3.0, 5.5]
-    extended = [x + explainer.XFADE for x in lengths[:-1]] + [lengths[-1]]
-    # 每次转场重叠 XFADE:拼完 = Σ加长后的段 − 转场次数 × XFADE = Σ原长
-    assert sum(extended) - explainer.XFADE * len(offsets) == pytest.approx(sum(lengths))
-
-
 @needs_ffmpeg
 @pytest.mark.parametrize("motion_name", render.STILL_MOTIONS)
 def test_every_still_motion_renders(tmp_path, motion_name):
@@ -132,7 +123,7 @@ def test_every_still_motion_renders(tmp_path, motion_name):
 
 
 @needs_ffmpeg
-def test_background_clip_with_xfade_has_exact_duration(stills_pool, tmp_path):
+def test_background_clip_hard_cuts_to_exact_duration(stills_pool, tmp_path):
     pieces = [library.Piece("a1", "still", stills_pool.items[0].path, 0.0, 1.5),
               library.Piece("b", "still", stills_pool.items[2].path, 0.0, 1.7),
               library.Piece("a2", "still", stills_pool.items[1].path, 0.0, 1.3)]
@@ -234,7 +225,7 @@ def test_hook_with_invented_keywords_falls_back_to_broll():
 def test_hook_lines_do_not_repeat_narration_or_the_stat_number():
     p = load_profile("auto_long")
     segs = _segments(p)
-    segs[0].text = "周六早上,一家人在服务区排队等充电桩。"
+    segs[0].text = "周六早上,一家人在服务区排队等充电桩,835公里够吗。"
     items = [{"idx": 1, "layout": "hook",
               "keywords": ["服务区排队等充电桩", "835公里够用吗"],
               "stat": {"label": "CLTC 续航", "value": "835 公里", "fact_id": "f_1"}}]
@@ -248,6 +239,7 @@ def test_hook_lines_do_not_repeat_narration_or_the_stat_number():
 def test_hook_stat_must_come_from_facts():
     p = load_profile("auto_long")
     segs = _segments(p)
+    segs[0].text = "835公里,够跑一趟长途吗。"
     good = {"idx": 1, "layout": "hook", "keywords": ["续航"],
             "stat": {"label": "CLTC 续航", "value": "835 公里", "fact_id": "f_1"}}
     got = explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),
@@ -300,6 +292,7 @@ def _concept_beats(scene, rows, columns=None):
     p = load_profile("auto_long")
     segs = _segments(p)
     i = next(n for n, s in enumerate(segs) if s.section == "三电性能")
+    segs[i].text = "续航835公里。"
     item = {"idx": i + 1, "layout": "concept",
             "concept": {"scene": scene, "title": "电池", "rows": rows, "columns": columns or []}}
     return explainer.build_beats(subject="小米YU7", profile=p, segments=segs, facts=_facts(),

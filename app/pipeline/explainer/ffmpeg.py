@@ -6,14 +6,13 @@ import re
 import shutil
 import subprocess
 import zlib
-from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 from ... import config
 from .. import aspect, library, looks
 from .. import render as render_mod
 
-from .consts import STILL_MOTIONS, XFADE, XFADE_KINDS, _ENC
+from .consts import STILL_MOTIONS, _ENC
 
 
 # --------------------------------------------------------------------------
@@ -134,60 +133,21 @@ def motion_for(item_id: str, n: int, prev: str = "") -> str:
     return motion
 
 
-def xfade_offsets(lengths: Sequence[float]) -> list[float]:
-    """各段原长 → 每个转场的起点。除最后一段外每段都加长 XFADE 去和下一段重叠,
-    所以第 k 个转场正好从前 k 段原长之和开始,拼完的总长仍是原长之和。"""
-    out, acc = [], 0.0
-    for length in lengths[:-1]:
-        acc += length
-        out.append(round(acc, 3))
-    return out
-
-
-def _xfade(parts: Sequence[Path], lengths: Sequence[float], seconds: float, dest: Path,
-           seed: int) -> Path:
-    inputs: list[str] = []
-    for p in parts:
-        inputs += ["-i", str(p)]
-    chain, prev = [], "[0:v]"
-    for k, offset in enumerate(xfade_offsets(lengths), start=1):
-        kind = XFADE_KINDS[(seed + k) % len(XFADE_KINDS)]
-        label = f"[x{k}]"
-        chain.append(f"{prev}[{k}:v]xfade=transition={kind}:duration={XFADE}:offset={offset:.3f}{label}")
-        prev = label
-    graph = ";".join(chain) + f";{prev}format=yuv420p[v]"
-    proc = _ff([*inputs, "-filter_complex", graph, "-map", "[v]", "-t", f"{seconds:.3f}",
-                "-an", *_ENC, str(dest)])
-    if proc.returncode != 0 or not dest.is_file():
-        raise render_mod.RenderError(f"背景转场失败:{(proc.stderr or '')[-300:]}")
-    return dest
-
-
 def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple[int, int],
                     work: Path, motion_seed: int = 0) -> Path:
-    """把几段背景拼成一条定长背景:段与段之间 xfade 转场(失败退回硬切拼接)。
-    没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
+    """把几段背景硬切拼成一条定长背景。没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
     work.mkdir(parents=True, exist_ok=True)
     dest = work / "bg.mp4"
     if not pieces:
         return _solid(dest, seconds, size)
-    lengths = [p.length for p in pieces]
-    blend = len(pieces) >= 2 and min(lengths) >= XFADE * 2
     parts, prev = [], ""
     for n, p in enumerate(pieces):
         motion = motion_for(p.item_id, motion_seed + n, prev)
         prev = motion
-        extra = XFADE if blend and n < len(pieces) - 1 else 0.0
-        parts.append(_piece_clip(replace(p, length=round(p.length + extra, 3)),
-                                 work / f"piece_{n:02d}.mp4", size, motion))
+        parts.append(_piece_clip(p, work / f"piece_{n:02d}.mp4", size, motion))
     if len(parts) == 1:
         shutil.copyfile(parts[0], dest)
         return dest
-    if blend:
-        try:
-            return _xfade(parts, lengths, seconds, dest, motion_seed)
-        except render_mod.RenderError:
-            pass  # 退回硬切:每段多出的 XFADE 秒被 -t 截在结尾,画面只是略早切
     listing = render_mod.timeline_mod.concat_list_file(parts, work / "pieces.txt")
     proc = _ff(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy",
                 "-t", f"{seconds:.3f}", str(dest)])

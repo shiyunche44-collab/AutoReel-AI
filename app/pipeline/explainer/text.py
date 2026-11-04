@@ -125,6 +125,20 @@ def ground_note(raw: Any, narration: str, profile: Any = None) -> str:
     return note
 
 
+def said(value: Any, narration: str) -> bool:
+    """屏上这个取值里的数字,这一拍的旁白都说过。没有数字的取值不受限。"""
+    return numbers_in(str(value)) <= numbers_in(narration or "")
+
+
+def said_overlay(overlay: dict, narration: str) -> dict | None:
+    """面板只留旁白说过的行,大数字没说过就不上屏。什么都不剩返回 None。"""
+    if overlay.get("kind") == "stat":
+        return overlay if said(overlay.get("value"), narration) else None
+    rows = [r for r in overlay.get("rows") or []
+            if all(said(v, narration) for v in r.get("values") or [])]
+    return {**overlay, "rows": rows} if rows else None
+
+
 def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "",
                 profile: Any = None) -> tuple[dict | None, list[str]]:
     """核对大数字:当成一行参数卡交给 `cards.ground`(数字必须见于引用的事实),
@@ -140,6 +154,8 @@ def ground_stat(raw: Any, facts: Sequence[Fact], narration: str = "",
     value = r["values"][0]
     if overlays.split_number(value) is None:
         return None, dropped + [f"「{value}」里没有可滚动的数字"]
+    if narration and not said(value, narration):
+        return None, dropped + [f"「{value}」这一拍的旁白没说过"]
     out = {"kind": "stat", "label": r["label"][:KEYWORD_CHARS], "value": value,
            "fact_id": r["fact_id"], "source": grounded.get("source", ""),
            "tag": r.get("tag", "")}

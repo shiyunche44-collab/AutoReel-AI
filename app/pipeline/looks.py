@@ -77,7 +77,7 @@ class Look:
     #: 参数面板(panel 拍左侧的 SPEC 卡)和横屏 highlight 的小窗;关掉后 panel 拍只留背景画面、highlight 全屏压字,数字交给旁白和字幕
     panel: bool = True
     #: 建项目时自动挑 look 会不会选到它;False = 只在手动指定时用(不改变老的随机分布)
-    auto_pick: bool = True
+    auto_pick: bool = False
     #: 字幕改用 Remotion 渲的花字层(关键词变色弹出,见 caption_layer.py);层不可用时退回 ASS
     sub_layer: bool = False
     #: 实拍视频镜头加缓推 / 拉远 / 冲击推(静图镜头本来就有运镜,见 render.still_filter)
@@ -179,13 +179,13 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         broll_cycle=("split", "lower_third", "split", "plain"),
         cover_accent=(214, 40, 58),
     ),
-    # 轻包装:无常驻章节条,白字描边字幕,配色沿用 hud 基线。只能手动指定
+    # 轻包装:无常驻章节条,白字描边字幕,配色沿用 hud 基线。新项目的默认,其他包手动选
     Look(
         "lite", "轻包装", "无常驻章节条,白字描边字幕,信息靠口播;对标三分半说车的清爽画面",
         paper=(236, 238, 233), ink=(18, 22, 26), key=(61, 68, 76), muted=(93, 101, 110),
         accent=(255, 90, 31),
         subs="outline", concept="studio", chapter_bar=False, video_first=True, panel=False,
-        auto_pick=False, sub_layer=True, cam_push=True, sfx=True,
+        auto_pick=True, sub_layer=True, cam_push=True, sfx=True, broll_cycle=("plain",),
     ),
 )}
 

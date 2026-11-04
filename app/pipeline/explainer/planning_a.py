@@ -9,7 +9,7 @@ from .. import cards, knobs, rhythm
 from ..grounding import numbers_in
 
 from .consts import LAYOUTS, MAX_BROLL_RUN, SAFE_LAYOUT
-from .text import _fact_label, _fact_value, _hint, _panel_from_rows, _stat_overlay, _unit_after, echoes_narration, ground_keywords, ground_stat
+from .text import _fact_label, _fact_value, _hint, _panel_from_rows, _stat_overlay, _unit_after, echoes_narration, ground_keywords, ground_stat, said, said_overlay
 
 
 def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile,
@@ -61,7 +61,7 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
     (highlight / hook 的大字):大字是照抄旁白的话,旁白一改就可能变成复读,
     或者引用了已经被删掉的数字。
 
-    版式、叠加卡片这些是按事实核过的,不受旁白改写影响,原样保留。
+    面板和大数字同样重核:旁白不再说的数字不留在屏上。其余版式、卡片原样保留。
     """
     if len(specs) != len(segments):
         raise ValueError(f"分镜 {len(specs)} 拍与脚本 {len(segments)} 段对不上,没法按拍同步")
@@ -85,6 +85,12 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
                 spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
             else:
                 spec.overlay = {**ov, "lines": []}
+        elif isinstance(ov, dict) and ov.get("kind") in ("panel", "stat"):
+            spec.overlay = said_overlay(ov, text)
+            if spec.overlay is None:
+                spec.layout = SAFE_LAYOUT
+                spec.card = None
+                spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
         out.append(spec)
     return out
 
@@ -147,7 +153,7 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
         lines = ground_keywords(item.get("keywords"), seg.text, facts, drop_echo=True, profile=profile)
         stat = None
         if item.get("stat"):
-            stat, dropped = ground_stat(item.get("stat"), facts, profile=profile)
+            stat, dropped = ground_stat(item.get("stat"), facts, seg.text, profile=profile)
         if stat:
             shown = numbers_in(stat["value"])
             lines = [x for x in lines if not (numbers_in(x) & shown)]
@@ -194,6 +200,11 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
                 overlay, layout = rescued, "panel"
             else:
                 layout = SAFE_LAYOUT
+    if layout == "panel" and overlay:
+        overlay = said_overlay(overlay, seg.text)
+        if overlay is None:
+            dropped = [*dropped, "面板的数字这一拍的旁白都没说过"]
+            layout = SAFE_LAYOUT
     if card_log is not None and (dropped or layout != str(item.get("layout") or layout)):
         card_log.append({"idx": i, "section": sec.name, "asked": item.get("layout"),
                          "layout": layout, "dropped": dropped})
@@ -277,8 +288,7 @@ def _cap_rows(seg: ScriptSegment, facts: Sequence[Fact], comparison: bool,
               offset: int) -> list[dict]:
     """这一拍引用过的事实里,挑出能上屏的行。
 
-    和 `auto_panel` 的区别:不要求数字在旁白里说过 —— 推导数字(「差了 228 公里」)
-    和观点拍(「这钱花得值」)说的话对不上事实原文的取值,但它引用的事实就是它的依据。
+    只留旁白说过的数字:屏上出现这一拍没讲的数字,观众会以为画面和口播各说各的。
     `offset` 让同一批引用连着几拍时各拍轮着展示不同的事实,不重复同一屏。
     """
     by_id = {f.id: f for f in facts}
@@ -290,7 +300,7 @@ def _cap_rows(seg: ScriptSegment, facts: Sequence[Fact], comparison: bool,
         if f.compare_with and not comparison:
             continue
         value = _headline_value(f.claim)
-        if value:
+        if value and said(value, seg.text or ""):
             pool.append((f, value))
     if not pool:
         return []

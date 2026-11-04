@@ -61,16 +61,15 @@ def test_voice_knob_only_with_candidates():
     assert knobs.VOICE not in knobs.universe(None)
 
 
-def test_looks_follow_plan_and_weights(fresh_db):
+def test_look_experiments_cannot_leave_the_default(fresh_db):
+    """其他视觉包只能手动选:配对实验点名别的包也不生效。"""
     from app.pipeline import looks, variety
 
-    before = [looks.pick(f"p{i}") for i in range(10)]
     variety.plan = lambda dim=None: {"dimension": "look", "value": "blueprint"} if dim == "look" else None
     try:
-        assert looks.pick("p1") == "blueprint"
+        assert looks.pick("p1") == "lite"
     finally:
         variety.plan = None
-    assert [looks.pick(f"p{i}") for i in range(10)] == before
 
 
 # --------------------------------------------------------------------------

@@ -601,6 +601,9 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                                           limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
                                           should_stop=(stop_event.is_set if stop_event else None))
         if result["stage_complete"]:
+            still_note = explainer.still_warning(explainer.footage_mix(project_id, specs))
+            if still_note:
+                db.add_event(project_id, "footage:still_heavy", reason=still_note)
             _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
             return {"state": str(State.GATE_B), "waiting": True, **result}
         failed = [r for r in db.get_shots(project_id, "draft") if r["status"] == "failed"]
@@ -739,8 +742,9 @@ def _gate_a_blockers(project_id: str, profile, theme) -> list[dict]:
     out = [i.to_dict() for i in issues if i.is_error]
     # 节奏拦截线:分镜出来就能查的部分(拍数口径、连拍),赶在烧 TTS 之前拦住
     try:
-        out += [{"code": "rhythm", "message": f"画面节奏:{m}"}
-                for m in rhythm.blockers(_specs(project_id), timed=False)]
+        with looks.use(looks.of_project(project_id)):
+            out += [{"code": "rhythm", "message": f"画面节奏:{m}"}
+                    for m in rhythm.blockers(_specs(project_id), timed=False)]
     except Exception as exc:  # noqa: BLE001 - 读不到分镜就别拦
         log.warning("读不到分镜就别拦: %s", exc)
     return out

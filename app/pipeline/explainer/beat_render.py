@@ -390,6 +390,12 @@ def sting_for(specs: Sequence[ShotSpec], where: Sequence[int],
     return ch + 1, chapters[ch][0]
 
 
+def chapter_starts(specs: Sequence[ShotSpec]) -> list[int]:
+    """各章第一拍的位置(开头章除外):成片在这些交界短叠化。"""
+    _, where = chapters_of(specs)
+    return [n for n in range(1, len(where)) if where[n] != where[n - 1]]
+
+
 def beat_role(where: Sequence[int], pos: int, n_chapters: int) -> str:
     """第 `pos` 拍在片子里的位置(`library.ROLES`):开头章 = hook,最后一章 = ending(结论段),
     其余 = body。只有一章的片子全按 hook 算 —— 宁严勿松,不让第三方画面进开场。"""

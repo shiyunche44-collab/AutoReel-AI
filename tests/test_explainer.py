@@ -76,6 +76,7 @@ def test_build_beats_grounds_panel_and_downgrades_bad_data():
     p = load_profile("auto_long")
     segs = _segments(p)
     i_price = next(i for i, s in enumerate(segs) if s.section == "定位与价格")
+    segs[i_price].text = "售价25.35万元,续航835公里。"
     llm = FakeLLM([
         {"idx": i_price + 1, "layout": "panel", "view": "exterior", "panel": {
             "title": "标准版", "rows": [
@@ -148,6 +149,7 @@ def test_build_beats_grounds_stat_and_rejects_invented_number():
     segs = _segments(p)
     perf = [i for i, s in enumerate(segs) if s.section == "三电性能"]
     good, bad = perf[0], perf[-1] if len(perf) > 1 else None
+    segs[good].text = "续航835公里。"
     beats = [{"idx": good + 1, "layout": "stat",
               "stat": {"label": "CLTC续航", "value": "835公里", "fact_id": "f_1"}}]
     if bad is not None and bad != good:
@@ -493,28 +495,28 @@ def test_letterbox_crop_detects_bars_and_ignores_full_frame(tmp_path):
 def _cap_world(n=10, section="三电性能"):
     """n 拍全是 broll,每拍引用 f_1 / f_2;偶数拍旁白带数字,奇数拍是观点。"""
     segs = [ScriptSegment(idx=i, section=section,
-                          text="差了 228 公里。" if i % 2 == 0 else "这钱花得值。",
+                          text="续航 835 公里。" if i % 2 == 0 else "这钱花得值。",
                           fact_refs=["f_1", "f_2"]) for i in range(n)]
     specs = [ShotSpec(idx=i, section=section, visual_zh="[broll] x", narration_zh=segs[i].text,
                       layout="broll", duration=3.0) for i in range(n)]
     return specs, segs
 
 
-def test_enforce_broll_cap_brings_broll_down_to_cap_with_grounded_panels():
+def test_enforce_broll_cap_only_puts_up_numbers_the_beat_says():
     from app.pipeline import rhythm
 
     profile = load_profile("auto_long")
     specs, segs = _cap_world()
     out = explainer.enforce_broll_cap(specs, segs, _facts(), profile)
-    assert sum(1 for s in out if s.layout == "broll") <= max(1, int(10 * rhythm.BROLL_RATIO_MAX))
     panels = [s for s in out if s.layout == "panel"]
-    assert panels
+    assert len(panels) == 5  # 观点拍没说数字,宁可留 broll 也不配错
     cited = {"f_1", "f_2"}
-    for s in panels:  # 上屏的行只来自这一拍引用过的事实
+    for s in panels:  # 上屏的行只来自这一拍引用过、旁白也说过的事实
         assert {r["fact_id"] for r in s.overlay["rows"]} <= cited
+        assert "835" in s.narration_zh
     # 相邻两拍的画面指纹不一样,不会同一屏连着杵
     sigs = [rhythm._overlay_signature(s) for s in out]
-    assert all(a != b for a, b in zip(sigs, sigs[1:]) if a[0] == "panel")
+    assert all(a != b for a, b in zip(sigs, sigs[1:]) if a[1] == "panel")
 
 
 def test_enforce_broll_cap_leaves_beats_without_refs_alone():

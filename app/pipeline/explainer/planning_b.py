@@ -5,11 +5,11 @@ import re
 from typing import Sequence
 from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment, ShotSpec
-from .. import looks
+from .. import looks, rhythm
 
 from ..script_gen.fit import PORTRAIT_CHARS_PER_SECOND
 from .consts import BROLL_STYLES, KEYWORD_CHARS, LAYOUTS, MAX_CARD_RUN, MAX_CONCEPT, SAFE_LAYOUT
-from .text import _as_panel_overlay, _hint, ground_keywords
+from .text import _as_panel_overlay, _hint, ground_keywords, said_overlay
 from .planning_a import facts_for
 
 
@@ -19,6 +19,8 @@ QUIET_CPS = 5.0
 QUIET_SECONDS = 5.5
 #: 短于这个的拍放不下大字(一闪而过读不完)
 KEYWORD_BEAT_MIN = 2.0
+#: 视频优先的视觉包:大字和大数字至少隔这么多秒,且不连着两拍
+OVERLAY_GAP_SECONDS = 25.0
 
 KEYWORD_SYSTEM = """你在给信息型解说视频里「没有数据可上屏」的观点句配大字关键词,让画面有变化。
 每句配 1–2 行,每行 2–{kw} 字,是这句话的核心判断或要点。
@@ -44,7 +46,7 @@ def add_keyword_beats(specs: list[ShotSpec], segments: Sequence[ScriptSegment],
     再走 `ground_keywords(drop_echo=True)`:照抄旁白的、编了数字型号的都不上屏。
     估算时长走字数,合成旁白之后才有真实时长,这里只管把静默串截短。
     """
-    if llm is None or not specs:
+    if llm is None or not specs or looks.current().video_first:
         return specs
     cps = PORTRAIT_CHARS_PER_SECOND if portrait else QUIET_CPS
     quiet = 0.0
@@ -102,6 +104,7 @@ def _demote(spec: ShotSpec, profile: CategoryProfile | None = None) -> None:
         sec = profile.section(spec.section)
         if "panel" in (sec.layouts or ()):
             ov = _as_panel_overlay(spec)
+            ov = ov and said_overlay(ov, spec.narration_zh)
             if ov:
                 spec.layout = "panel"
                 spec.overlay = ov
@@ -141,6 +144,45 @@ def enforce_rhythm(specs: list[ShotSpec], profile: CategoryProfile | None = None
         else:
             run = 0
     return specs
+
+
+def thin_overlays(specs: list[ShotSpec]) -> list[ShotSpec]:
+    """视频优先的视觉包:画面让给实拍。面板不上屏,大字和大数字限频,多出来的退回 broll。"""
+    t = 0.0
+    last: float | None = None
+    prev = False
+    for s in specs:
+        kept = s.layout in ("hook", "highlight", "stat")
+        crowded = prev or (last is not None and t - last < OVERLAY_GAP_SECONDS)
+        if s.layout == "panel" or (kept and s.layout != "hook" and crowded):
+            _demote(s)
+            kept = False
+        if kept:
+            last = t
+        prev = kept
+        t += max(1.0, len(s.narration_zh or "") / QUIET_CPS)
+    return _cap_overlay_seconds(specs)
+
+
+def _cap_overlay_seconds(specs: list[ShotSpec]) -> list[ShotSpec]:
+    """带信息叠加的总时长压到上限内:超了就撤离上一个叠加最近的那个,开场钩子不撤。
+    时长还没测出来,按字数估。"""
+    seconds = [max(1.0, len(s.narration_zh or "") / QUIET_CPS) for s in specs]
+    budget = sum(seconds) * rhythm.INFO_RATIO_MAX
+    while True:
+        spent, end, gap, worst = 0.0, None, 0.0, None
+        t = 0.0
+        for s, length in zip(specs, seconds):
+            if s.layout in rhythm.INFO_LAYOUTS:
+                spent += length
+                since = float("inf") if end is None else t - end
+                if s.layout != "hook" and (worst is None or since < gap):
+                    gap, worst = since, s
+                end = t + length
+            t += length
+        if spent <= budget or worst is None:
+            return specs
+        _demote(worst)
 
 
 def assign_broll_styles(specs: list[ShotSpec]) -> list[ShotSpec]:
