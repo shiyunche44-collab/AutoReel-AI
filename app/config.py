@@ -333,6 +333,11 @@ ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/
 ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_dayi_uranus_bigtts").strip()
 #: 看图用的模型
 ARK_VLM_MODEL = os.getenv("ARK_VLM_MODEL", "doubao-seed-2.1-pro").strip()
+#: 写脚本用哪家:deepseek(默认)| ark(豆包 Seed)。只影响脚本阶段,事实抽取等仍走 DeepSeek
+SCRIPT_LLM = os.getenv("SCRIPT_LLM", "deepseek").strip().lower()
+ARK_SCRIPT_MODEL = os.getenv("ARK_SCRIPT_MODEL", "doubao-seed-2.1-pro").strip()
+#: Seed 写脚本时的思考开关:enabled | disabled | 空(模型默认,会想几分钟)
+ARK_SCRIPT_THINKING = os.getenv("ARK_SCRIPT_THINKING", "").strip()
 
 #: 「豆包搜索 Custom 版」。Agent Plan 的 Key 可直接用,单独建了搜索 Key 就配 ARK_SEARCH_API_KEY
 ARK_SEARCH_API_KEY = os.getenv("ARK_SEARCH_API_KEY", "").strip() or ARK_API_KEY

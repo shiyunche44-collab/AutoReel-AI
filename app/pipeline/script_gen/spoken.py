@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import statistics
 from typing import Sequence
 from ...models import ScriptSegment
 
@@ -30,7 +31,25 @@ _SELF_EXPOSE = re.compile(
     r"不乱说|不乱讲|不敢乱说|不瞎说|不乱下结论"
     r"|我(?:这边|这里|手上)?(?:没有|没法|没办法|无法|没查到|查不到|不敢|不太确定|不确定|不知道)"
     r"[^。!?！？;；\n]{0,12}(?:数字|数据|确切|可靠|准确|依据|说|给你|保证)"
-    r"|没有(?:可靠|确切|公开|准确)的?(?:数字|数据|信息)")
+    r"|没有(?:可靠|确切|公开|准确)的?(?:数字|数据|信息)"
+    r"|我?(?:没能|没有|未能)[^。!?！？;；\n]{0,6}核实|我?没查到")
+#: 念出来的资料名:观众听到的是工具的名字。老款的数据要说明是老款,但不用说「资料」
+_SOURCE_LABELS = (
+    (re.compile(r"(?:根据|按)?专业数据集(?:里|中|显示|的参数是|的数据是|给的是)?[,，:：]?"), ""),
+    (re.compile(r"老款资料(?:里|中|显示)?(?:还给了|给了)?[,，:：]?"), "老款"),
+)
+_SOURCE_LABEL_RE = re.compile(r"专业数据集|老款资料|事实清单|这个判断来自|数据来源是")
+#: 写在纸上才这么说的词。个别出现不算错,所以是 warning
+_BOOKISH = ("值得一提", "值得注意", "综上", "总而言之", "总的来说", "不难看出", "由此可见", "不言而喻",
+            "毋庸置疑", "与此同时", "不仅如此", "归根结底", "得说透", "在此基础上", "从某种意义上")
+#: 章节开头的顺序词:连着几章都这么开头,就是在念提纲
+_ORDINAL_OPENING = re.compile(r"(?:首先|其次|然后|接下来|最后|先|再)")
+#: 至少这么多句才看全片的句长和称呼,太短的片段(和测试里的小稿)不算数
+_FILM_MIN_SENTENCES = 12
+#: 句长的变异系数低于这个,念出来就是等长的短句在排队
+_UNIFORM_LENGTH = 0.25
+#: 这些词的末字碰巧也是上面的虚词,但词是完整的
+_WHOLE_WORD_TAILS = ("核对", "比对", "相对", "绝对", "面对", "反对", "对比", "相比", "好比", "存在", "实在")
 _TERMINAL_STOPS = "。;；"
 _PUNCT_RE = re.compile(r"[\uff0c,\u3002\u3001;\uff1b:\uff1a!?\uff01\uff1f\s]")
 _TAIL_PUNCT_RE = re.compile(r"[\uff0c,\u3002\u3001;\uff1b:\uff1a!?\uff01\uff1f\s]+$")
@@ -43,7 +62,7 @@ def _plain_len(text: str) -> int:
 def ends_dangling(text: str) -> bool:
     """这句话是不是没说完("现代 Ioniq 5 的四驱版比。""能确定的是。")。"""
     t = _TAIL_PUNCT_RE.sub("", text or "")
-    return bool(t) and t.endswith(_DANGLING_TAILS)
+    return bool(t) and t.endswith(_DANGLING_TAILS) and not t.endswith(_WHOLE_WORD_TAILS)
 
 
 def strip_self_exposure(text: str) -> str:
@@ -65,6 +84,13 @@ def strip_self_exposure(text: str) -> str:
     return "".join(kept).strip()
 
 
+def strip_source_labels(text: str) -> str:
+    """去掉念出来的资料名。二改没处理到时的兜底。"""
+    for pat, repl in _SOURCE_LABELS:
+        text = pat.sub(repl, text)
+    return text
+
+
 def _join_spoken(a: str, b: str) -> str:
     """把两句话接成一句:前一句的句号换成逗号;问号、感叹号保留。"""
     a = (a or "").rstrip()
@@ -75,16 +101,17 @@ def _join_spoken(a: str, b: str) -> str:
 
 def clean_spoken(segments: Sequence[ScriptSegment],
                  max_chars: int = SHOOT_CHARS_MAX) -> list[ScriptSegment]:
-    """口播清洗:去自曝句,把碎句和半句并进相邻的拍。
+    """口播清洗:去资料名和自曝句,把碎句和半句并进相邻的拍。
 
     - 第一拍(钩子)和最后一拍(结论)不动,碎句也不并进钩子:黄金三秒要短;
     - 半句("……的四驱版比。")优先和**后一拍**合,话还没说完;碎句("价格是阶梯式的。")
       优先并进**前一拍**,当补充说明;
-    - 只在同一段落、同一台车内合并,事实引用取并集;合并后太长就放弃,留给 lint 提示。
+    - 只在同一段落、同一台车内合并,事实引用取并集;合并后太长就放弃,留给 lint 提示;
+    - 半句的句号换成逗号;完整的短句(「未必。」)保留句号,只是和相邻的句子同拍,长短错落才像人说话。
     """
     out: list[ScriptSegment] = []
     for seg in segments:
-        text = strip_self_exposure((seg.text or "").strip())
+        text = strip_self_exposure(strip_source_labels((seg.text or "").strip()))
         if text:
             out.append(seg.model_copy(update={"text": text, "fact_refs": list(seg.fact_refs)}))
 
@@ -107,7 +134,8 @@ def clean_spoken(segments: Sequence[ScriptSegment],
             if len(first.text) + len(second.text) > limit:
                 continue
             merged = first.model_copy(update={
-                "text": _join_spoken(first.text, second.text),
+                "text": (_join_spoken(first.text, second.text) if dangling
+                         else first.text + second.text),
                 "fact_refs": list(dict.fromkeys([*first.fact_refs, *second.fact_refs])),
                 "heading": first.heading or second.heading})
             lo = min(k, j)
@@ -148,9 +176,35 @@ def spoken_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
             issues.append(LintIssue(seg.idx, "warning", f"半句收尾,话没说完:{text[-16:]}"))
         elif 0 < n < last and _plain_len(text) < FRAGMENT_CHARS:
             issues.append(LintIssue(seg.idx, "warning", f"碎句(念出来像报幕),并进前后一句:{text}"))
+        label = _SOURCE_LABEL_RE.search(text)
+        if label:
+            issues.append(LintIssue(seg.idx, "error",
+                                    f"把资料名念出来了「{label.group()}」,换成人话:{text[:40]}"))
     whole = "\n".join(s.text or "" for s in segments)
     for name, pat in _PATTERNS.items():
         count = len(pat.findall(whole))
         if count > PATTERN_MAX:
             issues.append(LintIssue(0, "warning", f"句式 {name} 全片用了 {count} 次,换着说"))
+    issues.extend(_ai_voice_issues(segments, whole))
+    return issues
+
+
+def _ai_voice_issues(segments: Sequence[ScriptSegment], whole: str) -> list[LintIssue]:
+    """一听就是 AI 写的几个信号(warning):书面腔、章节开头在数数、句子一样长、没有对象。"""
+    issues = [LintIssue(0, "warning", f"书面腔「{word}」,换成说话的说法")
+              for word in _BOOKISH if word in whole]
+    openings: dict[str, str] = {}
+    for seg in segments:
+        openings.setdefault(seg.section, seg.text or "")
+    run = 0
+    for text in openings.values():
+        run = run + 1 if _ORDINAL_OPENING.match(text) else 0
+        if run == 2:
+            issues.append(LintIssue(0, "warning", f"连续几章都用顺序词开头,像念提纲:{text[:20]}"))
+    sentences = [n for n in (_plain_len(s) for s in _split_keep(whole, _SENT_END)) if n]
+    if len(sentences) >= _FILM_MIN_SENTENCES:
+        if "你" not in whole:
+            issues.append(LintIssue(0, "warning", "全片一个「你」都没有,像在念报告,不像在跟人说话"))
+        if statistics.pstdev(sentences) / statistics.mean(sentences) < _UNIFORM_LENGTH:
+            issues.append(LintIssue(0, "warning", "句子长度太整齐,长短错开一点"))
     return issues

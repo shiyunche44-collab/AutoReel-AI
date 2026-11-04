@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence  # noqa: F401
 from ...categories import CategoryProfile, Slot, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment  # noqa: F401
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band  # noqa: F401
+from ... import config  # noqa: F401
 from .. import knobs, variety  # noqa: F401
 from ..timeline import narration_budget_chars  # noqa: F401
 
@@ -162,6 +163,7 @@ from .spoken import (  # noqa: E402,F401
     spoken_lint,
     strip_self_exposure,
 )
+from .spoken_pass import rewrite_spoken  # noqa: E402,F401
 
 
 def generate(
@@ -327,6 +329,9 @@ def generate(
     else:
         segments = fit_length(segments, budget, llm, tolerance=LANDSCAPE_LENGTH_TOLERANCE,
                               keep_count=True, reviewer=reviewer)
+    if config.SPOKEN_PASS:
+        segments = rewrite_spoken(segments, subject=subject, profile=profile, facts=facts, llm=llm,
+                                  theme=theme, thesis=thesis, variant=variant, angle=angle)
     return segments, title, thesis
 
 

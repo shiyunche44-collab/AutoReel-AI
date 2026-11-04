@@ -16,6 +16,8 @@ from .base import LLMError, LLMNotConfigured, extract_json, require_keys
 
 class DeepSeekProvider:
     name = "deepseek"
+    #: 并进每次请求体的额外字段(子类用,如方舟的 thinking 开关)
+    extra_payload: dict[str, Any] = {}
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  model: str | None = None, timeout: int = 120) -> None:
@@ -54,6 +56,7 @@ class DeepSeekProvider:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        payload.update(self.extra_payload)
 
         url = f"{self.base_url}/chat/completions"
         headers = {

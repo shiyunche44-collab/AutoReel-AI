@@ -286,23 +286,28 @@ def _is_conclusion_section(section: str) -> bool:
     return any(w in (section or "") for w in _CONCLUSION_SECTION_WORDS)
 
 
+#: 结论段和主论点相邻两字的重合比例,到这个数就算回扣了
+THESIS_ECHO = 0.4
+
+
 def thesis_lint(segments: Sequence[ScriptSegment], thesis: str) -> list[LintIssue]:
     """结论段有没有回扣主论点。
 
     主论点(全片那句判断)是视频的脊椎:每一段为它服务,最后一段把它落地。
-    提示词要求结论段**原样包含**这句话,所以这里是精确匹配。
+    车评稿的结论用自己的话说,不要求原样,所以看的是相邻两字的重合比例,不是精确匹配。
     """
     if not thesis.strip():
         return []
     ends = [s for s in segments if _is_conclusion_section(s.section)]
     if not ends:
         return []
-    if any(thesis in (s.text or "") for s in ends):
+    whole = "".join(s.text or "" for s in ends)
+    pairs = {thesis[i:i + 2] for i in range(len(thesis) - 1)}
+    if thesis in whole or (pairs and sum(p in whole for p in pairs) / len(pairs) >= THESIS_ECHO):
         return []
     return [LintIssue(ends[-1].idx, "warning",
                      f"结论段没有回扣主论点「{thesis}」——"
-                     f"全片每一段都为它服务,最后一段要把它落地"
-                     f"(原样写进结论即可):{ends[-1].text[:40]}")]
+                     f"全片每一段都为它服务,最后一段要把它落地:{ends[-1].text[:40]}")]
 
 
 #: 第一人称声称亲身体验的通用说法(品类词在 vocab.firsthand_terms)

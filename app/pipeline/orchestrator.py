@@ -18,6 +18,7 @@ from typing import Any, Sequence
 
 from .. import config, costs, db
 from ..categories import ProfileError, load_profile
+from ..llm.ark import ArkProvider
 from ..llm.deepseek import DeepSeekProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import State, assert_transition, can_transition
@@ -48,6 +49,16 @@ def _llm():
     if deepseek.available():
         return deepseek
     return None
+
+
+def _script_llm(default):
+    """脚本阶段用的 LLM:`SCRIPT_LLM=ark` 且方舟 Key 在 → 豆包 Seed,否则沿用 `default`。"""
+    if config.SCRIPT_LLM == "ark":
+        ark = ArkProvider()
+        if ark.available():
+            return ark
+        log.warning("SCRIPT_LLM=ark 但没配 ARK_API_KEY,脚本退回默认模型")
+    return default
 
 
 def _profile(project: dict[str, Any]):
@@ -430,13 +441,14 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         plan = [s.section for s in slots]
         topic = db.read_json(project_id, "topic.json", {}) or {}
         hook = str(topic.get("hook") or "")
+        script_llm = _script_llm(llm)
         # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
         with costs.project_spend(project_id, costs.stage_reserve("script")):
             # 车评片型:写稿前先做分析,论点和章名都从这台车自己的矛盾里来
             brief = None
             if theme.reviewer:
                 brief = script_gen.write_brief(
-                    subject=subject, profile=profile, facts=facts, llm=llm,
+                    subject=subject, profile=profile, facts=facts, llm=script_llm,
                     n_args=len(script_gen.argument_slots(plan, profile)),
                     lens=str(_variant(project).get("lens") or ""), angle=angle,
                     why=str(topic.get("why") or ""), history=_review_history(project),
@@ -450,7 +462,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
             picked = None
             if script_gen.hook_candidates >= 2:
                 picked = script_gen.choose_hook(subject=subject, profile=profile, facts=facts,
-                                                llm=llm, n=script_gen.hook_candidates,
+                                                llm=script_llm, n=script_gen.hook_candidates,
                                                 angle=angle, hook=hook,
                                                 tension=str((brief or {}).get("tension") or ""))
                 if picked:
@@ -458,7 +470,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                     hook = picked["chosen"]
             segments, title, thesis = script_gen.generate(
                 subject=subject, profile=profile, facts=facts, plan=plan,
-                duration=project["duration"], llm=llm, theme=theme, angle=angle,
+                duration=project["duration"], llm=script_llm, theme=theme, angle=angle,
                 portrait=portrait, hook=hook, variant=_variant(project),
                 hook_locked=bool(picked), brief=brief,
                 **({"slots": slots, "subjects": subjects} if theme.multi else {}),

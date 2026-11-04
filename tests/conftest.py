@@ -24,5 +24,10 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     # 转写永远关,免得测试去加载模型
     monkeypatch.setattr(config, "VOICE_QA", False)
     monkeypatch.setattr(config, "VOICE_QA_ASR", False)
+    # 整段合成直连接口,测试默认走被打桩的逐句路径;专门的测试自己打开
+    monkeypatch.setattr(config, "TTS_ONE_TAKE", False)
+    monkeypatch.setattr(config, "SPOKEN_PASS", False)
+    # .env 里配成 ark 时,脚本阶段会绕过测试注入的假 LLM,真去调接口
+    monkeypatch.setattr(config, "SCRIPT_LLM", "deepseek")
     # 统一风格封面要联网生图;默认关,专门的测试自己打开
     monkeypatch.setattr(config, "COVER_ART", False)
