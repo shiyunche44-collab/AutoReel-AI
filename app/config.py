@@ -428,8 +428,16 @@ TEAM_SLOT_TIMES = tuple(t.strip() for t in os.getenv("TEAM_SLOT_TIMES", "18:30")
 #: 已批选题提前多少小时开工(事实别太早抓,成片也要留审核时间)
 TEAM_LEAD_HOURS = float(os.getenv("TEAM_LEAD_HOURS", "30"))
 #: 默认画幅 / 时长(不合主题时取最接近的档位)
-TEAM_ASPECT = os.getenv("TEAM_ASPECT", "16:9")
-TEAM_DURATION = int(os.getenv("TEAM_DURATION", "240"))
+#: 抖音短视频以竖屏、90 秒内为主(数据:横屏 4 分钟的作品平均只被看 16 秒)
+TEAM_ASPECT = os.getenv("TEAM_ASPECT", "9:16")
+TEAM_DURATION = int(os.getenv("TEAM_DURATION", "90"))
+#: 每周各天的选题类型,周一到周日用逗号分隔:model = 热门车型,band = 价位段选购,topic = 热点话题。
+#: 留空 = 不轮换,主编自己按热度挑。
+TEAM_WEEK_PLAN = tuple(
+    t.strip() for t in os.getenv("TEAM_WEEK_PLAN", "model,band,model,topic,model,band,topic").split(",")
+    if t.strip())
+#: 价位段选购选题的价位段 / 能源(写进给 LLM 的提示;品类文本以外的运营口径)
+TEAM_BAND_HINT = os.getenv("TEAM_BAND_HINT", "10-20万新能源")
 #: 同一车型多少天内不重复做
 TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
 #: 制片自动过门禁 A / B(只在机器检查零拦截时放行;拦下就停下等人)

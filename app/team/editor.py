@@ -132,6 +132,66 @@ def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
     return [x[2] for x in out]
 
 
+KINDS = ("model", "band", "topic")
+KIND_LABEL = {"model": "热门车型", "band": "价位段选购", "topic": "热点话题"}
+#: 这些方向的单车选题算热点话题(观众常问 / 争议类)
+TOPIC_THEMES = ("qa", "debate")
+
+
+def slot_kind(slot: float, plan: tuple[str, ...] | None = None) -> str:
+    """这个发布时刻按星期该做哪类选题;没配轮换 = 空串(不限)。"""
+    plan = config.TEAM_WEEK_PLAN if plan is None else plan
+    if len(plan) != 7:
+        return ""
+    kind = plan[dt.datetime.fromtimestamp(slot).weekday()]
+    return kind if kind in KINDS else ""
+
+
+def idea_kind(idea: Any, profile: CategoryProfile, hot_keys: set[str]) -> str:
+    """选题属于哪一类:价位段选购 / 热点话题(命中事件、观众问的,或争议类方向)/ 热门车型。"""
+    from ..pipeline import topics
+
+    if idea.theme in {t.name for t in topics.band_themes(profile)}:
+        return "band"
+    names = [idea.subject] if not idea.subjects else list(idea.subjects)
+    if idea.theme in TOPIC_THEMES or any(_norm(n) in hot_keys for n in names):
+        return "topic"
+    return "model"
+
+
+def rotation_hint(slots: list[float]) -> str:
+    """告诉 LLM 这批空档按星期各要哪几类,价位段选购的价位段写什么。"""
+    need = [slot_kind(s) for s in slots]
+    if not any(need):
+        return ""
+    lines = ["【本批选题的类型配比(按发布日星期轮换,尽量凑齐)】"]
+    for kind in KINDS:
+        n = need.count(kind)
+        if n:
+            lines.append(f"- {KIND_LABEL[kind]} {n} 条")
+    if "band" in need:
+        lines.append(f"- 价位段选购的价位段与能源写「{config.TEAM_BAND_HINT}」(angle 写明取舍点)")
+    if "topic" in need:
+        lines.append("- 热点话题 = 当前热榜 / 新闻 / 行业事件里最多人在讨论的那个点,或观众评论里问得多的")
+    return "\n".join(lines)
+
+
+def assign_slots(slots: list[float], ranked: list[Any], kind_of: dict[int, str]) -> list[tuple[float, Any]]:
+    """每个空档先挑排名最高的同类选题;该类没有就退而求其次拿排名最高的剩余选题。"""
+    left = list(ranked)
+    out: list[tuple[float, Any]] = []
+    for slot in slots:
+        want = slot_kind(slot)
+        pick = next((i for i in left if want and kind_of.get(id(i)) == want), None)
+        if pick is None and left:
+            pick = left[0]
+        if pick is None:
+            break
+        left.remove(pick)
+        out.append((slot, pick))
+    return out
+
+
 def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, ...] = (),
                taste: float = 1.0) -> str:
     why = (idea.why_hot or "").strip()
@@ -179,7 +239,8 @@ def run(category: str | None = None, *, llm: Any = None,
                                      engagement.audience_text(now.timestamp(), mark=True),
                                      engagement.topics_text(asked),
                                      events.prompt_text(category, now.date()),
-                                     benchmark.prompt_text(now.timestamp())) if t)
+                                     benchmark.prompt_text(now.timestamp()),
+                                     rotation_hint(empty)) if t)
     ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
                            playbook=hints)
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
@@ -193,12 +254,15 @@ def run(category: str | None = None, *, llm: Any = None,
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
     made = 0
-    used: set[str] = set()
-    for slot, idea in zip(empty, ranked):
-        key = _norm(idea.subject)
-        if key in used:
-            continue
-        used.add(key)
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for idea in ranked:
+        if _norm(idea.subject) not in seen:
+            seen.add(_norm(idea.subject))
+            deduped.append(idea)
+    hot_keys = set(event_cars) | set(asked_cars)
+    kind_of = {id(i): idea_kind(i, profile, hot_keys) for i in deduped}
+    for slot, idea in assign_slots(empty, deduped, kind_of):
         aspect, duration = choose_format(profile, idea.theme, weights=weights.get("duration"),
                                          seed=f"{slot}:{idea.subject}")
         names = [idea.subject] if not idea.subjects else list(idea.subjects)
