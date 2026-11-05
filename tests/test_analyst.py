@@ -133,6 +133,19 @@ def test_collect_keeps_reviewing_as_submitted(fresh_db):
     assert row["state"] == "submitted" and row["remote_id"] == "w1"
 
 
+def test_collect_claims_submitted_with_remote_id_but_no_published_at(fresh_db):
+    """提交时在审核:有 remote_id、没有 published_at。曾因此永远抓不到快照。"""
+    from app.team import analyst
+
+    now = time.time()
+    _pub(fresh_db, "rev", state="submitted", remote_id="w_rev")
+    got = analyst.collect(now, fetch=lambda since: [_work("w_rev", at=now - 7200, views=12)])
+    assert got["claimed"] == 1 and got["recorded"] == 1
+    row = fresh_db.get_publication("rev")
+    assert row["state"] == "published" and row["published_at"] == int(now - 7200)
+    assert fresh_db.latest_snapshot("rev")["views"] == 12
+
+
 def test_login_failure_blocks_until_rescan(fresh_db, monkeypatch):
     from app.publish import browser
     from app.publish.base import PublishError

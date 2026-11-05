@@ -120,6 +120,12 @@ def candidates(now: float) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             if now - submitted_at(pub) <= RECLAIM_HOURS * 3600:
                 unmatched.append(pub)
             continue
+        if not pub.get("published_at"):
+            # 提交时平台还在审核:有 remote_id 却没有发布时刻。当作"未认领"走一遍认领,
+            # 补上 published_at,否则 due_milestone 永远抓不到它(曾有 7 条零快照)。
+            if now - submitted_at(pub) <= GIVE_UP_HOURS * 3600:
+                unmatched.append(pub)
+            continue
         if due_milestone(pub, db.list_snapshots(pub["id"], limit=1000), now) is not None:
             due.append(pub)
     return unmatched, due
