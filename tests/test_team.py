@@ -587,6 +587,11 @@ def test_verdict_rules(fresh_db, monkeypatch):
     later = now + (config.TEAM_REVIEW_STUCK_HOURS + 1) * 3600
     what, why = compliance.verdict(stuck, old, later)
     assert what == "pause" and "审核" in why
+    # 有作品 id 只是还没被分析官认领:不算卡审核
+    fresh_db.create_publication({"id": "claimless", "project_id": "p_claimless", "account_id": "acc1",
+                                 "platform": "douyin", "state": "submitted", "title": "c",
+                                 "remote_id": "w1"})
+    assert compliance.verdict(fresh_db.get_publication("claimless"), old, later) == ("wait", "")
 
 
 def test_monitor_pauses_once_and_resume_sticks(fresh_db):

@@ -187,6 +187,10 @@ def verdict(pub: dict[str, Any], earlier: list[dict[str, Any]], now: float) -> t
 
     `earlier`:同账号更早发出的作品,算基线用。"""
     if pub["state"] == "submitted":
+        if pub.get("remote_id") and not pub.get("published_at"):
+            # 平台已收到作品(有作品 id),只是分析官还没认领、补发布时刻。
+            # 这不是"卡在审核",曾因此误暂停账号。
+            return "wait", ""
         since = pub.get("published_at") or pub.get("updated_at") or now
         hours = (now - since) / 3600
         if hours >= config.TEAM_REVIEW_STUCK_HOURS:
