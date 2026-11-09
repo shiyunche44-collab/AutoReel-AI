@@ -594,6 +594,22 @@ def test_verdict_rules(fresh_db, monkeypatch):
     assert compliance.verdict(fresh_db.get_publication("claimless"), old, later) == ("wait", "")
 
 
+def test_verdict_small_account_not_throttled(fresh_db):
+    from app.team import compliance
+
+    now = time.time()
+    day = 86400
+    for k, v in enumerate((50, 53, 60)):  # 冷启动号,中位数 53
+        _published(fresh_db, f"s{k}", "acc1", now - (10 - k) * day, v)
+    small = [fresh_db.get_publication(f"s{k}") for k in range(3)]
+    _published(fresh_db, "tiny", "acc1", now - 2 * day, 7)
+    assert compliance.verdict(fresh_db.get_publication("tiny"), small, now) == ("pass", "")
+    for k, v in enumerate((450, 500, 600)):  # 中位数 500:同样的低播放仍判限流
+        _published(fresh_db, f"b{k}", "acc2", now - (10 - k) * day, v)
+    big = [fresh_db.get_publication(f"b{k}") for k in range(3)]
+    assert compliance.verdict(fresh_db.get_publication("tiny"), big, now)[0] == "pause"
+
+
 def test_monitor_pauses_once_and_resume_sticks(fresh_db):
     from app.team import Skip, compliance
 

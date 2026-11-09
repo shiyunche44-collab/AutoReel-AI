@@ -205,6 +205,8 @@ def verdict(pub: dict[str, Any], earlier: list[dict[str, Any]], now: float) -> t
     if len(base) < config.TEAM_THROTTLE_MIN_BASELINE:
         return "pass", ""  # 样本不够,不下结论
     median = statistics.median(base)
+    if median < config.TEAM_THROTTLE_MIN_MEDIAN:
+        return "pass", ""  # 基数太小(冷启动号),低播放是常态,不当限流
     if median > 0 and views < config.TEAM_THROTTLE_RATIO * median:
         return "pause", (f"24 小时播放 {views},不到账号近 {len(base)} 条中位数 {median:.0f} 的 "
                          f"{config.TEAM_THROTTLE_RATIO:.0%},疑似限流")

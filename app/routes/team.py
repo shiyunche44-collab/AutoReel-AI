@@ -427,6 +427,14 @@ def team_bench_add(payload: BenchAdd):
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/api/team/growth")
+def team_growth(days: int = 14):
+    """涨粉看板(只读):粉丝曲线、每条主片漏斗、账号暂停状态。"""
+    from ..team import growth
+
+    return growth.summary(days=max(1, min(days, 90)))
+
+
 @router.post("/api/team/benchmark/accounts/{sec_uid}/toggle")
 def team_bench_toggle(sec_uid: str, payload: BenchToggle):
     from ..team import benchmark
