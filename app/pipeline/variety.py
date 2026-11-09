@@ -163,8 +163,19 @@ def allowed_endings(theme) -> tuple[str, ...]:
 
 def rule10(variant: Mapping[str, Any] | None, theme=None) -> str:
     """脚本提示词第 10 条:标题 + 开头要求 + 结尾要求。默认变体与旧版逐字相同。"""
+    from . import series
+
     o, e = opening(variant, theme), ending(variant, theme)
-    return f"10. **{o.title},{e.title}**:\n{o.rule}\n{e.rule}"
+    tail = series.script_rule(variant, host=_host_name())
+    return f"10. **{o.title},{e.title}**:\n{o.rule}\n{e.rule}" + (f"\n{tail}" if tail else "")
+
+
+def _host_name() -> str:
+    """栏目口播里怎么称呼自己:账号署名的前半(「柒哥&车」→「柒哥」)。"""
+    from .. import config
+
+    brand = config.COVER_BRAND
+    return brand.split("&")[0].strip() if brand else ""
 
 
 def parse(raw: Any) -> dict[str, Any]:

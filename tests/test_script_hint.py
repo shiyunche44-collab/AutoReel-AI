@@ -128,7 +128,8 @@ def test_script_hint_examples_and_rules(fresh_db):
     now = time.time()
     assert playbook.script_hint(now) == ""
     for i, (b, line) in enumerate([(0.2, "最好的开场"), (0.25, "次好的开场"),
-                                   (0.3, "一般的开场"), (0.6, "最差的开场")]):
+                                   (0.3, "一般的开场"), (0.35, "偏差的开场"),
+                                   (0.4, "较差的开场"), (0.6, "最差的开场")]):
         _work(fresh_db, f"w{i}", t0=now - 20 * 86400, bounce=b, opening=line)
     hint = playbook.script_hint(now)
     assert "「最好的开场」" in hint and "「次好的开场」" in hint

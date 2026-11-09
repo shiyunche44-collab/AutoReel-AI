@@ -154,3 +154,13 @@ def test_metadata_respects_platform_aspect():
     assert rule_for("xiaohongshu").aspect == PORTRAIT
     assert rule_for("channels").aspect == PORTRAIT
     assert rule_for("youtube").aspect == LANDSCAPE
+
+
+def test_tags_put_series_and_search_first():
+    from app.publish import metadata as md
+
+    ctx = md.ContentContext(subject="小米 YU7", series="柒哥帮你挑", topics=["补能"],
+                            category="auto_long")
+    assert md.build_tags(ctx, 5)[:3] == ["小米YU7", "柒哥帮你挑", "小米YU7怎么选"]
+    roundup = md.ContentContext(subject="20万纯电SUV", roundup=True, category="auto_long")
+    assert not any("怎么选" in t for t in md.build_tags(roundup, 10))

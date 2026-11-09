@@ -375,6 +375,10 @@ COVER_BRAND = os.getenv("COVER_BRAND", "").strip()
 #: 加在旁白之后,不动前面任何一拍的时间。默认关;OUTRO_ENABLED=1 开
 #: 片头品牌条:前几秒左上角叠一枚署名小标(不另加一段、不占时长)。默认关;INTRO_ENABLED=1 开
 INTRO_ENABLED = os.getenv("INTRO_ENABLED", "0") == "1"
+#: 虚拟主持人「柒哥」:成片角落常驻一个 Q版形象,嘴型跟着旁白动(见 pipeline/host.py)。
+#: 素材在 app/assets/host/<HOST_ID>/,由 scripts/host_sprites.py 生成;还要当前 look 开了 host。HOST_ENABLED=0 关
+HOST_ENABLED = os.getenv("HOST_ENABLED", "1") != "0"
+HOST_ID = os.getenv("HOST_ID", "qige").strip() or "qige"
 INTRO_SECONDS = float(os.getenv("INTRO_SECONDS", "2.5"))
 OUTRO_ENABLED = os.getenv("OUTRO_ENABLED", "0") == "1"
 OUTRO_SECONDS = float(os.getenv("OUTRO_SECONDS", "2.5"))
@@ -430,7 +434,8 @@ TEAM_LEAD_HOURS = float(os.getenv("TEAM_LEAD_HOURS", "30"))
 #: 默认画幅 / 时长(不合主题时取最接近的档位)
 #: 抖音短视频以竖屏、90 秒内为主(数据:横屏 4 分钟的作品平均只被看 16 秒)
 TEAM_ASPECT = os.getenv("TEAM_ASPECT", "9:16")
-TEAM_DURATION = int(os.getenv("TEAM_DURATION", "90"))
+#: 默认 60 秒:实测观众约 10 秒就划走 90 秒的竖屏片,更短的片子完播更高
+TEAM_DURATION = int(os.getenv("TEAM_DURATION", "60"))
 #: 每周各天的选题类型,周一到周日用逗号分隔:model = 热门车型,band = 价位段选购,topic = 热点话题。
 #: 留空 = 不轮换,主编自己按热度挑。
 TEAM_WEEK_PLAN = tuple(

@@ -48,19 +48,19 @@ def test_lifts_use_per_account_median():
     assert lifted["x"] == pytest.approx(0.5)  # 小号和自己比,不和大号比
 
 
-def test_learn_shrinks_and_needs_three_samples():
+def test_learn_shrinks_and_needs_min_samples():
     from app.team import stats
 
-    rows = ([_row(f"s{i}", 300, opening="scene") for i in range(4)]
-            + [_row(f"c{i}", 100, opening="conflict") for i in range(4)]
+    rows = ([_row(f"s{i}", 300, opening="scene") for i in range(6)]
+            + [_row(f"c{i}", 100, opening="conflict") for i in range(6)]
             + [_row("q1", 1000, acc="b", opening="question"), _row("q2", 900, acc="b", opening="question")])
     got = {r["id"]: r for r in stats.learn(rows, "2026-W43")}
-    # 中位数 = 200;scene 每条 1.5 倍 → (6 + 2) / (4 + 2) = 1.333
-    assert got["opening:scene:views"]["effect"] == pytest.approx(4 / 3, abs=1e-3)
+    # 中位数 = 200;scene 每条 1.5 倍 → (9 + 2) / (6 + 2) = 1.375
+    assert got["opening:scene:views"]["effect"] == pytest.approx(11 / 8, abs=1e-3)
     assert got["opening:scene:views"]["confidence"] == "medium"
-    assert got["opening:conflict:views"]["effect"] == pytest.approx(4 / 6, abs=1e-3)
+    assert got["opening:conflict:views"]["effect"] == pytest.approx(5 / 8, abs=1e-3)
     assert "opening:question:views" not in got  # 只有 2 条,不下结论
-    assert len(got["opening:scene:views"]["evidence"]) == 4
+    assert len(got["opening:scene:views"]["evidence"]) == 5  # 证据最多列 5 条
 
 
 def test_learn_ignores_small_effects():
@@ -75,15 +75,15 @@ def test_learn_uses_retention_metrics():
     from app.team import stats
 
     rows = ([_row(f"g{i}", 300, opening="scene",
-                  out={"retention_2s": 0.9, "avg_watch_sec": 30}) for i in range(4)]
+                  out={"retention_2s": 0.9, "avg_watch_sec": 30}) for i in range(6)]
             + [_row(f"b{i}", 100, opening="conflict",
-                    out={"retention_2s": 0.4, "avg_watch_sec": 8}) for i in range(4)])
+                    out={"retention_2s": 0.4, "avg_watch_sec": 8}) for i in range(6)])
     got = {r["id"]: r for r in stats.learn(rows, "w")}
     assert "opening:scene:retention_2s" in got
     assert "opening:scene:avg_watch_sec" in got
     assert got["opening:scene:retention_2s"]["effect"] > 1
     assert got["opening:conflict:retention_2s"]["effect"] < 1
-    assert got["opening:scene:retention_2s"]["n"] == 4
+    assert got["opening:scene:retention_2s"]["n"] == 6
 
 
 # --------------------------------------------------------------------------
@@ -283,7 +283,7 @@ def test_coach_writes_experiment_plan(fresh_db):
     coach.review(now)
     plans = fresh_db.get_team_setting(playbook.PLAN_KEY, None)
     assert plans[0]["dimension"] == "opening"
-    assert plans[0]["size"] == 3 and plans[0]["value"]
+    assert plans[0]["size"] == playbook.BLOCK_SIZE and plans[0]["value"]
     assert 1 < len(plans) <= playbook.MAX_PARALLEL  # 并行几个实验,每个维度一个
     assert len({p["dimension"] for p in plans}) == len(plans)
 
@@ -375,12 +375,12 @@ def test_review_writes_playbook_and_report(fresh_db):
     with pytest.raises(Skip):
         coach.review(now)
     t0 = now.timestamp() - 2 * 86400
-    for i in range(4):
+    for i in range(6):
         _published(fresh_db, f"n{i}", t0=t0 - i * 3600, views=100, kind="number")
         _published(fresh_db, f"p{i}", t0=t0 - i * 3600, views=400, kind="person")
     report = coach.review(now)  # 没有 LLM → 模板
-    assert report["source"] == "template" and "本周新发 8 条" in report["summary"]
-    assert report["totals"]["works"] == 8 and report["top"][0]["views"] == 400
+    assert report["source"] == "template" and "本周新发 12 条" in report["summary"]
+    assert report["totals"]["works"] == 12 and report["top"][0]["views"] == 400
     ids = {r["id"] for r in fresh_db.list_learnings()}
     assert {"title_kind:person:views", "title_kind:number:views"} <= ids
     assert any("标题写法 = 人群" in x for x in report["learnings"])

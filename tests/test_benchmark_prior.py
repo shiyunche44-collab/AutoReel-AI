@@ -38,19 +38,19 @@ def test_guess_kind():
 def test_learn_benchmark_shrinks_clamps_and_yields_to_own():
     from app.team import stats
 
-    posts = ([_bench(f"n{i}", 8.0, title_kind="number", duration="≤90s") for i in range(3)]
+    posts = ([_bench(f"n{i}", 8.0, title_kind="number", duration="≤90s") for i in range(6)]
              + [_bench(f"s{i}", 1.0, title_kind="stake", duration="≤90s") for i in range(6)]
              + [_bench("p0", 3.0, title_kind="person"), _bench("z", 0, title_kind="person")])
     rows = {r["id"]: r for r in stats.learn_benchmark(posts, "2026-W43")}
-    # 平均倍数(封顶 4):(12 + 6 + 3) / 10 = 2.1;数字 = (3 × 4/2.1 + 6) / 9 → 夹到 1.25
+    # 平均倍数(封顶 4):(24 + 6 + 3) / 13 ≈ 2.54;数字 = (6 × 4/2.54 + 6) / 12 → 夹到 1.25
     assert rows["bench:title_kind:number:views"]["effect"] == 1.25
-    assert rows["bench:title_kind:stake:views"]["effect"] == 0.8  # (6 × 0.476 + 6) / 12 → 夹到 0.8
+    assert rows["bench:title_kind:stake:views"]["effect"] == 0.8  # (6 × 0.394 + 6) / 12 → 夹到 0.8
     assert "bench:title_kind:person:views" not in rows  # 只有 1 条(倍数 0 的不算)
     assert rows["bench:title_kind:number:views"]["evidence"][0]["post_id"] == "n0"
-    # 时长档:9 条差不多和平均一样,收缩后偏离不到 5%,不算
+    # 时长档:12 条差不多和平均一样,收缩后偏离不到 5%,不算
     assert "bench:duration:≤90s:views" not in rows
 
-    own = [_row(f"o{i}", 100, title_kind="number") for i in range(3)]
+    own = [_row(f"o{i}", 100, title_kind="number") for i in range(6)]
     ids = {r["id"] for r in stats.learn_benchmark(posts, "w", own=own)}
     assert "bench:title_kind:number:views" not in ids and "bench:title_kind:stake:views" in ids
     assert stats.learn_benchmark([], "w") == []
@@ -87,7 +87,7 @@ def test_review_writes_prior_even_without_works(fresh_db):
     now = dt.datetime(2026, 10, 25, 20, 0)
     ts = now.timestamp()
     fresh_db.add_benchmark_account(ACC)
-    for i in range(3):
+    for i in range(6):
         _post(fresh_db, f"n{i}", 8.0, title="零百3.2秒,快得离谱", now=ts)
     for i in range(6):
         _post(fresh_db, f"s{i}", 1.0, now=ts)
@@ -97,7 +97,7 @@ def test_review_writes_prior_even_without_works(fresh_db):
         coach.review(now)
     got = {r["id"]: r for r in fresh_db.list_learnings()}
     assert got["bench:title_kind:number:views"]["source"] == "benchmark"
-    assert got["bench:title_kind:number:views"]["n"] == 3
+    assert got["bench:title_kind:number:views"]["n"] == 6
     log = fresh_db.list_iteration_log()
     assert any(x["kind"] == "weight" for x in log)  # 先验改了标题写法的权重,留痕
 
@@ -194,5 +194,9 @@ def test_structure_compare_and_prior_features(fresh_db):
     rows = {r["id"]: r["features"] for r in benchmark.prior_rows()}
     assert rows["h1"]["hook_visual"] == "hook" and rows["h1"]["pace"] == "fast"
     assert rows["plain"]["hook_visual"] == "" and rows["plain"]["title_kind"] == "stake"
+    for i in range(4, 6):  # 再补两条,凑够 stats.MIN_N 才下得了先验
+        _post(fresh_db, f"h{i}", 5.0, title="零百3.2秒")
+        fresh_db.save_benchmark_tag(f"h{i}", {"opening": "text", "claim": True,
+                                              "cover": "text", "cuts": "fast"})
     ids = {r["id"] for r in stats.learn_benchmark(benchmark.prior_rows(), "w")}
     assert "bench:hook_visual:hook:views" in ids or "bench:title_kind:number:views" in ids

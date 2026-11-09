@@ -140,10 +140,15 @@ def choose(rng: random.Random, allowed: tuple[str, ...], used: Iterable[str],
 
 
 def universe(profile: Any = None) -> dict[str, tuple[str, ...]]:
-    """每个旋钮能取的值。音色只在品类配了两个以上候选时才算旋钮。"""
+    """每个旋钮能取的值。音色只在品类配了两个以上候选时才算旋钮。
+
+    开了虚拟主持人(config.HOST_ENABLED)时音色不再探索:观众每次听到的必须是同一个「柒哥」,
+    一律用品类默认音色。"""
+    from .. import config
+
     out = {k: spec.values for k, spec in KNOBS.items()}
     voices = tuple(getattr(profile, "voices", ()) or ())
-    if len(voices) >= 2:
+    if len(voices) >= 2 and not config.HOST_ENABLED:
         out[VOICE] = voices
     return out
 

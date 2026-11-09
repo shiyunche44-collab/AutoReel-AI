@@ -47,6 +47,10 @@ class ContentContext:
     source_note: str = ""
     category: str = ""
     subject_label: str = "产品"
+    #: 栏目名(`pipeline.series`);空 = 不挂栏目
+    series: str = ""
+    #: 横评 / 合集片:主体名不是一台车,不派生「X怎么选」
+    roundup: bool = False
 
 
 def clamp_title(text: str, limit: int, soft: int = 0) -> str:
@@ -76,7 +80,8 @@ def clamp_title(text: str, limit: int, soft: int = 0) -> str:
 def build_tags(ctx: ContentContext, limit: int) -> list[str]:
     """派生标签。顺序即重要度,超限就截。
 
-    来源:主体名 → 事实主题 → 品类通用词。
+    来源:主体名 → 栏目 → 搜索式「主体名+怎么选」→ 事实主题 → 品类通用词。
+    抖音话题只放前 5 个,所以搜索能命中的词排前面,通用词垫底。
     """
     out: list[str] = []
     seen: set[str] = set()
@@ -89,6 +94,9 @@ def build_tags(ctx: ContentContext, limit: int) -> list[str]:
         out.append(tag)
 
     _add(ctx.subject)
+    _add(ctx.series)
+    if ctx.subject and not ctx.roundup:
+        _add(re.sub(r"\s+", "", ctx.subject) + "怎么选")
     for topic in ctx.topics:
         _add(topic)
     for tag in _CATEGORY_TAGS.get(ctx.category, _GENERIC_TAGS):

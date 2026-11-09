@@ -194,8 +194,18 @@ def create_project(payload: ProjectCreate) -> str:
     project_id = new_id("p_")
     try:
         recent = db.recent_variants(payload.category)
+        series_name = (payload.series or "").strip()
+        # 挂栏目就固定「下期预告」结尾(片型不允许时照常挑)
+        ending = payload.ending or ("next_episode" if series_name and "next_episode"
+                                    in variety.allowed_endings(theme) else None)
         variant = variety.pick(theme, project_id, recent,
-                               opening=payload.opening or None, ending=payload.ending or None)
+                               opening=payload.opening or None, ending=ending)
+        if series_name:
+            from . import series as series_mod
+
+            variant["series"] = series_name
+            variant["episode"] = payload.episode or series_mod.next_episode(
+                payload.category, series_name)
         # 视觉包同理:避开最近几条用过的
         variant["look"] = looks.pick(project_id, recent, payload.look or None)
         # 剪辑 / 配音 / 封面旋钮:服务里按打法手册挑,没挂手册全取默认(变体不变)

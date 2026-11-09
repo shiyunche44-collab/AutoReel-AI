@@ -26,7 +26,7 @@ def _save(image: Any, dest: Path) -> None:
 
 
 def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str = "",
-            name: str = "", brand: str = "") -> tuple[Any, str]:
+            name: str = "", brand: str = "", series: str = "") -> tuple[Any, str]:
     """底图 → 型号大字 + 车 → 字。返回 (图, 底图来源)。"""
     canvas, source = background(tone, size)
     place_car(canvas, cut, Frame.of(size), tone=tone, ghost=model_word(name))
@@ -34,7 +34,8 @@ def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str 
     # 以前是「主标题已经是车名就不重复」—— 大唐、小米YU7 那几条的角标能出现是因为
     # 大字和车名不是同一个字符串,纯属巧合;蔚来ES8 这种大字就是车名的就整个没了,
     # 一排看过去跟别人的封面不是一套(实跑踩过)。
-    chip = name or ""
+    # 挂了栏目就并进角标:「车名 | 柒哥帮你挑·第3期」,观众一眼知道这是哪个系列的第几期
+    chip = " | ".join(x for x in (name, series) if x)
     return render(canvas, tone, main=main, sub=sub, chip=chip, brand=brand), source
 
 
@@ -69,7 +70,9 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
                 (cover_3x4_path(dest), (short, short * 4 // 3)),
                 (cover_4x3_path(dest), (short * 4 // 3, short))]
         name = short_name(kicker)
-        rendered = [(path, compose(cut, tone, sz, main=main, sub=sub, name=name, brand=config.COVER_BRAND))
+        series_chip = _series_chip(project_id)
+        rendered = [(path, compose(cut, tone, sz, main=main, sub=sub, name=name,
+                                   brand=config.COVER_BRAND, series=series_chip))
                     for path, sz in jobs]
         for path, (im, _) in rendered:
             _save(im, path)
@@ -78,6 +81,17 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
     except Exception as exc:  # noqa: BLE001
         log.warning("统一风格封面失败,退回老封面:%s", exc)
         return None
+
+
+def _series_chip(project_id: str) -> str:
+    """项目挂的栏目角标(pipeline/series.py);读不到 = 空串。"""
+    from ... import db
+    from .. import series, variety
+
+    try:
+        return series.chip(variety.parse((db.get_project(project_id) or {}).get("variant")))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def pick_title(pkg: Any, fallback: str) -> str:

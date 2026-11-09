@@ -34,9 +34,26 @@ def test_title_rejects_ad_terms_but_not_benign_first():
     assert any("禁用词" in p for p in pk.check_title("销量第一的SUV", ALLOWED))
 
 
-def test_title_rejects_search_style():
-    assert any("搜索词" in p for p in pk.check_title("YU7值不值得买", ALLOWED))
+def test_title_rejects_empty_search_style():
+    # 空泛词仍压;「值不值得买」这种带车型的搜索式写法放行(吃抖音搜索流量)
     assert any("搜索词" in p for p in pk.check_title("YU7全面解析", ALLOWED))
+    assert pk.check_title("YU7值不值得买", ALLOWED) == []
+
+
+def test_title_must_name_subject():
+    assert any("车型名" in p for p in pk.check_title("补能15分钟,够不够用", ALLOWED,
+                                                       name="小米YU7"))
+    assert pk.check_title("YU7补能15分钟,够不够用", ALLOWED, name="小米YU7") == []
+    # 只带品牌不算(小米有好几台车)
+    assert pk.check_title("小米这台补能15分钟", ALLOWED, name="小米YU7")
+    assert pk.check_title("补能15分钟,够不够用", ALLOWED) == []  # 合集 / 没车型不查
+
+
+def test_subject_names():
+    names = pk.subject_names("小米YU7")
+    assert {"小米yu7", "yu7"} <= names
+    assert pk.mentions_subject("i6到底香不香", "理想i6")
+    assert not pk.mentions_subject("到底香不香", "理想i6")
 
 
 def test_title_extra_category_terms():

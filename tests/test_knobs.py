@@ -51,14 +51,28 @@ def test_pick_leans_on_weights(fresh_db):
     assert got.count("mid") > 0  # 探索还在
 
 
-def test_voice_knob_only_with_candidates():
+def test_voice_knob_only_with_candidates(monkeypatch):
+    from app import config
     from app.pipeline import knobs
 
     class P:
         voices = ("a", "b")
 
+    monkeypatch.setattr(config, "HOST_ENABLED", False)
     assert knobs.VOICE in knobs.universe(P())
     assert knobs.VOICE not in knobs.universe(None)
+
+
+def test_voice_locked_with_host(monkeypatch):
+    """开了虚拟主持人,音色不探索:人设要靠同一个声音认出来。"""
+    from app import config
+    from app.pipeline import knobs
+
+    class P:
+        voices = ("a", "b")
+
+    monkeypatch.setattr(config, "HOST_ENABLED", True)
+    assert knobs.VOICE not in knobs.universe(P())
 
 
 def test_look_experiments_cannot_leave_the_default(fresh_db):

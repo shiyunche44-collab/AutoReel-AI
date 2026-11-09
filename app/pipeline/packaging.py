@@ -17,8 +17,8 @@ from pydantic import BaseModel, Field
 from . import grounding
 from .script_gen import _BENIGN_FIRST_RE, AD_ABSOLUTE_TERMS
 
-#: 标题字数上限。最短的平台上限是小红书的 20 字,留 2 字余量(省略号、全角标点)
-TITLE_MAX_CHARS = 18
+#: 标题字数上限。最短的平台上限是小红书的 20 字;标题要带车型名,不再留 2 字余量
+TITLE_MAX_CHARS = 20
 #: 置顶评论总长上限;选项各自的上限
 COMMENT_MAX_CHARS = 40
 OPTION_MAX_CHARS = 8
@@ -31,8 +31,9 @@ KIND_STAKE, KIND_NUMBER, KIND_PERSON = "stake", "number", "person"
 KINDS = (KIND_STAKE, KIND_NUMBER, KIND_PERSON)
 KIND_LABEL = {KIND_STAKE: "立场", KIND_NUMBER: "数字", KIND_PERSON: "人群"}
 
-#: 搜索词式标题。观众刷到的是一句话判断,不是文章标题
-TITLE_AVOID = ("全面解析", "深度对比", "深度解析", "值不值得买", "值得买吗", "一文看懂", "全方位")
+#: 空泛的文章式标题词。「XX 值不值得买 / 怎么选」是观众真会搜的说法,带上车型名反而吃搜索流量,
+#: 所以不再拦(2026-11 数据:标题不带车型名的几条几乎只有推荐流量)
+TITLE_AVOID = ("全面解析", "深度对比", "深度解析", "一文看懂", "全方位")
 
 #: 通用的备用回复。不含任何数字和判断,作为 LLM 回复全被丢弃时的兜底
 GENERIC_REPLIES = (
@@ -121,9 +122,38 @@ def allowed_figures(fact_claims: Iterable[str] = (), script_texts: Iterable[str]
     return out
 
 
+_CJK = "一-鿿"
+
+
+def subject_names(subject: str) -> set[str]:
+    """车型的几种叫法(都小写、去空白):全名、各个词及相邻两词(宋Ultra)、型号段(i6 / YU7 / N8)、
+    车系尾巴(海鸥 / 海豹07 / 3系)。"""
+    s = re.sub(r"\s+", "", subject or "").lower()
+    if not s:
+        return set()
+    names = {s}
+    words = [w.lower() for w in (subject or "").split()]
+    names |= {w for w in words if len(w) >= 2}
+    names |= {a + b for a, b in zip(words, words[1:])}
+    names |= {c for c in re.findall(r"[a-z]*\d+[a-z0-9]*|[a-z]{2,}\d*", s)
+              if len(c) >= 2 and not c.isdigit()}
+    tail = re.search(rf"[{_CJK}]{{2}}[a-z0-9]*$|[a-z0-9]+[{_CJK}]$", s)
+    if tail and tail.group(0) != s:
+        names.add(tail.group(0))
+    return names
+
+
+def mentions_subject(text: str, subject: str) -> bool:
+    t = re.sub(r"\s+", "", text or "").lower()
+    names = subject_names(subject)
+    return not names or any(n in t for n in names)
+
+
 def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
-                avoid: Sequence[str] = TITLE_AVOID) -> list[str]:
-    """标题的问题清单,空 = 合格。"""
+                avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> list[str]:
+    """标题的问题清单,空 = 合格。
+
+    `name` = 单车片的车型名:给了就要求标题带上它的某种叫法(搜索流量靠车型名);横评不传。"""
     text = str(text or "").strip()
     if not text:
         return ["空标题"]
@@ -142,6 +172,8 @@ def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
     loose = sorted(figures_in(text) - allowed)
     if loose:
         problems.append("数字在事实层里找不到:" + "、".join(loose))
+    if name and not mentions_subject(text, name):
+        problems.append(f"没带车型名「{name}」")
     return problems
 
 
@@ -197,16 +229,16 @@ def check_reply(text: str, allowed: set[str], terms: Iterable[str] = ()) -> list
 # 兜底模板
 # --------------------------------------------------------------------------
 def _first_valid(candidates: Iterable[str], allowed: set[str], terms: Iterable[str],
-                 avoid: Sequence[str] = TITLE_AVOID) -> str:
+                 avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> str:
     for cand in candidates:
-        if not check_title(cand, allowed, terms, avoid):
+        if not check_title(cand, allowed, terms, avoid, name=name):
             return cand
     return ""
 
 
 def fallback_title(kind: str, subject: str, *, thesis: str = "", price: str = "",
                    allowed: set[str] | None = None, terms: Iterable[str] = (),
-                   avoid: Sequence[str] = TITLE_AVOID) -> str:
+                   avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> str:
     """一种写法的模板标题。多个模板按优先级试,第一个合格的胜出;全不合格就裁主体名。"""
     subject = re.sub(r"\s+", "", subject or "") or "这台车"
     # 兜底用的数字(价格)自己就来自事实层,放进允许集合
@@ -219,7 +251,7 @@ def fallback_title(kind: str, subject: str, *, thesis: str = "", price: str = ""
                  if price else []) + [f"{subject}这几个数字要看懂", f"{subject}的关键数字"]
     else:
         cands = [f"想买{subject}?先看你是哪类人", f"{subject}适合谁?", "这台车适合谁?"]
-    found = _first_valid(cands, pool, terms, avoid)
+    found = _first_valid(cands, pool, terms, avoid, name=name)
     if found:
         return found
     return subject[:TITLE_MAX_CHARS]
@@ -248,7 +280,7 @@ def _as_dict(item: Any) -> Mapping[str, Any]:
 def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
                  thesis: str = "", price: str = "",
                  avoid: Sequence[str] = TITLE_AVOID,
-                 order: Sequence[str] = KINDS) -> tuple[list[TitleOption], bool]:
+                 order: Sequence[str] = KINDS, name: str = "") -> tuple[list[TitleOption], bool]:
     """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。
 
     `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。"""
@@ -260,7 +292,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         text = str(d.get("text") or "").strip()
         if kind not in KINDS or kind in chosen:
             continue
-        if check_title(text, allowed, terms, avoid):
+        if check_title(text, allowed, terms, avoid, name=name):
             continue
         chosen[kind] = TitleOption(text=text, kind=kind, note=str(d.get("note") or "").strip()[:40])
     used_llm = bool(chosen)
@@ -270,7 +302,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         opt = chosen.get(kind)
         if opt is None or opt.text in seen:
             text = fallback_title(kind, subject, thesis=thesis, price=price, allowed=allowed,
-                              terms=terms, avoid=avoid)
+                                  terms=terms, avoid=avoid, name=name)
             opt = TitleOption(text=text, kind=kind, note="模板")
         seen.add(opt.text)
         out.append(opt)
@@ -306,12 +338,14 @@ def build_replies(raw: Any, *, allowed: set[str], terms: Iterable[str] = ()) -> 
 
 def assemble(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
              thesis: str = "", price: str = "", now: float = 0.0,
-             avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS) -> Packaging:
+             avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS,
+             name: str = "") -> Packaging:
     """LLM 原始输出 → 合规的 Packaging。`raw` 可以是 None 或残缺的字典,都能出结果。"""
     d = _as_dict(raw)
     terms = tuple(terms)
     titles, t_llm = build_titles(d.get("titles"), subject, allowed=allowed, terms=terms,
-                                 thesis=thesis, price=price, avoid=avoid, order=order)
+                                 thesis=thesis, price=price, avoid=avoid, order=order,
+                                 name=name)
     comment, c_llm = build_comment(d.get("comment"), subject, allowed=allowed, terms=terms)
     replies = build_replies(d.get("replies"), allowed=allowed, terms=terms)
     return Packaging(titles=titles, comment=comment, replies=replies,
@@ -335,6 +369,8 @@ SYSTEM = """你是中文{domain}短视频账号的运营,负责给一条已经�
 - number:数字 + 结论。用一个事实里的数字撑起一句判断。
 - person:人群 / 场景。点名一类人或一个用车场景(「预算 25 万天天跑高速,选哪版」)。
 - 每条 {title_max} 字以内,手机上一眼看完;可以用逗号或冒号分成两半。
+- 每条都要带车型的常用叫法(全名或简称,如「海鸥」「YU7」),放在前半句:观众会搜车型名,
+  不带车名的标题只能等推荐。横评可以写价位段或人群代替车名。
 - 标题里出现的每一个数字必须逐字来自下面的事实或入门价,不许四舍五入、不许换算、不许编。
 - 标题只能是主论点的另一种说法,不许引入片里没有的新判断。
 - 不许用这些词:{forbidden}。不许写成搜索词式标题,也不许出现这些词:{avoid}。
@@ -399,6 +435,8 @@ def build_inputs(project_id: str, profile: Any) -> dict[str, Any]:
                           + (f"({basis})" if basis else ""))
     return {
         "subject": str(project.get("subject") or ""),
+        # 单车片标题必须带车型名;横评(subjects 非空)的 subject 是话题,不查
+        "name": "" if db.project_subjects(project) else str(project.get("subject") or ""),
         "thesis": str(project.get("thesis") or "").strip(),
         "price": price,
         "title": str(project.get("title") or ""),
@@ -498,7 +536,8 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
             logging.getLogger(__name__).warning("包装生成失败,改用模板:%s", exc)
     return assemble(raw, inp["subject"], allowed=inp["allowed"], terms=inp["terms"],
                     thesis=inp["thesis"], price=inp["price"], avoid=inp["avoid"],
-                    now=time.time() if now is None else now, order=title_order(project_id))
+                    now=time.time() if now is None else now, order=title_order(project_id),
+                    name=inp["name"])
 
 
 def load(project_id: str) -> Packaging | None:

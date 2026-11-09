@@ -4,7 +4,7 @@
 ② 行业日历里今天发生、带车型的事件。同一台车 `COOLDOWN_DAYS` 天内做过 / 排着就不再快反,
 一天最多 `MAX_PER_DAY` 条(快反挤占产能,宁缺毋滥)。
 
-**产出。** `plan_items(kind=rapid, heat=5)`,竖版 60–90 秒,发布时刻 = 现在 + `PREP_HOURS`
+**产出。** `plan_items(kind=rapid, heat=5)`,竖版 60 秒,发布时刻 = 现在 + `PREP_HOURS`
 取整点。批了制片立刻开工(开工提前量远大于这几个小时),成片照样过成片闸。
 没人批的,过了发布时刻和普通选题一样作废 —— 热点过了就过了。
 
@@ -39,7 +39,7 @@ PREP_HOURS = 6
 #: 不发的时段:(几点起, 到几点)
 QUIET = (23, 8)
 #: 竖版目标时长
-DURATION = 90
+DURATION = 60
 #: 确认本车视频少于这么多秒算素材不够
 MIN_VIDEO_SECONDS = 60
 

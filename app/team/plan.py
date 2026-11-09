@@ -102,7 +102,29 @@ def to_payload(item: dict[str, Any]) -> ProjectCreate:
         hook=(item.get("hook") or "")[:40] or None,
         angle_why=(item.get("rationale") or "")[:300] or None,
         subjects=[SubjectEntry(name=s[:40]) for s in subjects] or None,
+        **_series_of(item),
     )
+
+
+def _series_of(item: dict[str, Any]) -> dict[str, Any]:
+    """选题挂哪个栏目(按发布日星期的选题类型)和第几期;返工沿用原项目的栏目和期号。"""
+    from ..pipeline import series, variety
+    from .editor import slot_kind
+
+    redo = db.get_plan_item(item["redo_of"]) if item.get("redo_of") else None
+    if redo and redo.get("project_id"):
+        name, ep = series.of_variant(
+            variety.parse((db.get_project(redo["project_id"]) or {}).get("variant")))
+        if name:
+            return {"series": name, "episode": ep or None}
+    try:
+        vocab = load_profile(item["category"]).vocab
+    except Exception:  # noqa: BLE001 —— 品类读不了就不挂栏目,不挡建项目
+        return {}
+    # 快反选题本来就是热点;其余按发布日星期的选题类型
+    kind = "topic" if item.get("kind") == "rapid" else slot_kind(float(item.get("slot_at") or 0))
+    name = series.name_for(vocab, kind)
+    return {"series": name} if name else {}
 
 
 def view(item: dict[str, Any]) -> dict[str, Any]:

@@ -405,8 +405,12 @@ def compose(
     intro_path: Path | None = None,
     intro_seconds: float = 0.0,
     dissolve_into: Sequence[int] = (),
+    host: tuple[Path, int, int] | None = None,
 ) -> RenderResult:
     """主合成入口。
+
+    `host` = 虚拟主持人层 (concat 清单, x, y),见 host.py:叠在字幕之上、片头标之下;
+    叠失败时整次合成退回不带主持人的版本。
 
     `intro_path` = 片头品牌条(带透明通道的 PNG,见 intro.py):叠在画面上前 `intro_seconds`
     秒,淡入淡出;不占时长、不挡旁白,叠失败时整次合成退回不带它的版本。
@@ -493,15 +497,23 @@ def compose(
         nxt += 1
     else:
         chain += ";[v0]null[v1]"
+    use_host = bool(host and Path(host[0]).is_file())
+    if use_host and host:
+        inputs += ["-f", "concat", "-safe", "0", "-i", str(host[0])]
+        chain += (f";[{nxt}:v]format=rgba[host];"
+                  f"[v1][host]overlay={host[1]}:{host[2]}:eof_action=pass:format=auto[v1h]")
+        nxt += 1
+    else:
+        chain += ";[v1]null[v1h]"
     use_intro = bool(intro_path and Path(intro_path).is_file() and intro_seconds > 0)
     if use_intro:
         fo = max(0.0, intro_seconds - 0.4)
         inputs += ["-loop", "1", "-t", f"{intro_seconds:.3f}", "-i", str(intro_path)]
         chain += (f";[{nxt}:v]format=rgba,fade=t=in:st=0:d=0.3:alpha=1,"
                   f"fade=t=out:st={fo:.3f}:d=0.4:alpha=1[intro];"
-                  "[v1][intro]overlay=eof_action=pass:format=auto[v2]")
+                  "[v1h][intro]overlay=eof_action=pass:format=auto[v2]")
     else:
-        chain += ";[v1]null[v2]"
+        chain += ";[v1h]null[v2]"
     filters = chain + ";[v2]format=yuv420p[vout]"
     if mix_path:
         audio_map = "1:a"
@@ -540,6 +552,20 @@ def compose(
         if problem:
             warnings.append(f"重合后仍不合格:{problem},请检查后重新合成")
     if proc.returncode != 0 or not tmp_output.is_file():
+        if use_host:
+            # 主持人层只是加分项:叠失败就不带它重合,其余参数原样
+            tmp_output.unlink(missing_ok=True)
+            warnings.append(f"主持人层叠加失败,成片不带主持人:{(proc.stderr or '').strip()[-300:]}")
+            retry = compose(
+                project_id, shot_paths,
+                ass_path=ass_path, narration_path=narration_path,
+                bgm_path=bgm_path, output_name=output_name,
+                size=size, durations=durations, layer_path=layer_path, sfx_path=sfx_path,
+                tail_silent=tail_silent, intro_path=intro_path, intro_seconds=intro_seconds,
+                dissolve_into=dissolve_into,
+            )
+            retry.warnings = warnings + (retry.warnings or [])
+            return retry
         if use_layer:
             # 花字层 overlay 失败:退回 ASS 字幕重合(ASS 烧录自己的失败由递归那次再兜底)
             tmp_output.unlink(missing_ok=True)
@@ -550,6 +576,7 @@ def compose(
                 bgm_path=bgm_path, output_name=output_name,
                 size=size, durations=durations, layer_path=None, sfx_path=sfx_path,
                 tail_silent=tail_silent, intro_path=intro_path, intro_seconds=intro_seconds,
+                dissolve_into=dissolve_into, host=host,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry
@@ -561,8 +588,9 @@ def compose(
                 project_id, shot_paths,
                 ass_path=None, narration_path=narration_path,
                 bgm_path=bgm_path, output_name=output_name,
-                size=size, durations=durations, tail_silent=tail_silent,
+                size=size, durations=durations, sfx_path=sfx_path, tail_silent=tail_silent,
                 intro_path=intro_path, intro_seconds=intro_seconds,
+                dissolve_into=dissolve_into, host=host,
             )
             retry.warnings = warnings + (retry.warnings or [])
             return retry

@@ -100,6 +100,7 @@ from .hook import (  # noqa: E402,F401
     _is_hook_section,
     first_sentence,
     hook_lint,
+    hook_verdict_lint,
     stance_lint,
 )
 from .lint_checks import (  # noqa: E402,F401

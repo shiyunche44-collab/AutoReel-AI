@@ -359,4 +359,27 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
         layer = Image.new("L", canvas.size, 0)
         ImageDraw.Draw(layer).text((bx - l, by - t), brand, font=bf, fill=150)
         canvas.paste(Image.new("RGB", canvas.size, tone.text), (0, 0), layer)
+        _host_badge(canvas, bx, by + (b - t), int(bf.size * 3.0))
     return canvas
+
+
+def _host_badge(canvas: Any, right: int, bottom: int, height: int) -> None:
+    """署名左边放虚拟主持人的头肩像:主页一排封面里认得出是同一个人。没开 / 没素材就不放。"""
+    from PIL import Image
+
+    from ... import config
+    from .. import host
+
+    if not config.HOST_ENABLED or not host.available():
+        return
+    try:
+        im = Image.open(host.sprite_dir() / "closed.png").convert("RGBA")
+    except OSError:
+        return
+    im = im.crop((0, 0, im.width, int(im.height * 0.62)))  # 头肩
+    bbox = im.getbbox()
+    if bbox:
+        im = im.crop(bbox)
+    im = im.resize((max(1, round(im.width * height / im.height)), height), Image.LANCZOS)
+    gap = max(6, height // 8)
+    canvas.paste(im, (right - gap - im.width, bottom - height), im)

@@ -78,7 +78,8 @@ def _title_entry(pid: str, project: dict[str, Any], title: str) -> dict[str, Any
         inp = packaging.build_inputs(pid, orchestrator._profile(project))
     except Exception as exc:  # noqa: BLE001
         return _entry("title", "发布标题", [f"读不到包装输入:{exc}"])
-    problems = packaging.check_title(title, inp["allowed"], inp["terms"], inp["avoid"])
+    problems = packaging.check_title(title, inp["allowed"], inp["terms"], inp["avoid"],
+                                     name=inp.get("name", ""))
     # 禁用词、数字没出处、空标题是硬伤;长短、搜索词式写法只提醒
     hard = [p for p in problems if "禁用词" in p or "数字" in p or p == "空标题"]
     if hard:

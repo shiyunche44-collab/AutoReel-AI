@@ -532,6 +532,46 @@ def test_hook_payoff_flags_unrelated_second_sentence():
     assert hook_payoff_lint(two)
 
 
+
+def test_hook_verdict_lint_stance_opening_needs_verdict():
+    from app.pipeline import variety
+    from app.pipeline.script_gen.hook import hook_verdict_lint
+
+    flat = [_seg(0, "开场", "聊聊小米YU7这台车。后面看配置。")]
+    issues = hook_verdict_lint(flat)
+    assert [i.severity for i in issues] == ["warning"] and "判断" in issues[0].message
+    assert hook_verdict_lint(flat, variety.OPENINGS["conflict"])
+    # 立场词 / 数字 / 对比词,任一即可
+    assert hook_verdict_lint([_seg(0, "开场", "这台车真正值的是底盘。")]) == []
+    assert hook_verdict_lint([_seg(0, "开场", "多花3万买快充。")]) == []
+    assert hook_verdict_lint([_seg(0, "开场", "YU7还是Model Y。")]) == []
+    # 只看第一句:判断写在第二句不算
+    assert hook_verdict_lint([_seg(0, "开场", "聊聊小米YU7。它其实不贵。")])
+    # 不是开场段:不查
+    assert hook_verdict_lint([_seg(0, "使用成本", "聊聊电费。")]) == []
+
+
+def test_hook_verdict_lint_question_opening_needs_answer():
+    from app.pipeline import variety
+    from app.pipeline.script_gen.hook import hook_verdict_lint
+
+    q = variety.OPENINGS["question"]
+    assert not q.stance
+    # 问句本身不算缺判断,但第 2 句要给答案
+    off = [_seg(0, "开场", "冬天它到底能跑多远?先说外观。")]
+    issues = hook_verdict_lint(off, q)
+    assert [i.severity for i in issues] == ["warning"] and "答案" in issues[0].message
+    assert hook_verdict_lint([_seg(0, "开场", "冬天它到底能跑多远?大约400公里。")], q) == []
+    assert hook_verdict_lint([_seg(0, "开场", "冬天它到底能跑多远?能跑远,但要预热电池。")],
+                             q) == []
+    assert hook_verdict_lint([_seg(0, "开场", "冬天它到底能跑多远?看实测。", ["f1"])], q) == []
+    # 单句问题开场:看下一段;没有下一段也要报
+    assert hook_verdict_lint([_seg(0, "开场", "冬天它到底能跑多远?"),
+                              _seg(1, "续航", "先说一下车身颜色。")], q)
+    assert hook_verdict_lint([_seg(0, "开场", "冬天它到底能跑多远?")], q)
+    assert hook_verdict_lint([_seg(0, "使用成本", "电费贵吗?先说外观。")], q) == []
+
+
 def test_density_lint_too_thin_too_dense_and_number_overload(auto):
     from app.pipeline.script_gen.lint_checks import density_lint
 

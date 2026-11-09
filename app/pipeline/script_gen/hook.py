@@ -166,8 +166,49 @@ def hook_payoff_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
     second, seg = nxt
     if not second:
         return []
-    if (_grams(first) & _grams(second)) or has_numeric_claim(second) or seg.fact_refs:
+    if _answers(first, second, seg):
         return []
     return [LintIssue(seg.idx, "warning",
                       f"开场第 2 句没有承接第 1 句的悬念:「{first}」→「{second}」"
                       "(第 2 句应直接兑现:给出依据、数字或原因)")]
+
+
+#: 第一句里的对比 / 转折痕迹:有了它,第一句就不是平铺直叙
+_VERDICT_CONTRAST = ("但", "却", "不是", "而是", "vs", "VS", "还是", "反而", "比")
+
+
+def _answers(first: str, second: str, seg: ScriptSegment) -> bool:
+    """第 2 句有没有接住第 1 句:复述关键词、带数字或事实引用都算。"""
+    return bool((_grams(first) & _grams(second)) or has_numeric_claim(second) or seg.fact_refs)
+
+
+def hook_verdict_lint(segments: Sequence[ScriptSegment],
+                      opening: variety.Opening | None = None) -> list[LintIssue]:
+    """开场第一句有没有给出明确判断(warning)。
+
+    观众划走前只听得到第一句。立场式开场:第一句要么站队(立场词),要么有数字,
+    要么有对比 / 转折,三样都没有就是平铺直叙。问题开场:问句本身不是判断,
+    那就要求第 2 句马上给答案,别让悬念悬着。
+    """
+    if not segments or not _is_hook_section(segments[0].section):
+        return []
+    first = first_sentence(segments[0].text)
+    if not first:
+        return []
+    if opening is None or opening.stance:
+        if (any(w in first for w in _STANCE_WORDS) or any(w in first for w in _VERDICT_CONTRAST)
+                or has_numeric_claim(first)):
+            return []
+        return [LintIssue(segments[0].idx, "warning",
+                          f"开场第一句没有明确判断:「{first}」"
+                          "(给一个立场、一个数字或一组对比,让人第一句就知道你的结论)")]
+    nxt = _second_sentence(segments)
+    if nxt is None:
+        return [LintIssue(segments[0].idx, "warning",
+                          f"问题开场「{first}」后面没有答案:第 2 句应直接给出结论或数字")]
+    second, seg = nxt
+    if second and _answers(first, second, seg):
+        return []
+    return [LintIssue(seg.idx, "warning",
+                      f"问题开场没有马上给答案:「{first}」→「{second}」"
+                      "(第 2 句应直接回答:给出结论、数字或依据)")]

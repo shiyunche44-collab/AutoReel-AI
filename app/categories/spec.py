@@ -256,6 +256,8 @@ class Vocab:
     persona: str = ""
     #: 人设的口头禅,全片每个最多 CATCHPHRASE_MAX 次,多了就是模板
     catchphrases: tuple[str, ...] = ()
+    #: 栏目:选题类型(model / band / topic,见 team.editor.slot_kind)→ 栏目名。空 = 不挂栏目
+    series: dict[str, str] = field(default_factory=dict)
     #: 分析视角:id -> 这个视角要回答什么
     lenses: dict[str, str] = field(default_factory=dict)
     #: 论证手法库:每章换一种,写进分析和脚本提示词

@@ -84,6 +84,8 @@ class Look:
     cam_push: bool = False
     #: 成片混入音效:章节切换 whoosh、关键词弹出 pop(见 sfx.py)
     sfx: bool = False
+    #: 角落常驻虚拟主持人(host.py);全局开关另见 config.HOST_ENABLED
+    host: bool = False
     # ---- 字幕 ----
     #: box = 半透明黑底条;outline = 白字描边无底;band = 色块底(用 sub_box 的颜色)
     subs: str = "box"
@@ -186,6 +188,7 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         accent=(255, 90, 31),
         subs="outline", concept="studio", chapter_bar=False, video_first=True, panel=False,
         auto_pick=True, sub_layer=False, cam_push=True, sfx=False, broll_cycle=("plain",),
+        host=True,
     ),
 )}
 

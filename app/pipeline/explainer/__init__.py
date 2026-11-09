@@ -40,6 +40,7 @@ from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
 from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, intro, outro, overlays, rhythm  # noqa: F401
 from .. import render as render_mod  # noqa: F401
+from .. import host as host_mod  # noqa: F401
 from ..grounding import numbers_in  # noqa: F401
 
 from .consts import (  # noqa: E402,F401
@@ -683,6 +684,11 @@ def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Seque
         return None
 
 
+def _host_seed(project_id: str) -> int:
+    """眨眼节奏按项目固定,重合成不变。"""
+    return sum(ord(c) for c in project_id)
+
+
 def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
             title: str, llm: Any = None) -> dict[str, Any]:
     """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。"""
@@ -716,6 +722,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
         dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
+        host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
+                                  seed=_host_seed(project_id)),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -794,6 +802,8 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
         dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
+        host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
+                                  seed=_host_seed(project_id)),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))

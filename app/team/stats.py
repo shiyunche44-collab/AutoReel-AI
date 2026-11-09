@@ -13,8 +13,8 @@
 这个真正的瓶颈上。这两个指标创作者中心早就给了,之前一直躺在库里没人学。
 
 **小样本保护**:一组的平均倍数向 1 收缩 —— `(倍数之和 + K) / (条数 + K)`,K=2,
-相当于先假设每组都「和平常一样」,数据多了才慢慢偏离。少于 3 条不下结论,
-3–5 条置信度「中」,6 条以上「高」;收缩后偏离不到 15% 也不算结论。
+相当于先假设每组都「和平常一样」,数据多了才慢慢偏离。少于 6 条不下结论,
+6–9 条置信度「中」,10 条以上「高」;收缩后偏离不到 15% 也不算结论。
 """
 
 from __future__ import annotations
@@ -27,8 +27,9 @@ from .features import DIMENSIONS
 
 #: 收缩强度(先验相当于 K 条「和平常一样」的作品)
 PRIOR = 2.0
-MIN_N = 3
-HIGH_N = 6
+#: 每条作品只有几十播放,3–4 条的倍数基本是噪声
+MIN_N = 6
+HIGH_N = 10
 #: 收缩后至少偏离这么多才写成结论
 MIN_EFFECT = 0.15
 METRICS = ("views", "completion_rate", "avg_watch_sec", "retention_2s")
@@ -167,7 +168,7 @@ def learn_benchmark(posts: list[dict[str, Any]], week: str,
     """对标作品(`benchmark.prior_rows`:{id, title, burst, features})→ 先验结论行。
 
     倍数 = 一组的平均爆款倍数 ÷ 全部对标作品的平均爆款倍数,收缩 K=6、夹在 0.8–1.25。
-    我们自己在同一取值上已经有 ≥3 条作品的不算:自己的数据说了算。"""
+    我们自己在同一取值上已经有 ≥MIN_N(6)条作品的不算(和自己数据开始下结论的门槛对齐):自己的数据说了算。"""
     posts = [p for p in posts if p.get("burst")]
     if not posts:
         return []

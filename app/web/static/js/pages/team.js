@@ -690,7 +690,7 @@ function learningRow(l) {
   const bench = l.source === 'benchmark';
   return h('div', { class: `rowline${off || l.shadowed ? ' is-off' : ''}` },
     badge(l.effect >= 1 ? '多做' : '少做', l.effect >= 1 ? 'success' : 'warning'),
-    bench ? h('span', { title: '对标号的先验:倍数夹在 0.8–1.25;自己同一取值攒够 3 条就让位' }, badge('对标', 'brand')) : null,
+    bench ? h('span', { title: '对标号的先验:倍数夹在 0.8–1.25;自己同一取值攒够 6 条就让位' }, badge('对标', 'brand')) : null,
     l.source === 'beat' ? h('span', { title: '进度条分析的跳过率落到每一拍上学的:留人倍数 = 1 ÷ 相对跳过率,回灌分镜挑版式和切片挑段' }, badge('逐拍', 'brand')) : null,
     l.source === 'reply' ? h('span', { title: '运营官回复后 24 小时的评论增量 / 原评论者再留言率学的,回灌回复写法的挑选(仍留 30% 探索)' }, badge('互动', 'brand')) : null,
     h('span', { class: 'grow small', title: ev }, bench ? l.text.replace(/^对标号 /, '') : l.text),
@@ -912,7 +912,7 @@ function renderIteration() {
     h('h3', { class: 'iter-h iter-h-gap' }, '写脚本时带的经验'),
     it.script_hint
       ? h('pre', { class: 'iter-hint small' }, it.script_hint)
-      : h('div', { class: 'subtle small' }, '还没有:至少 4 条有 2 秒留存的作品才给开场正反例'));
+      : h('div', { class: 'subtle small' }, '还没有:至少 6 条有 2 秒留存的作品才给开场正反例'));
   $('#iter-log').replaceChildren(h('h3', { class: 'iter-h' }, '变更日志'),
     ...(it.log.length ? it.log.map((r) => h('div', { class: 'rowline' },
       h('span', { class: 'subtle small num' }, relTime(r.ts)),
@@ -1099,7 +1099,7 @@ function render() {
     ? `${DATA.report.week} · ${relTime(DATA.report.created_at)}${DATA.report.source === 'template' ? ' · 模板' : ''}` : '';
   const book = DATA.playbook || [];
   $('#playbook-list').replaceChildren(
-    ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 3 条作品、效果偏离 15% 以上才会写进来')]),
+    ...(book.length ? book.map(learningRow) : [empty('还没有结论:同一种做法至少 6 条作品、效果偏离 15% 以上才会写进来')]),
     ...(DATA.tuning || []).map(tuningRow));
   const exps = DATA.experiments || [];
   $('#experiment-box').replaceChildren(...(exps.length
@@ -1110,7 +1110,7 @@ function render() {
         ? h('span', { class: 'subtle' }, ' · 已攒够,下次复盘换下一个')
         : h('span', { class: 'subtle' }, ` · 还差 ${exp.left} 条`))),
     h('div', { class: 'subtle small' },
-      '几个实验轮着来:一条片只固定其中一个,其余照常换 —— 每个攒够 3 条才比得出好坏')]
+      '几个实验轮着来:一条片只固定其中一个,其余照常换 —— 每个连发 5 条,同一取值攒够 6 条才比得出好坏')]
     : [empty('没有在跑的配对实验(复盘官每周日下发)')]));
   renderIteration();
   renderPreference();

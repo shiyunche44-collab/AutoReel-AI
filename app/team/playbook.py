@@ -32,7 +32,7 @@ PROMPT_DIMENSIONS = ("subject", "theme", "duration", "aspect")
 #: 配对实验计划存在 team_settings 里的键
 PLAN_KEY = "experiment_plan"
 #: 一个取值要几条样本才够下一条结论(统计的最低样本数)
-BLOCK_SIZE = 3
+BLOCK_SIZE = 5
 #: 同时最多几个实验(每个维度最多一个)
 MAX_PARALLEL = 3
 
@@ -129,8 +129,8 @@ def prompt_text(learnings: list[dict[str, Any]] | None = None, limit: int = 6) -
 HINT_DAYS = 30
 #: 诊断只看最近一周发的(老问题可能已经改了)
 HINT_DIAGNOSE_DAYS = 7
-#: 至少这么多条有 2 秒留存的作品才给正反例(两条好、两条差)
-HINT_MIN_WORKS = 4
+#: 至少这么多条有 2 秒留存的作品才给正反例(两条好、两条差,中间隔开几条)
+HINT_MIN_WORKS = 6
 HINT_MAX_CHARS = 600
 #: 早期诊断的问题 → 写脚本的硬规则(`distribution` 是封面 / 标题的事,不进脚本)
 SCRIPT_RULE = {
@@ -274,7 +274,7 @@ def plan(dimension: str | None = None) -> dict[str, Any] | None:
 
     同时有几个实验时,**一条片只固定其中一个**:挑还差得最多的那个(并列按下发顺序)。
     几个变量钉在同一批片上就分不清是谁的功劳;轮着来,每周 7 条片也不会闲着 ——
-    单个实验 3 条就做完,以前剩下的几天只能等下周复盘。
+    单个实验 5 条就做完,以前剩下的几天只能等下周复盘。
 
     `dimension`:调用方问的维度;当前轮到的不是它 → None(那个维度照常挑)。
     做够了就自动回到正常挑选 —— 计划是「凑够样本」用的,不是「永远只用这一种」。"""

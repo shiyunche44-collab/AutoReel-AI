@@ -9,7 +9,7 @@ from .. import variety
 
 from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
 from .scrub import _BENIGN_FIRST_RE, _COMPETITOR_MARKERS, _DISPARAGING_TERMS, _is_comparison_section, vendor_attribution
-from .hook import hook_lint, hook_payoff_lint, stance_lint
+from .hook import hook_lint, hook_payoff_lint, hook_verdict_lint, stance_lint
 from .lint_checks import attribution_lint, conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, firsthand_lint, hero_lint, ledger_use_lint, meaning_lint, number_source_lint, range_lint, review_use_lint, rival_lint, stock_phrase_lint, term_lint, thesis_lint
 from .spoken import spoken_lint
 
@@ -162,8 +162,10 @@ def compliance_lint(
                     break
 
     issues.extend(hook_lint(segments))
-    issues.extend(stance_lint(segments, variety.opening(variant, theme)))
+    opening = variety.opening(variant, theme)
+    issues.extend(stance_lint(segments, opening))
     issues.extend(hook_payoff_lint(segments))
+    issues.extend(hook_verdict_lint(segments, opening))
     issues.extend(density_lint(segments, profile, facts))
     # 车评稿不要求每个数字都跟一句"所以呢":参数是证据,不必每个都解释
     if not getattr(theme, "reviewer", False):

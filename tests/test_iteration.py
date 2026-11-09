@@ -74,7 +74,7 @@ def test_review_logs_weights_and_experiments(fresh_db):
 
     now = dt.datetime(2026, 10, 25, 20, 0)
     t0 = now.timestamp() - 2 * 86400
-    for i in range(4):
+    for i in range(6):
         _published(fresh_db, f"n{i}", t0=t0 - i * 3600, views=100, kind="number")
         _published(fresh_db, f"p{i}", t0=t0 - i * 3600, views=400, kind="person")
     coach.review(now)
@@ -89,7 +89,7 @@ def test_review_logs_weights_and_experiments(fresh_db):
     assert len(fresh_db.list_iteration_log()) == len(rows)
 
     view = iteration.overview(now.timestamp())
-    assert len(view["weeks"]) == iteration.WEEKS and view["weeks"][-1]["works"] == 8
+    assert len(view["weeks"]) == iteration.WEEKS and view["weeks"][-1]["works"] == 12
     assert view["experiments"] and all("label" in e and "left" in e for e in view["experiments"])
     assert view["log"][0]["kind_label"] in iteration.KIND_LABEL.values()
 

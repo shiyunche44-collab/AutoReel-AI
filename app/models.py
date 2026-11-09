@@ -202,6 +202,10 @@ class ProjectCreate(BaseModel):
     ending: str | None = Field(default=None, max_length=20)
     #: 视觉包(pipeline/looks.py 的 id)。为空 = 自动挑
     look: str | None = Field(default=None, max_length=20)
+    #: 栏目名(pipeline/series.py)。给了就固定「下期预告」结尾,封面挂「栏目·第N期」
+    series: str | None = Field(default=None, max_length=20)
+    #: 期号。空 = 按栏目自增;返工沿用原项目的期号
+    episode: int | None = Field(default=None, ge=1)
     #: 多车横评的车单(方向为 roundup 时必填);此时 subject 是选题名
     subjects: list[SubjectEntry] | None = Field(default=None, max_length=8)
 

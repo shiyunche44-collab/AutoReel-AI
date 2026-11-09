@@ -110,7 +110,15 @@ def build_context(project_id: str) -> md.ContentContext:
         source_note=str(render.get("source_note") or ""),
         category=str(row.get("category") or ""),
         subject_label=subject_label,
+        series=_series_name(row),
+        roundup=len(db.project_subjects(row)) > 1,
     )
+
+
+def _series_name(row: dict) -> str:
+    from ..pipeline import series, variety
+
+    return series.of_variant(variety.parse(row.get("variant")))[0]
 
 
 def forbidden_hits(text: str, category: str, theme: str = "") -> list[str]:

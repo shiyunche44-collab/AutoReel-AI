@@ -51,7 +51,7 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     **配对实验**:样本少说明这一组没法比。下周要把它补上 —— 同一个题材连发几条,
     只改这一个变量(开头 / 结尾 / 标题写法),其余保持一致。别的变量不动,比出来的
-    差值才是这个变量的功劳,攒够 3 条就能进统计。"""
+    差值才是这个变量的功劳,攒够样本(`stats.MIN_N`)就能进统计。"""
     from ..pipeline import knobs, looks, packaging, variety
 
     universe = {"opening": list(variety.OPENINGS), "ending": list(variety.ENDINGS),
@@ -65,7 +65,7 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         out.append({"dimension": dim, "value": value,
                     "label": f"{features.DIMENSION_LABEL[dim]}:{features.value_label(dim, value)}",
                     "n": n, "why": "还没试过" if not n else f"只有 {n} 条样本",
-                    "how": "配对实验:同一题材连发 3 条,只改这一个变量,其余不变"})
+                    "how": f"配对实验:同一题材连发 {playbook.BLOCK_SIZE} 条,只改这一个变量,其余不变"})
     return out
 
 
@@ -88,14 +88,15 @@ def _pool(rows: list[dict[str, Any]], early_rows: list[dict[str, Any]]) -> list[
 def build_plan(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """下一轮配对实验(最多 `playbook.MAX_PARALLEL` 个,每个维度一个):固定一个取值连发几条。
 
-    统计要同一维度 3 条样本才下得了结论,均匀轮着挑要十几条作品才凑得出第一条。
-    所以这里明确点名:哪个写法要补 3 条。几个实验并行,但一条片只照做其中一个
+    统计要同一维度 6 条样本才下得了结论,均匀轮着挑要十几条作品才凑得出第一条。
+    所以这里明确点名:哪个写法要连发 `BLOCK_SIZE` 条。几个实验并行,但一条片只照做其中一个
     (`playbook.plan` 轮流),不会两个变量钉在同一批片上。"""
     exps = {e["dimension"]: e for e in experiments(pool)}
     out = []
     for dim in PLAN_PRIORITY:
         e = exps.get(dim)
-        if e and e["n"] < playbook.BLOCK_SIZE:
+        # 门槛按统计的 MIN_N:BLOCK_SIZE(5)比 MIN_N(6)小,只看 BLOCK_SIZE 会卡在 5 条永远下不了结论
+        if e and e["n"] < stats.MIN_N:
             out.append({"dimension": dim, "value": e["value"],
                         "size": playbook.BLOCK_SIZE, "since": time.time()})
         if len(out) >= playbook.MAX_PARALLEL:
