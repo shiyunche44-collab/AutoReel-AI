@@ -479,6 +479,8 @@ TEAM_CHIEF_PUBLISH_GAP = max(10, int(os.getenv("TEAM_CHIEF_PUBLISH_GAP", "60")))
 #: 本项目的片子全是 AI 生成(TTS 配音 + 概念动画),所以默认开着。
 #: 真要发一条非 AI 的片子,单次请求用 `extra={"declare_ai": False}` 覆盖。
 DOUYIN_DECLARE_AI = os.getenv("DOUYIN_DECLARE_AI", "1") not in ("0", "false", "False")
+#: 发出去的作品自动加进同名合集(栏目名 = 合集名,要先在创作者中心建好合集)。
+DOUYIN_COLLECTIONS = os.getenv("DOUYIN_COLLECTIONS", "1") not in ("0", "false", "False")
 # --------------------------------------------------------------------------
 # 活跃官:主动去**别人**作品下评论 / 点赞 / 分享 / 关注。
 # 抖音《社区自律公约》32 条:用自动化手段、频率明显异于常人地评论/点赞/关注

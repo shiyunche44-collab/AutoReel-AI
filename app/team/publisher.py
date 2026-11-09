@@ -273,6 +273,14 @@ def sync() -> int:
 
 def run() -> str:
     changed = sync()
-    if not changed:
+    try:
+        from . import series_mix
+
+        added = series_mix.run_once()
+    except Exception as exc:  # noqa: BLE001 - 加合集是顺手的事,不能拖垮发布员
+        log.warning("加合集出错: %s", exc)
+        added = ""
+    if not changed and not added:
         raise Skip("没有发布状态变化")
-    return f"{changed} 条选题发布状态更新"
+    parts = [f"{changed} 条选题发布状态更新"] if changed else []
+    return ";".join(parts + ([f"合集:{added}"] if added else []))
