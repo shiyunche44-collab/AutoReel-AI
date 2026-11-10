@@ -2,6 +2,8 @@
 
     python scripts/host_sprites.py candidates            # 出 4 个 Q版候选 → data/host/candidates/
     python scripts/host_sprites.py poses <候选png> <id>   # 以选定图为参考出嘴型/眨眼 → app/assets/host/<id>/
+    python scripts/host_sprites.py expressions <id> [名字...]  # 出表情整图(惊讶/摇头/点赞/指向)→ 同一目录
+    python scripts/host_sprites.py expressions <id> --refit   # 不重新生图,只把已有原图重新抠图入库
 
 生图走方舟 Seedream(会消耗套餐额度);抠图用 rembg。出图没有 seed,不满意就重跑。
 """
@@ -76,6 +78,68 @@ def poses(ref: Path, host_id: str) -> None:
         print(_cutout(raw, raw_dir / f"cut_{name}.png"))
 
 
+#: 表情整图:闪现 1 秒左右的反应,整张替换(不对嘴型),所以允许姿势变化。名字与 host.REACTIONS 对应
+_SAME = "保持完全相同的角色、发型、眼镜、服装、画风和纯白背景,半身正面,无文字,"
+EXPRESSIONS = {
+    "surprised": _SAME + "表情改成惊讶:眼睛睁大,嘴巴张成圆形,双手抬到胸前张开",
+    "shake": _SAME + "表情改成不认同:皱眉,嘴角下撇,右手抬起在胸前摆手表示不行",
+    "thumbs": _SAME + "表情改成开心大笑,右手在胸前竖起大拇指",
+    "point": _SAME + "表情微笑张嘴说话,只抬起一只手、伸出一根食指指向画面右侧,另一只手自然垂下不做手势",
+}
+
+
+def _fit(cut: Path, raw: Path, out: Path, size: tuple[int, int]) -> Path:
+    """抠好的表情图 → 入库规格:补回被抠掉的白 T 恤,再按人物外框对齐到和闭嘴图一样的画布。
+
+    白底上的白衣服会被 rembg 当背景抠成半透明。真正的背景是从上 / 左 / 右三条边连进来的
+    全透明区(衣服一直画到下沿,所以底边不算);离它 5 像素以外、又没抠实的地方都是人物内部,
+    用原图颜色填实。"""
+    import numpy as np
+    from scipy import ndimage
+
+    rgba = Image.open(cut).convert("RGBA")
+    src = np.asarray(Image.open(raw).convert("RGB").resize(rgba.size, Image.LANCZOS))
+    px = np.asarray(rgba).copy()
+    alpha = px[..., 3]
+    labels, _ = ndimage.label(alpha < 20)
+    edge = set(labels[0]) | set(labels[:, 0]) | set(labels[:, -1])
+    outside = np.isin(labels, [k for k in edge if k])
+    holes = ~ndimage.binary_dilation(outside, iterations=5) & (alpha < 250)
+    px[holes, :3] = src[holes]
+    px[holes, 3] = 255
+    im = Image.fromarray(px, "RGBA")
+    im = im.crop(im.split()[3].getbbox())
+    w, h = size
+    im = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
+    canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+    canvas.alpha_composite(im.crop((0, 0, min(w, im.width), h)))
+    canvas.save(out)
+    return out
+
+
+def expressions(host_id: str, names: list[str] | None = None, refit: bool = False) -> None:
+    """以入库的闭嘴图为参考出表情整图。出图没有 seed:哪张不满意就单独重跑那一张。
+
+    `refit`:不重新生图,只把 data/host/<id>/ 里已有的原图重新抠图入库(不花额度)。"""
+    import io
+
+    d = ASSET_DIR / host_id
+    raw_dir = ROOT / "data" / "host" / host_id
+    base = Image.open(d / "closed.png").convert("RGBA")
+    flat = Image.new("RGB", base.size, (255, 255, 255))
+    flat.paste(base, mask=base.split()[3])
+    buf = io.BytesIO()
+    flat.save(buf, "PNG")
+    data = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    for name in names or list(EXPRESSIONS):
+        raw = raw_dir / f"{name}.png"
+        if not refit:
+            url = ark_image.generate_one(EXPRESSIONS[name], aspect_ratio="3:4", input_urls=[data])
+            _download(url, raw)
+        cut = _cutout(raw, raw_dir / f"cut_{name}.png", height=base.height)
+        print(_fit(cut, raw, d / f"{name}.png", base.size))
+
+
 #: 局部贴片框(相对宽高,以 720 高的闭嘴图为准):图生图出来的各张身体和脸型会有细微偏差,
 #: 整张切换会抖,所以只把嘴 / 眼这一小块对齐后贴回闭嘴底图
 PATCHES = {"half": (0.40, 0.44, 0.60, 0.56), "open": (0.40, 0.44, 0.60, 0.56),
@@ -137,6 +201,9 @@ if __name__ == "__main__":
     elif len(sys.argv) >= 4 and sys.argv[1] == "poses":
         poses(Path(sys.argv[2]), sys.argv[3])
         compose(sys.argv[3])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "expressions":
+        rest = [a for a in sys.argv[3:] if a != "--refit"]
+        expressions(sys.argv[2], rest or None, refit="--refit" in sys.argv)
     elif len(sys.argv) >= 3 and sys.argv[1] == "compose":
         compose(sys.argv[2])
     else:

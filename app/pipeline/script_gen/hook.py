@@ -16,6 +16,18 @@ _BASIS_WINDOW = 40
 
 #: 黄金三秒:第一句的字数上限(约 3 秒读完,按 5.5–5.8 字/秒)与禁用的开场套话
 HOOK_MAX_CHARS = 18
+#: 更紧的一档:平均只被看 8-13 秒的账号,第一句要在 2.5 秒内说完。超了只报 warning
+#: (`hook_verdict_lint`);团队片的开场候选按这个数写、按这个数筛(`choose_hook`)
+HOOK_TIGHT_CHARS = 14
+
+
+def spoken_len(text: str) -> int:
+    """念出来占多少字:空格不占时间。"""
+    return len(re.sub(r"\s+", "", text or ""))
+
+
+def hook_tight(text: str) -> bool:
+    return 0 < spoken_len(text) <= HOOK_TIGHT_CHARS
 #: 开场套话。命中即判定为"没抛钩子" —— 这些是自我介绍,不是钩子。
 #:
 #: 收得比直觉宽:模型实际写出来的是"朋友们好,今天聊小米YU7",只禁"今天来聊"会整条漏掉。
@@ -90,7 +102,7 @@ def hook_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
     first = first_sentence(first_seg.text)
     issues: list[LintIssue] = []
     # 字数按"念出来要多久"算:空格不占时间,数字一位算一个音
-    spoken = len(re.sub(r"\s+", "", first))
+    spoken = spoken_len(first)
     if spoken > HOOK_MAX_CHARS:
         issues.append(LintIssue(first_seg.idx, "error",
                                 f"开场第一句 {spoken} 字,超过黄金三秒的 {HOOK_MAX_CHARS} 字:"
@@ -189,26 +201,34 @@ def hook_verdict_lint(segments: Sequence[ScriptSegment],
     观众划走前只听得到第一句。立场式开场:第一句要么站队(立场词),要么有数字,
     要么有对比 / 转折,三样都没有就是平铺直叙。问题开场:问句本身不是判断,
     那就要求第 2 句马上给答案,别让悬念悬着。
+
+    另外第一句超过 `HOOK_TIGHT_CHARS` 字也报一条:18 字是硬上限(`hook_lint` 的 error),
+    14 字是要争取的 —— 第一句念完观众才决定留不留。
     """
     if not segments or not _is_hook_section(segments[0].section):
         return []
     first = first_sentence(segments[0].text)
     if not first:
         return []
+    issues: list[LintIssue] = []
+    if HOOK_TIGHT_CHARS < spoken_len(first) <= HOOK_MAX_CHARS:
+        issues.append(LintIssue(segments[0].idx, "warning",
+                                f"开场第一句 {spoken_len(first)} 字,争取压到 {HOOK_TIGHT_CHARS} 字内:"
+                                f"「{first}」(去掉铺垫,只留判断)"))
     if opening is None or opening.stance:
         if (any(w in first for w in _STANCE_WORDS) or any(w in first for w in _VERDICT_CONTRAST)
                 or has_numeric_claim(first)):
-            return []
-        return [LintIssue(segments[0].idx, "warning",
-                          f"开场第一句没有明确判断:「{first}」"
-                          "(给一个立场、一个数字或一组对比,让人第一句就知道你的结论)")]
+            return issues
+        return issues + [LintIssue(segments[0].idx, "warning",
+                                   f"开场第一句没有明确判断:「{first}」"
+                                   "(给一个立场、一个数字或一组对比,让人第一句就知道你的结论)")]
     nxt = _second_sentence(segments)
     if nxt is None:
-        return [LintIssue(segments[0].idx, "warning",
-                          f"问题开场「{first}」后面没有答案:第 2 句应直接给出结论或数字")]
+        return issues + [LintIssue(segments[0].idx, "warning",
+                                   f"问题开场「{first}」后面没有答案:第 2 句应直接给出结论或数字")]
     second, seg = nxt
     if second and _answers(first, second, seg):
-        return []
-    return [LintIssue(seg.idx, "warning",
-                      f"问题开场没有马上给答案:「{first}」→「{second}」"
-                      "(第 2 句应直接回答:给出结论、数字或依据)")]
+        return issues
+    return issues + [LintIssue(seg.idx, "warning",
+                               f"问题开场没有马上给答案:「{first}」→「{second}」"
+                               "(第 2 句应直接回答:给出结论、数字或依据)")]

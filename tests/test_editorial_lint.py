@@ -577,6 +577,17 @@ def test_hook_verdict_lint_stance_opening_needs_verdict():
     assert hook_verdict_lint([_seg(0, "使用成本", "聊聊电费。")]) == []
 
 
+def test_hook_verdict_lint_flags_first_sentence_over_14_chars():
+    from app.pipeline.script_gen.hook import hook_verdict_lint
+
+    long = hook_verdict_lint([_seg(0, "开场", "这台车其实不值这个价,原因有三个。")])
+    assert len(long) == 1 and not long[0].is_error and "14 字" in long[0].message
+    assert hook_verdict_lint([_seg(0, "开场", "这台车其实不值这个价。")]) == []
+    # 超过 18 字归 hook_lint 报 error,这里不重复报
+    assert not any("14 字" in i.message for i in hook_verdict_lint(
+        [_seg(0, "开场", "这台车其实真的完全不值现在这个价格啊朋友。")]))
+
+
 def test_hook_verdict_lint_question_opening_needs_answer():
     from app.pipeline import variety
     from app.pipeline.script_gen.hook import hook_verdict_lint

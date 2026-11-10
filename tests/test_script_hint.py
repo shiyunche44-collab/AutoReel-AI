@@ -91,15 +91,42 @@ def test_choose_hook_filters_and_picks_best():
 
 def test_choose_hook_gives_up_quietly():
     profile = load_profile("auto_long")
-    one = _Capture([{"candidates": [{"text": "这车最该买的是低配"}]}])
+    one = _Capture([{"candidates": [{"text": "这台车真正该买的其实是最便宜的低配"}]}])
     assert script_gen.choose_hook(subject="x", profile=profile, facts=_facts(), llm=one) is None
-    assert len(one.calls) == 1  # 不到两版就不评审
+    assert len(one.calls) == 2  # 再写一轮还是不到两版:不评审
 
     class Broken:
         def structured(self, *a, **k):
             raise RuntimeError("timeout")
 
     assert script_gen.choose_hook(subject="x", profile=profile, facts=_facts(), llm=Broken()) is None
+
+
+def test_choose_hook_prefers_short_first_sentence():
+    """够短(14 字内)的不到两版 → 再写一轮;之后只在够短的里挑。"""
+    profile = load_profile("auto_long")
+    long_a, long_b = "这台车真正该买的其实是最便宜的低配", "多出来的那些钱买到的其实只是省心"
+    llm = _Capture([
+        {"candidates": [{"text": long_a}, {"text": long_b}, {"text": "低配才是它的甜点"}]},
+        {"candidates": [{"text": "顶配多花的钱不值"}]},
+        {"scores": [{"i": 0, "score": 7}, {"i": 1, "score": 9}]},
+    ])
+    got = script_gen.choose_hook(subject="x", profile=profile, facts=_facts(), llm=llm)
+    assert "14 字以内" in llm.calls[0][0] and "太长" in llm.calls[1][1]
+    assert [c["text"] for c in got["candidates"]] == ["低配才是它的甜点", "顶配多花的钱不值"]
+    assert got["chosen"] == "顶配多花的钱不值"
+
+    # 两轮下来只有一版够短:直接用它,不评审
+    one = _Capture([{"candidates": [{"text": long_a}, {"text": "低配才是它的甜点"}]},
+                    {"candidates": [{"text": long_b}]}])
+    got = script_gen.choose_hook(subject="x", profile=profile, facts=_facts(), llm=one)
+    assert got["chosen"] == "低配才是它的甜点" and len(one.calls) == 2
+
+    # 一版够短的都没有:退回在超长的里挑
+    none = _Capture([{"candidates": [{"text": long_a}]}, {"candidates": [{"text": long_b}]},
+                     {"scores": [{"i": 1, "score": 8}]}])
+    assert script_gen.choose_hook(subject="x", profile=profile, facts=_facts(),
+                                  llm=none)["chosen"] == long_b
 
 
 def test_choose_hook_carries_hint(monkeypatch):

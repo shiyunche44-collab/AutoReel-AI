@@ -91,6 +91,8 @@ from .scrub import (  # noqa: E402,F401
 from .hook import (  # noqa: E402,F401
     HOOK_FILLER,
     HOOK_MAX_CHARS,
+    HOOK_TIGHT_CHARS,
+    hook_tight,
     HOOK_SYSTEM,
     JUDGE_SYSTEM,
     _BASIS_WINDOW,
@@ -376,6 +378,9 @@ def choose_hook(*, subject: str, profile: CategoryProfile, facts: Sequence[Fact]
 
     返回 {chosen, candidates: [{text, fact_refs, score, why}]};能用的不到两版、
     或者 LLM 出错 → None(照常写脚本,不挑)。多两次短 LLM 调用。
+
+    候选按 `HOOK_TIGHT_CHARS` 字写。够短的不到两版就再写一轮(只多这一次);
+    之后有两版以上够短的就只在它们里挑,只有一版就直接用它,一版都没有才退回在超长的里挑。
     `tension`:车评分析得出的核心矛盾,开场围绕它写。"""
     facts = [f for f in usable_facts(facts) if not f.compare_with]
     fact_ids = {f.id for f in facts}
@@ -387,18 +392,29 @@ def choose_hook(*, subject: str, profile: CategoryProfile, facts: Sequence[Fact]
         f"- 本账号的经验:\n{hint}\n" if hint else "",
     ))
     try:
-        data = llm.structured(
-            HOOK_SYSTEM.format(subject=subject, n=n, max_chars=HOOK_MAX_CHARS, extra=extra,
-                               facts="\n".join(f"- {f.id} | {f.claim}" for f in facts) or "(无)"),
-            f"写 {n} 版第一句。", required_keys=["candidates"], temperature=0.9)
-        cands = []
-        for c in data.get("candidates") or []:
-            if not isinstance(c, dict):
-                continue
-            text = first_sentence(str(c.get("text") or ""))
-            refs = [str(r) for r in (c.get("fact_refs") or []) if str(r)]
-            if _hook_ok(text, refs, profile, fact_ids) and text not in {x["text"] for x in cands}:
-                cands.append({"text": text, "fact_refs": refs, "score": None, "why": ""})
+        system = HOOK_SYSTEM.format(
+            subject=subject, n=n, max_chars=HOOK_TIGHT_CHARS, extra=extra,
+            facts="\n".join(f"- {f.id} | {f.claim}" for f in facts) or "(无)")
+        cands: list[dict[str, Any]] = []
+        for ask in (f"写 {n} 版第一句。",
+                    f"上一轮写得太长。重写 {n} 版第一句,每句必须在 {HOOK_TIGHT_CHARS} 字以内,"
+                    "去掉铺垫只留判断。"):
+            data = llm.structured(system, ask, required_keys=["candidates"], temperature=0.9)
+            for c in data.get("candidates") or []:
+                if not isinstance(c, dict):
+                    continue
+                text = first_sentence(str(c.get("text") or ""))
+                refs = [str(r) for r in (c.get("fact_refs") or []) if str(r)]
+                if (_hook_ok(text, refs, profile, fact_ids)
+                        and text not in {x["text"] for x in cands}):
+                    cands.append({"text": text, "fact_refs": refs, "score": None, "why": ""})
+            if sum(hook_tight(c["text"]) for c in cands) >= 2:
+                break
+        tight = [c for c in cands if hook_tight(c["text"])]
+        if len(tight) == 1:
+            return {"chosen": tight[0]["text"], "candidates": cands}
+        if len(tight) >= 2:
+            cands = tight
         if len(cands) < 2:
             return None
         judged = llm.structured(

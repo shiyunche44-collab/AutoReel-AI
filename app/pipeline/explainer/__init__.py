@@ -41,6 +41,7 @@ from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
 from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, intro, outro, overlays, rhythm  # noqa: F401
 from .. import render as render_mod  # noqa: F401
 from .. import host as host_mod  # noqa: F401
+from .. import variety  # noqa: F401
 from ..grounding import numbers_in  # noqa: F401
 
 from .consts import (  # noqa: E402,F401
@@ -739,7 +740,8 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
-                                  seed=_host_seed(project_id)),
+                                  seed=_host_seed(project_id),
+                                  variant=variety.parse(project.get("variant"))),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -819,7 +821,8 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         dissolve_into=chapter_starts(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
-                                  seed=_host_seed(project_id)),
+                                  seed=_host_seed(project_id),
+                                  variant=variety.parse(project.get("variant"))),
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
