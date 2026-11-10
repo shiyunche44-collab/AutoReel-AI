@@ -33,8 +33,9 @@ PROMPT_DIMENSIONS = ("subject", "theme", "duration", "aspect")
 PLAN_KEY = "experiment_plan"
 #: 一个取值要几条样本才够下一条结论(统计的最低样本数)
 BLOCK_SIZE = 5
-#: 同时最多几个实验(每个维度最多一个)
-MAX_PARALLEL = 3
+#: 同时最多几个实验。只开 1 个:一周 7 条片,几个实验轮着做每个只分到两三条,
+#: 哪个都攒不够样本;一个做完(`BLOCK_SIZE` 条)下次复盘再换下一个
+MAX_PARALLEL = 1
 
 
 def _geo_mean(values: list[float]) -> float:
@@ -272,9 +273,9 @@ def progress() -> list[dict[str, Any]]:
 def plan(dimension: str | None = None) -> dict[str, Any] | None:
     """这条新片该照做的配对实验:{dimension, value}。没有 / 都做够了 → None。
 
-    同时有几个实验时,**一条片只固定其中一个**:挑还差得最多的那个(并列按下发顺序)。
-    几个变量钉在同一批片上就分不清是谁的功劳;轮着来,每周 7 条片也不会闲着 ——
-    单个实验 5 条就做完,以前剩下的几天只能等下周复盘。
+    现在同时只开一个实验(`MAX_PARALLEL`)。`MAX_PARALLEL` 调大后有几个实验时,
+    **一条片只固定其中一个**:挑还差得最多的那个(并列按下发顺序)——
+    几个变量钉在同一批片上就分不清是谁的功劳。
 
     `dimension`:调用方问的维度;当前轮到的不是它 → None(那个维度照常挑)。
     做够了就自动回到正常挑选 —— 计划是「凑够样本」用的,不是「永远只用这一种」。"""

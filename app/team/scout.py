@@ -20,6 +20,7 @@ FRESH_HOURS = 12
 COMPARE_HOURS = 24
 #: 有名次的来源(榜单)
 RANKED = ("dongchedi.sales", "dongchedi.hot")
+RANK_LABEL = {"dongchedi.sales": "销量榜", "dongchedi.hot": "热度榜"}
 
 
 def snapshot_rows(items: Iterable[Any]) -> list[dict[str, Any]]:

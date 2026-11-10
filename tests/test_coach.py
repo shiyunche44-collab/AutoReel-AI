@@ -284,7 +284,7 @@ def test_coach_writes_experiment_plan(fresh_db):
     plans = fresh_db.get_team_setting(playbook.PLAN_KEY, None)
     assert plans[0]["dimension"] == "opening"
     assert plans[0]["size"] == playbook.BLOCK_SIZE and plans[0]["value"]
-    assert 1 < len(plans) <= playbook.MAX_PARALLEL  # 并行几个实验,每个维度一个
+    assert len(plans) == playbook.MAX_PARALLEL == 1  # 一次只开一个实验
     assert len({p["dimension"] for p in plans}) == len(plans)
 
 

@@ -97,10 +97,18 @@ def _publish(db, pid, *, opening, t0):
                            "variant": json.dumps({"title_kind": "number", "cover": "a"})})
 
 
-def test_parallel_plans_take_turns(fresh_db):
+def test_parallel_plans_take_turns(fresh_db, monkeypatch):
     from app.team import playbook
 
     t0 = time.time()
+    plans = [{"dimension": "opening", "value": "conflict", "size": 3, "since": t0},
+             {"dimension": "pace", "value": "fast", "size": 3, "since": t0}]
+    # 默认一次只开一个:库里存着几个也只认第一个
+    fresh_db.set_team_setting(playbook.PLAN_KEY, plans)
+    assert [p["dimension"] for p in playbook.stored_plans()] == ["opening"]
+    assert playbook.plan("pace") is None
+    # 调大并行数后:轮流
+    monkeypatch.setattr(playbook, "MAX_PARALLEL", 3)
     fresh_db.set_team_setting(playbook.PLAN_KEY, [
         {"dimension": "opening", "value": "conflict", "size": 3, "since": t0},
         {"dimension": "pace", "value": "fast", "size": 3, "since": t0},

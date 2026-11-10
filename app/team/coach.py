@@ -69,6 +69,15 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _next_experiments(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """周报文字里提的「下周试什么」:和真正下发的计划一致(样本还不够的前 `MAX_PARALLEL` 个)。
+
+    `report["experiments"]` 是每个维度各一个候选(页面上都列出来);文字里全念一遍,
+    读的人和写结论的 LLM 都会以为下周要同时试这么多。"""
+    return [e for e in report.get("experiments") or []
+            if e["n"] < stats.MIN_N][:playbook.MAX_PARALLEL]
+
+
 def _work(r: dict[str, Any]) -> dict[str, Any]:
     o = r["outcome"]
     return {"pub_id": r["pub_id"], "project_id": r["project_id"], "title": r["title"],
@@ -86,11 +95,11 @@ def _pool(rows: list[dict[str, Any]], early_rows: list[dict[str, Any]]) -> list[
 
 
 def build_plan(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """下一轮配对实验(最多 `playbook.MAX_PARALLEL` 个,每个维度一个):固定一个取值连发几条。
+    """下一轮配对实验(最多 `playbook.MAX_PARALLEL` 个,现在是 1 个):固定一个取值连发几条。
 
     统计要同一维度 6 条样本才下得了结论,均匀轮着挑要十几条作品才凑得出第一条。
-    所以这里明确点名:哪个写法要连发 `BLOCK_SIZE` 条。几个实验并行,但一条片只照做其中一个
-    (`playbook.plan` 轮流),不会两个变量钉在同一批片上。"""
+    所以这里明确点名:哪个写法要连发 `BLOCK_SIZE` 条。按 `PLAN_PRIORITY` 挑第一个样本还不够的
+    维度;它做够了,下次复盘自然轮到下一个。"""
     exps = {e["dimension"]: e for e in experiments(pool)}
     out = []
     for dim in PLAN_PRIORITY:
@@ -168,7 +177,7 @@ def _facts(report: dict[str, Any]) -> str:
     lines += activator.effect_lines(engage.get("active"))
     lines += health.report_lines(report.get("health"))
     lines += ["打法结论:" + x for x in report["learnings"]] or ["打法结论:样本还不够,没有结论"]
-    lines += [f"下周可试:{e['label']}({e['why']})" for e in report["experiments"]]
+    lines += [f"下周可试:{e['label']}({e['why']})" for e in _next_experiments(report)]
     bench = report.get("benchmark") or {}
     lines += [f"对标爆款:《{b['title']}》{b['account']},是该号平常的 {b['burst']:g} 倍"
               for b in bench.get("theirs", [])[:3]]
@@ -190,7 +199,7 @@ def fallback_text(report: dict[str, Any]) -> dict[str, Any]:
         summary += "最明显的结论:" + report["learnings"][0] + "。"
     else:
         summary += f"近 {report['window_days']} 天只有 {t['works']} 条作品有完整数据,还不够下结论。"
-    nxt = [f"试试{e['label']}({e['why']})" for e in report["experiments"]][:3]
+    nxt = [f"试试{e['label']}({e['why']})" for e in _next_experiments(report)]
     for e in early:
         for a in e.get("advice") or []:
             nxt.insert(0, f"《{e['title'][:20]}》: {a}")

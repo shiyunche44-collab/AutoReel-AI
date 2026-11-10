@@ -4,8 +4,8 @@
 已批的不碰。所以「每周批一次」和「每天补位」是同一个动作。
 
 **选题来自 `topics.suggest`**(和首页热点选题同一套规则:车型必须在热点里出现、
-禁用词剔除、角度去重),这里只多做三件事:冷却(同车 N 天内不重复)、
-上升车型加热度、按热度把选题放进最近的空档。
+禁用词剔除、角度去重),这里只多做四件事:冷却(同车 N 天内不重复)、
+上升车型加热度、只留榜单前几名的车(`TEAM_TOP_RANK`)、按热度把选题放进最近的空档。
 """
 from __future__ import annotations
 
@@ -116,20 +116,106 @@ def taste_weight(idea: Any, rates: dict[str, Any] | None) -> float:
     return preference.multiplier({"theme": idea.theme, "subject": idea.subject}, rates)
 
 
+#: 榜单第 1 名比圈内最后一名多乘这么多(线性):同在前 10,也先做更靠前的
+RANK_BONUS = 0.3
+#: 榜单前几名之外的车只在补位时用,分数再打这个折
+OUTSIDE_WEIGHT = 0.5
+#: 单点深挖(只讲一项技术 / 配置)这类片型打的折:讲给已经在看这台车的人听,新号没有这批人
+NICHE_WEIGHT = 0.7
+
+
+def _names(idea: Any) -> list[str]:
+    return [idea.subject] if not idea.subjects else list(idea.subjects)
+
+
+def top_cars(items: list[dict[str, Any]], n: int | None = None) -> dict[str, dict[str, Any]]:
+    """榜单前 n 名的车:{规范化车名: {car, label, rank}}。一台车上了两个榜取名次靠前的那个。
+
+    没有榜单数据(来源挂了)或 n = 0 → 空,调用方就不限范围 —— 宁可照旧排,不要静静排不出。"""
+    n = config.TEAM_TOP_RANK if n is None else n
+    out: dict[str, dict[str, Any]] = {}
+    for r in items:
+        key, rank = _norm(r.get("car")), int(r.get("rank") or 0)
+        if r.get("source") not in scout.RANKED or not key or not 0 < rank <= n:
+            continue
+        if key not in out or rank < out[key]["rank"]:
+            out[key] = {"car": str(r["car"]), "rank": rank,
+                        "label": scout.RANK_LABEL.get(r["source"], "榜单")}
+    return out
+
+
+def gate_hit(idea: Any, top: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """这个选题沾到的榜单前几名里名次最靠前的那台;一台都不沾 = None。
+
+    选题里写的是「品牌+车系」(吉利银河星愿),榜单里是车系(星愿):互相包含就算同一台。
+    横评 / 对决 / 价位段:车单里有一台在圈内就算。"""
+    hits = [v for name in _names(idea) if len(k := _norm(name)) >= 2
+            for c, v in top.items() if len(c) >= 2 and (c in k or k in c)]
+    return min(hits, key=lambda v: v["rank"]) if hits else None
+
+
+def gate_weight(idea: Any, top: dict[str, dict[str, Any]] | None, exempt: set[str] = frozenset(),
+                n: int | None = None) -> float:
+    """榜单范围给这个选题的乘数:圈内按名次 1–1.3,圈外打折;没开 = 1。
+
+    `exempt` 里的车(观众点名问的)按第 1 名算:有人在问,比榜单名次更直接。"""
+    if not top:
+        return 1.0
+    if any(_norm(x) in exempt for x in _names(idea)):
+        return 1 + RANK_BONUS
+    hit = gate_hit(idea, top)
+    if hit is None:
+        return OUTSIDE_WEIGHT
+    n = max(1, n or config.TEAM_TOP_RANK or max(v["rank"] for v in top.values()))
+    return round(1 + RANK_BONUS * max(0, n - hit["rank"]) / n, 3)
+
+
+def in_gate(idea: Any, top: dict[str, dict[str, Any]] | None,
+            exempt: set[str] = frozenset()) -> bool:
+    return gate_weight(idea, top, exempt) >= 1.0
+
+
+def niche_weight(idea: Any, profile: CategoryProfile | None) -> float:
+    """单点深挖类片型降权(`NICHE_WEIGHT`)。"""
+    if profile is None or idea.theme not in profile.themes:
+        return 1.0
+    theme = profile.theme_spec(idea.theme)
+    return NICHE_WEIGHT if theme.requires_angle and not theme.multi else 1.0
+
+
+def gate_hint(top: dict[str, dict[str, Any]]) -> str:
+    """告诉 LLM 这批选题只从哪些车里出。"""
+    if not top:
+        return ""
+    cars = "、".join(f"{v['car']}({v['label']}第 {v['rank']})"
+                    for v in sorted(top.values(), key=lambda v: v["rank"]))
+    return ("【选车范围】单车选题只从这些榜单靠前的车里选,名次越靠前越优先;"
+            "横评 / 对决 / 价位段的车单里至少有一台在这里面:\n" + cars
+            + "\n榜单更靠后的车、只在新闻里出现的车,这批不做(观众评论里点名问的除外)。"
+            "\n角度优先写观众会搜的问法:这台车到底该不该买、和谁怎么选、哪个版本值,"
+            "不要只讲一项配置或一个参数。")
+
+
 def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
                weights: dict[str, dict[str, float]] | None = None,
-               rates: dict[str, Any] | None = None) -> list[Any]:
-    """去掉冷却中的,上升车型热度 +1,乘上打法手册的权重和你的通过率乘数,按分排。"""
+               rates: dict[str, Any] | None = None, *,
+               top: dict[str, dict[str, Any]] | None = None, exempt: set[str] = frozenset(),
+               profile: CategoryProfile | None = None) -> list[Any]:
+    """去掉冷却中的,上升车型热度 +1,乘上打法手册的权重和你的通过率乘数,按分排。
+
+    `top`(`top_cars`)给了就再乘榜单范围的乘数,并且圈外的一律排在圈内的后面;
+    `exempt`:不受范围限制的车(观众点名问的、对标号刚出爆款的)。`profile` 给了就给单点深挖降权。"""
     out = []
     for idea in ideas:
-        names = [idea.subject] if not idea.subjects else list(idea.subjects)
+        names = _names(idea)
         if any(_norm(n) in cooled for n in names):
             continue
         boost = 1 if any(_norm(n) in rising_cars for n in names) else 0
-        out.append((min(5, idea.heat + boost) * learned_weight(idea, weights)
-                    * taste_weight(idea, rates), boost, idea))
-    out.sort(key=lambda x: (-x[0], -x[1]))
-    return [x[2] for x in out]
+        gate = gate_weight(idea, top, exempt)
+        out.append((gate < 1.0, min(5, idea.heat + boost) * learned_weight(idea, weights)
+                    * taste_weight(idea, rates) * gate * niche_weight(idea, profile), boost, idea))
+    out.sort(key=lambda x: (x[0], -x[1], -x[2]))
+    return [x[3] for x in out]
 
 
 KINDS = ("model", "band", "topic")
@@ -230,6 +316,7 @@ def run(category: str | None = None, *, llm: Any = None,
         raise TeamError("没有热点可用")
     from . import benchmark, engagement, events, playbook, preference
 
+    top = top_cars(items)
     learnings = db.list_learnings()
     weights = {d: playbook.weights(d, learnings) for d in ("theme", "subject", "duration")}
     # 打法手册 + 观众在评论里问的(运营官回灌)+ 行业日历 + 对标爆款
@@ -240,7 +327,7 @@ def run(category: str | None = None, *, llm: Any = None,
                                      engagement.topics_text(asked),
                                      events.prompt_text(category, now.date()),
                                      benchmark.prompt_text(now.timestamp()),
-                                     rotation_hint(empty)) if t)
+                                     rotation_hint(empty), gate_hint(top)) if t)
     ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
                            playbook=hints)
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
@@ -248,8 +335,10 @@ def run(category: str | None = None, *, llm: Any = None,
     bench_cars = benchmark.hot_cars(now.timestamp())
     cooled = cooled_subjects(category, now.timestamp(), config.TEAM_COOLDOWN_DAYS)
     rates = preference.rates() if preference.rate_on() else None
+    # 不受榜单范围限制的:观众在评论里点名问的、对标号同车型刚出爆款的
+    exempt = set(asked_cars) | bench_cars
     ranked = rank_ideas(ideas, cooled, rising_cars | set(event_cars) | bench_cars | set(asked_cars),
-                        weights, rates)
+                        weights, rates, top=top, exempt=exempt, profile=profile)
     if not ranked:
         raise Skip(f"LLM 给了 {len(ideas)} 个选题,都在冷却期或不合规")
 
@@ -260,14 +349,24 @@ def run(category: str | None = None, *, llm: Any = None,
         if _norm(idea.subject) not in seen:
             seen.add(_norm(idea.subject))
             deduped.append(idea)
+    # 圈内的够填满空档就不用圈外的;不够才拿圈外分数最高的补位(宁可降权,不留空档断更)
+    inside = [i for i in deduped if in_gate(i, top, exempt)]
+    outside = [i for i in deduped if not in_gate(i, top, exempt)]
+    deduped = inside + outside[:max(0, len(empty) - len(inside))]
     hot_keys = set(event_cars) | set(asked_cars)
     kind_of = {id(i): idea_kind(i, profile, hot_keys) for i in deduped}
     for slot, idea in assign_slots(empty, deduped, kind_of):
         aspect, duration = choose_format(profile, idea.theme, weights=weights.get("duration"),
                                          seed=f"{slot}:{idea.subject}")
-        names = [idea.subject] if not idea.subjects else list(idea.subjects)
+        names = _names(idea)
         keys = [_norm(n) for n in names]
-        extra = tuple(f"{event_cars[k]['in_days']} 天后{event_cars[k]['kind_label']}:"
+        hit = gate_hit(idea, top) if top else None
+        extra = ((f"{hit['car']}在{hit['label']}第 {hit['rank']}",) if hit
+                 else (f"不在榜单前 {config.TEAM_TOP_RANK},补位",) if top and not in_gate(
+                     idea, top, exempt) else ())
+        if niche_weight(idea, profile) < 1:
+            extra += (f"单点深挖降权 ×{NICHE_WEIGHT:g}",)
+        extra += tuple(f"{event_cars[k]['in_days']} 天后{event_cars[k]['kind_label']}:"
                       f"{event_cars[k]['title']}" for k in dict.fromkeys(keys) if k in event_cars)
         if any(k in bench_cars for k in keys):
             extra += ("对标号同车型出了爆款",)

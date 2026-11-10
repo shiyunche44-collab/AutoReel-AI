@@ -52,3 +52,59 @@ def test_rotation_hint(monkeypatch):
     assert editor.config.TEAM_BAND_HINT in text
     monkeypatch.setattr(editor.config, "TEAM_WEEK_PLAN", ())
     assert editor.rotation_hint([_slot(0)]) == ""
+
+
+# --------------------------------------------------------------------------
+# 选题范围:只从榜单前几名里出
+# --------------------------------------------------------------------------
+ROWS = ([{"source": "dongchedi.sales", "car": c, "rank": i + 1}
+         for i, c in enumerate(["星愿", "元UP", "零跑A10"] + [f"车{i}" for i in range(4, 21)])]
+        + [{"source": "dongchedi.hot", "car": c, "rank": i + 1}
+           for i, c in enumerate(["Model Y", "星愿", "宝马3系"])]
+        + [{"source": "news", "car": "宋Ultra", "rank": 1}])
+
+
+def test_top_cars_takes_best_rank_within_limit():
+    top = editor.top_cars(ROWS, 10)
+    assert top["星愿"] == {"car": "星愿", "rank": 1, "label": "销量榜"}
+    assert top["modely"]["label"] == "热度榜"
+    assert "车11" not in top and "宋ultra" not in top      # 11 名以后、非榜单来源都不算
+    assert editor.top_cars(ROWS, 0) == {}                    # 0 = 不限
+    assert editor.top_cars([{"source": "news", "car": "星愿", "rank": 1}], 10) == {}
+
+
+def test_gate_hit_matches_brand_prefixed_names():
+    top = editor.top_cars(ROWS, 10)
+    assert editor.gate_hit(_idea("吉利银河星愿", "review"), top)["rank"] == 1
+    assert editor.gate_hit(_idea("特斯拉Model Y", "review"), top)["car"] == "Model Y"
+    assert editor.gate_hit(_idea("比亚迪宋Ultra", "review"), top) is None
+    # 横评:车单里有一台在圈内就算
+    band = _idea("10-20万怎么选", "priceband", ["比亚迪宋Ultra", "比亚迪元UP"])
+    assert editor.gate_hit(band, top)["car"] == "元UP"
+
+
+def test_rank_ideas_puts_outside_gate_last_and_downweights_niche():
+    profile = load_profile("auto_long")
+    top = editor.top_cars(ROWS, 10)
+    hot = NS(subject="比亚迪宋Ultra", theme="review", subjects=[], heat=5)
+    tenth = NS(subject="车10", theme="review", subjects=[], heat=2)
+    first = NS(subject="吉利银河星愿", theme="review", subjects=[], heat=2)
+    got = editor.rank_ideas([hot, tenth, first], set(), set(), top=top, profile=profile)
+    assert got == [first, tenth, hot]           # 圈外的热度再高也排最后;圈内名次靠前的在前
+    assert editor.in_gate(first, top) and not editor.in_gate(hot, top)
+    assert editor.in_gate(hot, top, {"比亚迪宋ultra"})   # 观众点名问的不受限
+    assert editor.rank_ideas([hot, tenth], set(), set(), top=top,
+                             exempt={"比亚迪宋ultra"})[0] is hot
+    # 同一台车:单点深挖排在选购类后面
+    deep = NS(subject="吉利银河星愿", theme="deepdive", subjects=[], heat=3)
+    buy = NS(subject="吉利银河星愿", theme="buyguide", subjects=[], heat=3)
+    assert editor.rank_ideas([deep, buy], set(), set(), top=top, profile=profile) == [buy, deep]
+    assert editor.niche_weight(deep, profile) == editor.NICHE_WEIGHT
+    # 没有榜单数据:照旧按热度排
+    assert editor.rank_ideas([tenth, hot], set(), set(), top={}) == [hot, tenth]
+
+
+def test_gate_hint_lists_cars_by_rank():
+    text = editor.gate_hint(editor.top_cars(ROWS, 3))
+    assert text.index("星愿(销量榜第 1)") < text.index("零跑A10(销量榜第 3)")
+    assert "该不该买" in text and editor.gate_hint({}) == ""
