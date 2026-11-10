@@ -87,6 +87,8 @@ from .works import (  # noqa: E402,F401
 from .comments import (  # noqa: E402,F401
     COMMENT_ITEMS_API,
     COMMENT_LIST_API,
+    COMMENT_LIST_APIS,
+    normalize_comment,
     COMMENT_PAGES,
     CREATOR_COMMENTS,
     _CommentPage,

@@ -385,7 +385,15 @@ def run() -> str:
     except Exception as exc:  # noqa: BLE001 - 加合集是顺手的事,不能拖垮发布员
         log.warning("加合集出错: %s", exc)
         added = ""
-    if not changed and not added:
+    try:
+        from . import first_comment
+
+        said = first_comment.run_once()
+    except Exception as exc:  # noqa: BLE001 - 发评论也是顺手的事
+        log.warning("发第一条评论出错: %s", exc)
+        said = ""
+    if not changed and not added and not said:
         raise Skip("没有发布状态变化")
     parts = [f"{changed} 条选题发布状态更新"] if changed else []
-    return ";".join(parts + ([f"合集:{added}"] if added else []))
+    return ";".join(parts + ([f"合集:{added}"] if added else [])
+                    + ([f"评论:{said}"] if said else []))

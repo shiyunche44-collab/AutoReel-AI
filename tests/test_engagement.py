@@ -278,3 +278,85 @@ def test_run_sends_then_collects(fresh_db, monkeypatch):
     out = engagement.run()
     assert "发出 1 条回复" in out and "新增 1 条评论" in out
     assert fresh_db.get_comment("c0")["reply_state"] == "sent"
+
+
+# --------------------------------------------------------------------------
+# 评论列表接口改版(2026-11):新字段名、拉不到时不记「看过」
+# --------------------------------------------------------------------------
+def test_normalize_comment_new_and_old_shape():
+    from app.publish.platforms.douyin import comments
+
+    new = {"cid": "77", "text": "续航实测多少?", "create_time": 1793464734, "digg_count": 3,
+           "level": 1, "label_text": "", "user": {"uid": "u1", "nickname": "糖宝"}}
+    got = comments.normalize_comment(new, owner="me")
+    assert got["comment_id"] == "77" and got["user_info"]["screen_name"] == "糖宝"
+    assert got["digg_count"] == 3 and got["level"] == 1 and got["is_author"] is False
+    assert comments.normalize_comment({**new, "user": {"uid": "me"}}, owner="me")["is_author"]
+    assert comments.normalize_comment({**new, "label_text": "作者"})["is_author"]
+    old = _raw("c1", "老接口")
+    assert comments.normalize_comment(old) is old
+    assert comments._comments_of({"comments": [new]}) == [new]
+    assert comments._comments_of({"comment_info_list": [old]}) == [old]
+
+
+def test_new_shape_flows_into_parse_comment(fresh_db):
+    from app.publish.platforms.douyin import comments
+    from app.team import engagement
+
+    pub = _pub(fresh_db)
+    raw = comments.normalize_comment({"cid": "77", "text": "续航实测多少?", "level": 1,
+                                      "create_time": 1793464734, "digg_count": 3,
+                                      "user": {"uid": "u1", "nickname": "糖宝"}})
+    row = engagement.parse_comment(raw, pub)
+    assert row["id"] == "77" and row["author"] == "糖宝" and row["kind"] == "question"
+
+
+def test_collect_does_not_mark_seen_when_nothing_fetched(fresh_db):
+    """平台说有 6 条评论、列表却是空的:不记「看过」,下一轮还会去拉。"""
+    from app.team import engagement
+
+    _pub(fresh_db)
+    asked: list[dict] = []
+
+    def fetch(known):
+        asked.append(dict(known))
+        return {"counts": {"w1": 6}, "comments": {"w1": []}}
+
+    out = engagement.collect(fetch=fetch)
+    assert out["missed"] == 1 and out["added"] == 0
+    assert "w1" not in (fresh_db.get_team_setting(engagement._COUNTS_KEY, {}) or {})
+    engagement.collect(fetch=fetch)
+    assert asked[1] == {"w1": 0}
+
+
+def test_collect_refetches_works_marked_seen_by_old_version(fresh_db):
+    """老版本记了「看过 10 条」、库里却没有:升级后从头拉一次,之后不再重复。"""
+    from app.team import engagement
+
+    _pub(fresh_db)
+    fresh_db.set_team_setting(engagement._COUNTS_KEY, {"w1": 10})
+    asked: list[dict] = []
+
+    def fetch(known):
+        asked.append(dict(known))
+        return {"counts": {"w1": 10}, "comments": {"w1": [_raw("c1", "多少钱落地?")]}
+                if known["w1"] < 10 else {}}
+
+    assert engagement.collect(fetch=fetch)["added"] == 1
+    engagement.collect(fetch=fetch)
+    assert asked == [{"w1": 0}, {"w1": 10}]
+
+
+def test_run_fails_loudly_when_comments_missed(fresh_db, monkeypatch):
+    import pytest
+
+    from app.pipeline import orchestrator
+    from app.publish.platforms import douyin
+    from app.team import TeamError, engagement
+
+    _pub(fresh_db)
+    monkeypatch.setattr(orchestrator, "_llm", lambda: None)
+    monkeypatch.setattr(douyin, "fetch_creator_comments",
+                        lambda known: {"counts": {"w1": 6}, "comments": {"w1": []}})
+    with pytest.raises(TeamError, match="一条都没拉到"):
+        engagement.run()

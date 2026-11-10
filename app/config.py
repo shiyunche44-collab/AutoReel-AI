@@ -491,6 +491,9 @@ TEAM_CHIEF_PUBLISH_GAP = max(10, int(os.getenv("TEAM_CHIEF_PUBLISH_GAP", "60")))
 DOUYIN_DECLARE_AI = os.getenv("DOUYIN_DECLARE_AI", "1") not in ("0", "false", "False")
 #: 发出去的作品自动加进同名合集(栏目名 = 合集名,要先在创作者中心建好合集)。
 DOUYIN_COLLECTIONS = os.getenv("DOUYIN_COLLECTIONS", "1") not in ("0", "false", "False")
+#: 主片发出去后,用账号自己在评论区发第一条评论(包装阶段写好的二选一提问)。
+#: 默认关:以账号名义往外发公开内容,真实发送路径第一次要有人盯着(`team/first_comment.py`)。
+DOUYIN_FIRST_COMMENT = os.getenv("DOUYIN_FIRST_COMMENT", "0") in ("1", "true", "True")
 # --------------------------------------------------------------------------
 # 活跃官:主动去**别人**作品下评论 / 点赞 / 分享 / 关注。
 # 抖音《社区自律公约》32 条:用自动化手段、频率明显异于常人地评论/点赞/关注

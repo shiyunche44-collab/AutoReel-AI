@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import parse_qs, urlparse
+
 from ...base import PublishError
 
 
@@ -14,6 +16,9 @@ CREATOR_COMMENTS = "https://creator.douyin.com/creator-micro/interactive/comment
 #: 页面自己请求的作品列表(带每条作品的评论数)和单条作品的评论列表
 COMMENT_ITEMS_API = "/aweme/v1/creator/item/list/"
 COMMENT_LIST_API = "/aweme/v1/creator/comment/list/"
+#: 2026-11 页面改版后评论列表换了接口(老的不再请求):地址带 aweme_id,返回 `comments`
+#: 而不是 `comment_info_list`,字段名也不同 —— 统一由 `normalize_comment` 转成老的那套
+COMMENT_LIST_APIS = (COMMENT_LIST_API, "/web/comment/list/select/")
 #: 每条作品最多往下翻这么多页评论(一页 10 条)
 COMMENT_PAGES = 3
 #: 评论里的表情在接口里是「[赞]」,页面上是图片
@@ -47,6 +52,25 @@ _MARK_SEND_JS = """() => {
 }"""
 
 
+def normalize_comment(raw: dict[str, Any], owner: str = "") -> dict[str, Any]:
+    """评论接口的一条 → 统一字段(老接口的那套名字)。新老两种返回都认。
+
+    `owner`:作品作者的用户 id(作品列表的 `anchor_user_id`),新接口靠它认出作者自己的评论。"""
+    if raw.get("comment_id"):
+        return raw
+    user = raw.get("user") or {}
+    return {"comment_id": str(raw.get("cid") or ""), "text": raw.get("text") or "",
+            "create_time": raw.get("create_time"), "digg_count": raw.get("digg_count"),
+            "level": raw.get("level") or 1,
+            "is_author": bool(owner and str(user.get("uid") or "") == owner)
+            or "作者" in str(raw.get("label_text") or ""),
+            "user_info": {"screen_name": str(user.get("nickname") or "")}}
+
+
+def _comments_of(body: dict[str, Any]) -> list[dict[str, Any]]:
+    return body.get("comment_info_list") or body.get("comments") or []
+
+
 def comment_text_key(text: str) -> str:
     """页面上能看到的评论文字(去掉表情,取前 20 字,够认出是哪条)。"""
     return _EMOJI_RE.sub("", str(text or "")).strip()[:20]
@@ -58,13 +82,15 @@ class _CommentPage:
     def __init__(self, session: Any) -> None:
         self.s = session
         self.items: dict[str, dict[str, Any]] = {}
+        #: 收到的评论列表:每个 body 多带一个 `_work`(地址里的 aweme_id,老接口没有 = 空)
         self.lists: list[dict[str, Any]] = []
         self.posts: list[dict[str, Any]] = []
         session.page.on("response", self._on_response)
 
     def _on_response(self, resp: Any) -> None:
         url = resp.url
-        if COMMENT_ITEMS_API not in url and COMMENT_LIST_API not in url \
+        is_list = any(api in url for api in COMMENT_LIST_APIS)
+        if COMMENT_ITEMS_API not in url and not is_list \
                 and not (resp.request.method == "POST" and "comment" in url):
             return
         try:
@@ -78,8 +104,9 @@ class _CommentPage:
                 wid = str(it.get("item_id_plain") or "")
                 if wid:
                     self.items[wid] = it
-        elif COMMENT_LIST_API in url:
-            self.lists.append(body)
+        elif is_list:
+            work = (parse_qs(urlparse(url).query).get("aweme_id") or [""])[0]
+            self.lists.append({**body, "_work": work})
         else:
             self.posts.append(body)
 
@@ -109,7 +136,9 @@ class _CommentPage:
             if len(self.lists) > got:
                 break
             page.wait_for_timeout(500)
-        return self.lists[got:]
+        fresh = [b for b in self.lists[got:] if b.get("_work") in ("", work_id)]
+        # 页面一打开就默认停在最新那条作品上,再点它不会重新请求:用打开时收到的那份
+        return fresh or [b for b in self.lists[:got] if b.get("_work") == work_id]
 
     def comments(self, work_id: str) -> list[dict[str, Any]]:
         bodies = self.select(work_id)
@@ -121,10 +150,12 @@ class _CommentPage:
             self.s.page.wait_for_timeout(2500)
             if len(self.lists) == got:
                 break
-            bodies += self.lists[got:]
+            bodies += [b for b in self.lists[got:] if b.get("_work") in ("", work_id)]
+        owner = str((self.items.get(work_id) or {}).get("anchor_user_id") or "")
         out: dict[str, dict[str, Any]] = {}
         for body in bodies:
-            for c in body.get("comment_info_list") or []:
+            for raw in _comments_of(body):
+                c = normalize_comment(raw, owner)
                 if c.get("comment_id"):
                     out[str(c["comment_id"])] = c
         return list(out.values())
@@ -185,7 +216,9 @@ def fetch_creator_comments(known: dict[str, int]) -> dict[str, Any]:
 
     作品列表接口带每条作品的评论数,只切到评论数比上次多的那几条去拉评论(作品不在
     `known` 里的不看 —— 只管团队发的)。返回 {"counts": {作品 id: 评论数},
-    "comments": {作品 id: [评论接口原始条目]}}。登录失效抛 `PublishError(credential=True)`。"""
+    "comments": {作品 id: [评论条目,字段见 `normalize_comment`]}}。
+    切过去却一条都没拿到的作品也在 `comments` 里(空列表),调用方据此判断「没拉到」。
+    登录失效抛 `PublishError(credential=True)`。"""
     from ... import browser
 
     try:

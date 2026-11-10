@@ -50,6 +50,9 @@ ASK_MIN_COUNT = 2
 ASK_MIN_LIKES = 5
 
 _COUNTS_KEY = "engage_counts"
+#: 评论数记录按哪一版抓取逻辑记的。版本对不上 → 核一遍「记着看过、库里却没有」的作品
+_COUNTS_VERSION_KEY = "engage_counts_version"
+COUNTS_VERSION = 2
 _LOGIN_KEY = "engage_login_bad"
 _IDLE_KEY = "engage_idle_warned"
 AUTO_THANKS_KEY = "engage_auto_thanks"
@@ -276,6 +279,13 @@ def collect(now: float | None = None, fetch: Callable[..., dict[str, Any]] | Non
         raise Skip(f"近 {WATCH_DAYS} 天没有对上作品的抖音发布")
     seen = db.get_team_setting(_COUNTS_KEY, {}) or {}
     known = {wid: int(seen.get(wid, 0)) for wid in pubs}
+    have = {c["publication_id"] for c in db.list_comments(limit=5000)}
+    if db.get_team_setting(_COUNTS_VERSION_KEY, 1) != COUNTS_VERSION:
+        # 老版本接口改版后拉不到评论却照样记了「看过 N 条」:库里一条都没有的作品从头拉一次。
+        # 只核这一次 —— 评论全是作者自己回的作品,库里本来就该是空的
+        for wid, pub in pubs.items():
+            if known[wid] and pub["id"] not in have:
+                known[wid] = 0
     try:
         got = (fetch or douyin.fetch_creator_comments)(known)
     except PublishError as exc:
@@ -284,9 +294,16 @@ def collect(now: float | None = None, fetch: Callable[..., dict[str, Any]] | Non
     auto = bool(db.get_team_setting(AUTO_THANKS_KEY, False))
     weights = _style_weights()
     added = 0
+    counts = dict(got.get("counts") or {})
+    missed = 0
     for wid, raws in (got.get("comments") or {}).items():
         pub = pubs.get(wid)
         if not pub:
+            continue
+        if not raws and counts.get(wid, 0) > 0 and pub["id"] not in have:
+            # 平台说有评论,却一条都没拉到:不记「看过」,下一轮再试;连着拉不到说明页面又改了
+            counts.pop(wid, None)
+            missed += 1
             continue
         rows = [r for r in (parse_comment(x, pub, weights) for x in raws) if r]
         fresh = [r for r in rows if not db.get_comment(r["id"])]
@@ -298,8 +315,11 @@ def collect(now: float | None = None, fetch: Callable[..., dict[str, Any]] | Non
                 if auto and r["kind"] == "praise" and r["reply_source"] == "template":
                     r["reply_state"] = "approved"  # 你开了感谢自动档
         added += db.add_comments(rows)
-    db.set_team_setting(_COUNTS_KEY, {**seen, **(got.get("counts") or {})})
-    return {"works": len(pubs), "checked": len(got.get("comments") or {}), "added": added}
+    db.set_team_setting(_COUNTS_KEY, {**seen, **counts})
+    if not missed:
+        db.set_team_setting(_COUNTS_VERSION_KEY, COUNTS_VERSION)
+    return {"works": len(pubs), "checked": len(got.get("comments") or {}), "added": added,
+            "missed": missed}
 
 
 # --------------------------------------------------------------------------
@@ -628,6 +648,10 @@ def run() -> str:
         got = collect(now, llm=orchestrator._llm())
         if got["added"]:
             parts.append(f"{got['checked']} 条作品有新评论,新增 {got['added']} 条评论")
+        if got.get("missed"):
+            # 报成失败而不是「没有新评论」:不然接口改版了也看不出来
+            raise TeamError(f"{got['missed']} 条作品显示有评论,但评论列表一条都没拉到(页面改版了?)"
+                            + (";" + ",".join(parts) if parts else ""))
     except Skip:
         if not parts:
             raise

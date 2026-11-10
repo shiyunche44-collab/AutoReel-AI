@@ -34,6 +34,7 @@ def fetch_profile_posts(target: str, *, max_scrolls: int = 1) -> dict[str, Any]:
 
     sec = sec_uid_of(target)
     pages: list[dict[str, Any]] = []
+    gone = False
 
     def on_response(resp: Any) -> None:
         if PROFILE_POST_API not in resp.url:
@@ -58,6 +59,7 @@ def fetch_profile_posts(target: str, *, max_scrolls: int = 1) -> dict[str, Any]:
                 sec = sec_uid_of(session.page.url)
                 if not sec:
                     raise PublishError("链接没跳到抖音用户主页", retryable=False)
+            gone = not pages and "用户不存在" in session.page_text()
             if not pages and "扫码登录" in session.page_text():
                 raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
                                    retryable=False, credential=True)
@@ -72,6 +74,9 @@ def fetch_profile_posts(target: str, *, max_scrolls: int = 1) -> dict[str, Any]:
     except browser.BrowserUnavailable as exc:
         raise PublishError(str(exc), retryable=False) from exc
     if not pages:
+        if gone:
+            raise PublishError("抖音说这个用户不存在:账号 id 不完整,或者号已注销 / 改了链接",
+                               retryable=False)
         raise PublishError("主页没请求作品列表接口(被风控或页面改版了?)", retryable=False)
     awemes: dict[str, dict[str, Any]] = {}
     for body in pages:
