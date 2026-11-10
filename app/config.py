@@ -451,6 +451,9 @@ TEAM_BAND_HINT = os.getenv("TEAM_BAND_HINT", "10-20万新能源")
 #: 团队选题只从榜单(销量榜 / 热度榜)前几名的车型里出;榜外的车播放差一个量级。
 #: 前几名都在冷却、凑不满空档时才用榜单靠后的补位(降权)。0 = 不限。
 TEAM_TOP_RANK = max(0, int(os.getenv("TEAM_TOP_RANK", "10")))
+#: 两周目标从哪天发的作品开始算(YYYY-MM-DD)。固定打法的那天填进来,之前的旧片不混进去;
+#: 留空 = 看板窗口内的全部主片(`team/growth.py` 的 `goals`)。
+TEAM_GOAL_SINCE = os.getenv("TEAM_GOAL_SINCE", "").strip()
 #: 同一车型多少天内不重复做
 TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
 #: 制片自动过门禁 A / B(只在机器检查零拦截时放行;拦下就停下等人)

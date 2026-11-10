@@ -57,3 +57,62 @@ def test_summary_empty(fresh_db):
     out = growth.summary()
     assert out["works"] == [] and out["followers"] == []
     assert out["followers_now"] is None and out["followers_change"] is None
+
+
+# --------------------------------------------------------------------------
+# 两周目标
+# --------------------------------------------------------------------------
+def _w(views, bounce, c5, *, hours=48.0, at=1_000_000.0):
+    return {"views": views, "bounce_2s": bounce, "completion_5s": c5,
+            "hours_since_publish": hours, "published_at": at}
+
+
+def test_goals_hold_until_enough_works():
+    from app.team import growth
+
+    g = growth.goals([_w(50, 0.43, 0.29)] * 3 + [_w(9999, 0.1, 0.9, hours=2.0)])
+    assert g["works"] == 3 and g["hold"] is True and g["ready"] is False   # 不满 24 小时的不算
+    assert "3/10" in g["verdict"] and "先别改打法" in g["verdict"]
+    by = {m["key"]: m for m in g["metrics"]}
+    assert by["views"]["value"] == 50 and by["views"]["met"] is False
+    assert by["bounce_2s"]["met"] is False and by["completion_5s"]["met"] is False
+    assert growth.goals([])["verdict"].startswith("还没有")
+
+
+def test_goals_met_and_missed_layers():
+    from app.team import growth
+
+    good = growth.goals([_w(320, 0.25, 0.5)] * 10)
+    assert good["ready"] and all(m["met"] for m in good["metrics"]) and "达标" in good["verdict"]
+    # 边界:播放正好 300 算达标;跳出正好 30% 不算
+    edge = {m["key"]: m["met"] for m in growth.goals([_w(300, 0.30, 0.45)] * 10)["metrics"]}
+    assert edge == {"views": True, "bounce_2s": False, "completion_5s": False}
+    bad = growth.goals([_w(320, 0.41, 0.5)] * 10)
+    assert bad["verdict"].startswith("没达标") and "开头" in bad["verdict"]
+    assert "选题" not in bad["verdict"]
+
+
+def test_goals_since_drops_older_works():
+    import datetime as dt
+
+    from app.team import growth
+
+    t0 = dt.datetime(2026, 11, 10).timestamp()
+    works = [_w(20, 0.5, 0.2, at=t0 - 86400)] * 5 + [_w(400, 0.2, 0.6, at=t0 + 86400)] * 2
+    g = growth.goals(works, "2026-11-10")
+    assert g["works"] == 2 and g["since"] == "2026-11-10"
+    assert {m["key"]: m["value"] for m in g["metrics"]}["views"] == 400
+    assert growth.goals(works, "不是日期")["works"] == 7       # 写错了就当没填
+
+
+def test_summary_reads_5s_completion_from_raw(fresh_db):
+    from app.team import growth
+
+    now = time.time()
+    _pub(fresh_db, "w1", now - 2 * 86400)
+    fresh_db.add_snapshot("w1", "douyin", now - 3600, {
+        "views": 86, "bounce_2s": 0.43, "hours_since_publish": 47.0},
+        raw={"metrics": {"completion_rate_5s": "0.294118"}})
+    out = growth.summary(days=14, now=now)
+    assert out["works"][0]["completion_5s"] == pytest.approx(0.294118)
+    assert out["goals"]["works"] == 1 and out["goals"]["hold"] is True

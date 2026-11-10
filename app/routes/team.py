@@ -455,11 +455,13 @@ def team_bench_report():
 
 
 @router.get("/api/team/growth")
-def team_growth(days: int = 14):
-    """涨粉看板(只读):粉丝曲线、每条主片漏斗、账号暂停状态。"""
+def team_growth(days: int = 14, since: str | None = None):
+    """涨粉看板(只读):粉丝曲线、每条主片漏斗、账号暂停状态、两周目标达标情况。
+
+    `since`(YYYY-MM-DD):目标只算这天之后发的作品;不传用 `TEAM_GOAL_SINCE`。"""
     from ..team import growth
 
-    return growth.summary(days=max(1, min(days, 90)))
+    return growth.summary(days=max(1, min(days, 90)), since=since)
 
 
 @router.post("/api/team/benchmark/accounts/{sec_uid}/toggle")
