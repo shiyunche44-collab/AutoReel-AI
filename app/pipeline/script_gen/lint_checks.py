@@ -521,6 +521,35 @@ def duplicate_lint(
     return issues
 
 
+#: 短于这么多字的句子不算复读(「对吧。」「你说呢?」这类口头语本来就会重复)
+REPEAT_MIN_CHARS = 8
+_REPEAT_STRIP_RE = re.compile(r"[\s，,。.!！?？;；:：、\"'“”‘’()()《》…—-]+")
+
+
+def repeat_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+    """整句复读(error):同一句话在稿子里原样出现两次以上。
+
+    实测成片把同一组结论句念了 3–4 遍(海豹07、帕萨特、宝马3系),观众当场划走。
+    根因(对齐计划时复制末段占位)已经去掉,这里兜底:不管哪一步再造出复读,都拦在门禁 A。
+    每句只报一条,挂在第二次出现的那一段上。"""
+    first: dict[str, int] = {}
+    again: dict[str, list[int]] = {}
+    for seg in segments:
+        key = _REPEAT_STRIP_RE.sub("", seg.text or "")
+        if len(key) < REPEAT_MIN_CHARS:
+            continue
+        if key in first:
+            again.setdefault(key, []).append(seg.idx)
+        else:
+            first[key] = seg.idx
+    issues: list[LintIssue] = []
+    for key, idxs in again.items():
+        where = "、".join(str(i + 1) for i in [first[key], *idxs])
+        issues.append(LintIssue(idxs[0], "error",
+                                f"第 {where} 段是同一句话(「{key[:16]}」),整句复读,只留一次"))
+    return issues
+
+
 #: 事实密度(每分钟引用多少条不同事实)。太稀是在讲空话,太密观众记不住
 FACTS_PER_MIN_LOW = 2.5
 FACTS_PER_MIN_HIGH = 14.0

@@ -58,6 +58,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - 不要抓懂车帝的参数配置页(`auto/params-carIds-*`),返回空 200,疑似反爬。图库需要登录,状态在 `data/_browser/dongchedi.json`。
 - 浏览器会话共用 profile,同一 profile 在进程内有锁(`BrowserSession`);`BROWSER_PATH` 默认是 chrome-headless-shell,需要有界面登录时用 `publish/browser.headed_browser` 换真 Chrome。
 - 抖音评论回复的真实发送路径、小红书图文上传(`_publish_note`)、对标账号抓取,都**没在真实账号上完整跑过**。首次启用要盯着。
+- 对标号自动发现(`team/benchmark_discover.py`,抖音搜索页)2026-11-06 实测:无头浏览器打开搜索页会跳「验证码中间页」,不绕过;发现失败会降级为手动添加对标号。别连续重试。
 - 登录态过期时 analyst 会阻塞浏览器,直到 `douyin.json` 的 mtime 变化。
 
 ## Windows 环境

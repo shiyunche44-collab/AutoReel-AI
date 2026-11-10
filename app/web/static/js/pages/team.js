@@ -10,6 +10,7 @@ initChrome();
 const STATUS_TONE = {
   proposed: 'warning', approved: 'brand', producing: 'brand', review: 'warning',
   scheduled: 'brand', published: 'success', rejected: 'neutral', expired: 'neutral', failed: 'danger',
+  abandoned: 'neutral',
 };
 const RUN_TONE = { ok: 'success', failed: 'danger', skipped: 'neutral', running: 'brand', idle: 'neutral' };
 const RUN_LABEL = { ok: '完成', failed: '失败', skipped: '跳过', running: '运行中', idle: '空闲' };
@@ -103,7 +104,7 @@ const TOPIC_REASONS = ['车型不想做', '角度没意思', '最近做过类似
 const CUT_REASONS = ['开场没抓人', '节奏拖', '画面 / 素材不行', '配音别扭', '标题不对味', '事实有问题'];
 
 /** 驳回 / 打回:选个理由或自己写一句(可空)。理由会被复盘官归纳成「你的偏好」。取消 → null。 */
-function reasonDialog({ title, body, confirmText, reasons }) {
+function reasonDialog({ title, body, confirmText, reasons, redoText = '' }) {
   return new Promise((resolve) => {
     const note = h('input', { class: 'input', maxlength: '120', placeholder: '为什么?(可不填)' });
     const chips = h('div', { class: 'chips' }, reasons.map((r) => h('button', {
@@ -117,15 +118,17 @@ function reasonDialog({ title, body, confirmText, reasons }) {
     }, r)));
     const ok = h('button', { class: 'btn btn-danger', type: 'button' }, confirmText);
     const cancel = h('button', { class: 'btn btn-ghost', type: 'button' }, '取消');
+    const redo = redoText ? h('button', { class: 'btn btn-primary', type: 'button' }, redoText) : null;
     const content = h('div', {},
       h('div', { class: 'modal-head' }, h('div', { class: 'modal-title' }, title)),
       h('div', { class: 'modal-body stack-sm' },
         h('p', { class: 'small' }, body), chips, note,
         h('div', { class: 'subtle small' }, '理由会被复盘官归纳成「你的偏好」,以后排选题、写脚本照着来')),
-      h('div', { class: 'modal-foot' }, cancel, ok));
+      h('div', { class: 'modal-foot' }, cancel, ok, redo));
     const { close } = openModal(content, { label: title, onClose: (r) => resolve(r || null) });
     cancel.addEventListener('click', () => close(null));
     ok.addEventListener('click', () => close({ note: note.value.trim() }));
+    if (redo) redo.addEventListener('click', () => close({ note: note.value.trim(), redo: true }));
     note.addEventListener('keydown', (e) => { if (e.key === 'Enter') ok.click(); });
   });
 }
@@ -339,10 +342,10 @@ function reviewCard(item) {
   const back = h('button', { class: 'btn btn-sm btn-ghost', type: 'button' }, icon('x', 'i-sm'), '打回');
   back.addEventListener('click', async () => {
     const res = await reasonDialog({
-      title: '打回这条成片?', body: '这条不发了。要重做就去项目页改,或者让主编另排。',
-      confirmText: '打回', reasons: CUT_REASONS,
+      title: '打回这条成片?', body: '「打回」这条就不发了;「按意见重做」会用同一选题重新制作,理由会写进新一版的写稿依据(最多返工 2 次)。',
+      confirmText: '打回', redoText: '按意见重做', reasons: CUT_REASONS,
     });
-    if (res) await call(`/api/team/plan/${item.id}/reject-cut`, '已打回', res);
+    if (res) await call(`/api/team/plan/${item.id}/reject-cut`, res.redo ? '已打回,按意见重做' : '已打回', res);
   });
   // 精修:Studio 里改字幕,点「应用」重出成片。Studio 只在本机 127.0.0.1 能打开
   const refineBtns = [];
@@ -420,6 +423,12 @@ function planRow(item) {
       onclick: (e) => withLoading(e.currentTarget, () => call(`/api/team/plan/${item.id}/retry-gate`, '下一轮重新过闸')),
     }, icon('refresh', 'i-sm'), '重试')
     : null;
+  const redo = item.status === 'failed'
+    ? h('button', {
+      class: 'btn btn-sm btn-ghost', type: 'button', title: '按失败原因重开一条(有返工上限)',
+      onclick: (e) => withLoading(e.currentTarget, () => call(`/api/team/plan/${item.id}/redo`, '已重开一条', { note: item.note || '' })),
+    }, icon('refresh', 'i-sm'), '重做')
+    : null;
   const tail = item.status === 'scheduled' && item.publish_at ? `发布 ${when(item.publish_at)}` : '';
   return h('div', { class: 'plan-row' },
     h('div', { class: 'rowline' },
@@ -430,7 +439,7 @@ function planRow(item) {
       h('span', { class: 'subtle small' }, tail || `${themeLabel(item.theme)} · ${aspectLabel(item.aspect)} ${item.duration}s`),
       item.note ? h('span', { class: 'subtle small', title: item.note }, icon('info', 'i-sm')) : null,
       held ? badge('等你处理', 'warning') : badge(item.status_label, STATUS_TONE[item.status]),
-      retry, link),
+      retry, redo, link),
     held ? h('div', { class: 'plan-hold small' }, item.hold) : null);
 }
 
@@ -647,7 +656,23 @@ function benchHit(p) {
     h('span', { class: 'subtle small num' }, `${p.account} · 赞 ${p.likes} · ${Math.round(p.duration)}s`));
 }
 
+/** 对标差距报告:对标库现状 + 我们和爆款的结构差距 + 建议先改的几项。 */
+function renderBenchReport(r) {
+  const box = $('#bench-report');
+  if (!r || !r.accounts) { box.replaceChildren(); return; }
+  const out = [h('div', { class: 'subtle small' },
+    `差距报告:${r.accounts} 个对标号 · ${r.posts} 条作品 · 爆款 ${r.hits} 条 · 拆过结构 ${r.tagged} 条 · 我们 ${r.own_works} 条有数据`
+    + (r.their_avg_duration ? ` · 爆款平均 ${Math.round(r.their_avg_duration)} 秒` : ''))];
+  if (r.suggestions && r.suggestions.length) {
+    out.push(...r.suggestions.map((s) => h('div', { class: 'rowline' }, badge('建议', 'warning'), h('span', { class: 'grow small' }, s))));
+  } else {
+    out.push(h('div', { class: 'subtle small' }, r.tagged ? '暂时没有明显的结构差距。' : '还没拆出爆款结构,等对标官跑几轮再看。'));
+  }
+  box.replaceChildren(...out);
+}
+
 function renderSide() {
+  api.get('/api/team/benchmark/report').then(renderBenchReport).catch(() => {});
   const kinds = DATA.event_kinds || {};
   const sel = $('#event-form select');
   if (!sel.options.length) sel.replaceChildren(...Object.entries(kinds).map(([k, v]) => h('option', { value: k }, v)));

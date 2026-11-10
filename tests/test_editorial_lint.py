@@ -146,6 +146,32 @@ def test_single_digit_and_year_not_counted_as_duplicate():
     assert not any("反复出现" in i.message for i in duplicate_lint(segs, facts))
 
 
+def test_whole_sentence_repeat_is_error():
+    """海豹07 首版(p_2b0825572033):同一组结论句挂在 3 个章节尾部,念了 4 遍。"""
+    tail = ["最后算账，CLTC续航705km，两款差价约2万，", "适配桩下5分钟补近300公里。",
+            "它适合常用高快领航、也有适配桩的人。", "你要是没这个条件，没必要硬等这代。"]
+    segs = [_seg(0, "深挖开场", "买海豹07，先看适配桩再看快充。")]
+    for section in ("深挖结论", "关键数字", "代价边界"):
+        segs += [_seg(len(segs) + k, section, t) for k, t in enumerate(tail)]
+    issues = script_gen.repeat_lint(segs)
+    assert len(issues) == 4 and all(i.is_error for i in issues)
+    assert issues[0].segment_idx == 5
+    assert "整句复读" in issues[0].message
+
+
+def test_repeat_ignores_punctuation_and_short_tags():
+    segs = [_seg(0, "开场", "续航够用,价格也合适。"), _seg(1, "结论", "续航够用，价格也合适！"),
+            _seg(2, "开场", "对吧?"), _seg(3, "结论", "对吧?")]
+    issues = script_gen.repeat_lint(segs)
+    assert [i.message[:4] for i in issues] == ["第 1、"]
+
+
+def test_clean_script_has_no_repeat_issue():
+    segs = [_seg(0, "开场", "买海豹07，先看适配桩再看快充。"),
+            _seg(1, "结论", "你要是没这个条件，没必要硬等这代。")]
+    assert script_gen.repeat_lint(segs) == []
+
+
 # --------------------------------------------------------------------------
 # 大字与旁白复读
 # --------------------------------------------------------------------------
@@ -587,3 +613,42 @@ def test_density_lint_too_thin_too_dense_and_number_overload(auto):
     heavy = [_seg(0, "外观设计", "车长4999,车宽1996,车高1600,轴距3000,整备2000。", ["f0"])]
     assert any("5 个不同数字" in i.message for i in density_lint(heavy, auto, facts))
     assert density_lint([], auto, facts) == []
+
+
+# --------------------------------------------------------------------------
+# 屏上数字必须是旁白说过的(卡片 / 概念动画按全片核)
+# --------------------------------------------------------------------------
+def _spec(idx, text, layout="broll", **kw):
+    return ShotSpec(idx=idx, duration=0.0, section="关键数字", visual_zh=f"[{layout}] 画面",
+                    camera_zh="", ambience_zh="", narration_zh=text, layout=layout, **kw)
+
+
+def test_concept_row_with_unsaid_number_is_dropped():
+    """元UP:屏上零百 7.2 秒,旁白说的是 7.9 秒 —— 没说过的那一行不上屏。"""
+    rows = [{"label": "零百加速", "values": ["7.2秒"], "fact_id": "f_1"},
+            {"label": "续航", "values": ["401km"], "fact_id": "f_2"}]
+    specs = [_spec(0, "零百加速7.9秒。"),
+             _spec(1, "CLTC续航401km。", "concept",
+                   overlay={"kind": "concept", "scene": "accel", "rows": rows})]
+    log: list[dict] = []
+    out = explainer.drop_unsaid_numbers(specs, log)
+    assert [r["label"] for r in out[1].overlay["rows"]] == ["续航"]
+    assert out[1].layout == "concept" and "7.2秒" in log[0]["dropped"][0]
+
+
+def test_card_falls_back_to_broll_when_nothing_was_said():
+    card = {"kind": "spec", "title": "电池", "rows": [
+        {"label": "电池容量", "values": ["148度"], "fact_id": "f_1"}]}
+    specs = [_spec(0, "电池容量150度。", "card", card=card)]
+    out = explainer.drop_unsaid_numbers(specs)
+    assert out[0].layout == "broll" and out[0].card is None
+    assert out[0].visual_zh.startswith("[broll]")
+
+
+def test_said_numbers_and_text_rows_are_kept():
+    card = {"kind": "spec", "title": "配置", "rows": [
+        {"label": "续航", "values": ["705km"], "fact_id": "f_1"},
+        {"label": "驱动形式", "values": ["后驱"], "fact_id": "f_2"}]}
+    specs = [_spec(0, "两款CLTC续航都是705km。"), _spec(1, "都是后驱。", "card", card=card)]
+    out = explainer.drop_unsaid_numbers(specs)
+    assert out[1].layout == "card" and len(out[1].card["rows"]) == 2

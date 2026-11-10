@@ -288,12 +288,28 @@ def test_normalize_merges_extra_segments(auto_profile):
     assert out[-1].idx == 2
 
 
-def test_normalize_pads_missing_segments(auto_profile):
-    plan = ["A", "B", "C", "D", "E"]
-    segments = [ScriptSegment(idx=0, section="A", text="只有一段。")]
+def test_normalize_never_copies_last_segment(auto_profile):
+    """段落比计划少就少着:原来复制末段占位,成片把结论念了 3–4 遍(p_2b0825572033)。"""
+    plan = ["开场", "为什么", "关键数字", "代价边界", "代价边界", "深挖结论"]
+    segments = [ScriptSegment(idx=0, section="开场", text="买海豹07,先看适配桩。"),
+                ScriptSegment(idx=1, section="为什么", text="换代核心改动只在EV版本。"),
+                ScriptSegment(idx=2, section="深挖结论", text="没这个条件,没必要硬等这代。")]
     out = normalize_segments(segments, plan)
-    assert len(out) == 5
-    assert [s.idx for s in out] == [0, 1, 2, 3, 4]
+    assert [s.text for s in out] == [s.text for s in segments]
+    assert [s.idx for s in out] == [0, 1, 2]
+    assert [s.section for s in out] == ["开场", "为什么", "深挖结论"]
+
+
+def test_normalize_matches_subject_by_section_when_short():
+    """中间删掉一段后,后面的段落仍然拿到自己那台车的名字,不是上一台的。"""
+    from app.categories import Slot
+
+    slots = [Slot("横评开场"), Slot("车型亮相", "小米YU7"), Slot("核心卖点", "小米YU7"),
+             Slot("车型亮相", "问界M7"), Slot("核心卖点", "问界M7"), Slot("横评结论")]
+    segments = [ScriptSegment(idx=i, section=sec, text=f"第{i}段旁白内容")
+                for i, sec in enumerate(["横评开场", "车型亮相", "车型亮相", "核心卖点", "横评结论"])]
+    out = normalize_segments(segments, slots)
+    assert [s.subject for s in out] == ["", "小米YU7", "问界M7", "问界M7", ""]
 
 
 def test_normalize_preserves_fact_refs_on_merge(auto_profile):

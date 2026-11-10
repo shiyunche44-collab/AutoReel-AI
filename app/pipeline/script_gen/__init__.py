@@ -125,6 +125,7 @@ from .lint_checks import (  # noqa: E402,F401
     meaning_lint,
     number_source_lint,
     range_lint,
+    repeat_lint,
     rival_lint,
     stock_phrase_lint,
     term_lint,

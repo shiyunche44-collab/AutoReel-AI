@@ -154,10 +154,12 @@ def test_roundup_script_prompt_groups_facts_and_marks_cars():
 
 def test_normalize_segments_writes_subject_from_slots():
     slots = [Slot("横评开场"), Slot("车型亮相", "小米YU7"), Slot("车型亮相", "问界M7")]
-    segs = [ScriptSegment(idx=i, section="x", text="一段旁白", subject="乱写的") for i in range(2)]
+    segs = [ScriptSegment(idx=i, section="x", text="一段旁白", subject="乱写的") for i in range(3)]
     out = script_gen.normalize_segments(segs, slots)
     assert [s.subject for s in out] == ["", "小米YU7", "问界M7"]
-    assert out[2].section == "车型亮相"
+    # 少一段时不复制占位:只有两段,第二台车就没有段落
+    short = script_gen.normalize_segments(segs[:2], slots)
+    assert len(short) == 2
 
 
 def test_lint_flags_cross_car_fact_refs():

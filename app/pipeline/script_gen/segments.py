@@ -46,36 +46,48 @@ def normalize_segments(
     segments: Sequence[ScriptSegment],
     plan: Sequence[str] | Sequence[Slot],
 ) -> list[ScriptSegment]:
-    """把段落数量对齐到分镜计划 —— 数量不一致会导致画面与旁白错位。
+    """把段落对齐到分镜计划:多了并掉尾部,少了就少着,绝不复制占位。
 
-    `plan` 也可以是段落位(`Slot`):对齐后按位置写回每段讲哪台车 ——
-    以段落位为准,不信 LLM 返回的车名。"""
+    `plan` 也可以是段落位(`Slot`):对齐后写回每段讲哪台车 ——
+    以段落位为准,不信 LLM 返回的车名。
+
+    段落比计划少时(竖屏压缩允许整段删)原来会「复制最后一段占位」:最后一段是结论,
+    于是成片里同一组结论句被念 3–4 遍(海豹07 p_2b0825572033、帕萨特、宝马3系都是这个)。
+    现在缺的段落位直接空着 —— 后面按句拆拍,拍数本来就不等于计划段数。"""
     slots = [p if isinstance(p, Slot) else Slot(str(p)) for p in plan]
     plan = [s.section for s in slots]
     out = list(segments)
     # 段落过多:合并尾部
-    while len(out) > len(plan):
+    while len(plan) and len(out) > len(plan):
         merged = out[-2].text.rstrip() + out[-1].text
         out[-2].text = merged
         out[-2].fact_refs = list(dict.fromkeys(out[-2].fact_refs + out[-1].fact_refs))
         out.pop()
-    # 段落过少:复制最后一段占位,后续由用户/分镜阶段修正
-    while len(out) < len(plan):
-        template = out[-1] if out else ScriptSegment(idx=0, text="")
-        out.append(
-            ScriptSegment(
-                idx=len(out),
-                section=plan[len(out)] if len(out) < len(plan) else "",
-                text=template.text,
-                fact_refs=list(template.fact_refs),
-            )
-        )
     unify_headings(out)
     for i, seg in enumerate(out):
         seg.idx = i
         # LLM 偶尔整篇写中文数字:字幕全是汉字,lint 的引用检查也会被绕过
         seg.text = arabicize(seg.text)
-        seg.subject = slots[i].subject if i < len(slots) else ""
+    for seg, slot in zip(out, _match_slots(out, slots), strict=True):
+        seg.subject = slot.subject if slot else ""
+    return out
+
+
+def _match_slots(segments: Sequence[ScriptSegment], slots: Sequence[Slot]) -> list[Slot | None]:
+    """每段对应哪个段落位。数量一致就按位置;段落少了(中间有段被删)就按段落名顺着往后找,
+    找不到同名的再退回按位置 —— 不然删掉一段后,后面每段都会拿到上一台车的名字。"""
+    if len(segments) >= len(slots):
+        return [slots[i] if i < len(slots) else None for i in range(len(segments))]
+    out: list[Slot | None] = []
+    at = 0
+    for i, seg in enumerate(segments):
+        # 后面还要给剩下的段落留位置,所以最远只能找到这里
+        last = len(slots) - (len(segments) - i)
+        hit = next((j for j in range(at, last + 1) if slots[j].section == seg.section), None)
+        if hit is None:
+            hit = min(max(at, i), last)
+        out.append(slots[hit])
+        at = hit + 1
     return out
 
 

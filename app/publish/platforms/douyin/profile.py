@@ -81,3 +81,79 @@ def fetch_profile_posts(target: str, *, max_scrolls: int = 1) -> dict[str, Any]:
     first = next(iter(awemes.values()), {})
     return {"sec_uid": sec, "nickname": str((first.get("author") or {}).get("nickname") or ""),
             "awemes": list(awemes.values())}
+
+
+# --------------------------------------------------------------------------
+# 关键词搜同类热门视频(用来自动发现对标号)
+# --------------------------------------------------------------------------
+SEARCH_PAGE = "https://www.douyin.com/search/{kw}?type=video"
+SEARCH_APIS = ("/aweme/v1/web/general/search/single/", "/aweme/v1/web/search/item/")
+
+
+def _search_items(body: Any) -> list[dict[str, Any]]:
+    """搜索接口的两种返回形状都认:data[].aweme_info(综合)和 aweme_list / data[](视频 tab)。"""
+    if not isinstance(body, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for it in body.get("data") or []:
+        if not isinstance(it, dict):
+            continue
+        info = it.get("aweme_info") or (it if it.get("aweme_id") else None)
+        if info:
+            out.append(info)
+    out += [a for a in body.get("aweme_list") or [] if isinstance(a, dict)]
+    return out
+
+
+def is_captcha_page(title: str, text: str) -> bool:
+    """验证码中间页:标题带「验证码」,或正文有滑块 / 拖动提示。"""
+    return "验证码" in (title or "") or any(w in (text or "") for w in ("滑块", "拖动", "拼图"))
+
+
+def fetch_search_posts(keyword: str) -> list[dict[str, Any]]:
+    """无头打开抖音搜索页(视频 tab),截页面自己请求的搜索接口,返回作品原始条目。只读。
+
+    条目里 `author` 带 sec_uid / nickname / follower_count。登录失效抛
+    `PublishError(credential=True)`;接口没出来(风控 / 验证码 / 改版)抛普通 `PublishError`。"""
+    from urllib.parse import quote
+
+    from ... import browser
+
+    keyword = (keyword or "").strip()
+    if not keyword:
+        raise PublishError("搜索词不能为空", retryable=False)
+    bodies: list[Any] = []
+
+    def on_response(resp: Any) -> None:
+        if not any(api in resp.url for api in SEARCH_APIS):
+            return
+        try:
+            bodies.append(resp.json())
+        except Exception:  # noqa: BLE001
+            return
+
+    try:
+        with browser.BrowserSession("douyin", headless=True, lock_timeout=60) as session:
+            session.page.on("response", on_response)
+            session.goto(SEARCH_PAGE.format(kw=quote(keyword)), wait_ms=8000)
+            text = session.page_text()
+            if not any(_search_items(b) for b in bodies):
+                if is_captcha_page(session.page.title(), text):
+                    raise PublishError("抖音搜索页弹出验证码(反爬),不自动绕过:"
+                                       "在有界面的浏览器里手动过一次验证,或手动添加对标号",
+                                       retryable=False)
+                if "扫码登录" in text:
+                    raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
+                                       retryable=False, credential=True)
+            session.page.mouse.wheel(0, 4000)
+            session.page.wait_for_timeout(3000)
+    except browser.BrowserUnavailable as exc:
+        raise PublishError(str(exc), retryable=False) from exc
+    awemes: dict[str, dict[str, Any]] = {}
+    for body in bodies:
+        for a in _search_items(body):
+            if a.get("aweme_id"):
+                awemes[str(a["aweme_id"])] = a
+    if not awemes:
+        raise PublishError("搜索页没请求到视频列表接口(被风控或页面改版了?)", retryable=False)
+    return list(awemes.values())

@@ -55,7 +55,9 @@ def started_today(now: float | None = None) -> int:
     """今天已经开工的选题数(含已失败的:产能已经花出去了)。"""
     now = now or time.time()
     start = _day_start(now)
-    pids = {i["project_id"] for i in db.list_plan_items(limit=500) if i.get("project_id")}
+    # 返工(redo_of 非空)不另占日产量:同一个题重做几次只算一份产能
+    pids = {i["project_id"] for i in db.list_plan_items(limit=500)
+            if i.get("project_id") and not i.get("redo_of")}
     return sum(1 for pid in pids
                if ((db.get_project(pid) or {}).get("created_at") or 0) >= start)
 

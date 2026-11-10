@@ -102,5 +102,6 @@ from .profile import (  # noqa: E402,F401
     USER_PAGE,
     _SEC_UID,
     fetch_profile_posts,
+    fetch_search_posts,
     sec_uid_of,
 )

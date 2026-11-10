@@ -94,9 +94,11 @@ from .car_ai import (  # noqa: E402,F401
 )
 from .plates import (  # noqa: E402,F401
     _car_layer,
+    find_plate_text,
     find_plates,
     find_yellow_plates,
     scrub_body_plates,
+    scrub_plate_text,
     scrub_plates,
     scrub_watermarks,
 )

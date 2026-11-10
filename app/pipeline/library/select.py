@@ -1,12 +1,16 @@
 """取材:给一拍挑干净片段连拼成背景(fill / long_take)。"""
 from __future__ import annotations
 
+import contextvars
+import datetime as dt
 import functools
 import logging
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Sequence
+from ... import config
 from ...categories import Vocab
 from .. import knobs, looks, media_check
 
@@ -15,6 +19,53 @@ from .model import FILL_MIN_PIECE, Item, Library, STILL_SECONDS, _confirmed, _ha
 from .tagging import _dhash
 
 log = logging.getLogger(__name__)
+
+#: 当前这次渲染不许用的素材(源地址 / 素材 id)。打回重做的项目由 `banned_materials` 设置
+_BANNED: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "banned_materials", default=frozenset())
+_YEAR_RE = re.compile(r"(?<!\d)(20[0-3]\d)(?!\d)")
+
+
+@contextmanager
+def banned_materials(keys):
+    """这段代码里的取材(fill / long_take)一律跳过这些素材:源地址或素材 id 命中就不取。"""
+    token = _BANNED.set(frozenset(str(k) for k in keys or () if k))
+    try:
+        yield
+    finally:
+        _BANNED.reset(token)
+
+
+def base_item_id(item_id: str) -> str:
+    """连拼切出来的子段 id(`xxx~2`)还原成池子里的素材 id。"""
+    return item_id.split("~", 1)[0]
+
+
+def stale_title(title: str, *, now_year: int | None = None,
+                max_age: int | None = None) -> bool:
+    """源标题里写着年份、且最新的那个年份比今年早超过 `MATERIAL_MAX_AGE_YEARS` 年 → 老款。
+    标题没年份的认不出来,放行(由人工打回 + 排除兜底)。"""
+    max_age = config.MATERIAL_MAX_AGE_YEARS if max_age is None else max_age
+    years = [int(y) for y in _YEAR_RE.findall(title or "")]
+    if not max_age or not years:
+        return False
+    return (now_year or dt.date.today().year) - max(years) > max_age
+
+
+def screen(lib: Library, pool: list[Item]) -> list[Item]:
+    """取材前的相关性过滤:被打回项目点名的素材、标题年份太老的源,整源剔除。"""
+    banned = _BANNED.get()
+    urls = {s.id: s.url for s in lib.sources}
+    stale = {s.id for s in lib.sources if stale_title(s.title)}
+    out = []
+    for i in pool:
+        if i.source in stale:
+            continue
+        if banned and (i.id in banned or base_item_id(i.id) in banned or i.url in banned
+                       or urls.get(i.source, "") in banned):
+            continue
+        out.append(i)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +243,9 @@ BRANDED_GALLERIES = {"autohome"}
 #: 当背景铺满全屏时,那个黄方块明晃晃挂在车头正中,不能带上屏。
 BRANDED_PLATFORMS = ("dongchedi", "autohome")
 
+#: 抹牌算法的版本。改了检测 / 涂抹逻辑就加 1,旧缓存(`clean/` 下别的目录)自然作废。
+CLEAN_VERSION = 2
+
 
 def clean_still(item: Item) -> str:
     """当背景用的官图:先把车牌上别家的 logo 抹掉,返回该用的那张图的路径。
@@ -204,7 +258,7 @@ def clean_still(item: Item) -> str:
     src = Path(item.path)
     if not src.is_file():
         return item.path
-    dest = src.parent.parent / "clean" / src.name
+    dest = src.parent.parent / "clean" / f"v{CLEAN_VERSION}" / src.name
     if dest.is_file():
         return str(dest)
     try:
@@ -436,7 +490,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
         or (i.kind == "still" and i.view in vocab.angle_of_view and not i.small_still))
         and not is_dark(i) and not _text_slide(i) and not _blackout(i)]
-    pool = book.keep(pool, BACKGROUND)
+    pool = screen(lib, book.keep(pool, BACKGROUND))
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
     strict = role != "body"
@@ -596,7 +650,7 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
     need = seconds / LONG_TAKE_MAX_SLOWDOWN
     pool = [i for i in lib.items if i.kind == "video" and i.usable and Path(i.path).is_file()
             and not is_dark(i) and not _text_slide(i) and not _blackout(i) and (not want or i.view in want)]
-    pool = book.keep(pool, BACKGROUND)
+    pool = screen(lib, book.keep(pool, BACKGROUND))
     hosts = _host_sources(lib.items)
     pool = [i for i in pool if not _hard_bad(i, hosts)]
     if role != "body":

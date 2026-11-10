@@ -10,7 +10,7 @@ from .. import variety
 from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
 from .scrub import _BENIGN_FIRST_RE, _COMPETITOR_MARKERS, _DISPARAGING_TERMS, _is_comparison_section, vendor_attribution
 from .hook import hook_lint, hook_payoff_lint, hook_verdict_lint, stance_lint
-from .lint_checks import attribution_lint, conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, firsthand_lint, hero_lint, ledger_use_lint, meaning_lint, number_source_lint, range_lint, review_use_lint, rival_lint, stock_phrase_lint, term_lint, thesis_lint
+from .lint_checks import attribution_lint, conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, firsthand_lint, hero_lint, ledger_use_lint, meaning_lint, number_source_lint, range_lint, repeat_lint, review_use_lint, rival_lint, stock_phrase_lint, term_lint, thesis_lint
 from .spoken import spoken_lint
 
 
@@ -179,6 +179,7 @@ def compliance_lint(
     issues.extend(hero_lint(segments, profile, facts))
     issues.extend(rival_lint(segments, facts))
     issues.extend(duplicate_lint(segments, facts))
+    issues.extend(repeat_lint(segments))
     issues.extend(thesis_lint(segments, thesis))
     issues.extend(ending_lint(segments, variety.ending(variant, theme)))
     issues.extend(spoken_lint(segments))

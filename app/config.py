@@ -431,6 +431,11 @@ TEAM_PLAN_DAYS = max(1, int(os.getenv("TEAM_PLAN_DAYS", "7")))
 TEAM_SLOT_TIMES = tuple(t.strip() for t in os.getenv("TEAM_SLOT_TIMES", "18:30").split(",") if t.strip())
 #: 已批选题提前多少小时开工(事实别太早抓,成片也要留审核时间)
 TEAM_LEAD_HOURS = float(os.getenv("TEAM_LEAD_HOURS", "30"))
+#: 成片被打回后「按意见重做」最多几次(0 = 不自动重做)。到顶了就停,等人看
+#: 素材源标题里写着的年份比今年早超过这么多年,就当「老款」不取(0 = 不筛)。
+#: 例:2026 年做的片子不用标题带 2017 的官方宣传片
+MATERIAL_MAX_AGE_YEARS = int(os.getenv("MATERIAL_MAX_AGE_YEARS", "4"))
+TEAM_MAX_REVISIONS = int(os.getenv("TEAM_MAX_REVISIONS", "2"))
 #: 默认画幅 / 时长(不合主题时取最接近的档位)
 #: 抖音短视频以竖屏、90 秒内为主(数据:横屏 4 分钟的作品平均只被看 16 秒)
 TEAM_ASPECT = os.getenv("TEAM_ASPECT", "9:16")

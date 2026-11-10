@@ -92,7 +92,45 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
                 spec.card = None
                 spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
         out.append(spec)
-    return out
+    # 卡片 / 概念动画按改完的全片旁白重核:改稿删掉的数字不留在屏上
+    return drop_unsaid_numbers(out)
+
+
+def drop_unsaid_numbers(specs: list[ShotSpec],
+                        card_log: list[dict] | None = None) -> list[ShotSpec]:
+    """整屏卡片和概念动画里,全片旁白从没说过的数字不上屏。
+
+    面板 / 大数字是按「这一拍说过」核的(`said_overlay`),卡片和概念动画原来只核事实出处:
+    事实里同一个参数有两个取值时(零百 7.2 秒 / 7.9 秒、148 度 / 150 度),屏上挑了一个、
+    旁白说的是另一个,观众看到的就是画面和口播对不上(元UP、理想i6 都被这样打回过)。
+    卡片一屏好几行,一拍旁白说不完,所以按全片核:一行的取值里有旁白没说过的数字就去掉这一行;
+    行数不够版式下限,这一拍退回 broll(后面的兜底会再给它配说过的数字)。"""
+    spoken = numbers_in(" ".join(s.narration_zh or "" for s in specs))
+    for s in specs:
+        ov = s.overlay if isinstance(s.overlay, dict) and s.overlay.get("kind") == "concept" else None
+        box = ov or (s.card if isinstance(s.card, dict) else None)
+        if not box or not box.get("rows"):
+            continue
+        rows = [r for r in box["rows"]
+                if all(numbers_in(str(v)) <= spoken for v in r.get("values") or [])]
+        if len(rows) == len(box["rows"]):
+            continue
+        gone = [f"{r.get('label', '')} {' '.join(map(str, r.get('values') or []))}".strip()
+                for r in box["rows"] if r not in rows]
+        need = 1 if ov else cards._MIN_ROWS.get(str(box.get("kind") or "spec"), 1)
+        if len(rows) >= need:
+            if ov:
+                s.overlay = {**ov, "rows": rows}
+            else:
+                s.card = {**box, "rows": rows}
+        else:
+            s.layout, s.overlay, s.card = SAFE_LAYOUT, None, None
+            s.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", s.visual_zh)
+        if card_log is not None:
+            card_log.append({"idx": s.idx, "section": s.section, "asked": "concept" if ov else "card",
+                             "layout": s.layout,
+                             "dropped": [f"旁白没说过的数字不上屏:{'、'.join(gone)}"]})
+    return specs
 
 
 def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: CategoryProfile,

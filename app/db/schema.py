@@ -450,7 +450,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     plan_cols = _column_names(conn, "plan_items")
     for col, ddl in (("hold", "TEXT NOT NULL DEFAULT ''"),        # 自动流程停下等人的原因
                      ("hold_state", "TEXT NOT NULL DEFAULT ''"),  # 停下时项目在哪个状态
-                     ("publish_at", "REAL")):                     # 成片闸通过后排定的发布时刻
+                     ("publish_at", "REAL"),                      # 成片闸通过后排定的发布时刻
+                     ("revision", "INTEGER NOT NULL DEFAULT 0"),  # 第几次返工(0 = 原版)
+                     ("redo_of", "TEXT NOT NULL DEFAULT ''"),     # 返工自哪条被打回的选题
+                     ("feedback", "TEXT NOT NULL DEFAULT ''"),    # 打回意见,写稿时带上
+                     ("exclude", "TEXT NOT NULL DEFAULT '[]'")):  # 打回点名不许再用的素材
         if col not in plan_cols:
             conn.execute(f"ALTER TABLE plan_items ADD COLUMN {col} {ddl}")
     # 第一期的「已出片」现在叫「成片待审」

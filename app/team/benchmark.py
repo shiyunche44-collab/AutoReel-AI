@@ -487,6 +487,50 @@ def structure_compare(own_rows: list[dict[str, Any]], now: float | None = None) 
             "claim_share": round(sum(x["claim"] for x in theirs) / len(theirs), 2)}
 
 
+#: 差距报告:爆款里某取值占比到这个才算"爆款的共同点"
+GAP_MIN_SHARE = 0.4
+
+
+def gap_suggestions(struct: dict[str, Any]) -> list[str]:
+    """从结构对照里挑出"爆款多数这样、我们不这样"的维度,最多 3 条。只引用抓到的占比。"""
+    out = []
+    for d in struct.get("dims") or []:
+        their = d["theirs"][0] if d["theirs"] else None
+        if not their or their["share"] < GAP_MIN_SHARE or not d["ours"]:
+            continue
+        mine = d["ours"][0]
+        if mine["value"] == their["value"]:
+            continue
+        out.append(f"{d['label']}:爆款里 {their['share'] * 100:.0f}% 是「{their['label']}」,"
+                   f"我们最常用的是「{mine['label']}」({mine['share'] * 100:.0f}%)")
+    claim = struct.get("claim_share")
+    if claim is not None and claim >= GAP_MIN_SHARE:
+        out.append(f"开场判断句:爆款里 {claim * 100:.0f}% 开场就亮出一句明确判断")
+    return out[:3]
+
+
+def gap_report(now: float | None = None) -> dict[str, Any]:
+    """页面用:对标库现状 + 爆款清单 + 我们和爆款的结构差距 + 建议先改的几项。"""
+    from . import features
+
+    now = now or time.time()
+    accounts = db.list_benchmark_accounts()
+    posts = db.list_benchmark_posts(since=now - PRIOR_DAYS * 86400, limit=2000)
+    own = features.main_rows(features.rows())
+    struct = structure_compare(own, now)
+    top = hits(now, limit=10)
+    durations = [r["duration"] for r in top if r["duration"]]
+    return {
+        "accounts": len(accounts), "posts": len(posts),
+        "hits": sum(1 for p in posts if p["burst"] >= BURST_RATIO),
+        "tagged": struct["n_theirs"], "own_works": len(own),
+        "top": [{"title": r["title"][:60], "account": r["account"], "likes": r["likes"],
+                 "burst": r["burst"], "duration": r["duration"], "car": r["car"]} for r in top],
+        "their_avg_duration": round(statistics.fmean(durations), 1) if durations else None,
+        "structure": struct, "suggestions": gap_suggestions(struct),
+    }
+
+
 def accounts_view() -> list[dict[str, Any]]:
     out = []
     for a in db.list_benchmark_accounts():
@@ -497,16 +541,28 @@ def accounts_view() -> list[dict[str, Any]]:
 
 
 def run() -> str:
-    if not db.list_benchmark_accounts(enabled_only=True):
-        raise Skip("还没有对标账号:在 /team 页加几个")
+    from .. import config
+    from . import benchmark_discover as disc
+
     if _login_blocked():
         raise Skip("抖音登录失效,等你去分发台重新扫码")
+    found = ""
+    if len(db.list_benchmark_accounts(enabled_only=True)) < disc.WANT_ACCOUNTS:
+        d = disc.discover(config.TEAM_CATEGORY)
+        if d["added"]:
+            found = f"自动发现 {len(d['added'])} 个新对标号({'、'.join(d['added'][:3])});"
+        elif d["error"]:
+            found = f"自动找号没成:{d['error']};"
+    if not db.list_benchmark_accounts(enabled_only=True):
+        raise Skip(found + "还没有对标账号:在 /team 页加几个")
+    if _login_blocked():
+        raise Skip(found + "抖音登录失效,等你去分发台重新扫码")
     if not due_accounts():
-        raise Skip(f"对标账号 {REFRESH_HOURS} 小时内都看过了")
+        raise Skip(found + f"对标账号 {REFRESH_HOURS} 小时内都看过了")
     out = collect()
     if out["error"] and not out["accounts"]:
         raise TeamError(f"对标主页没抓到:{out['error']}")
-    msg = f"看了 {out['accounts']} 个对标号,新作品 {out['added']} 条,爆款 {out['hits']} 条"
+    msg = found + f"看了 {out['accounts']} 个对标号,新作品 {out['added']} 条,爆款 {out['hits']} 条"
     tagged = tag_posts()
     if tagged:
         msg += f",拆了 {tagged} 条的开场结构"

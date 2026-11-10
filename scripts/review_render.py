@@ -219,24 +219,49 @@ def contact_sheets(video: Path, out: Path, fps: float, scenes: list[float], dur:
     sheets_dir.mkdir(parents=True, exist_ok=True)
     sheets = []
     for n in range(0, len(jobs), 12):
-        chunk = [d for _, d in jobs[n:n + 12] if d.is_file()]
-        if not chunk:
-            continue
+        chunk = [(t, d) for t, d in jobs[n:n + 12] if d.is_file()]
         sheet = sheets_dir / f"sheet_{n // 12:03d}.jpg"
-        args: list[str] = [str(config.FFMPEG_PATH), "-v", "error", "-y"]
-        for d in chunk:
-            args += ["-i", str(d)]
-        labels = "".join(f"[{i}:v]drawtext=text='{jobs[n + i][0]:.1f}s':x=6:y=6:fontsize=18:"
-                         f"fontcolor=yellow:box=1:boxcolor=black@0.6[v{i}];" for i in range(len(chunk)))
-        layout = "|".join(f"{(i % 4) * 360}_{(i // 4) * 640}" for i in range(len(chunk)))
-        stack = "".join(f"[v{i}]" for i in range(len(chunk)))
-        fc = f"{labels}{stack}xstack=inputs={len(chunk)}:layout={layout}" if len(chunk) > 1 else \
-            f"{labels.rstrip(';')}"
-        args += ["-filter_complex", fc] if len(chunk) > 1 else ["-vf", "null"]
-        args += ["-frames:v", "1", str(sheet)]
-        if run(args, timeout=120).returncode == 0 and sheet.is_file():
+        if chunk and _paste_sheet(chunk, sheet):
             sheets.append(sheet)
     return sheets
+
+
+def _paste_sheet(chunk: list[tuple[float, Path]], sheet: Path, cols: int = 4) -> bool:
+    """用 PIL 拼一张联系表。原来走 ffmpeg drawtext,Windows 上没配字体就整张出不来(联系表为空)。
+
+    时间戳用 PIL 自带字体,画不上也照样出图 —— 没时间戳的联系表好过没有联系表。
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    tiles = []
+    for t, path in chunk:
+        try:
+            with Image.open(path) as im:
+                tiles.append((t, im.convert("RGB")))
+        except OSError:
+            continue
+    if not tiles:
+        return False
+    w, h = tiles[0][1].size
+    rows = (len(tiles) + cols - 1) // cols
+    canvas = Image.new("RGB", (w * cols, h * rows), "black")
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.load_default(size=18)
+    except Exception:  # noqa: BLE001 - 老版本 Pillow 不收 size
+        font = ImageFont.load_default()
+    for i, (t, im) in enumerate(tiles):
+        x, y = (i % cols) * w, (i // cols) * h
+        canvas.paste(im if im.size == (w, h) else im.resize((w, h)), (x, y))
+        try:
+            label = f"{t:.1f}s"
+            box = draw.textbbox((x + 6, y + 6), label, font=font)
+            draw.rectangle((box[0] - 3, box[1] - 3, box[2] + 3, box[3] + 3), fill=(0, 0, 0))
+            draw.text((x + 6, y + 6), label, fill=(255, 220, 0), font=font)
+        except Exception:  # noqa: BLE001, S110 - 时间戳画不上不影响出图
+            pass
+    canvas.save(sheet, quality=88)
+    return sheet.is_file()
 
 
 def export_all_frames(video: Path, out: Path) -> int:

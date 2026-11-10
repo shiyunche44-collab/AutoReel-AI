@@ -173,6 +173,77 @@ def test_scrub_plate_removes_third_party_logo():
     assert cover_art.find_plates(blank) == []
 
 
+def _yellow_plate(colour, *, solid=True):
+    """灰车身上一块带黑字的黄牌(懂车帝那种)。solid=False 画成散的一团。"""
+    im = Image.new("RGB", (800, 400), (120, 125, 135))
+    d = ImageDraw.Draw(im)
+    if solid:
+        d.rectangle((340, 260, 460, 300), fill=colour)
+    else:
+        for x in range(340, 460, 12):
+            d.ellipse((x, 260 + (x % 24), x + 9, 290 + (x % 24)), fill=colour)
+    for x in range(360, 440, 8):
+        d.rectangle((x, 270, x + 3, 290), fill=(20, 20, 20))
+    return im
+
+
+def test_yellow_plate_found_in_shade():
+    """车尾的黄牌在阴影里发暗(实跑漏过一张 R≈150 的);散成一团的黄不算车牌。"""
+    assert cover_art.find_yellow_plates(_yellow_plate((235, 195, 40)))
+    shaded = _yellow_plate((153, 123, 28))
+    assert cover_art.find_yellow_plates(shaded)
+    out = cover_art.scrub_watermarks(shaded)
+    r, g, b = out.getpixel((400, 264))
+    assert r - b < 40  # 黄没了,换成车身的灰
+    assert cover_art.find_yellow_plates(_yellow_plate((153, 123, 28), solid=False)) == []
+    assert cover_art.find_yellow_plates(_yellow_plate((200, 90, 30))) == []  # 橙色:不是
+
+
+def _blue_text_plate(body, text=(40, 80, 200)):
+    im = Image.new("RGB", (800, 400), body)
+    d = ImageDraw.Draw(im)
+    d.rectangle((340, 255, 460, 305), fill=(236, 238, 242))
+    for x in range(360, 440, 7):  # 「汽车之家」:一行粗笔画
+        d.rectangle((x, 270, x + 4, 290), fill=text)
+    return im
+
+
+def test_blue_plate_text_scrubbed_on_white_car():
+    """白车上牌子和保险杠连成一片,找不到「白方块」;按蓝字找照样能抹(实跑 24 张只认出 3 张)。"""
+    for body in ((150, 20, 40), (238, 240, 244)):
+        im = _blue_text_plate(body)
+        (x0, y0, x1, y1), = cover_art.find_plate_text(im)
+        assert 355 <= x0 <= 362 and 438 <= x1 <= 446 and 266 <= y0 <= 272
+        out = cover_art.scrub_watermarks(im)
+        assert cover_art.find_plate_text(out) == []
+        assert min(out.getpixel((x, 280))[0] for x in range(360, 440)) > 200  # 字抹成牌底色
+        assert out.getpixel((100, 100)) == body  # 车身不动
+    # 真车牌是黑字:不动;蓝字不在浅色牌底上(蓝车身上的一条蓝):不动
+    assert cover_art.find_plate_text(_blue_text_plate((150, 20, 40), text=(20, 20, 20))) == []
+    stripe = Image.new("RGB", (800, 400), (30, 40, 60))
+    ImageDraw.Draw(stripe).rectangle((360, 270, 440, 290), fill=(40, 80, 200))
+    assert cover_art.find_plate_text(stripe) == []
+
+
+def test_clean_still_cache_is_versioned(tmp_path):
+    """抹牌逻辑升级后,旧的 clean/ 缓存不能接着用(旧缓存里有没抹掉的牌子)。"""
+    from app.pipeline import library
+    from app.pipeline.library import select
+
+    stills = tmp_path / "pool" / "stills"
+    stills.mkdir(parents=True)
+    _blue_text_plate((150, 20, 40)).save(stills / "img_a.jpg", quality=95)
+    stale = tmp_path / "pool" / "clean"
+    stale.mkdir()
+    _blue_text_plate((150, 20, 40)).save(stale / "img_a.jpg", quality=95)  # 旧版缓存:没抹
+    item = library.Item(id="img_a", kind="still", path=str(stills / "img_a.jpg"), source="s",
+                        platform="autohome")
+    got = select.clean_still(item)
+    assert got == str(stale / f"v{select.CLEAN_VERSION}" / "img_a.jpg")
+    with Image.open(got) as im:
+        assert cover_art.find_plate_text(im) == []
+
+
 # --------------------------------------------------------------------------
 # 生图兜底那台车(素材池里没有白底官图时)
 # --------------------------------------------------------------------------

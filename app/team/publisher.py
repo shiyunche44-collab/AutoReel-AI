@@ -15,6 +15,7 @@ import datetime as dt
 import logging
 import threading
 import time
+import uuid
 from typing import Any
 
 from .. import config, db
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 
 #: 发布时刻离现在至少留这么久(审完马上发也给发布线程一点余量)
 MIN_AHEAD = 120.0
+#: 返工重做一版大约要多久(实测海豹07 返工 18:05 打回、19:00 进待审),排发布时留出来
+REDO_PREP_HOURS = 2.0
 #: 这些发布状态算发出去了
 _OUT = {"published", "submitted"}
 
@@ -165,14 +168,113 @@ def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
             "publish_at": at, "pieces": extras}
 
 
-def reject_cut(item_id: str, note: str = "") -> dict[str, Any]:
-    """成片打回:这条不发了。要重做就在项目页改,或者让主编另排。"""
+def reject_cut(item_id: str, note: str = "", *, redo: bool = False,
+               bad_ranges: list[list[float]] | None = None) -> dict[str, Any]:
+    """成片打回。`bad_ranges` = 成片里有问题的时间段 [[起, 止], ...](秒),重做时这些时间段
+    用到的素材整条排除、新一版不再取。`redo=True`:按打回意见重做 —— 原选题记为已驳回,另开一条同题的新选题,
+    直接是「已批」(选题闸早就过了),带上意见和返工次数,制作员按排期重新开工。
+
+    返工有上限(`TEAM_MAX_REVISIONS`):到顶了只打回、不再重做,等人看。"""
     if not db.cas_plan_status(item_id, ("review",), "rejected",
                               note=("成片打回:" + note)[:200]):
         raise PlanError("这条选题不在成片待审")
     item = db.get_plan_item(item_id) or {}
     preference.record(item, "cut", "reject", note=note)
+    if redo:
+        child = _redo_item(item, note, bad_ranges)
+        if child:
+            item = {**item, "redo_item": child}
+        else:
+            abandon(item_id, note)
+            item = {**(db.get_plan_item(item_id) or item), "redo_item": "",
+                    "redo_stopped": f"已返工 {item.get('revision', 0)} 次,到上限了"}
     return item
+
+
+def bad_materials(item: dict[str, Any], ranges: list[list[float]] | None) -> set[str]:
+    """成片里问题时间段用到的素材:返回源地址和素材 id,新一版据此排除。
+    时间轴按分镜时长顺序累加(和成片一致,开场片头另算的偏差忽略不计)。"""
+    pid = item.get("project_id")
+    if not pid or not ranges:
+        return set()
+    from ..pipeline import library
+
+    starts, t = {}, 0.0
+    for spec in db.read_json(pid, "storyboard.json", []) or []:
+        dur = float(spec.get("duration") or 0)
+        starts[int(spec.get("idx", len(starts)))] = (t, t + dur)
+        t += dur
+    bad_beats = {idx for idx, (a, b) in starts.items()
+                 for lo, hi in ((float(r[0]), float(r[1])) for r in ranges if len(r) == 2)
+                 if a < hi and b > lo}
+    out: set[str] = set()
+    pieces = (db.read_json(pid, "materials_used.json", {}) or {}).get("pieces") or []
+    for p in pieces:
+        if int(p.get("beat", -1)) in bad_beats:
+            if p.get("source_url"):
+                out.add(str(p["source_url"]))
+            if p.get("item_id") and p["item_id"] != "bg":
+                out.add(library.base_item_id(str(p["item_id"])))
+    return out
+
+
+def _redo_item(item: dict[str, Any], note: str,
+               bad_ranges: list[list[float]] | None = None) -> str:
+    """开返工选题,返回新选题 id;到返工上限返回空串。"""
+    revision = int(item.get("revision") or 0) + 1
+    if revision > config.TEAM_MAX_REVISIONS:
+        return ""
+    new_id = "pl_" + uuid.uuid4().hex[:12]
+    keep = ("category", "slot_at", "kind", "subject", "subjects", "angle", "theme", "aspect",
+            "duration", "hook", "search_terms", "evidence", "rationale", "heat")
+    db.create_plan_item({
+        **{k: item[k] for k in keep}, "id": new_id, "status": "approved",
+        "slot_at": _redo_slot(item),
+        "revision": revision, "redo_of": item["id"], "feedback": note.strip()[:300],
+        "exclude": sorted(set(item.get("exclude") or []) | bad_materials(item, bad_ranges)),
+        "note": f"第 {revision} 次返工(上一版 {item['id']} 被打回)",
+    })
+    return new_id
+
+
+def _redo_slot(item: dict[str, Any]) -> float:
+    """返工排到最近一个来得及的发布时段,不等下一个「空档」。
+
+    原来沿用原时刻、来不及就取主编的下一个空档:空档被待批选题占着时会排到 5–6 天后
+    (深蓝S05 返工排到 11-15、元UP 排到 11-13),当天就断更。返工的题早过了选题闸,
+    制作员也不等开工时间(`producer.due`),所以只要留出重做的时间就行。
+    和别的片撞时刻由 `chief.free_publish_time` 在排发布时错开。"""
+    now = time.time()
+    ready = now + REDO_PREP_HOURS * 3600
+    soonest = next_publish_time(0.0, now=ready - MIN_AHEAD)
+    at = float(item["slot_at"])
+    return at if ready <= at <= soonest else soonest
+
+
+def abandon(item_id: str, note: str = "") -> None:
+    """返工到上限:这题放弃。不占发布空档,主编下一轮会补新题。"""
+    item = db.get_plan_item(item_id) or {}
+    db.update_plan_item(item_id, status="abandoned",
+                        note=(f"已返工 {item.get('revision', 0)} 次仍不过,放弃。" + note)[:200])
+
+
+def redo(item_id: str, note: str = "") -> dict[str, Any]:
+    """失败 / 驳回 / 过期的选题按原因重开一条(同样受返工上限);到上限就放弃。
+    给「定时 Claude 任务」和页面的「重做」按钮用:这三个状态原来是死胡同。"""
+    item = db.get_plan_item(item_id)
+    if not item:
+        raise PlanError("选题不存在")
+    if item["status"] not in ("failed", "rejected", "expired"):
+        raise PlanError("只有失败 / 驳回 / 过期的选题能重做")
+    if any(i.get("redo_of") == item_id for i in db.list_plan_items(limit=500)):
+        raise PlanError("这条已经重做过了")
+    reason = (note or item.get("note") or "").strip()
+    child = _redo_item(item, reason or "上一版没走完,重做")
+    if not child:
+        abandon(item_id, reason)
+        return {**(db.get_plan_item(item_id) or {}), "redo_item": "",
+                "redo_stopped": f"已返工 {item.get('revision', 0)} 次,放弃这题"}
+    return {**item, "redo_item": child}
 
 
 def _refine_item(item_id: str) -> dict[str, Any]:
@@ -255,7 +357,10 @@ def refine_status(item_id: str) -> dict[str, Any]:
 def sync() -> int:
     """已排发布的选题跟着发布任务走:都发出去 → 已发布;有失败且没有在途的 → 失败。"""
     changed = 0
-    for item in db.list_plan_items(statuses=("scheduled",), limit=200):
+    # 「失败」的也看:人在发布页手动重试发出去了,选题要跟着回到已发布
+    for item in db.list_plan_items(statuses=("scheduled", "failed"), limit=200):
+        if not item.get("project_id"):
+            continue
         # 只看主片:衍生品晚几天发、失败了也不该让选题算「发布失败」
         pubs = [p for p in db.list_publications(project_id=item["project_id"]) if repurpose.is_main(p)]
         if not pubs:
@@ -264,7 +369,7 @@ def sync() -> int:
         if states <= _OUT:
             db.update_plan_item(item["id"], status="published")
             changed += 1
-        elif "failed" in states and not states & {"pending", "uploading"}:
+        elif item["status"] == "scheduled" and "failed" in states and not states & {"pending", "uploading"}:
             err = next((p["error"] for p in pubs if p["state"] == "failed" and p["error"]), "")
             db.update_plan_item(item["id"], status="failed", note=f"发布失败:{err}"[:200])
             changed += 1

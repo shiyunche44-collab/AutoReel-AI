@@ -53,7 +53,7 @@ def trend_rows(batch: str) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
-_PLAN_JSON = ("subjects", "evidence")
+_PLAN_JSON = ("subjects", "evidence", "exclude")
 
 
 def _plan_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -73,7 +73,8 @@ def create_plan_item(row: dict[str, Any]) -> None:
     now = time.time()
     row = {"kind": "single", "subjects": [], "angle": "", "theme": "", "aspect": "16:9",
            "duration": 240, "hook": "", "search_terms": "", "evidence": [], "rationale": "",
-           "heat": 3, "status": "proposed", "project_id": "", "note": "", **row}
+           "heat": 3, "status": "proposed", "project_id": "", "note": "",
+           "revision": 0, "redo_of": "", "feedback": "", "exclude": [], **row}
     row.setdefault("created_at", now)
     row["updated_at"] = now
     for key in _PLAN_JSON:
@@ -84,10 +85,11 @@ def create_plan_item(row: dict[str, Any]) -> None:
             """INSERT INTO plan_items
                (id, category, slot_at, kind, subject, subjects, angle, theme, aspect, duration,
                 hook, search_terms, evidence, rationale, heat, status, project_id, note,
-                created_at, updated_at)
+                revision, redo_of, feedback, exclude, created_at, updated_at)
                VALUES (:id, :category, :slot_at, :kind, :subject, :subjects, :angle, :theme,
                        :aspect, :duration, :hook, :search_terms, :evidence, :rationale, :heat,
-                       :status, :project_id, :note, :created_at, :updated_at)""",
+                       :status, :project_id, :note, :revision, :redo_of, :feedback, :exclude,
+                       :created_at, :updated_at)""",
             row,
         )
 

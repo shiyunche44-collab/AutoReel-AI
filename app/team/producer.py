@@ -38,8 +38,10 @@ _gating_lock = threading.Lock()
 
 def due(now: float | None = None) -> list[dict[str, Any]]:
     now = now or time.time()
+    # 返工的题不等开工时间:上一版已经做过一遍,事实不会变味,拖着只会断更
     return [i for i in db.list_plan_items(statuses=("approved",), limit=200)
-            if i["slot_at"] - config.TEAM_LEAD_HOURS * 3600 <= now]
+            if i["slot_at"] - config.TEAM_LEAD_HOURS * 3600 <= now
+            or int(i.get("revision") or 0) > 0]
 
 
 def _bootstrap(project_id: str) -> None:
@@ -65,6 +67,10 @@ def start(item_id: str, *, background: bool = True) -> str:
         db.update_plan_item(item_id, status="failed", note=f"建项目失败:{exc}"[:200])
         return ""
     db.update_plan_item(item_id, project_id=project_id)
+    if item.get("exclude"):
+        from ..pipeline.explainer import EXCLUDE_FILE
+
+        db.write_json(project_id, EXCLUDE_FILE, list(item["exclude"]))
     db.add_event(project_id, "team", reason=f"AI 团队按选题单开工({item_id})")
     if background:
         threading.Thread(target=_bootstrap, args=(project_id,), name=f"team-{project_id}",

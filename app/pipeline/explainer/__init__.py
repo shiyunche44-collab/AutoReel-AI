@@ -93,6 +93,7 @@ from .planning_a import (  # noqa: E402,F401
     _beat_line,
     _cap_rows,
     _ground_beat,
+    drop_unsaid_numbers,
     _headline_value,
     auto_panel,
     enforce_broll_cap,
@@ -243,6 +244,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
                           facts_for(facts, seg.subject, profile.section(seg.section).name),
                           card_log)
              for i, seg in enumerate(segments)]
+    # 卡片 / 概念动画里旁白没说过的数字先去掉(见 drop_unsaid_numbers),退回 broll 的拍交给下面兜底
+    specs = drop_unsaid_numbers(specs, card_log)
     # broll 兜底:这一拍讲的数字还有事实支撑,就把它放上屏(见 rescue_broll)
     # 视频优先的视觉包不跑这两步:broll 就是它的主画面,转成面板正好相反
     if not lite:
@@ -376,7 +379,20 @@ def _shot_status(project_id: str, idx: int) -> str:
     return ""
 
 
-def render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
+def render_pending(project_id: str, specs: Sequence[ShotSpec], *args: Any, **kwargs: Any
+                   ) -> dict[str, Any]:
+    """渲染还没出片的拍。被打回重做的项目带着排除清单(`exclude_materials.json`),
+    取材时跳过清单里的素材;没有清单就是原来的行为。"""
+    banned = db.read_json(project_id, EXCLUDE_FILE, []) or []
+    with library.banned_materials(banned):
+        return _render_pending(project_id, specs, *args, **kwargs)
+
+
+#: 项目目录里的素材排除清单:打回重做时由制作员写入(源地址 / 素材 id 的列表)
+EXCLUDE_FILE = "exclude_materials.json"
+
+
+def _render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                    profile: CategoryProfile, limit: int = 3,
                    subjects: Sequence[str] | None = None,
                    should_stop: Any = None) -> dict[str, Any]:

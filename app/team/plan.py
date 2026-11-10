@@ -11,7 +11,7 @@ from ..models import ProjectCreate, SubjectEntry
 STATUS_LABEL = {
     "proposed": "待批", "approved": "已批", "rejected": "已驳回", "expired": "过期未批",
     "producing": "制作中", "review": "成片待审", "scheduled": "已排发布", "published": "已发布",
-    "failed": "失败",
+    "failed": "失败", "abandoned": "已放弃",
 }
 #: 用户还能改的状态
 EDITABLE = ("proposed", "approved")
@@ -87,6 +87,15 @@ def patch(item_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     return _get(item_id)
 
 
+def _why(item: dict[str, Any]) -> str | None:
+    """选题依据;返工的选题把上一版被打回的意见接在后面,写稿前的分析要回应它。"""
+    why = (item.get("rationale") or "")[:170]
+    fb = (item.get("feedback") or "").strip()
+    if fb:
+        why = f"{why}【上一版被打回,这版必须改正:{fb[:110]}】"
+    return why[:300] or None
+
+
 def to_payload(item: dict[str, Any]) -> ProjectCreate:
     """选题 → 建项目参数。和首页点热点选题卡片填进去的一样。"""
     subjects = item.get("subjects") or []
@@ -100,7 +109,7 @@ def to_payload(item: dict[str, Any]) -> ProjectCreate:
         angle_search=(item.get("search_terms") or "")[:60] or None,
         angle_evidence=(item.get("evidence") or [])[:12] or None,
         hook=(item.get("hook") or "")[:40] or None,
-        angle_why=(item.get("rationale") or "")[:300] or None,
+        angle_why=_why(item),
         subjects=[SubjectEntry(name=s[:40]) for s in subjects] or None,
         **_series_of(item),
     )

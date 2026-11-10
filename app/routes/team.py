@@ -82,6 +82,10 @@ class PlanPatch(BaseModel):
 
 class PlanReject(BaseModel):
     note: str = ""
+    #: 打回成片时用:按意见重做(开一条新选题,不用再批)
+    redo: bool = False
+    #: 成片里有问题的时间段 [[起, 止], ...] 秒:这些段用到的素材重做时整条排除
+    bad_ranges: list[list[float]] = []
 
 
 def _plan_call(fn, *args):
@@ -162,7 +166,22 @@ def repurpose_file(project_id: str, name: str):
 def team_cut_reject(item_id: str, payload: PlanReject):
     from ..team import publisher
 
-    return _plan_call(publisher.reject_cut, item_id, payload.note)
+    try:
+        return team_plan.view(publisher.reject_cut(item_id, payload.note, redo=payload.redo,
+                                                       bad_ranges=payload.bad_ranges))
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/team/plan/{item_id}/redo")
+def team_plan_redo(item_id: str, payload: PlanReject):
+    """失败 / 驳回 / 过期的选题按原因重开一条(受返工上限,到顶放弃)。"""
+    from ..team import publisher
+
+    try:
+        return team_plan.view(publisher.redo(item_id, payload.note))
+    except team_plan.PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/api/team/plan/{item_id}/refine/open")
@@ -425,6 +444,14 @@ def team_bench_add(payload: BenchAdd):
         return benchmark.add_account(payload.target, payload.note)
     except benchmark.BenchError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/api/team/benchmark/report")
+def team_bench_report():
+    """对标差距报告:爆款清单 + 我们和爆款的开场 / 节奏 / 标题 / 时长对照。"""
+    from ..team import benchmark
+
+    return benchmark.gap_report()
 
 
 @router.get("/api/team/growth")
