@@ -15,7 +15,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 服务器与调度器(最容易出事)
 
-- **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/aimovice.db`。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。启动前先确认端口。
+- **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/AutoReel-AI.db`(`data/aimovice.db` 是 0 字节的旧空文件,别用)。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。启动前先确认端口。
 - `scripts/serve.ps1` 会**杀掉已在监听该端口的进程**。曾因此中断用户正在渲染的项目。先用 `curl --noproxy '*' http://127.0.0.1:<port>/` 探测(不加 `--noproxy` 会走代理返回 000)。
 - `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`(DRAFT_RENDERING / FINAL_RENDERING / COMPOSING / QA_PASSED 等)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
 - 新增会自动推进的状态,必须加进 `AUTO_ADVANCE_STATES`,漏了就是"静静卡住",没有报错。
@@ -23,7 +23,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 测试
 
-- 测试里调用 `orchestrator.create_project` 等会写库的函数,**必须用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的 `data/aimovice.db`。
+- 测试里调用 `orchestrator.create_project` 等会写库的函数,**必须用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的库(现在是 `data/AutoReel-AI.db`)。
 - `tests/conftest.py` 已把 BGM 曲库重定向到 tmp,别绕开。
 - 提示词有黄金快照 `tests/golden/auto_long_prompts.json`。改 prompt 后用 `tests/test_profile_vocab.py` 里的 `regen_golden` 重生成,并在 diff 里确认只有预期变化。
 - `playbook.install()` 只在 `team.scheduler.start()` 里调用,所以测试和黄金快照不受学习权重影响。别在别处调用它。

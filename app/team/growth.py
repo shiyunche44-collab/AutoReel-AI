@@ -4,6 +4,8 @@
 再通过偏好接口调方向。这里只汇总已有数据(分析师写的 account_daily、metric_snapshots),
 不抓网络、不写库。
 
+`conversion`:主页访问 → 关注(转化层)。只展示,不进 `goals` 的达标判断 —— 一周只有几十次主页访问,样本太小。
+
 `goals`:固定打法后的两周目标(中位播放、2 秒跳出、5 秒完播)和达标情况。**先看留人,再看涨粉** ——
 播放只有几十的时候,粉丝数不动是正常的。样本不到 `GOAL_MIN_WORKS` 条不下结论,也不该改打法。
 """
@@ -128,7 +130,18 @@ def _work(pub: dict[str, Any], now: float) -> dict[str, Any]:
         "bounce_2s": snap.get("bounce_2s"),
         "completion_5s": _raw_metric(snap, "completion_rate_5s"),
         "followers_gained": snap.get("followers_gained"),
+        "homepage_visits": _raw_metric(snap, "homepage_visit_count"),
     }
+
+
+def _conversion(works: list[dict[str, Any]]) -> dict[str, Any]:
+    """转化层:进了主页的人里有多少点了关注。只算两个数都读到的作品;没人进主页时比例为 None。"""
+    rows = [w for w in works
+            if w.get("homepage_visits") is not None and w.get("followers_gained") is not None]
+    visits = int(sum(w["homepage_visits"] for w in rows))
+    gained = int(sum(w["followers_gained"] for w in rows))
+    return {"homepage_visits": visits, "followers_gained": gained, "works": len(rows),
+            "visit_to_follow": round(gained / visits, 4) if visits else None}
 
 
 def summary(days: int = 14, now: float | None = None, since: str | None = None) -> dict[str, Any]:
@@ -153,6 +166,7 @@ def summary(days: int = 14, now: float | None = None, since: str | None = None) 
                              if len(followers) >= 2 else None),
         "totals": {"works": len(works), "views": sum(views),
                    "followers_gained": sum(gained)},
+        "conversion": _conversion(works),
         "goals": goals(works, since if since is not None else config.TEAM_GOAL_SINCE),
         "works": works,
         "accounts": [{"account_id": a["account_id"], "paused": bool(a.get("paused")),

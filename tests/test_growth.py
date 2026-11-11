@@ -116,3 +116,29 @@ def test_summary_reads_5s_completion_from_raw(fresh_db):
     out = growth.summary(days=14, now=now)
     assert out["works"][0]["completion_5s"] == pytest.approx(0.294118)
     assert out["goals"]["works"] == 1 and out["goals"]["hold"] is True
+
+
+def test_summary_conversion_from_homepage_visits(fresh_db):
+    from app.team import growth
+
+    now = time.time()
+    _pub(fresh_db, "w1", now - 2 * 86400)
+    fresh_db.add_snapshot("w1", "douyin", now - 3600, {"views": 400, "followers_gained": 2},
+                          raw={"metrics": {"homepage_visit_count": "21"}})
+    _pub(fresh_db, "w2", now - 3 * 86400)
+    fresh_db.add_snapshot("w2", "douyin", now - 3600, {"views": 50, "followers_gained": 0},
+                          raw={"metrics": {"homepage_visit_count": "4"}})
+    _pub(fresh_db, "w3", now - 4 * 86400)                       # 没有主页访问数的不计入
+    fresh_db.add_snapshot("w3", "douyin", now - 3600, {"views": 30, "followers_gained": 1})
+    out = growth.summary(days=14, now=now)
+    assert {w["publication_id"]: w["homepage_visits"] for w in out["works"]} == {
+        "w1": 21.0, "w2": 4.0, "w3": None}
+    assert out["conversion"] == {"homepage_visits": 25, "followers_gained": 2, "works": 2,
+                                 "visit_to_follow": 0.08}
+
+
+def test_summary_conversion_empty(fresh_db):
+    from app.team import growth
+
+    assert growth.summary()["conversion"] == {
+        "homepage_visits": 0, "followers_gained": 0, "works": 0, "visit_to_follow": None}
