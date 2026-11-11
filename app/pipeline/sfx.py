@@ -83,18 +83,24 @@ def sample(kind: str) -> np.ndarray:
         return data / (float(np.abs(data).max()) or 1.0) * 0.9
 
 
-def events_for(cues: Sequence[Mapping[str, Any]], chapter_starts: Sequence[float]
+def events_for(cues: Sequence[Mapping[str, Any]], chapter_starts: Sequence[float],
+               reveal_times: Sequence[float] = (),
                ) -> list[tuple[float, str]]:
     """事件表 [(秒, 音效名)]:每个章节切换一个 whoosh(提前一点,"呼"完正好换章),
-    关键词弹出(`caption_layer.build_layer` 里 hot 词的起点)一个 pop,同类间隔不小于 `POP_MIN_GAP`。"""
+    关键词弹出(`caption_layer.build_layer` 里 hot 词的起点)或参数上屏时刻一个 pop,
+    同类间隔不小于 `POP_MIN_GAP`。"""
     events = [(max(0.0, float(t) - WHOOSH_LEAD), "whoosh") for t in chapter_starts if t > 0.5]
-    last = -POP_MIN_GAP
+    candidates: list[float] = [float(t) for t in reveal_times if float(t) > 0.1]
     for cue in cues:
         for w in cue.get("words") or []:
-            if w.get("hot") and float(w["start"]) - last >= POP_MIN_GAP:
-                last = float(w["start"])
-                events.append((last, "pop"))
+            if w.get("hot"):
+                candidates.append(float(w["start"]))
                 break  # 一条字幕最多一个
+    last = -POP_MIN_GAP
+    for t in sorted(candidates):
+        if t - last >= POP_MIN_GAP:
+            last = t
+            events.append((t, "pop"))
     return sorted(events)
 
 

@@ -21,8 +21,8 @@ from app.state import (
 PIPELINE = [
     State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY,
     State.STORYBOARD_READY, State.GATE_A, State.ASSETS_READY,
-    State.PROMPTS_READY, State.DRAFT_RENDERING, State.GATE_B,
-    State.FINAL_RENDERING, State.QA_PASSED, State.COMPOSING, State.DONE,
+    State.DRAFT_RENDERING, State.GATE_B,
+    State.COMPOSING, State.DONE,
 ]
 
 
@@ -32,7 +32,7 @@ PIPELINE = [
 def test_state_str_returns_bare_value():
     assert str(State.DRAFT_INTENT) == "DRAFT_INTENT"
     assert str(State.GATE_A) == "GATE_A"
-    assert f"{State.FINAL_RENDERING}" == "FINAL_RENDERING"
+    assert f"{State.COMPOSING}" == "COMPOSING"
 
 
 def test_state_is_json_serialisable_as_string():
@@ -55,10 +55,7 @@ def test_next_auto_state_walks_the_pipeline():
         State.DRAFT_INTENT: State.FACTS_RESOLVED,
         State.FACTS_RESOLVED: State.SCRIPT_READY,
         State.SCRIPT_READY: State.STORYBOARD_READY,
-        State.ASSETS_READY: State.PROMPTS_READY,
-        State.PROMPTS_READY: State.DRAFT_RENDERING,
-        State.FINAL_RENDERING: State.QA_PASSED,
-        State.QA_PASSED: State.COMPOSING,
+        State.ASSETS_READY: State.DRAFT_RENDERING,
         State.COMPOSING: State.DONE,
     }
     for src, dst in expected.items():
@@ -77,17 +74,16 @@ def test_gate_states_block_auto_advance():
 
 def test_cannot_skip_gate_a_into_generation():
     """未过门禁 A 就不能进入任何生成阶段。"""
-    forbidden = (State.ASSETS_READY, State.PROMPTS_READY,
-                 State.DRAFT_RENDERING, State.FINAL_RENDERING)
+    forbidden = (State.ASSETS_READY, State.DRAFT_RENDERING, State.COMPOSING)
     for target in forbidden:
         assert not can_transition(State.STORYBOARD_READY, target)
     assert can_transition(State.STORYBOARD_READY, State.GATE_A)
 
 
 def test_cannot_skip_gate_b_into_final():
-    assert not can_transition(State.DRAFT_RENDERING, State.FINAL_RENDERING)
+    assert not can_transition(State.DRAFT_RENDERING, State.COMPOSING)
     assert can_transition(State.DRAFT_RENDERING, State.GATE_B)
-    assert can_transition(State.GATE_B, State.FINAL_RENDERING)
+    assert can_transition(State.GATE_B, State.COMPOSING)
 
 
 def test_gate_a_can_send_user_back_for_edits():
@@ -104,7 +100,7 @@ def test_illegal_transitions_rejected():
         (State.DRAFT_INTENT, State.SCRIPT_READY),   # 跳过事实采集
         (State.SCRIPT_READY, State.DRAFT_RENDERING),
         (State.GATE_A, State.DRAFT_RENDERING),      # 跳过后面的素材与编译
-        (State.COMPOSING, State.FINAL_RENDERING),   # 往回走但不合法
+        (State.COMPOSING, State.DRAFT_RENDERING),   # 往回走但不合法
         (State.DONE, State.DRAFT_INTENT),           # 终态不可复活
         (State.CANCELLED, State.DRAFT_INTENT),
     ]
@@ -131,20 +127,18 @@ def test_terminal_states():
 
 def test_failed_can_resume_from_checkpoint():
     assert can_transition(State.FAILED, State.DRAFT_RENDERING)
-    assert can_transition(State.FAILED, State.FINAL_RENDERING)
+    assert can_transition(State.FAILED, State.COMPOSING)
     assert can_transition(State.FAILED, State.SCRIPT_READY)
 
 
 def test_paused_budget_resumes_the_state_it_came_from():
     """配额暂停后要能回到**暂停前的那个状态**。
 
-    之前 PAUSED_BUDGET 只能回 DRAFT_RENDERING / FINAL_RENDERING,
-    "不能从配额暂停直接跳到别的阶段"。现在暂停前在哪个阶段,提额后
-    就从哪个阶段继续 —— 暂停前在事实采集,接着采事实,而不是跳到渲染。
-    暂停前在哪个状态记在 `projects.resume_state`。
+    暂停前在哪个阶段,提额后就从哪个阶段继续 —— 暂停前在事实采集,
+    接着采事实,而不是跳到渲染。暂停前在哪个状态记在 `projects.resume_state`。
     """
     assert can_transition(State.PAUSED_BUDGET, State.DRAFT_RENDERING)
-    assert can_transition(State.PAUSED_BUDGET, State.FINAL_RENDERING)
+    assert can_transition(State.PAUSED_BUDGET, State.GATE_B)
     assert can_transition(State.PAUSED_BUDGET, State.GATE_A)
     assert can_transition(State.PAUSED_BUDGET, State.FACTS_RESOLVED)
     assert can_transition(State.PAUSED_BUDGET, State.SCRIPT_READY)
@@ -231,7 +225,7 @@ def test_confirm_gate_b_passes_the_gate(monkeypatch):
 
     def fake_advance(project_id, *, confirmed=False):
         seen["confirmed"] = confirmed
-        return {"state": "FINAL_RENDERING", "waiting": False}
+        return {"state": "COMPOSING", "waiting": False}
 
     monkeypatch.setattr(orchestrator.db, "get_project",
                         lambda *a, **k: _fake_project(State.GATE_B))
@@ -246,15 +240,11 @@ def test_confirm_gate_b_passes_the_gate(monkeypatch):
 # 后台调度器必须覆盖所有"自己会往前走"的状态
 # --------------------------------------------------------------------------
 def test_scheduler_covers_every_autonomous_state():
-    """回归:调度器曾只推进 FINAL_RENDERING 与 COMPOSING,漏掉 DRAFT_RENDERING。
-
-    后果不是报错,而是草稿阶段的镜头永远停在 pending —— 页面看着一切正常,
-    就是永远不动。这类"静默不工作"最难查,所以把状态集合锁死在这里。
-    """
+    """回归:调度器必须覆盖所有自动推进状态。"""
     from app.main import AUTO_ADVANCE_STATES
     from app.state import State
 
-    for state in (State.DRAFT_RENDERING, State.FINAL_RENDERING, State.QA_PASSED, State.COMPOSING):
+    for state in (State.DRAFT_RENDERING, State.COMPOSING):
         assert str(state) in AUTO_ADVANCE_STATES, f"调度器未覆盖 {state}"
 
 

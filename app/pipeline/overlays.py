@@ -210,9 +210,9 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
 # --------------------------------------------------------------------------
 #: "4D 毫米波""5G""8K" 里的一位数是名字不是参数,不拿来滚动
 _NUM_RE = r"-?(?!\d[DGK](?![A-Za-z]))\d+(?:\.\d+)?"
-#: 数字从 0 滚到目标值用几帧、多久。关键帧 + concat 时长,不逐帧画满整拍
-COUNT_STEPS = 16
-COUNT_SECONDS = 1.1
+#: 数字从 0 滚到目标值用几帧、多久。关键帧 + concat 时长,30fps 下 24 帧更细腻
+COUNT_STEPS = 24
+COUNT_SECONDS = 0.95
 
 
 def split_number(value: str) -> tuple[str, float, int, str] | None:
@@ -276,16 +276,19 @@ def stat(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str
 
 def stat_frames(overlay: dict[str, Any], subject: str, size: tuple[int, int],
                 out_dir: str | Path) -> list[tuple[Path, float]]:
-    """滚动关键帧:[(透明 PNG, 停留秒数)]。最后一帧是原值,停留时长由调用方定格到结束。"""
+    """滚动关键帧:[(透明 PNG, 停留秒数)]。若带旁白时刻 `at`,在开口前先停在第 0 帧,
+    说到数字时才启动滚动;最后一帧是原值,停留时长由调用方定格到结束。"""
     from .cards import ease_out
 
     out_dir = Path(out_dir)
     step = COUNT_SECONDS / COUNT_STEPS
+    lead_wait = max(0.0, float(overlay["at"]) - 0.15) if isinstance(overlay.get("at"), (int, float)) else 0.0
     out: list[tuple[Path, float]] = []
     for k in range(COUNT_STEPS + 1):
         p = stat(overlay, subject, size, out_dir / f"stat_{k:02d}.png",
                  progress=ease_out(k / COUNT_STEPS))
-        out.append((p, step))
+        dur = (lead_wait + step) if k == 0 and lead_wait > 0.1 else step
+        out.append((p, dur))
     return out
 
 
@@ -379,12 +382,12 @@ def lower_third(subject: str, chapter: str, size: tuple[int, int], dest: str | P
 # --------------------------------------------------------------------------
 # 黄金三秒:开场大字(0 秒起弹出,无淡入;停留后快速淡出)
 # --------------------------------------------------------------------------
-HOOK_POP_STEPS = 5
-HOOK_POP_SECONDS = 0.2
-HOOK_FADE_STEPS = 3
-HOOK_FADE_SECONDS = 0.3
+HOOK_POP_STEPS = 8
+HOOK_POP_SECONDS = 0.22
+HOOK_FADE_STEPS = 6
+HOOK_FADE_SECONDS = 0.28
 #: 弹出起始放大倍数,缩回 1.0 时停稳
-HOOK_POP_FROM = 1.35
+HOOK_POP_FROM = 1.32
 
 
 def hook_text(overlay: dict[str, Any], subject: str, size: tuple[int, int], dest: str | Path,

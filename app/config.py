@@ -456,6 +456,8 @@ TEAM_TOP_RANK = max(0, int(os.getenv("TEAM_TOP_RANK", "10")))
 TEAM_GOAL_SINCE = os.getenv("TEAM_GOAL_SINCE", "").strip()
 #: 同一车型多少天内不重复做
 TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
+#: 选题闸自动放行:主编排出的圈内合格选题、快反素材够的选题自动标为 approved
+TEAM_AUTO_APPROVE_TOPICS = os.getenv("TEAM_AUTO_APPROVE_TOPICS", "0") in ("1", "true", "True")
 #: 制片自动过门禁 A / B(只在机器检查零拦截时放行;拦下就停下等人)
 TEAM_AUTO_GATES = os.getenv("TEAM_AUTO_GATES", "1") not in ("0", "false", "False")
 #: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)

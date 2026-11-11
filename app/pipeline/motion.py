@@ -613,9 +613,9 @@ def row_reveal_times(rows: list[dict[str, Any]], cues: list[Any], beat_start: fl
                      duration: float) -> list[float | None]:
     """每行参数在这一拍里被旁白说到的时刻(秒,相对拍头)。
 
-    先找这一行的数字(原文里的第一个数),找不到再找参数名;在那条字幕里按字符位置
-    线性插值。都找不到给 None,模版按均匀节奏排。时刻夹在 [0.3, 时长 - 1.2] 里,
-    留出入场和退场。"""
+    先找这一行的数字(原文里的第一个数),找不到再找参数名;若该条字幕带有逐字时间戳
+    (`char_t`),直接取对应字符的精确声学时刻,否则按字符位置线性插值。都找不到给 None,
+    模版按均匀节奏排。时刻夹在 [0.3, 时长 - 1.2] 里,留出入场和退场。"""
     out: list[float | None] = []
     hi = max(0.3, duration - 1.2)
     for r in rows:
@@ -636,8 +636,12 @@ def row_reveal_times(rows: list[dict[str, Any]], cues: list[Any], beat_start: fl
                 m = re.search(pat, text)
                 pos = m.start() if m else -1
                 if pos >= 0:
-                    frac = pos / max(1, len(c.text))
-                    at = c.start + frac * (c.end - c.start) - beat_start
+                    char_t = getattr(c, "char_t", None)
+                    if isinstance(char_t, list) and 0 <= pos < len(char_t):
+                        at = float(char_t[pos]) - beat_start
+                    else:
+                        frac = pos / max(1, len(c.text))
+                        at = c.start + frac * (c.end - c.start) - beat_start
                     break
             if at is not None:
                 break

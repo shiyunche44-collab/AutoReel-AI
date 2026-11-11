@@ -16,15 +16,8 @@ class State(str, Enum):
     STORYBOARD_READY = "STORYBOARD_READY"
     GATE_A = "GATE_A"
     ASSETS_READY = "ASSETS_READY"
-    #: **历史态**:解说轨不编译生成提示词,这一段是空转,保留只是为了
-    #: 不动转移表(牵一发动全身)。新代码不必往里加逻辑。
-    PROMPTS_READY = "PROMPTS_READY"
     DRAFT_RENDERING = "DRAFT_RENDERING"
     GATE_B = "GATE_B"
-    FINAL_RENDERING = "FINAL_RENDERING"
-    #: **历史态**:解说轨的画面来自已审的各拍,不做独立视觉质检,这一段
-    #: 是空转。
-    QA_PASSED = "QA_PASSED"
     COMPOSING = "COMPOSING"
     DONE = "DONE"
     PAUSED_BUDGET = "PAUSED_BUDGET"
@@ -56,24 +49,21 @@ TRANSITIONS: dict[State, set[State]] = {
     State.STORYBOARD_READY: {State.GATE_A, State.FAILED, State.CANCELLED},
     State.GATE_A: {State.ASSETS_READY, State.SCRIPT_READY, State.STORYBOARD_READY,
                    State.PAUSED_BUDGET, State.FAILED, State.CANCELLED},
-    State.ASSETS_READY: {State.PROMPTS_READY, State.FAILED, State.CANCELLED},
-    State.PROMPTS_READY: {State.DRAFT_RENDERING, State.FAILED, State.CANCELLED},
+    State.ASSETS_READY: {State.DRAFT_RENDERING, State.FAILED, State.CANCELLED},
     State.DRAFT_RENDERING: {State.GATE_B, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
-    State.GATE_B: {State.FINAL_RENDERING, State.DRAFT_RENDERING, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
-    State.FINAL_RENDERING: {State.QA_PASSED, State.GATE_B, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
-    State.QA_PASSED: {State.COMPOSING, State.FAILED, State.CANCELLED},
+    State.GATE_B: {State.COMPOSING, State.DRAFT_RENDERING, State.FAILED, State.PAUSED_BUDGET, State.CANCELLED},
     State.COMPOSING: {State.DONE, State.FAILED, State.CANCELLED},
     # 配额暂停后要能回到**暂停前的那个状态**:暂停前在事实采集,提额后
     # 接着采事实,而不是跳到渲染。(暂停前的状态记在 projects.resume_state)
     State.PAUSED_BUDGET: {
         State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.GATE_A,
-        State.DRAFT_RENDERING, State.GATE_B, State.FINAL_RENDERING,
+        State.DRAFT_RENDERING, State.GATE_B,
         State.CANCELLED,
     },
     State.FAILED: {
         State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY, State.GATE_A,
-        State.ASSETS_READY, State.PROMPTS_READY, State.DRAFT_RENDERING, State.GATE_B,
-        State.FINAL_RENDERING, State.QA_PASSED, State.COMPOSING, State.CANCELLED,
+        State.ASSETS_READY, State.DRAFT_RENDERING, State.GATE_B,
+        State.COMPOSING, State.CANCELLED,
     },
     State.CANCELLED: set(),
     State.DONE: set(),
@@ -126,8 +116,8 @@ def next_auto_state(state: State | str) -> State | None:
         return None
     auto_order = [
         State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY,
-        State.ASSETS_READY, State.PROMPTS_READY, State.DRAFT_RENDERING,
-        State.FINAL_RENDERING, State.QA_PASSED, State.COMPOSING, State.DONE,
+        State.ASSETS_READY, State.DRAFT_RENDERING,
+        State.COMPOSING, State.DONE,
     ]
     for candidate in auto_order:
         if candidate in TRANSITIONS.get(cur, set()):

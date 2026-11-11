@@ -202,7 +202,7 @@ def test_render_busy_blocks_gate_and_asset(fresh_db, monkeypatch):
 
     _project(fresh_db, "p_g")
     _item(fresh_db, status="producing", project_id="p_g")
-    _project(fresh_db, "p_r2", state="FINAL_RENDERING")
+    _project(fresh_db, "p_r2", state="COMPOSING")
     monkeypatch.setattr(producer, "_gate_async", lambda *a, **k: pytest.fail("不该放闸"))
     assert producer.sync(background=False) == 0
 

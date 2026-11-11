@@ -172,7 +172,7 @@ def test_pipeline_error_never_overwrites_done(store, monkeypatch):
 
 def test_pipeline_error_fails_from_current_state(store, monkeypatch):
     """这一轮推进了几步才出错:按现在的状态判死,不是按开头读到的。"""
-    store.create_project(_project(state="QA_PASSED"))
+    store.create_project(_project(state="DRAFT_RENDERING"))
 
     def boom(pid, **kwargs):
         store.update_project(pid, state="COMPOSING")

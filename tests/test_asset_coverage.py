@@ -116,7 +116,7 @@ def test_gate_b_force_overrides_missing_footage(project, monkeypatch):
     monkeypatch.setattr(orchestrator.explainer, "promote_all", lambda *a, **k: 4)
     monkeypatch.setattr(orchestrator, "_specs", lambda pid: _specs())
     out = orchestrator.advance(project, confirmed=True, force=True)
-    assert out["state"] == "FINAL_RENDERING"
+    assert out["state"] == "COMPOSING"
 
 
 def test_pool_status_tells_building_from_empty(tmp_path, monkeypatch):

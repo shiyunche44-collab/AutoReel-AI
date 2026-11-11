@@ -23,12 +23,27 @@ from . import Skip, TeamError, scout
 
 #: 离发布不到这么多小时的空档不排了(来不及出片 + 审核)
 MIN_PREP_HOURS = 8
-#: 这些状态的选题占着空档
+#: 这些状态的选题算近期做过/排着(冷却去重用)
 HOLDING = ("proposed", "approved", "producing", "review", "scheduled", "published")
+#: 这些状态的选题占着未来的发布空档(已提前发布的不再占未来空档,避免断更)
+SLOT_HOLDING = ("proposed", "approved", "producing", "review", "scheduled")
 
 
 def _norm(text: str) -> str:
     return re.sub(r"[\s\-_·()（）]+", "", str(text or "")).lower()
+
+
+def _same_car(a: str, b: str) -> bool:
+    """规范化车名是否指同一台车(兼容「哈弗长城H10」与「长城H10」这类品牌前缀差异)。"""
+    ka, kb = _norm(a), _norm(b)
+    if not ka or not kb:
+        return False
+    return ka == kb or (len(ka) >= 2 and len(kb) >= 2 and (ka.endswith(kb) or kb.endswith(ka)))
+
+
+def _in_car_set(name: str, pool: set[str]) -> bool:
+    k = _norm(name)
+    return bool(k) and (k in pool or any(_same_car(k, c) for c in pool))
 
 
 def slot_times(now: dt.datetime, days: int, per_day: int, times: tuple[str, ...]) -> list[float]:
@@ -47,7 +62,7 @@ def slot_times(now: dt.datetime, days: int, per_day: int, times: tuple[str, ...]
 
 
 def open_slots(slots: list[float], items: list[dict[str, Any]]) -> list[float]:
-    taken = {round(i["slot_at"]) for i in items if i["status"] in HOLDING}
+    taken = {round(i["slot_at"]) for i in items if i["status"] in SLOT_HOLDING}
     return [s for s in slots if round(s) not in taken]
 
 
@@ -122,6 +137,15 @@ RANK_BONUS = 0.3
 OUTSIDE_WEIGHT = 0.5
 #: 单点深挖(只讲一项技术 / 配置)这类片型打的折:讲给已经在看这台车的人听,新号没有这批人
 NICHE_WEIGHT = 0.7
+#: 冲粉期高转化片型加权:双车对决(pk)、同预算选购(priceband/roundup)、买车避坑问答(buyguide/qa)优先
+GROWTH_THEMES: dict[str, float] = {
+    "pk": 1.25,
+    "priceband": 1.2,
+    "roundup": 1.15,
+    "buyguide": 1.1,
+    "qa": 1.1,
+    "debate": 1.05,
+}
 
 
 def _names(idea: Any) -> list[str]:
@@ -176,11 +200,13 @@ def in_gate(idea: Any, top: dict[str, dict[str, Any]] | None,
 
 
 def niche_weight(idea: Any, profile: CategoryProfile | None) -> float:
-    """单点深挖类片型降权(`NICHE_WEIGHT`)。"""
+    """单点深挖类片型降权(`NICHE_WEIGHT`),双车PK / 预算选购 / 买车问答加权(`GROWTH_THEMES`)。"""
     if profile is None or idea.theme not in profile.themes:
         return 1.0
     theme = profile.theme_spec(idea.theme)
-    return NICHE_WEIGHT if theme.requires_angle and not theme.multi else 1.0
+    if theme.requires_angle and not theme.multi:
+        return NICHE_WEIGHT
+    return GROWTH_THEMES.get(idea.theme, 1.0)
 
 
 def gate_hint(top: dict[str, dict[str, Any]]) -> str:
@@ -208,9 +234,10 @@ def rank_ideas(ideas: list[Any], cooled: set[str], rising_cars: set[str],
     out = []
     for idea in ideas:
         names = _names(idea)
-        if any(_norm(n) in cooled for n in names):
+        check_names = [idea.subject] if idea.subjects else names
+        if any(_in_car_set(n, cooled) for n in check_names):
             continue
-        boost = 1 if any(_norm(n) in rising_cars for n in names) else 0
+        boost = 1 if any(_in_car_set(n, rising_cars) for n in names) else 0
         gate = gate_weight(idea, top, exempt)
         out.append((gate < 1.0, min(5, idea.heat + boost) * learned_weight(idea, weights)
                     * taste_weight(idea, rates) * gate * niche_weight(idea, profile), boost, idea))
@@ -234,10 +261,12 @@ def slot_kind(slot: float, plan: tuple[str, ...] | None = None) -> str:
 
 
 def idea_kind(idea: Any, profile: CategoryProfile, hot_keys: set[str]) -> str:
-    """选题属于哪一类:价位段选购 / 热点话题(命中事件、观众问的,或争议类方向)/ 热门车型。"""
+    """选题属于哪一类:价位段选购(含双车PK/多车横评)/ 热点话题 / 热门车型。"""
     from ..pipeline import topics
 
-    if idea.theme in {t.name for t in topics.band_themes(profile)}:
+    if idea.theme in {t.name for t in topics.band_themes(profile)} or (
+        idea.theme in profile.themes and profile.theme_spec(idea.theme).multi
+    ):
         return "band"
     names = [idea.subject] if not idea.subjects else list(idea.subjects)
     if idea.theme in TOPIC_THEMES or any(_norm(n) in hot_keys for n in names):
@@ -256,7 +285,9 @@ def rotation_hint(slots: list[float]) -> str:
         if n:
             lines.append(f"- {KIND_LABEL[kind]} {n} 条")
     if "band" in need:
-        lines.append(f"- 价位段选购的价位段与能源写「{config.TEAM_BAND_HINT}」(angle 写明取舍点)")
+        lines.append(f"- 价位段选购的价位段与能源写「{config.TEAM_BAND_HINT}」(angle 写明取舍点),"
+                     "本批必须包含至少 1 条 1v1 对决(theme=pk,subjects 填 2 款榜单内同级车)"
+                     "或价位段选购(theme=priceband)")
     if "topic" in need:
         lines.append("- 热点话题 = 当前热榜 / 新闻 / 行业事件里最多人在讨论的那个点,或观众评论里问得多的")
     return "\n".join(lines)
@@ -294,6 +325,20 @@ def _rationale(idea: Any, boosted: bool, weight: float = 1.0, extra: tuple[str, 
     return why[:200]
 
 
+def auto_approve_open(category: str, now: float | None = None) -> int:
+    """自动过选题闸开启时,把未过期且无素材告警的待批选题自动放行。"""
+    if not config.TEAM_AUTO_APPROVE_TOPICS:
+        return 0
+    now = now or time.time()
+    n = 0
+    for item in db.list_plan_items(category, statuses=("proposed",), since=now, limit=500):
+        if "素材不够" in str(item.get("note") or ""):
+            continue
+        if db.cas_plan_status(item["id"], ("proposed",), "approved"):
+            n += 1
+    return n
+
+
 def run(category: str | None = None, *, llm: Any = None,
         now: dt.datetime | None = None) -> str:
     from ..pipeline import orchestrator, topics
@@ -302,10 +347,13 @@ def run(category: str | None = None, *, llm: Any = None,
     now = now or dt.datetime.now()
     profile = load_profile(category)
     expire_stale(category, now.timestamp())
+    auto_ok = auto_approve_open(category, now.timestamp())
     window = slot_times(now, config.TEAM_PLAN_DAYS, config.TEAM_DAILY_SLOTS, config.TEAM_SLOT_TIMES)
     planned = db.list_plan_items(category, since=now.timestamp(), limit=500)
     empty = open_slots(window, planned)
     if not empty:
+        if auto_ok:
+            return f"自动批准 {auto_ok} 条选题,未来 {config.TEAM_PLAN_DAYS} 天已排满"
         raise Skip(f"未来 {config.TEAM_PLAN_DAYS} 天已排满")
 
     llm = llm if llm is not None else orchestrator._llm()
@@ -328,7 +376,8 @@ def run(category: str | None = None, *, llm: Any = None,
                                      events.prompt_text(category, now.date()),
                                      benchmark.prompt_text(now.timestamp()),
                                      rotation_hint(empty), gate_hint(top)) if t)
-    ideas = topics.suggest(items, profile=profile, llm=llm, n=min(12, len(empty) * 2 + 2),
+    ideas = topics.suggest(items, profile=profile, llm=llm,
+                           n=max(8, min(12, len(empty) * 2 + 4)),
                            playbook=hints)
     rising_cars = {_norm(m["car"]) for m in scout.rising(category, limit=20)}
     event_cars = events.lead_cars(category, now.date())
@@ -346,7 +395,7 @@ def run(category: str | None = None, *, llm: Any = None,
     deduped: list[Any] = []
     seen: set[str] = set()
     for idea in ranked:
-        if _norm(idea.subject) not in seen:
+        if not _in_car_set(idea.subject, seen):
             seen.add(_norm(idea.subject))
             deduped.append(idea)
     # 圈内的够填满空档就不用圈外的;不够才拿圈外分数最高的补位(宁可降权,不留空档断更)
@@ -366,6 +415,8 @@ def run(category: str | None = None, *, llm: Any = None,
                      idea, top, exempt) else ())
         if niche_weight(idea, profile) < 1:
             extra += (f"单点深挖降权 ×{NICHE_WEIGHT:g}",)
+        elif niche_weight(idea, profile) > 1:
+            extra += (f"冲粉片型加权 ×{niche_weight(idea, profile):g}",)
         extra += tuple(f"{event_cars[k]['in_days']} 天后{event_cars[k]['kind_label']}:"
                       f"{event_cars[k]['title']}" for k in dict.fromkeys(keys) if k in event_cars)
         if any(k in bench_cars for k in keys):
@@ -376,8 +427,11 @@ def run(category: str | None = None, *, llm: Any = None,
                       for k in dict.fromkeys(keys) if k in asked_cars) + extra
         evidence = list(idea.evidence) + [x for n in names
                                           for x in benchmark.evidence_for(n, now.timestamp())]
+        status = ("approved" if config.TEAM_AUTO_APPROVE_TOPICS and in_gate(idea, top, exempt)
+                  else "proposed")
         db.create_plan_item({
             "id": new_id("pl_"), "category": category, "slot_at": slot,
+            "status": status,
             "kind": "multi" if idea.subjects else "single",
             "subject": idea.subject, "subjects": list(idea.subjects),
             "angle": idea.angle, "theme": idea.theme, "aspect": aspect, "duration": duration,
@@ -388,8 +442,11 @@ def run(category: str | None = None, *, llm: Any = None,
             "heat": idea.heat,
         })
         made += 1
+        auto_ok += status == "approved"
     left = len(empty) - made
-    return f"新排 {made} 条待批选题" + (f",还有 {left} 个空档没合适的" if left > 0 else "")
+    label = (f"新排 {made} 条选题(自动批准 {auto_ok} 条)" if config.TEAM_AUTO_APPROVE_TOPICS
+             else f"新排 {made} 条待批选题")
+    return label + (f",还有 {left} 个空档没合适的" if left > 0 else "")
 
 
 def expire_stale(category: str, now: float | None = None) -> int:

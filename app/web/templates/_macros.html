@@ -7,7 +7,6 @@
   {"key": "gate_a", "label": "确认 A"},
   {"key": "draft", "label": "逐拍渲染"},
   {"key": "gate_b", "label": "确认 B"},
-  {"key": "final", "label": "转成片"},
   {"key": "compose", "label": "拼接合成"},
 ] %}
 
@@ -18,13 +17,10 @@
   "STORYBOARD_READY": {"label": "分镜已就绪",       "tone": "brand",   "step": 3, "live": false, "group": "running"},
   "GATE_A":           {"label": "待确认脚本与分镜", "tone": "warning", "step": 3, "live": false, "group": "gate"},
   "ASSETS_READY":     {"label": "旁白已就绪",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
-  "PROMPTS_READY":    {"label": "准备渲染",         "tone": "brand",   "step": 4, "live": true,  "group": "running"},
   "DRAFT_RENDERING":  {"label": "逐拍渲染中",       "tone": "brand",   "step": 4, "live": true,  "group": "running"},
   "GATE_B":           {"label": "待审核各拍",       "tone": "warning", "step": 5, "live": false, "group": "gate"},
-  "FINAL_RENDERING":  {"label": "转成片中",         "tone": "brand",   "step": 6, "live": true,  "group": "running"},
-  "QA_PASSED":        {"label": "准备合成",         "tone": "brand",   "step": 7, "live": true,  "group": "running"},
-  "COMPOSING":        {"label": "合成中",           "tone": "brand",   "step": 7, "live": true,  "group": "running"},
-  "DONE":             {"label": "已完成",           "tone": "success", "step": 8, "live": false, "group": "done"},
+  "COMPOSING":        {"label": "合成中",           "tone": "brand",   "step": 6, "live": true,  "group": "running"},
+  "DONE":             {"label": "已完成",           "tone": "success", "step": 7, "live": false, "group": "done"},
   "PAUSED_BUDGET":    {"label": "额度不足已暂停",   "tone": "danger",  "step": -1, "live": false, "group": "error"},
   "FAILED":           {"label": "失败",             "tone": "danger",  "step": -1, "live": false, "group": "error"},
   "CANCELLED":        {"label": "已删除",           "tone": "neutral", "step": -1, "live": false, "group": "cancelled"},

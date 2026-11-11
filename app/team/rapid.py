@@ -118,14 +118,19 @@ def video_seconds(car: str) -> float:
 
 
 def pick_idea(ideas: list[Any], car: str, profile: Any) -> Any | None:
-    """只要单车、主题能出竖版的那条。"""
+    """只要单车、主题能出竖版的那条;优先选问答/选购/争议等高转化方向,少选单点深挖。"""
+    from . import editor
+
     key = _norm(car)
-    for idea in ideas:
-        if idea.subjects or profile.theme_spec(idea.theme).multi:
-            continue
-        if _norm(idea.subject) == key or key in _norm(idea.subject) or _norm(idea.subject) in key:
-            return idea
-    return None
+    cands = [
+        idea for idea in ideas
+        if not (idea.subjects or profile.theme_spec(idea.theme).multi)
+        and (_norm(idea.subject) == key or key in _norm(idea.subject) or _norm(idea.subject) in key)
+    ]
+    if not cands:
+        return None
+    cands.sort(key=lambda i: (-editor.niche_weight(i, profile), -getattr(i, "heat", 3)))
+    return cands[0]
 
 
 def make(category: str, trig: dict[str, Any], *, llm: Any, now: dt.datetime) -> str:
@@ -144,7 +149,9 @@ def make(category: str, trig: dict[str, Any], *, llm: Any, now: dt.datetime) -> 
         rows = [{"source": "rank", "kind": "model", "title": trig["why"], "car": trig["car"],
                  "metric": "", "url": "", "date": now.date().isoformat()}]
     hint = (f"这是快反选题:「{trig['car']}」{trig['why']}。只围绕这台车出选题,"
-            f"做竖版 {DURATION} 秒以内的短稿:角度紧扣刚发生的事,开头三秒就说新闻点。")
+            f"做竖版 {DURATION} 秒以内的短稿:角度紧扣刚发生的事,开头三秒就说新闻点;"
+            "优先选问答(qa)、选购(buyguide)或槽点争议(debate)方向,"
+            "讲清这波变化对买家意味着该不该买、选哪版,少用单点深挖(deepdive)。")
     ideas = topics.suggest(rows, profile=profile, llm=llm, n=3, playbook=hint)
     idea = pick_idea(ideas, trig["car"], profile)
     if idea is None:
@@ -157,10 +164,12 @@ def make(category: str, trig: dict[str, Any], *, llm: Any, now: dt.datetime) -> 
         note = (f"素材不够:确认本车视频只有 {secs:.0f} 秒(要 {MIN_VIDEO_SECONDS} 秒)。"
                 "批了素材官会先补池;补不上就别批")
         rationale += f";素材池偏薄({secs:.0f}s)"
+    status = "approved" if config.TEAM_AUTO_APPROVE_TOPICS and not note else "proposed"
     item_id = new_id("pl_")
     evidence = [trig["why"], *idea.evidence, *benchmark.evidence_for(idea.subject, now.timestamp())]
     db.create_plan_item({
         "id": item_id, "category": category, "slot_at": slot_for(now), "kind": "rapid",
+        "status": status,
         "subject": idea.subject, "subjects": [], "angle": idea.angle, "theme": idea.theme,
         "aspect": aspect, "duration": duration, "hook": idea.hook, "search_terms": idea.search_terms,
         "evidence": evidence[:12], "rationale": rationale[:200], "heat": 5, "note": note,

@@ -679,9 +679,26 @@ def _caption_layer(project_dir: Path, nar: dict, size: tuple[int, int], total: f
         return None
 
 
+def _reveal_sfx_times(beats: Sequence[ShotSpec]) -> list[float]:
+    """收集各拍上屏数字/卡片首次跳出时的全片绝对秒数,供音效轨叠加轻提示音。"""
+    out: list[float] = []
+    acc = 0.0
+    for s in beats:
+        ov = s.overlay or s.card or {}
+        if s.layout == "stat" and isinstance(ov.get("at"), (int, float)):
+            out.append(round(acc + float(ov["at"]), 3))
+        elif s.layout in ("panel", "card", "concept"):
+            for r in (ov.get("rows") or []):
+                if isinstance(r, dict) and isinstance(r.get("at"), (int, float)):
+                    out.append(round(acc + float(r["at"]), 3))
+                    break
+        acc += max(0.0, float(s.duration or 0.0))
+    return out
+
+
 def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Sequence[ShotSpec],
                total: float) -> Path | None:
-    """当前 look 要音效就摆一条音效轨(章节 whoosh + 关键词 pop);没开 / 失败返回 None,成片不带音效。"""
+    """当前 look 要音效就摆一条音效轨(章节 whoosh + 关键词/上屏数字 pop);没开 / 失败返回 None,成片不带音效。"""
     lk = looks.current()
     if not lk.sfx or not nar.get("cues"):
         return None
@@ -694,11 +711,18 @@ def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Seque
         for _, dur in chapters:
             starts.append(acc)
             acc += dur
-        return sfx.build_track(sfx.events_for(layer["cues"], starts), total,
+        reveals = _reveal_sfx_times(beats)
+        return sfx.build_track(sfx.events_for(layer["cues"], starts, reveal_times=reveals), total,
                                project_dir / "_render" / "sfx.wav")
     except Exception:  # noqa: BLE001 —— 音效只是加分项
         _log.warning("音效轨生成失败,成片不带音效", exc_info=True)
         return None
+
+
+def _dissolve_targets(beats: Sequence[ShotSpec]) -> list[int]:
+    """章节交界短叠化:整屏卡片与概念动画自带入场动效,不叠化(避免与上一拍实拍画面糊在一起)。"""
+    return [k for k in chapter_starts(beats)
+            if 0 <= k < len(beats) and beats[k].layout not in ("card", "concept")]
 
 
 def _host_seed(project_id: str) -> int:
@@ -737,11 +761,12 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
-        dissolve_into=chapter_starts(beats),
+        dissolve_into=_dissolve_targets(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
                                   variant=variety.parse(project.get("variant"))),
+        grade=False,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
@@ -818,11 +843,12 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         size=size, durations=durations,
         output_name=aspect.output_name(project),
         layer_path=layer_path, sfx_path=sfx_path, tail_silent=bool(card),
-        dissolve_into=chapter_starts(beats),
+        dissolve_into=_dissolve_targets(beats),
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
                                   variant=variety.parse(project.get("variant"))),
+        grade=False,
     )
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))

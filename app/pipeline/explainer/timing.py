@@ -123,25 +123,42 @@ def time_beats(project_id: str, specs: list[ShotSpec], profile: CategoryProfile
     return specs, nar
 
 
+def _stamp_rows(rows: list[dict[str, Any]], mine: list[Any], duration: float,
+                lead: float) -> list[dict[str, Any]]:
+    times = motion.row_reveal_times(rows, mine, mine[0].start, duration)
+    times = [None if t is None else round(t + lead, 3) for t in times]
+    out: list[dict[str, Any]] = []
+    for r, at in zip(rows, times):
+        r = {k: v for k, v in r.items() if k != "at"}
+        if at is not None:
+            r["at"] = at
+        out.append(r)
+    return out
+
+
 def mark_reveal_times(specs: Sequence[ShotSpec], cues: Sequence[Any],
                       leads: dict[int, float] | None = None) -> None:
-    """concept 拍的每行参数记下旁白说到它的时刻(`rows[k].at`,相对拍头的秒数),
-    动画里这一行就在那一刻出现 —— 参数跟着嘴说的走,而不是按固定间隔一条条排出来。"""
+    """concept / panel / card / stat 拍的参数记下旁白说到它的时刻(`at`,相对拍头的秒数),
+    动画与卡片里这一行/大数字就在那一刻出现 —— 参数跟着嘴说的走,实现字级音画卡点。"""
     by_shot: dict[int, list[Any]] = {}
     for c in cues:
         by_shot.setdefault(c.shot_idx, []).append(c)
     for s in specs:
-        if s.layout != "concept" or not s.overlay or not by_shot.get(s.idx):
+        if not by_shot.get(s.idx):
             continue
         mine = sorted(by_shot[s.idx], key=lambda c: c.start)
-        rows = list(s.overlay.get("rows") or [])
-        times = motion.row_reveal_times(rows, mine, mine[0].start, s.duration)
         lead = (leads or {}).get(s.idx, 0.0)  # 画面提前切了,拍头比开口早,出现时刻跟着后移
-        times = [None if t is None else round(t + lead, 3) for t in times]
-        new_rows = []
-        for r, at in zip(rows, times):
-            r = {k: v for k, v in r.items() if k != "at"}
-            if at is not None:
-                r["at"] = at
-            new_rows.append(r)
-        s.overlay = {**s.overlay, "rows": new_rows}
+        if s.layout in ("concept", "panel") and s.overlay and s.overlay.get("rows"):
+            rows = list(s.overlay.get("rows") or [])
+            s.overlay = {**s.overlay, "rows": _stamp_rows(rows, mine, s.duration, lead)}
+        elif s.layout == "card" and s.card and s.card.get("rows"):
+            rows = list(s.card.get("rows") or [])
+            s.card = {**s.card, "rows": _stamp_rows(rows, mine, s.duration, lead)}
+        elif s.layout == "stat" and s.overlay:
+            probe = [{"label": s.overlay.get("label", ""),
+                      "values": [s.overlay.get("value", "")]}]
+            stamped = _stamp_rows(probe, mine, s.duration, lead)
+            ov = {k: v for k, v in s.overlay.items() if k != "at"}
+            if stamped and "at" in stamped[0]:
+                ov["at"] = stamped[0]["at"]
+            s.overlay = ov

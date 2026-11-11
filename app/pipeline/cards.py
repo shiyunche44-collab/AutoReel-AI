@@ -46,7 +46,7 @@ KIND_GUIDE = {
 }
 
 W, H = config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT
-FPS = 24
+FPS = render_mod.FPS
 
 
 @dataclass(frozen=True)
@@ -326,30 +326,44 @@ def ease_out(t: float) -> float:
     return 1 - (1 - t) ** 3
 
 
-#: 柱子生长分几帧、每帧多久。关键帧 + concat 时长,12 帧就够看着顺
-GROW_STEPS = 12
-GROW_STEP_SECONDS = 0.06
+#: 柱子生长分几帧、每帧多久。关键帧 + concat 时长,30fps 下 18 帧更加丝滑
+GROW_STEPS = 18
+GROW_STEP_SECONDS = 0.04
 
 
 def _steps(card: dict[str, Any]) -> list[tuple[int, float, bool, float]]:
     """卡片的动画步骤:[(显示几行, 柱子生长进度, 最后一行只亮左列, 这一帧停多久)]。
 
-    - 参数卡 / 时间线:逐行出现;
+    - 参数卡 / 时间线:逐行出现(若行带旁白时刻 `at`,按旁白节奏出行);
     - 对比卡:每行先亮左边的值,再亮右边的值,一左一右像在过招;
     - 柱状图:所有行一起从 0 长到各自长度(缓出)。
     第 0 步只有标题。最后一步的时长由 `render` 改成"定格到结束"。
     """
-    n = len(card["rows"])
-    steps: list[tuple[int, float, bool, float]] = [(0, 1.0, False, 0.4)]
+    rows = card["rows"]
+    n = len(rows)
     if card["kind"] == "bars":
+        steps: list[tuple[int, float, bool, float]] = [(0, 1.0, False, 0.35)]
         steps += [(n, ease_out(k / GROW_STEPS), False, GROW_STEP_SECONDS)
                   for k in range(1, GROW_STEPS + 1)]
-    elif card["kind"] == "compare":
+        return steps
+    if card["kind"] == "compare":
+        steps = [(0, 1.0, False, 0.35)]
         for r in range(1, n + 1):
-            steps += [(r, 1.0, True, 0.3), (r, 1.0, False, 0.3)]
-    else:
-        steps += [(r, 1.0, False, 0.45) for r in range(1, n + 1)]
-    return steps
+            steps += [(r, 1.0, True, 0.28), (r, 1.0, False, 0.28)]
+        return steps
+    # spec / timeline:若有字级卡点时刻 `at`,按实际开口时刻排各行间隔
+    ats = [r.get("at") for r in rows]
+    if any(isinstance(t, (int, float)) for t in ats):
+        first_at = float(ats[0]) if isinstance(ats[0], (int, float)) else 0.35
+        steps = [(0, 1.0, False, max(0.2, min(1.2, first_at)))]
+        cur = steps[0][3]
+        for r in range(1, n + 1):
+            nxt_at = ats[r] if r < n and isinstance(ats[r], (int, float)) else (cur + 0.45)
+            dur = max(0.25, min(1.8, float(nxt_at) - cur))
+            steps.append((r, 1.0, False, round(dur, 3)))
+            cur += dur
+        return steps
+    return [(0, 1.0, False, 0.4)] + [(r, 1.0, False, 0.45) for r in range(1, n + 1)]
 
 
 def _frame(card: dict[str, Any], subject: str, visible_rows: int, base: Image.Image,

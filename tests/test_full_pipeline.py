@@ -226,8 +226,7 @@ def test_chain_to_done_and_events_are_legal(store, wired):
     orchestrator.advance(pid, confirmed=True, force=True)   # → DRAFT_RENDERING
     out = orchestrator.advance(pid)                # → GATE_B
     assert out["state"] == str(State.GATE_B)
-    orchestrator.advance(pid, confirmed=True)      # → FINAL_RENDERING
-    orchestrator.advance(pid)                      # → QA_PASSED
+    orchestrator.advance(pid, confirmed=True)      # → COMPOSING
     out = orchestrator.advance(pid)                # → DONE
     assert out["state"] == str(State.DONE)
     assert db.get_project(pid)["state"] == str(State.DONE)
@@ -242,7 +241,7 @@ def test_chain_to_done_and_events_are_legal(store, wired):
     dsts = {e["dst"] for e in events}
     for st in (State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY,
                State.GATE_A, State.DRAFT_RENDERING, State.GATE_B,
-               State.FINAL_RENDERING, State.QA_PASSED, State.DONE):
+               State.COMPOSING, State.DONE):
         assert str(st) in dsts, f"{st} 这一步没有留下事件"
 
 

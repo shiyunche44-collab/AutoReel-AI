@@ -34,7 +34,7 @@ SYSTEM = """你是一个中文汽车短视频账号的团队总管,要给账号�
 ACTIONS_KEY = "chief_actions"
 #: 在渲染的项目超过这么久没动静,就当它卡死了,不再占名额
 RENDER_STALE_HOURS = 3.0
-_RENDERING = ("DRAFT_RENDERING", "FINAL_RENDERING", "COMPOSING")
+_RENDERING = ("DRAFT_RENDERING", "COMPOSING")
 #: 不发的时段:(几点起, 到几点),同 rapid.QUIET
 QUIET = (23, 8)
 #: 挪时段最多试几次

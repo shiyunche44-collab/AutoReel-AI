@@ -593,15 +593,13 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         _set_state(project_id, state, State.ASSETS_READY,
                    reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
                           + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))
-        _set_state(project_id, State.ASSETS_READY, State.PROMPTS_READY,
-                   reason="解说轨不编译生成提示词")
-        _set_state(project_id, State.PROMPTS_READY, State.DRAFT_RENDERING,
+        _set_state(project_id, State.ASSETS_READY, State.DRAFT_RENDERING,
                    reason=f"开始逐拍渲染({len(specs)} 拍)")
         return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
                 "warnings": list(nar.warnings or []) + list(report["problems"]),
                 "rhythm": report, "voice_qa": getattr(nar, "qa_report", None)}
 
-    if state == State.PROMPTS_READY:
+    if state == State.ASSETS_READY:
         _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")
         return {"state": str(State.DRAFT_RENDERING)}
 
@@ -635,25 +633,10 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
                 + " —— 素材池可能还没建好,回「先补素材」等它建完再重渲这几拍,"
                   "或显式选择「仍然继续」。")
         n = explainer.promote_all(project_id, specs)
-        _set_state(project_id, state, State.FINAL_RENDERING, reason=f"{n} 拍转为成片")
-        return {"state": str(State.FINAL_RENDERING), "promoted": n, "coverage": coverage}
+        _set_state(project_id, state, State.COMPOSING, reason=f"{n} 拍转为成片,进入拼接混音")
+        return {"state": str(State.COMPOSING), "promoted": n, "coverage": coverage}
 
-    if state == State.FINAL_RENDERING:
-        done = {r["idx"] for r in db.get_shots(project_id, "final")
-                if r["status"] == "succeeded" and r.get("final_path")}
-        missing = [s.idx for s in _specs(project_id) if s.duration > 0 and s.idx not in done]
-        if missing:
-            # 门禁 B 里重拍过、还没渲完的拍:回草稿档补渲
-            _set_state(project_id, state, State.GATE_B,
-                       reason=f"还有 {len(missing)} 拍没有成片,请重拍完成后再确认")
-            return {"state": str(State.GATE_B), "waiting": True, "missing": missing}
-        _set_state(project_id, state, State.QA_PASSED,
-                   reason="解说轨画面来自已审各拍,跳过视觉质检")
-        return {"state": str(State.QA_PASSED)}
-
-    if state in (State.QA_PASSED, State.COMPOSING):
-        if state == State.QA_PASSED:
-            _set_state(project_id, state, State.COMPOSING, reason="拼接各拍与混音")
+    if state == State.COMPOSING:
         try:
             payload = explainer.compose(project_id, _specs(project_id), profile,
                                         project["title"], llm=llm)
@@ -940,8 +923,8 @@ def update_shots(project_id: str, specs: list[ShotSpec]) -> None:
         project = db.get_project(project_id)
         if not project:
             raise PipelineError("项目不存在")
-        if State(project["state"]) not in (State.GATE_A, State.PROMPTS_READY):
-            raise PipelineError("只有门禁 A / 提示词就绪阶段可以修改分镜")
+        if State(project["state"]) not in (State.GATE_A, State.ASSETS_READY):
+            raise PipelineError("只有门禁 A / 备料阶段可以修改分镜")
         profile, _theme = _theme_of(project)
         specs = explainer.enforce_rhythm(list(specs), profile)
         problems = explainer.validate_beats(specs)
@@ -974,7 +957,7 @@ def retry(project_id: str, idx: int, stage: str) -> None:
 
 #: 概念动画还没开始渲染的状态:换模版只记下来,渲染时就用新模版
 _STYLE_FREE = (State.DRAFT_INTENT, State.FACTS_RESOLVED, State.SCRIPT_READY, State.STORYBOARD_READY,
-               State.GATE_A, State.ASSETS_READY, State.PROMPTS_READY)
+               State.GATE_A, State.ASSETS_READY)
 
 
 def project_names(project: dict[str, Any]) -> tuple[str, list[str]]:

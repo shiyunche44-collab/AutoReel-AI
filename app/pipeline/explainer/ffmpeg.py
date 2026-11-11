@@ -106,8 +106,10 @@ def _piece_clip(piece: library.Piece, dest: Path, size: tuple[int, int], motion:
     # 视频不够长(原片在这一段后面就结束了)时,用最后一帧补齐。
     # 竖屏也照常裁烧录字幕:实拍只放在 16:9 的画面带里,和横屏是同一个比例
     push = f",{push_filter(motion, piece.length, size)}" if looks.current().cam_push else ""
-    vf = _fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
-                     letterbox_crop(piece.path)) + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}{push}[v]"
+    grade = f",{render_mod.GRADE_FILTER}" if config.GRADE_ENABLED else ""
+    vf = (_fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
+                      letterbox_crop(piece.path))
+          + f",tpad=stop_mode=clone:stop_duration={piece.length:.3f}{push}{grade}[v]")
     proc = _ff(["-ss", f"{piece.start:.3f}", "-i", piece.path, "-filter_complex", vf,
                 "-map", "[v]", "-t", f"{piece.length:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():
@@ -134,15 +136,16 @@ def motion_for(item_id: str, n: int, prev: str = "") -> str:
 
 
 def background_clip(pieces: Sequence[library.Piece], seconds: float, size: tuple[int, int],
-                    work: Path, motion_seed: int = 0) -> Path:
-    """把几段背景硬切拼成一条定长背景。没有片段时给纯色底(不应发生,但不能卡死流水线)。"""
+                    work: Path, motion_seed: int = 0, prefer_punch: bool = False) -> Path:
+    """把几段背景硬切拼成一条定长背景。没有片段时给纯色底(不应发生,但不能卡死流水线)。
+    `prefer_punch`:大数字/关键词拍首刀用冲击推(`punch_in`),增强上屏瞬间的视觉张力。"""
     work.mkdir(parents=True, exist_ok=True)
     dest = work / "bg.mp4"
     if not pieces:
         return _solid(dest, seconds, size)
     parts, prev = [], ""
     for n, p in enumerate(pieces):
-        motion = motion_for(p.item_id, motion_seed + n, prev)
+        motion = "punch_in" if (n == 0 and prefer_punch) else motion_for(p.item_id, motion_seed + n, prev)
         prev = motion
         parts.append(_piece_clip(p, work / f"piece_{n:02d}.mp4", size, motion))
     if len(parts) == 1:
@@ -198,9 +201,10 @@ def concept_background(piece: library.Piece, seconds: float, size: tuple[int, in
     dest = work / "bg.mp4"
     w, h = size
     factor = max(1.0, seconds / max(0.1, piece.length))
+    grade = f",{render_mod.GRADE_FILTER}" if config.GRADE_ENABLED else ""
     vf = (_fit_filter(w, h, piece.crop_bottom, piece.crop_edge,
                       letterbox_crop(piece.path)) + f",setpts={factor:.4f}*PTS,fps={render_mod.FPS},"
-          f"tpad=stop_mode=clone:stop_duration={seconds:.3f}[v]")
+          f"tpad=stop_mode=clone:stop_duration={seconds:.3f}{grade}[v]")
     proc = _ff(["-ss", f"{piece.start:.3f}", "-t", f"{piece.length:.3f}", "-i", piece.path,
                 "-filter_complex", vf, "-map", "[v]", "-t", f"{seconds:.3f}", "-an", *_ENC, str(dest)])
     if proc.returncode != 0 or not dest.is_file():

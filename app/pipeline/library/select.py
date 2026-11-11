@@ -393,8 +393,9 @@ def _detail_conflict(item: Item, want_detail: set[str], vocab: Vocab) -> bool:
 
 
 _NOT_WORD = re.compile(r"[^一-鿿A-Za-z0-9]+")
+_CLAUSE_SPLIT = re.compile(r"[，,。！？；;：:!?\n]+")
 #: 重合度封顶:再多的字面重合也不该压过视角、水印、用过没有这些硬指标
-OVERLAP_CAP = 3
+OVERLAP_CAP = 4
 
 
 def _bigrams(text: str) -> set[str]:
@@ -403,14 +404,45 @@ def _bigrams(text: str) -> set[str]:
     return {chars[k:k + 2] for k in range(len(chars) - 1)}
 
 
+def _trigrams(text: str) -> set[str]:
+    """三字切词集合:命中具体部件名(如「激光雷达」「方向盘」「仪表盘」「充电口」)额外加权。"""
+    chars = _NOT_WORD.sub("", text or "")
+    return {chars[k:k + 3] for k in range(len(chars) - 2)}
+
+
 def _desc_overlap(item: Item, text: str) -> int:
     """素材描述和这一拍旁白(或画面提示)有几处字面重合,0–OVERLAP_CAP。
 
     只做排序里的软偏好:旁白说"后排空间",描述写着"后排座椅"的片段就排前面。
-    `_detail_fit` 只认词表里的部件,这里补上词表之外的说法。"""
+    `_detail_fit` 只认词表里的部件,这里补上词表之外的说法,三字部件词额外给权重。"""
     if not text or not item.desc:
         return 0
-    return min(len(_bigrams(item.desc) & _bigrams(text)), OVERLAP_CAP)
+    bi = len(_bigrams(item.desc) & _bigrams(text))
+    tri = len(_trigrams(item.desc) & _trigrams(text))
+    return min(bi + tri, OVERLAP_CAP)
+
+
+def _clause_targets(detail: str, seconds: float, max_piece: float) -> list[float]:
+    """按旁白的气口(逗号/句号分句)把一拍时长拆成若干刀的目标秒数。
+    只有一拍够长且旁白有多个分句时才按气口切,让画面切点落在换气停顿处。"""
+    if seconds < 2 * FILL_MIN_PIECE or not detail:
+        return []
+    clauses = [len(_NOT_WORD.sub("", c)) for c in _CLAUSE_SPLIT.split(detail) if _NOT_WORD.sub("", c)]
+    if len(clauses) < 2:
+        return []
+    # 合并太短的碎句,保证每刀至少够 FILL_MIN_PIECE
+    total_chars = sum(clauses) or 1
+    raw = [seconds * c / total_chars for c in clauses]
+    merged: list[float] = []
+    acc = 0.0
+    for d in raw:
+        acc += d
+        if acc >= FILL_MIN_PIECE:
+            merged.append(min(acc, max_piece))
+            acc = 0.0
+    if acc > 0 and merged:
+        merged[-1] = min(max_piece, merged[-1] + acc)
+    return merged if len(merged) >= 2 else []
 
 
 def _detail_fit(item: Item, want_detail: set[str], vocab: Vocab) -> int:
@@ -559,6 +591,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     out: list[Piece] = []
     covered = 0.0
     left = list(pool)
+    clause_plan = _clause_targets(detail, seconds, max_piece)
     while left and covered < seconds - 0.05:
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}
@@ -566,14 +599,16 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         i = min(left, key=lambda x: rank(x, recent_groups, last.view if last else ""))
         left.remove(i)
         remaining = seconds - covered
+        slot_cap = clause_plan[len(out)] if len(out) < len(clause_plan) else max_piece
+        slot_cap = max(FILL_MIN_PIECE, min(max_piece, slot_cap))
         if i.kind == "still":
-            take = min(remaining, max_piece)
+            take = min(remaining, slot_cap)
             start = 0.0
         else:
             # 源片开头的那一段几乎都是黑场淡入(打标签抽的是段中间的帧,看不出来)
             skip = _head_skip(i)
             length = i.length - skip
-            take = min(length, remaining, max_piece)
+            take = min(length, remaining, slot_cap)
             # 别留一截过短的尾巴:够长就把它吃进这一段
             if remaining - take < FILL_MIN_PIECE:
                 take = min(length, remaining)

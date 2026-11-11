@@ -132,7 +132,7 @@
 </section>
 
 {# 概念动画模版:渲染前(门禁 A 前后)和审片时可选;JS 拉到本片有概念拍才显示 #}
-{% if p.state in ('STORYBOARD_READY', 'GATE_A', 'ASSETS_READY', 'PROMPTS_READY', 'GATE_B') %}
+{% if p.state in ('STORYBOARD_READY', 'GATE_A', 'ASSETS_READY', 'GATE_B') %}
 <section class="card cs-card hidden" id="concept-style" data-state="{{ p.state }}">
   <div class="card-head">
     <h2>{{ m.icon("sparkles", "i-sm") }}概念动画模版<span class="tag tone-brand" id="cs-current"></span></h2>
@@ -146,7 +146,7 @@
 {% endif %}
 
 <!-- 内容 Tabs -->
-{%- set default_tab = {"GATE_A": "script", "GATE_B": "board", "DONE": "output", "DRAFT_RENDERING": "board", "FINAL_RENDERING": "board"}.get(p.state, "overview") -%}
+{%- set default_tab = {"GATE_A": "script", "GATE_B": "board", "DONE": "output", "DRAFT_RENDERING": "board", "COMPOSING": "board"}.get(p.state, "overview") -%}
 <section class="card content-card" id="content" data-default-tab="{{ default_tab }}">
   <nav class="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="overview">{{ m.icon("layers", "i-sm") }}概览{% if lint_errors or (facts_report and facts_report.product_gap) %}<span class="alert-dot"></span>{% endif %}</button>
@@ -424,7 +424,7 @@
       {% for s in p.shots %}
       {%- set draft_src = ('/media/' ~ p.id ~ '/drafts/' ~ (s.draft_path | basename)) if s.draft_path else '' -%}
       {%- set src = ('/media/' ~ p.id ~ '/' ~ (s.final_path | media_kind) ~ '/' ~ (s.final_path | basename)) if s.final_path else draft_src -%}
-      {%- set can_retry = s.status not in ('succeeded', 'pending') or p.state == 'FINAL_RENDERING' -%}
+      {%- set can_retry = s.status not in ('succeeded', 'pending') or p.state == 'GATE_B' -%}
       <div class="shot status-{{ s.status }}" data-idx="{{ s.idx }}" data-status="{{ s.status }}" tabindex="0" role="button" aria-label="镜头 {{ s.idx }} 详情">
         <div class="shot-media">
           {% if src %}

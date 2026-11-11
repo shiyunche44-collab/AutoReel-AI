@@ -26,7 +26,7 @@ from . import timeline as timeline_mod
 
 log = logging.getLogger(__name__)
 
-FPS = 24
+FPS = 30
 TARGET_LOUDNESS = f"I={config.TARGET_LUFS}:TP=-1.5:LRA=11"
 
 
@@ -97,15 +97,53 @@ def _size(size: tuple[int, int] | None) -> tuple[int, int]:
     return out
 
 
+def _can_copy_video(src: str | Path, w: int, h: int) -> bool:
+    """检查输入镜头是否已满足目标画幅、yuv420p 与 FPS,满足则无需二次重编码视频流。"""
+    if not config.FFPROBE_PATH:
+        return False
+    try:
+        proc = subprocess.run(
+            [str(config.FFPROBE_PATH), "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,pix_fmt,r_frame_rate",
+             "-of", "csv=p=0", str(src)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return False
+        line = (proc.stdout or "").strip().splitlines()[0]
+        parts = line.split(",")
+        return (len(parts) >= 4 and int(parts[0]) == w and int(parts[1]) == h
+                and parts[2] == "yuv420p" and parts[3] in (f"{FPS}/1", str(FPS)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] | None = None,
                    trim: float | None = config.SHOT_GRID_SECONDS) -> bool:
-    """把单个镜头归一化为目标画幅(默认 1080×1920)/ 24fps / yuv420p / 静音音轨。
+    """把单个镜头归一化为目标画幅(默认 1080×1920)/ 30fps / yuv420p / 静音音轨。
 
     竖屏 9:16 素材源分辨率不统一,统一 scale+crop 到目标画幅可保证拼接不花屏。
     统一生成静音音轨是必需的:concat 要求所有片段的流结构一致。
-    `trim` 为 None 时不截断(横屏解说轨的节拍时长各不相同,已经在渲染时定好)。
+    `trim` 为 None 时不截断(横屏解说轨的节拍时长各不相同,已经在渲染时定好);
+    若原镜头已满足目标分辨率、像素格式与帧率,视频流直接 `-c:v copy` 免重编码。
     """
     w, h = _size(size)
+    if trim is None and _can_copy_video(src, w, h):
+        proc = _run(
+            [
+                "-y", "-v", "error",
+                "-i", str(src),
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-shortest",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                str(dest),
+            ],
+            timeout=600,
+        )
+        if proc.returncode == 0 and Path(dest).is_file() and Path(dest).stat().st_size > 0:
+            return True
     proc = _run(
         [
             "-y", "-v", "error",
@@ -406,6 +444,7 @@ def compose(
     intro_seconds: float = 0.0,
     dissolve_into: Sequence[int] = (),
     host: tuple[Path, int, int] | None = None,
+    grade: bool = True,
 ) -> RenderResult:
     """主合成入口。
 
@@ -481,7 +520,7 @@ def compose(
 
     # 视频滤镜链:拼接后的视频 → 归一化 → 可选烧字幕
     vf_parts = [f"scale={w}:{h}", f"fps={FPS}", "setsar=1", "format=yuv420p"]
-    if config.GRADE_ENABLED:
+    if config.GRADE_ENABLED and grade:
         vf_parts.append(GRADE_FILTER)
     use_layer = bool(layer_path and Path(layer_path).is_file())
     ass_filter = None if use_layer else _build_ass_filter(ass_path, project_dir)

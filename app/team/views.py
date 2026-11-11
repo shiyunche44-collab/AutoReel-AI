@@ -109,6 +109,7 @@ def overview(category: str | None = None) -> dict[str, Any]:
             "daily_slots": config.TEAM_DAILY_SLOTS, "plan_days": config.TEAM_PLAN_DAYS,
             "slot_times": list(config.TEAM_SLOT_TIMES), "lead_hours": config.TEAM_LEAD_HOURS,
             "cooldown_days": config.TEAM_COOLDOWN_DAYS, "auto_gates": config.TEAM_AUTO_GATES,
+            "auto_approve_topics": config.TEAM_AUTO_APPROVE_TOPICS,
         },
     }
 

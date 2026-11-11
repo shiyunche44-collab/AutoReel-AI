@@ -172,6 +172,26 @@ def test_editor_fills_open_slots(fresh_db, monkeypatch):
         editor.run("auto_long", llm=llm, now=now)
 
 
+def test_editor_auto_approves_when_enabled(fresh_db, monkeypatch):
+    from app import config
+    from app.categories import load_profile
+    from app.team import editor
+
+    monkeypatch.setattr(config, "TEAM_PLAN_DAYS", 2)
+    monkeypatch.setattr(config, "TEAM_DAILY_SLOTS", 1)
+    monkeypatch.setattr(config, "TEAM_AUTO_APPROVE_TOPICS", True)
+    _seed_trends(fresh_db)
+    theme = load_profile("auto_long").default_theme
+    llm = FakeLLM([
+        {"subject": "小米YU7", "angle": "月销 3 万背后", "theme": theme, "heat": 4, "why_hot": "销量榜第一"},
+    ])
+    now = dt.datetime(2026, 10, 24, 6, 0)
+    summary = editor.run("auto_long", llm=llm, now=now)
+    items = fresh_db.list_plan_items("auto_long")
+    assert len(items) == 1 and items[0]["status"] == "approved"
+    assert "自动批准 1 条" in summary
+
+
 # --------------------------------------------------------------------------
 # 选题闸 + 制片
 # --------------------------------------------------------------------------

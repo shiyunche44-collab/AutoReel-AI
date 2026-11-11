@@ -33,31 +33,20 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool
     """把背景 [0]、章节条 [1]、叠加层 [2] 合成 [out] 的滤镜图。
 
     `layout` 除了版式名,还可以是 broll 的样式 `lower_third`(角标从左擦入)。
-    `pip` = False(轻包装):横屏 highlight 不缩小窗,画面全屏,关键词直接压在上面。"""
+    横屏 highlight 全面升级为全屏沉浸暗场托字(弃用老旧的白框画中画小窗)。"""
     w, h = size
     if layout == "highlight" and has_layer and aspect.is_portrait_size(size):
         # 竖屏:实拍本来就在画面带里,不用再缩小窗;关键词占标题区,淡入
         return (
-            f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
+            f"[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
             f"[0:v][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
-    if layout == "highlight" and has_layer and not pip:
-        return (
-            f"[0:v]eq=brightness=-0.1[bgd];"
-            f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
-            f"[bgd][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
-        )
     if layout == "highlight" and has_layer:
-        pip_w = int(w * 0.62) // 2 * 2
-        pip_h = int(h * 0.62) // 2 * 2
-        # 模糊底用同一段画面的镜像放大版:和小窗里的画面错开,不像同一张图叠了两层
+        # 横屏全屏实拍微压暗 + 大字淡入,视野通透不破坏实拍质感
         return (
-            f"[0:v]split[a][b];[a]hflip,scale=iw*1.3:-2,crop={w}:{h},"
-            f"boxblur=22:2,eq=brightness=-0.18[bgb];"
-            f"[b]scale={pip_w}:{pip_h},pad={pip_w + 12}:{pip_h + 12}:6:6:color=white[pip];"
-            f"[bgb][pip]overlay=(W-w)/2:{int(h * 0.05)}[v1];"
-            f"[2:v]format=rgba,fade=in:st=0.15:d=0.35:alpha=1[txt];"
-            f"[v1][txt]overlay=0:0[v2];[v2][1:v]overlay=0:0,format=yuv420p[out]"
+            f"[0:v]eq=brightness=-0.12:saturation=0.92[bgd];"
+            f"[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
+            f"[bgd][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "hook" and has_layer:
         # [2] 是大字弹出关键帧(播完透明);前 3 秒压暗托字、不放章节条,之后条再淡入
@@ -78,7 +67,7 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool
     if layout == "panel" and has_layer:
         slide = int(w * 0.36)
         return (
-            f"[0:v][2:v]overlay=x='-{slide}*(1-min(1,t/0.35))':y=0[v1];"
+            f"[0:v][2:v]overlay=x='-{slide}*pow(1-min(1,t/0.38),3)':y=0[v1];"
             f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "lower_third" and has_layer:
@@ -154,7 +143,9 @@ def _broll_base(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, i
                           detail=detail, role=role)
     if not pieces and card_bg:
         pieces = [library.Piece("bg", "still", str(card_bg), 0.0, seconds)]
-    return background_clip(pieces, seconds, size, work, motion_seed=spec.idx), pieces
+    prefer_punch = spec.layout in ("stat", "highlight")
+    return background_clip(pieces, seconds, size, work, motion_seed=spec.idx,
+                           prefer_punch=prefer_punch), pieces
 
 
 def hook_background(subject: str, seconds: float, size: tuple[int, int], work: Path,

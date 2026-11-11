@@ -34,7 +34,7 @@ def _sample_contexts() -> dict[str, dict]:
     detail = ProjectDetail(
         id="p_test", title="测试项目", subject="比亚迪汉 EV", category="auto_long",
         theme="buyguide", theme_label="单车选购深讲",
-        duration=60, shot_count=10, state="FINAL_RENDERING", est_cost=0.4,
+        duration=60, shot_count=10, state="COMPOSING", est_cost=0.4,
         spent_cost=3.2, quota_budget=40.0, created_at=1.0, updated_at=2.0,
         has_output=True, narration_mode="tts", state_reason="各拍转为成片",
         facts=[
@@ -56,7 +56,7 @@ def _sample_contexts() -> dict[str, dict]:
         "id": "p_test", "title": "测试项目", "subject": "比亚迪汉 EV",
         "category": "auto_long", "theme": "buyguide", "theme_label": "单车选购深讲",
         "duration": 60, "shot_count": 10,
-        "state": "FINAL_RENDERING", "est_cost": 0.4, "spent_cost": 3.2,
+        "state": "COMPOSING", "est_cost": 0.4, "spent_cost": 3.2,
         "quota_budget": 40.0, "created_at": 1.0, "updated_at": 2.0,
         "has_output": False,
     }

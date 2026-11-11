@@ -231,9 +231,9 @@ def test_chapters_group_adjacent_beats():
 
 def test_layout_filters_reference_expected_inputs():
     f = explainer.layout_filter("panel", (1920, 1080), True)
-    assert "[2:v]" in f and "[1:v]" in f and f.endswith("[out]")
+    assert "[2:v]" in f and "[1:v]" in f and "pow(" in f and f.endswith("[out]")
     f = explainer.layout_filter("highlight", (1920, 1080), True)
-    assert "pad=" in f and "fade=in" in f
+    assert "eq=brightness=" in f and "fade=in" in f and "pad=" not in f
     # 叠加层缺失时退化为只叠章节条
     assert explainer.layout_filter("panel", (1920, 1080), False) == \
         "[0:v][1:v]overlay=0:0,format=yuv420p[out]"

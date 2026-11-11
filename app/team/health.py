@@ -44,8 +44,8 @@ TUNED_WEEK_KEY = "health_tuned_week"
 STAGE_LABEL = {
     "DRAFT_INTENT": "采集事实", "FACTS_RESOLVED": "写脚本", "SCRIPT_READY": "做分镜",
     "STORYBOARD_READY": "进门禁 A", "GATE_A": "门禁 A(审稿 + 配音)", "ASSETS_READY": "备料",
-    "PROMPTS_READY": "备料", "DRAFT_RENDERING": "渲染各拍", "GATE_B": "门禁 B(审片)",
-    "FINAL_RENDERING": "转成片", "QA_PASSED": "质检", "COMPOSING": "拼接混音",
+    "DRAFT_RENDERING": "渲染各拍", "GATE_B": "门禁 B(审片)",
+    "COMPOSING": "拼接混音",
     "PAUSED_BUDGET": "等额度",
 }
 _END = {"DONE", "FAILED", "CANCELLED"}

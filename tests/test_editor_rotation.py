@@ -28,7 +28,9 @@ def test_slot_kind_by_weekday():
 def test_idea_kind():
     profile = load_profile("auto_long")
     band = _idea("10-20万新能源怎么选", "priceband", ["A", "B", "C"])
+    pk = _idea("星愿 vs 元UP", "pk", ["吉利银河星愿", "比亚迪元UP"])
     assert editor.idea_kind(band, profile, set()) == "band"
+    assert editor.idea_kind(pk, profile, set()) == "band"
     assert editor.idea_kind(_idea("问界M9", "review"), profile, {"问界m9"}) == "topic"
     assert editor.idea_kind(_idea("小米YU7", "debate"), profile, set()) == "topic"
     assert editor.idea_kind(_idea("小米YU7", "review"), profile, set()) == "model"
@@ -95,11 +97,13 @@ def test_rank_ideas_puts_outside_gate_last_and_downweights_niche():
     assert editor.in_gate(hot, top, {"比亚迪宋ultra"})   # 观众点名问的不受限
     assert editor.rank_ideas([hot, tenth], set(), set(), top=top,
                              exempt={"比亚迪宋ultra"})[0] is hot
-    # 同一台车:单点深挖排在选购类后面
+    # 同一台车:单点深挖排在选购类后面;双车PK排在最前
     deep = NS(subject="吉利银河星愿", theme="deepdive", subjects=[], heat=3)
     buy = NS(subject="吉利银河星愿", theme="buyguide", subjects=[], heat=3)
-    assert editor.rank_ideas([deep, buy], set(), set(), top=top, profile=profile) == [buy, deep]
+    pk = NS(subject="星愿 vs 元UP", theme="pk", subjects=["吉利银河星愿", "比亚迪元UP"], heat=3)
+    assert editor.rank_ideas([deep, buy, pk], set(), set(), top=top, profile=profile) == [pk, buy, deep]
     assert editor.niche_weight(deep, profile) == editor.NICHE_WEIGHT
+    assert editor.niche_weight(pk, profile) > editor.niche_weight(buy, profile) > 1.0
     # 没有榜单数据:照旧按热度排
     assert editor.rank_ideas([tenth, hot], set(), set(), top={}) == [hot, tenth]
 
