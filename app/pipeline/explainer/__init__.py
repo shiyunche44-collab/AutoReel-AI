@@ -700,7 +700,7 @@ def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Seque
                total: float) -> Path | None:
     """当前 look 要音效就摆一条音效轨(章节 whoosh + 关键词/上屏数字 pop);没开 / 失败返回 None,成片不带音效。"""
     lk = looks.current()
-    if not lk.sfx or not nar.get("cues"):
+    if not config.SFX_ENABLED or not lk.sfx or not nar.get("cues"):
         return None
     from .. import caption_layer, sfx
 

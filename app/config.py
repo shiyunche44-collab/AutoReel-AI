@@ -349,8 +349,10 @@ def tts_tag() -> str:
     return f"ark:seed-tts-2.0:{ARK_TTS_VOICE}"
 
 
-#: 是否给成片配 BGM。方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98),默认开;BGM_ENABLED=0 关
-BGM_ENABLED = os.getenv("BGM_ENABLED", "1") == "1"
+#: 是否给成片配 BGM。方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98);2026-11-12 用户不要配乐,默认关,BGM_ENABLED=1 开
+BGM_ENABLED = os.getenv("BGM_ENABLED", "0") == "1"
+#: 成片混入音效(章节 whoosh、关键词 pop)。2026-11-12 用户反馈弹字音效像"叮叮叮",默认关;SFX_ENABLED=1 开
+SFX_ENABLED = os.getenv("SFX_ENABLED", "0") == "1"
 #: 成片统一调色(轻微对比 / 饱和 + 极轻颗粒),抹平官方片、第三方片、静图之间的色差。
 #: 没在真实成片上对比过观感,默认关;GRADE_ENABLED=1 开
 GRADE_ENABLED = os.getenv("GRADE_ENABLED", "0") == "1"

@@ -149,8 +149,27 @@ def mentions_subject(text: str, subject: str) -> bool:
     return not names or any(n in t for n in names)
 
 
+#: 疑似车型名的词:字母+数字(YU7 / H10)或 汉字+数字(钛7;取最后一个汉字,够用即可)。
+_UNIT_AFTER = "公万元年月日期号个人座辆台米秒分时天度%千克升排项条次倍成岁档款代"
+_MODEL_TOKEN = re.compile(rf"[A-Za-z]+\d+[A-Za-z0-9]*|[{_CJK}]\d+[A-Za-z]?(?![\d.{_UNIT_AFTER}])")
+#: 这些字后面跟数字是量词 / 序数(第2期、近3年),不是车型名
+_NOT_MODEL_LEAD = set("第近前后约超共每仅只含满上下去今这那")
+
+
+def unknown_models(text: str, known: str) -> list[str]:
+    """标题里出现、但车型名 / 脚本 / 事实里都没有的疑似车型名(单车片标题凭空拉进一个对手车型)。"""
+    pool = re.sub(r"\s+", "", known or "").lower()
+    out: list[str] = []
+    for m in _MODEL_TOKEN.finditer(re.sub(r"\s+", "", text or "")):
+        tok = m.group()
+        if tok[0] in _NOT_MODEL_LEAD and not tok[0].isascii() or tok.lower() in pool:
+            continue
+        out.append(tok)
+    return out
+
+
 def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
-                avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> list[str]:
+                avoid: Sequence[str] = TITLE_AVOID, name: str = "", known: str = "") -> list[str]:
     """标题的问题清单,空 = 合格。
 
     `name` = 单车片的车型名:给了就要求标题带上它的某种叫法(搜索流量靠车型名);横评不传。"""
@@ -174,6 +193,10 @@ def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
         problems.append("数字在事实层里找不到:" + "、".join(loose))
     if name and not mentions_subject(text, name):
         problems.append(f"没带车型名「{name}」")
+    if name and known:
+        stray = unknown_models(text, known)
+        if stray:
+            problems.append("脚本和事实里没有的车型:" + "、".join(stray))
     return problems
 
 
@@ -280,7 +303,8 @@ def _as_dict(item: Any) -> Mapping[str, Any]:
 def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
                  thesis: str = "", price: str = "",
                  avoid: Sequence[str] = TITLE_AVOID,
-                 order: Sequence[str] = KINDS, name: str = "") -> tuple[list[TitleOption], bool]:
+                 order: Sequence[str] = KINDS, name: str = "",
+                 known: str = "") -> tuple[list[TitleOption], bool]:
     """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。
 
     `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。"""
@@ -292,7 +316,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         text = str(d.get("text") or "").strip()
         if kind not in KINDS or kind in chosen:
             continue
-        if check_title(text, allowed, terms, avoid, name=name):
+        if check_title(text, allowed, terms, avoid, name=name, known=known):
             continue
         chosen[kind] = TitleOption(text=text, kind=kind, note=str(d.get("note") or "").strip()[:40])
     used_llm = bool(chosen)
@@ -339,13 +363,13 @@ def build_replies(raw: Any, *, allowed: set[str], terms: Iterable[str] = ()) -> 
 def assemble(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
              thesis: str = "", price: str = "", now: float = 0.0,
              avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS,
-             name: str = "") -> Packaging:
+             name: str = "", known: str = "") -> Packaging:
     """LLM 原始输出 → 合规的 Packaging。`raw` 可以是 None 或残缺的字典,都能出结果。"""
     d = _as_dict(raw)
     terms = tuple(terms)
     titles, t_llm = build_titles(d.get("titles"), subject, allowed=allowed, terms=terms,
                                  thesis=thesis, price=price, avoid=avoid, order=order,
-                                 name=name)
+                                 name=name, known=known)
     comment, c_llm = build_comment(d.get("comment"), subject, allowed=allowed, terms=terms)
     replies = build_replies(d.get("replies"), allowed=allowed, terms=terms)
     return Packaging(titles=titles, comment=comment, replies=replies,
@@ -538,7 +562,8 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
     return assemble(raw, inp["subject"], allowed=inp["allowed"], terms=inp["terms"],
                     thesis=inp["thesis"], price=inp["price"], avoid=inp["avoid"],
                     now=time.time() if now is None else now, order=title_order(project_id),
-                    name=inp["name"])
+                    name=inp["name"],
+                    known=" ".join([inp["subject"], *inp["script_texts"], *inp["fact_lines"]]))
 
 
 def load(project_id: str) -> Packaging | None:

@@ -298,3 +298,11 @@ def test_profile_title_avoid_rejects_and_falls_back():
 def test_profiles_declare_title_avoid():
     for name in ("auto_long", "baby_long"):
         assert load_profile(name).title_avoid, name
+
+
+def test_title_rejects_model_absent_from_script():
+    known = "哈弗长城H10 H10五座六座 续航15公里 第2期"
+    bad = pk.check_title("H10和钛7怎么选", {"5", "6", "15"}, name="哈弗长城H10", known=known)
+    assert any("钛7" in p for p in bad)
+    assert not pk.check_title("天天通勤带家人,H10选五座还是六座", {"5", "6", "15"}, name="哈弗长城H10", known=known)
+    assert not pk.check_title("H10续航15公里够不够", {"5", "6", "15"}, name="哈弗长城H10", known=known)
