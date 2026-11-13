@@ -354,6 +354,37 @@ def refine_status(item_id: str) -> dict[str, Any]:
         return dict(_refine_jobs.get(item_id) or {"state": "idle"})
 
 
+#: 错误信息里有这些词才算网络问题(登录失效、审核不过、验证码都不该自动重发)
+_NETWORK_HINTS = ("超时", "timeout", "timed out", "网络", "net::", "connection", "连接")
+_NO_RETRY_HINTS = ("登录", "验证", "审核")
+_RETRIED_KEY = "publish_auto_retried"
+
+
+def _requeue_network_failures(pubs: list[dict[str, Any]]) -> bool:
+    """发布因网络失败的任务自动重排一次(每条任务只一次)。重排了返回 True。
+
+    只把任务放回 pending 让发布线程自己领,不在这里直接上传 ——
+    两个执行流同时传同一条片子出过事(同一片子发了 4 条)。"""
+    if not config.TEAM_AUTO_RELAY:
+        return False
+    done = db.get_team_setting(_RETRIED_KEY, None)
+    done = list(done) if isinstance(done, list) else []
+    failed = [p for p in pubs if p["state"] == "failed"]
+    if not failed:
+        return False
+    for p in failed:
+        err = str(p.get("error") or "").lower()
+        if p["id"] in done or any(w in err for w in _NO_RETRY_HINTS) \
+                or not any(w in err for w in _NETWORK_HINTS):
+            return False
+    for p in failed:
+        db.update_publication(p["id"], state="pending", error="", attempts=0)
+        db.add_event(p["project_id"], "team", reason="发布网络失败,自动重排一次")
+        done.append(p["id"])
+    db.set_team_setting(_RETRIED_KEY, done[-200:])
+    return True
+
+
 def sync() -> int:
     """已排发布的选题跟着发布任务走:都发出去 → 已发布;有失败且没有在途的 → 失败。"""
     changed = 0
@@ -370,6 +401,9 @@ def sync() -> int:
             db.update_plan_item(item["id"], status="published")
             changed += 1
         elif item["status"] == "scheduled" and "failed" in states and not states & {"pending", "uploading"}:
+            if _requeue_network_failures(pubs):
+                changed += 1
+                continue
             err = next((p["error"] for p in pubs if p["state"] == "failed" and p["error"]), "")
             db.update_plan_item(item["id"], status="failed", note=f"发布失败:{err}"[:200])
             changed += 1

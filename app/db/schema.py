@@ -454,7 +454,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("revision", "INTEGER NOT NULL DEFAULT 0"),  # 第几次返工(0 = 原版)
                      ("redo_of", "TEXT NOT NULL DEFAULT ''"),     # 返工自哪条被打回的选题
                      ("feedback", "TEXT NOT NULL DEFAULT ''"),    # 打回意见,写稿时带上
-                     ("exclude", "TEXT NOT NULL DEFAULT '[]'")):  # 打回点名不许再用的素材
+                     ("exclude", "TEXT NOT NULL DEFAULT '[]'"),   # 打回点名不许再用的素材
+                     ("hold_count", "INTEGER NOT NULL DEFAULT 0"),  # 同一道门禁连续被拦几次
+                     ("hold_at", "REAL"),                         # 最近一次被拦的时刻
+                     ("machine_review", "TEXT NOT NULL DEFAULT ''")):  # 成片机审结论(JSON)
         if col not in plan_cols:
             conn.execute(f"ALTER TABLE plan_items ADD COLUMN {col} {ddl}")
     # 第一期的「已出片」现在叫「成片待审」

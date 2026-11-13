@@ -93,9 +93,11 @@ def cut_problems(project_id: str) -> list[str]:
 
 
 def _hold(item_id: str, state: str, reason: str) -> None:
-    db.update_plan_item(item_id, hold=reason[:300], hold_state=state)
+    item = db.get_plan_item(item_id) or {}
+    db.update_plan_item(item_id, hold=reason[:300], hold_state=state,
+                        hold_count=int(item.get("hold_count") or 0) + 1, hold_at=time.time())
     # hold 处理完就清掉了;记一条事件,复盘官的流程体检才数得出门禁最常拦什么
-    pid = (db.get_plan_item(item_id) or {}).get("project_id")
+    pid = item.get("project_id")
     if pid:
         db.add_event(pid, "team", src=state, reason=f"拦下:{reason[:300]}")
     log.info("plan %s held at %s: %s", item_id, state, reason)
@@ -164,14 +166,66 @@ def sync(*, background: bool = True) -> int:
             continue
         if item.get("hold"):
             if item.get("hold_state") == state:
-                continue  # 还卡在原地,等人
-            db.update_plan_item(item["id"], hold="", hold_state="")  # 人处理过了
+                verdict = _stuck(item, state)
+                if verdict == "wait":
+                    continue  # 还卡在原地,等人(或等下一次自动重试)
+                if verdict == "fail":
+                    # 同一道门禁连续两次没过:这一版救不回来,记失败,接力按原因重开
+                    db.update_plan_item(item["id"], status="failed", hold="", hold_state="",
+                                        note=("门禁连续被拦:" + str(item["hold"]))[:200])
+                    changed += 1
+                    continue
+                db.update_plan_item(item["id"], hold="", hold_state="")  # 自动再试一次
+            else:
+                # 人处理过了
+                db.update_plan_item(item["id"], hold="", hold_state="", hold_count=0)
         if state in _GATES and config.TEAM_AUTO_GATES:
             if chief.render_busy():
                 continue  # 总管:渲染名额占满,放闸会排队抢资源,下一轮再看
             if _gate_async(item, state, background):
                 changed += 1
     return changed
+
+
+def _stuck(item: dict[str, Any], state: str) -> str:
+    """卡在门禁的选题怎么办:"wait" 等着 / "retry" 再试一次 / "fail" 放弃这一版。
+
+    原来一律等人,人不在就断更(2026-11 上旬 9 天断了 3 天,门禁 A 卡住占其中一部分)。
+    第一次被拦隔 `TEAM_HOLD_RETRY_MINUTES` 再试(旁白合成、素材池常常只是当时没好);
+    第二次还被拦就不再试。额度暂停不算在内,提额后它自己会继续。"""
+    if not config.TEAM_AUTO_RELAY or state not in _GATES:
+        return "wait"
+    if time.time() - float(item.get("hold_at") or 0) < config.TEAM_HOLD_RETRY_MINUTES * 60:
+        return "wait"
+    return "retry" if int(item.get("hold_count") or 0) < 2 else "fail"
+
+
+#: 只接力这么久以内失败的选题:更早的是历史,不该被翻出来重做
+RELAY_WINDOW = 36 * 3600
+
+
+def relay(now: float | None = None) -> int:
+    """失败接力:近期失败(项目失败 / 门禁连续被拦)的选题自动重开一条已批选题。
+    返工上限由 `publisher.redo` 管(到顶就放弃);发布失败不在这里,归发布员。"""
+    if not config.TEAM_AUTO_RELAY:
+        return 0
+    from . import publisher
+    from .plan import PlanError
+
+    now = now or time.time()
+    n = 0
+    for item in db.list_plan_items(statuses=("failed",), limit=500):
+        if now - float(item.get("updated_at") or 0) > RELAY_WINDOW:
+            continue
+        if str(item.get("note") or "").startswith("发布失败"):
+            continue
+        try:
+            out = publisher.redo(item["id"])
+        except PlanError:
+            continue  # 已经重做过
+        n += 1
+        log.info("plan %s relayed -> %s", item["id"], out.get("redo_item") or "abandoned")
+    return n
 
 
 def retry_gate(item_id: str) -> dict[str, Any]:
@@ -183,7 +237,7 @@ def retry_gate(item_id: str) -> dict[str, Any]:
 def run(now: float | None = None) -> str:
     ready, later = chief.admit(due(now), now)  # 日产量上限:超了的顺延到明天
     started = [pid for pid in (start(i["id"]) for i in ready) if pid]
-    changed = sync()
+    changed = sync() + relay(now)
     if not started and not changed:
         raise Skip(f"总管:今天产能已满,{len(later)} 条顺延" if later else "没有到开工时间的选题")
     parts = []

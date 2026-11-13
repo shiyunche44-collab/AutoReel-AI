@@ -293,6 +293,22 @@ def rotation_hint(slots: list[float]) -> str:
     return "\n".join(lines)
 
 
+def slot_aspect(slot: float) -> str | None:
+    """横竖屏对照:配置的星期排横屏,其余(和对照结束后)返回 None = 用团队默认画幅。"""
+    days = config.TEAM_LANDSCAPE_WEEKDAYS
+    if not days:
+        return None
+    day = dt.datetime.fromtimestamp(slot).date()
+    until = config.TEAM_LANDSCAPE_UNTIL
+    if until:
+        try:
+            if day > dt.date.fromisoformat(until):
+                return None
+        except ValueError:
+            return None
+    return config.LANDSCAPE if day.weekday() in days else None
+
+
 def assign_slots(slots: list[float], ranked: list[Any], kind_of: dict[int, str]) -> list[tuple[float, Any]]:
     """每个空档先挑排名最高的同类选题;该类没有就退而求其次拿排名最高的剩余选题。"""
     left = list(ranked)
@@ -405,7 +421,8 @@ def run(category: str | None = None, *, llm: Any = None,
     hot_keys = set(event_cars) | set(asked_cars)
     kind_of = {id(i): idea_kind(i, profile, hot_keys) for i in deduped}
     for slot, idea in assign_slots(empty, deduped, kind_of):
-        aspect, duration = choose_format(profile, idea.theme, weights=weights.get("duration"),
+        aspect, duration = choose_format(profile, idea.theme, aspect=slot_aspect(slot),
+                                         weights=weights.get("duration"),
                                          seed=f"{slot}:{idea.subject}")
         names = _names(idea)
         keys = [_norm(n) for n in names]

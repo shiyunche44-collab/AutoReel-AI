@@ -462,6 +462,19 @@ TEAM_COOLDOWN_DAYS = int(os.getenv("TEAM_COOLDOWN_DAYS", "14"))
 TEAM_AUTO_APPROVE_TOPICS = os.getenv("TEAM_AUTO_APPROVE_TOPICS", "0") in ("1", "true", "True")
 #: 制片自动过门禁 A / B(只在机器检查零拦截时放行;拦下就停下等人)
 TEAM_AUTO_GATES = os.getenv("TEAM_AUTO_GATES", "1") not in ("0", "false", "False")
+#: 失败接力:项目失败 / 门禁连续被拦的选题自动重开一条(受返工上限约束),
+#: 发布因网络失败的自动重排一次。关掉 = 全部停下等人。
+TEAM_AUTO_RELAY = os.getenv("TEAM_AUTO_RELAY", "1") not in ("0", "false", "False")
+#: 门禁被拦后隔多少分钟自动再试一次;第二次还被拦就记失败、按原因重开
+TEAM_HOLD_RETRY_MINUTES = float(os.getenv("TEAM_HOLD_RETRY_MINUTES", "10"))
+#: 成片机审(`pipeline/cut_review`):成片出来先让视觉模型看一遍,不过自动打回重做。
+#: 关掉 = 成片直接进待审(老行为)。
+TEAM_MACHINE_REVIEW = os.getenv("TEAM_MACHINE_REVIEW", "1") not in ("0", "false", "False")
+#: 横竖屏对照:这些星期(0 = 周一)的空档排横屏,其余用 TEAM_ASPECT;留空 = 不做对照。
+#: TEAM_LANDSCAPE_UNTIL(YYYY-MM-DD)之后的空档不再改写。
+TEAM_LANDSCAPE_WEEKDAYS = tuple(
+    int(t) for t in os.getenv("TEAM_LANDSCAPE_WEEKDAYS", "").split(",") if t.strip().isdigit())
+TEAM_LANDSCAPE_UNTIL = os.getenv("TEAM_LANDSCAPE_UNTIL", "").strip()
 #: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)
 TEAM_ASSET_PREBUILD = os.getenv("TEAM_ASSET_PREBUILD", "1") not in ("0", "false", "False")
 #: 合规审核官:成片里第三方视频占比到这个数提醒,到上限不让发
