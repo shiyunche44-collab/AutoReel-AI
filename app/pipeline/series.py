@@ -2,6 +2,7 @@
 
 - 栏目名来自品类 vocab `series`(选题类型 model / band / topic → 栏目名),
   选题类型按发布日星期轮换(`team.editor.slot_kind`)。
+  键也可以是片型 id(如 buyguide):该片型固定挂这个栏目,优先于星期(`team.plan._series_of`)。
 - 期号存在项目的 variant 里(`series` / `episode`),建项目时定:
   同栏目里未取消 / 未失败的项目的最大期号 + 1;返工沿用原项目的期号。
 - 栏目出现在:脚本结尾(固定「下期预告」+ 关注口播)、封面角标、发布标签。

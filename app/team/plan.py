@@ -132,7 +132,11 @@ def _series_of(item: dict[str, Any]) -> dict[str, Any]:
         return {}
     # 快反选题本来就是热点;其余按发布日星期的选题类型
     kind = "topic" if item.get("kind") == "rapid" else slot_kind(float(item.get("slot_at") or 0))
-    name = series.name_for(vocab, kind)
+    # 片型自己有栏目的(如 buyguide → 「柒哥到底该不该买」)优先;没配就按星期
+    name = ""
+    if item.get("kind") != "rapid":
+        name = series.name_for(vocab, str(item.get("theme") or ""))
+    name = name or series.name_for(vocab, kind)
     return {"series": name} if name else {}
 
 

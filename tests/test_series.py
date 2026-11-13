@@ -88,3 +88,19 @@ def test_to_payload_picks_series_by_weekday(fresh_db, monkeypatch):
     payload = plan.to_payload(fresh_db.get_plan_item("pl_1"))
     assert payload.series == "柒哥帮你挑"
     assert payload.episode is None
+
+
+def test_to_payload_theme_series_beats_weekday(fresh_db, monkeypatch):
+    """片型自己配了栏目(buyguide)就挂它,不看星期;快反仍是热点栏目。"""
+    from app import config
+    from app.team import plan
+
+    monkeypatch.setattr(config, "TEAM_WEEK_PLAN",
+                        ("model", "band", "model", "topic", "model", "band", "topic"))
+    tuesday = dt.datetime(2026, 11, 10, 18, 30).timestamp()  # 周二 = band
+    base = {"category": "auto_long", "slot_at": tuesday, "subject": "腾势N8",
+            "theme": "buyguide", "aspect": "16:9", "duration": 240}
+    fresh_db.create_plan_item({"id": "pl_bg", **base})
+    fresh_db.create_plan_item({"id": "pl_rapid", **base, "kind": "rapid"})
+    assert plan.to_payload(fresh_db.get_plan_item("pl_bg")).series == "柒哥到底该不该买"
+    assert plan.to_payload(fresh_db.get_plan_item("pl_rapid")).series == "柒哥聊热点"
