@@ -110,7 +110,7 @@ def strip_verdict_json(text: str) -> str:
 
 
 def structure_with_llm(texts: dict[int, str], system: str, llm: Any,
-                       errors: list[str], *, what: str = "图"
+                       errors: list[str], *, what: str = "图", max_chars: int = 1500,
                        ) -> dict[int, dict[str, Any]] | None:
     """把描述一次性交给 LLM 转成判定。`texts` 的键是 1 起的编号。
 
@@ -122,7 +122,7 @@ def structure_with_llm(texts: dict[int, str], system: str, llm: Any,
         return None
     if not texts:
         return {}
-    user = "\n\n".join(f"### 图 {n}\n{t[:1500]}" for n, t in sorted(texts.items()))
+    user = "\n\n".join(f"### 图 {n}\n{t[:max_chars]}" for n, t in sorted(texts.items()))
     try:
         data = llm.structured(system, user, required_keys=["verdicts"], temperature=0.0)
     except Exception as exc:  # noqa: BLE001
@@ -143,7 +143,7 @@ def structure_with_llm(texts: dict[int, str], system: str, llm: Any,
 
 def judge(urls: list[str], prompt: str | Sequence[str], system: str, llm: Any,
           errors: list[str], *, what: str = "图",
-          contexts: Sequence[str] | None = None,
+          contexts: Sequence[str] | None = None, max_chars: int = 1500,
           ) -> tuple[list[dict[str, Any] | None], list[str], dict[str, int]]:
     """逐张判定。返回 (与 urls 对齐的结论或 None, 原始回答, 结论来源计数)。
 
@@ -153,6 +153,7 @@ def judge(urls: list[str], prompt: str | Sequence[str], system: str, llm: Any,
 
     只回 JSON 的图追问一次(见模块说明)。`contexts` 与 `urls` 对齐,
     逐图拼在描述前面交给 LLM(如"这个镜头想要的画面"),空串不拼。
+    `max_chars`:每张图的描述交给 LLM 前截到多长(联系表一张 8 格,描述比单图长得多)。
     """
     texts = describe_each(urls, prompt, errors, what=what)
     if llm is not None:
@@ -168,7 +169,8 @@ def judge(urls: list[str], prompt: str | Sequence[str], system: str, llm: Any,
     described = {n: (f"{ctx[n - 1]}\n{d}" if n - 1 < len(ctx) and ctx[n - 1] else d)
                  for n, t in enumerate(texts, start=1) if t
                  for d in [strip_verdict_json(t)] if d}
-    structured = structure_with_llm(described, system, llm, errors, what=what)
+    structured = structure_with_llm(described, system, llm, errors, what=what,
+                                    max_chars=max_chars)
     verdicts: list[dict[str, Any] | None] = []
     from_json = 0
     for n, t in enumerate(texts, start=1):

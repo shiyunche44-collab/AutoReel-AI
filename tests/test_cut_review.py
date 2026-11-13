@@ -25,14 +25,14 @@ CUES = [{"start": 0.0, "end": 6.0, "text": "银河E5起售价10.98万。"},
 
 
 def _stub(monkeypatch, tmp_path, sheet_verdicts, confirm_verdicts=(), tech=None):
-    """抽帧给 12 张纯色图(两张联系表),视觉判定按给定结论回。"""
+    """抽帧给 8 张纯色图(两张联系表,每张 4 格),视觉判定按给定结论回。"""
     from app.pipeline import final_qa, timeline, vision_verdict
     from app.providers import images
 
     def frames(video, out_dir, duration, **kw):
         out_dir.mkdir(parents=True, exist_ok=True)
         out = []
-        for k in range(12):
+        for k in range(8):
             p = out_dir / f"s{k:05d}.jpg"
             Image.new("RGB", (64, 112), (40, 40, 40)).save(p)
             out.append((k + 0.5, p))
@@ -45,7 +45,7 @@ def _stub(monkeypatch, tmp_path, sheet_verdicts, confirm_verdicts=(), tech=None)
 
     calls = []
 
-    def judge(urls, prompt, system, llm, errors, *, what="图", contexts=None):
+    def judge(urls, prompt, system, llm, errors, *, what="图", contexts=None, max_chars=1500):
         calls.append((what, len(urls), list(contexts or [])))
         verdicts = list(sheet_verdicts if what == "联系表" else confirm_verdicts)
         verdicts = (verdicts + [None] * len(urls))[:len(urls)]
@@ -89,11 +89,11 @@ def test_watermark_needs_confirmation(monkeypatch, tmp_path):
 def test_screen_number_not_said_is_only_a_hint(monkeypatch, tmp_path):
     sheets = [{"issues": [], "screen_numbers": [{"at": 2.5, "value": "10.98"},
                                                 {"at": 3.5, "value": "7.9"}]},
-              {"issues": [{"kind": "plate", "at": 8.5, "detail": "粤B 可读"}]}]
+              {"issues": [{"kind": "plate", "at": 6.5, "detail": "粤B 可读"}]}]
     video, _ = _stub(monkeypatch, tmp_path, sheets)
     rep = cut_review.review(video, tmp_path / "w", subject="银河E5", cues=CUES, llm=object())
     kinds = [(i["kind"], i["at"]) for i in rep["issues"]]
-    assert kinds == [("number_mismatch", 3.5), ("plate", 8.5)]
+    assert kinds == [("number_mismatch", 3.5), ("plate", 6.5)]
     assert rep["passed"] and "2 条提示" in rep["summary"]
 
 
@@ -161,3 +161,20 @@ def test_producer_rejects_failed_cut_and_reopens(fresh_db, monkeypatch):
     redo = [i for i in fresh_db.list_plan_items(statuses=("approved",), limit=10)
             if i["id"] != "pl_1"]
     assert len(redo) == 1 and redo[0]["subject"] == "银河E5"
+
+
+def test_sheet_the_llm_skipped_counts_as_clean_when_it_was_described(monkeypatch, tmp_path):
+    """LLM 只回了有问题的那张:另一张视觉模型描述过,算没问题,不算没看完。"""
+    from app.pipeline import vision_verdict
+
+    video, _ = _stub(monkeypatch, tmp_path, [])
+
+    def judge(urls, prompt, system, llm, errors, *, what="图", contexts=None, max_chars=1500):
+        if what != "联系表":
+            return [{"confirmed": False}] * len(urls), ["x"] * len(urls), {"llm": len(urls)}
+        return ([{"issues": [{"kind": "plate", "at": 1.5, "detail": "可读"}]}, None],
+                ["第一张的描述", "第二张的描述"], {"llm": 1, "json": 0, "none": 1})
+
+    monkeypatch.setattr(vision_verdict, "judge", judge)
+    rep = cut_review.review(video, tmp_path / "w", subject="银河E5", cues=CUES, llm=object())
+    assert not rep["inconclusive"] and rep["passed"] and len(rep["issues"]) == 1

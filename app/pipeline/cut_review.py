@@ -34,10 +34,10 @@ log = logging.getLogger(__name__)
 SAMPLE_EVERY = 1.0
 SAMPLE_EVERY_LONG = 2.0
 LONG_FILM = 100.0
-#: 联系表一格的宽度(像素)、一张几格。格子太小视觉模型看不清角标
+#: 联系表一格的宽度(像素)、一张几格。实测一张 8 格配这份清单,视觉模型约 90 秒后返回空;4 格能答完
 TILE_WIDTH = 480
-SHEET_TILES = 8
-SHEET_COLS = 4
+SHEET_TILES = 4
+SHEET_COLS = 2
 #: 复核用的单帧宽度
 CONFIRM_WIDTH = 960
 #: 一条片最多复核几处(每处一次视觉调用)
@@ -46,6 +46,8 @@ CONFIRM_MAX = 6
 RANGE_PAD = 1.5
 #: 画面静止到这么久才打回(数据卡停 4–5 秒是正常的,`final_qa` 的 4 秒线只提示)
 FREEZE_BLOCK_SECONDS = 8.0
+#: 一张联系表的描述交给 LLM 前截到多长(逐格描述 + 逐条回答,比单图长)
+SHEET_TEXT_MAX = 3000
 #: 屏上数字要在这格前后这么多秒的旁白里被说到
 SAID_PAD = 6.0
 
@@ -61,24 +63,20 @@ KINDS = {
 }
 BLOCKING = frozenset({"watermark", "wrong_model", "text_blocked", "blank", "technical"})
 #: 这几种打回前要单帧复核
-CONFIRM_KINDS = frozenset({"watermark", "wrong_model", "text_blocked"})
+CONFIRM_KINDS = frozenset({"watermark", "wrong_model", "text_blocked", "blank"})
 
 REPORT_FILE = "_render/qa/machine_review.json"
 
 SHEET_PROMPT = (
-    "这是一条{shape}汽车解说视频的联系表:{n} 格按时间从左到右、从上到下排,每格左上角的黄字是"
-    "时间(秒),那是我加的标记,不算画面内容。片子讲的是「{subject}」。片子自己的栏目名、"
-    "账号名(含「柒哥」字样的)和它自己做的数据卡、字幕都是正常内容。\n"
-    "请只依据看到的内容,用文字逐条回答,有问题要写明是哪一格、黄字时间是多少:\n"
-    "1. 有没有**别的**平台或账号的水印、台标、logo(例如 汽车之家 / AUTOHOME、懂车帝、"
-    "bilibili、易车、别的抖音号),包括印在车牌位置上的;\n"
-    "2. 有没有能读出号码的真实车牌;\n"
-    "3. 哪几格里的车明显不是「{subject}」(看车标、车尾字标、车型);看不出来就说看不出;\n"
-    "4. 字幕、标题、数据卡的文字有没有被别的东西挡住、超出画面、互相重叠,"
-    "有没有卡通人物头像压在文字或数字上;\n"
-    "5. 有没有整格全黑、全白或花屏;\n"
-    "6. 把每格屏上出现的大号数字连同单位抄出来(字幕里的不用抄)。\n"
-    "没问题的格不用逐格说。最后用一句话概括。"
+    "这是一条{shape}汽车解说视频的联系表,{n} 格按时间排,每格左上角黄字是时间(秒)。"
+    "片子讲的是「{subject}」;含「柒哥」的栏目名、卡通主持人、字幕和数据卡是片子自己的内容。\n"
+    "先逐格用一句话描述画面(什么车的什么部位、屏上的大号数字连单位),然后回答,"
+    "有问题要写明是哪个时间的格:\n"
+    "1. 有没有别的平台或账号的水印、台标(汽车之家、懂车帝、易车、bilibili 等),"
+    "包括印在车牌位置上的;有没有能读出号码的真实车牌;\n"
+    "2. 哪几格的车明显不是「{subject}」(说出看到的车标或字标),看不出就说看不出;\n"
+    "3. 文字有没有被挡住、超出画面、互相重叠,卡通主持人有没有压在文字或数字上;\n"
+    "4. 有没有整格全黑、全白或花屏。"
 )
 
 REVIEW_SYSTEM = """你把视觉模型对视频联系表的描述转成质检问题清单。片子讲的是「{subject}」。
@@ -98,7 +96,7 @@ REVIEW_SYSTEM = """你把视觉模型对视频联系表的描述转成质检问�
 输出 JSON 对象 {{"verdicts": [...]}},每张图一项:
 {{"index": 图的编号, "issues": [{{"kind": "...", "at": 那一格的黄字时间(秒,数字), "detail": "一句话"}}],
   "screen_numbers": [{{"at": 秒, "value": "数字"}}]}}
-没有问题时 issues 为空数组。"""
+**每张图都必须有一项**,没有问题的图 issues 为空数组,不能省略。"""
 
 CONFIRM_PROMPTS = {
     "watermark": "这是视频里的一帧。片子自己的栏目名、账号名(含「柒哥」字样)和字幕、数据卡是正常内容。"
@@ -106,6 +104,8 @@ CONFIRM_PROMPTS = {
                  "有就写出它的文字和位置;没有就明确说没有。",
     "wrong_model": "这是讲「{subject}」的视频里的一帧。画面里的车是不是「{subject}」?"
                    "请说出你看到的车标、字标或车型特征,再给结论:是 / 不是 / 看不出来。",
+    "blank": "这是视频里的一帧。它是不是整幅全黑、全白或花屏(没有任何正常画面内容)?"
+             "是就说明;画面正常就明确说画面正常。",
     "text_blocked": "这是竖屏或横屏解说视频里的一帧。字幕、标题、数据卡上的文字有没有被别的元素"
                     "(比如卡通人物头像)挡住、超出画面边缘、或互相重叠看不清?"
                     "有就说明是哪段文字被什么挡住;没有就明确说没有。",
@@ -180,8 +180,10 @@ def paste_sheet(chunk: Sequence[tuple[float, Path]], sheet: Path, cols: int = SH
     if not tiles:
         return False
     w, h = tiles[0][1].size
+    # 不满一行时画布收窄:空着的格子是黑的,视觉模型会把它报成「半边黑屏」
+    cols = min(cols, len(tiles))
     rows = (len(tiles) + cols - 1) // cols
-    canvas = Image.new("RGB", (w * cols, h * rows), "black")
+    canvas = Image.new("RGB", (w * cols, h * rows), (90, 90, 90))
     draw = ImageDraw.Draw(canvas)
     try:
         font = ImageFont.load_default(size=max(18, w // 16))
@@ -396,10 +398,15 @@ def review(video: Path, work: Path, *, subject: str, cues: Sequence[dict] = (),
                        f"各格时间:{'、'.join(f'{t:.1f}' for t in sheet['times'])}。"
                        f"这段旁白:{said or '(没有)'}")
             used.append(sheet)
-        verdicts, _texts, sources = vision_verdict.judge(
+        verdicts, texts, sources = vision_verdict.judge(
             urls, prompts, REVIEW_SYSTEM.format(subject=subject), llm, errors,
-            what="联系表", contexts=ctx)
+            what="联系表", contexts=ctx, max_chars=SHEET_TEXT_MAX)
         report["vlm_calls"] += len(urls)
+        # LLM 常常只回有问题的那几张(实测 9 张回 3 张)。视觉模型描述过、LLM 也确实
+        # 转出了结论,只是没提这一张 = 这张没问题;没被描述过的才算没看
+        if sources.get("llm"):
+            verdicts = [v if isinstance(v, dict) else ({"issues": []} if t else None)
+                        for v, t in zip(verdicts, texts, strict=False)]
         seen = sum(1 for v in verdicts if isinstance(v, dict))
         # 一半以上的联系表没有结论 = 没看完,不能当通过
         if not used or seen * 2 < len(sheets):
