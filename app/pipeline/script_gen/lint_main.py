@@ -11,7 +11,25 @@ from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
 from .scrub import _BENIGN_FIRST_RE, _COMPETITOR_MARKERS, _DISPARAGING_TERMS, _is_comparison_section, vendor_attribution
 from .hook import hook_lint, hook_payoff_lint, hook_verdict_lint, stance_lint
 from .lint_checks import attribution_lint, conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, firsthand_lint, hero_lint, ledger_use_lint, meaning_lint, number_source_lint, range_lint, repeat_lint, review_use_lint, rival_lint, stock_phrase_lint, term_lint, thesis_lint
+from .repair import NEAR_REPEAT_ERROR, near_repeats
 from .spoken import spoken_lint
+
+
+def near_repeat_lint(segments: Sequence[ScriptSegment]) -> list[LintIssue]:
+    """换说法的重复:同一句话改了几个字再说一遍(整句相同的归 repeat_lint)。
+
+    实测成片被打回最多的一条是「结论段把前面的话换个说法再说一遍」。写稿后
+    `repair.drop_near_repeats` 会自动删;这里兜底人改稿又改回来的情况。
+    重合度到 `NEAR_REPEAT_ERROR` 报 error,其余 warning。"""
+    issues: list[LintIssue] = []
+    for first, idx, sent, score in near_repeats(segments):
+        if score >= 0.999:
+            continue  # 整句复读 repeat_lint 已经报了
+        level = "error" if score >= NEAR_REPEAT_ERROR else "warning"
+        issues.append(LintIssue(idx, level,
+                                f"第 {idx + 1} 段和第 {first + 1} 段在重说同一句话"
+                                f"(「{sent[:16]}」),留一处就够"))
+    return issues
 
 
 def compliance_lint(
@@ -180,6 +198,7 @@ def compliance_lint(
     issues.extend(rival_lint(segments, facts))
     issues.extend(duplicate_lint(segments, facts))
     issues.extend(repeat_lint(segments))
+    issues.extend(near_repeat_lint(segments))
     issues.extend(thesis_lint(segments, thesis))
     issues.extend(ending_lint(segments, variety.ending(variant, theme)))
     issues.extend(spoken_lint(segments))

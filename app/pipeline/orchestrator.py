@@ -496,9 +496,15 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         # 口播清洗:去"我没有数字"类自曝句,把碎句和半句并进相邻的拍(拆完再清,否则拆分又造出碎句)
         segments = script_gen.clean_spoken(
             segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
+        # 自修:换说法的重复删掉,没出处的数字补引用 / 改写 / 删句。原来这两类只报不修,
+        # 项目停在门禁 A 等人,人不在就断更。
+        segments, fixes = script_gen.repair(segments, facts, profile, llm=script_llm, angle=angle)
+        if fixes:
+            db.write_json(project_id, "repair.json", fixes)
+            db.add_event(project_id, "script", reason=f"写稿自修 {len(fixes)} 处:" + ";".join(fixes)[:240])
         # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
         # 发布简介由 publish.metadata 带上品类免责声明。
-        issues = script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
+        issues =script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
                                             variant=_variant(project), angle=angle)
         blocking = [i for i in issues if i.is_error]
         db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])

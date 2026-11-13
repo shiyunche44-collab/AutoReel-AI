@@ -135,6 +135,13 @@ from .lint_checks import (  # noqa: E402,F401
 )
 from .lint_main import (  # noqa: E402,F401
     compliance_lint,
+    near_repeat_lint,
+)
+from .repair import (  # noqa: E402,F401
+    drop_near_repeats,
+    near_repeats,
+    repair,
+    repair_grounding,
 )
 from .segments import (  # noqa: E402,F401
     MIN_PART_CHARS,

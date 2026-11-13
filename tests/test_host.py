@@ -114,7 +114,7 @@ def test_build_falls_back_to_beat_durations_when_clips_short(tmp_path, monkeypat
     """量出来的镜头数不够(某拍探测失败)就按拍时长,不报错。"""
     seen = {}
 
-    def fake_hide(layouts, durations, fps, n, *a):
+    def fake_hide(layouts, durations, fps, n, *a, **kw):
         seen["d"] = list(durations)
         return np.zeros(n, bool)
 

@@ -96,17 +96,29 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
     return drop_unsaid_numbers(out)
 
 
+#: 卡片上的数字要在这一拍的前几拍 / 后几拍(或同一章节)里被说到
+SAID_WINDOW = (2, 4)
+
+
 def drop_unsaid_numbers(specs: list[ShotSpec],
                         card_log: list[dict] | None = None) -> list[ShotSpec]:
-    """整屏卡片和概念动画里,全片旁白从没说过的数字不上屏。
+    """整屏卡片和概念动画里,这一拍附近的旁白没说过的数字不上屏。
 
     面板 / 大数字是按「这一拍说过」核的(`said_overlay`),卡片和概念动画原来只核事实出处:
     事实里同一个参数有两个取值时(零百 7.2 秒 / 7.9 秒、148 度 / 150 度),屏上挑了一个、
     旁白说的是另一个,观众看到的就是画面和口播对不上(元UP、理想i6 都被这样打回过)。
-    卡片一屏好几行,一拍旁白说不完,所以按全片核:一行的取值里有旁白没说过的数字就去掉这一行;
-    行数不够版式下限,这一拍退回 broll(后面的兜底会再给它配说过的数字)。"""
-    spoken = numbers_in(" ".join(s.narration_zh or "" for s in specs))
-    for s in specs:
+    卡片一屏好几行,一拍旁白说不完,所以按「同一章节 + 前后几拍」核(`SAID_WINDOW`):
+    一行的取值里有这个范围内旁白没说过的数字就去掉这一行;
+    行数不够版式下限,这一拍退回 broll(后面的兜底会再给它配说过的数字)。
+
+    原来按全片核:开场说过一次的数字,到结尾的卡片上还算「说过」,观众看到的仍然是
+    屏上的数和正在说的话对不上(元UP 返工版就这样又被打回)。"""
+    before, after = SAID_WINDOW
+    for pos, s in enumerate(specs):
+        near = specs[max(0, pos - before):pos + after + 1]
+        spoken = numbers_in(" ".join(
+            x.narration_zh or "" for x in specs
+            if x in near or (s.section and x.section == s.section)))
         ov = s.overlay if isinstance(s.overlay, dict) and s.overlay.get("kind") == "concept" else None
         box = ov or (s.card if isinstance(s.card, dict) else None)
         if not box or not box.get("rows"):

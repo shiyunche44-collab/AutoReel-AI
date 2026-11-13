@@ -46,6 +46,9 @@ STATES = ("closed", "half", "open", "blink")
 HIDDEN = "hidden"
 #: 全屏卡片 / 概念动画会被挡;stat / panel 的数字卡画在竖屏数据区,和主持人同一位置
 HIDE_LAYOUTS = frozenset({"card", "concept", "stat", "panel"})
+#: 竖屏多藏一种:重点词大字也画在数据区,主持人站在同一块地方会压住字
+#: (成片被打回过:头像遮数据卡)。横屏的重点词在画面另一侧,不用藏
+PORTRAIT_HIDE_LAYOUTS = HIDE_LAYOUTS | {"highlight"}
 #: 音量(相对 cue 内 90 分位)超过这两个阈值分别是半张 / 张大
 HALF_AT, OPEN_AT = 0.18, 0.55
 #: 隐藏段两端各多让几帧:探测 / 拼接时间戳差一帧时,主持人也不会提前回来压住卡片
@@ -152,16 +155,17 @@ def mouth_track(rms: Sequence[float], cues: Sequence[dict], fps: int,
 
 def hide_spans(layouts: Sequence[str], durations: Sequence[float], fps: int,
                n_frames: int, dissolve_into: Sequence[int] = (),
-               dissolve_seconds: float = 0.0) -> np.ndarray:
-    """全屏 / 数据卡拍对应的帧标 True。
+               dissolve_seconds: float = 0.0, portrait: bool = False) -> np.ndarray:
+    """全屏 / 数据卡拍对应的帧标 True。`portrait`:竖屏按 `PORTRAIT_HIDE_LAYOUTS` 藏。
 
     `durations` 应是各镜头**画面**的实际时长(见模块说明);`dissolve_into` 里的拍从上一拍
     最后一帧叠化进来,上一拍要隐藏时把隐藏段延到叠化结束。两端各让 `GUARD_FRAMES`。"""
     mask = np.zeros(n_frames, bool)
     fades = set(dissolve_into)
     t = 0.0
+    hidden = PORTRAIT_HIDE_LAYOUTS if portrait else HIDE_LAYOUTS
     for k, (lay, dur) in enumerate(zip(layouts, durations, strict=False)):
-        if lay in HIDE_LAYOUTS:
+        if lay in hidden:
             end = t + dur + (dissolve_seconds if k + 1 in fades else 0.0)
             a = max(0, int(t * fps) - GUARD_FRAMES)
             b = min(n_frames, int(round(end * fps)) + GUARD_FRAMES)
@@ -429,7 +433,8 @@ def build(work_dir: Path, nar: dict, size: tuple[int, int], durations: Sequence[
 
         picture = (list(clip_seconds[:len(layouts)])
                    if clip_seconds and len(clip_seconds) >= len(layouts) else list(durations))
-        hide = hide_spans(layouts, picture, fps, n, dissolve_into, DISSOLVE_SECONDS)
+        hide = hide_spans(layouts, picture, fps, n, dissolve_into, DISSOLVE_SECONDS,
+                          portrait=aspect.is_portrait_size(size))
 
         out = work_dir / "_host"
         shutil.rmtree(out, ignore_errors=True)

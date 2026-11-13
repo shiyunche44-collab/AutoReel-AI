@@ -107,7 +107,7 @@ STILL_SECONDS = 4.0
 #: 代表帧 dHash 的汉明距离不超过它算同一个画面(同源快剪里的重复镜头),只打一个
 DUP_BITS = 6
 
-#: 拦掉的问题(text_overlay 只记不拦)
+#: 拦掉的问题(text_overlay 对视频只记不拦,对静图拦,见 `Item.usable`)
 BLOCKING = {"not_target_model", "no_subject", "cropped", "unclear", "poster"}
 
 
@@ -225,6 +225,10 @@ class Item:
         blocking = (BLOCKING - {"poster"}) | {"subtitle"} if self.launch else BLOCKING
         # 回放里的人(台上的主讲、全场)也是发布会画面;选料时排在车的画面后面
         banned = ("text", "other", "") if self.launch else ("people", "text", "other", "")
+        # 静图带角标 / 水印的不用:视频能按边裁掉,静图铺满全屏时水印就挂在画面上
+        # (成片被打回最多的原因之一:汽车之家图库的水印)。实测只占图库静图不到一成
+        if self.kind == "still" and self.problem == "text_overlay":
+            return False
         return self.tagged and self.target != "no" and self.problem not in blocking \
             and self.view not in banned and not self.low_res \
             and not self.skipped
