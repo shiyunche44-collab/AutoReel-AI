@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, costs, db, hang_watch, logging_setup, maintenance
+from . import config, costs, db, hang_watch, instance_lock, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
 from .metrics import worker as metrics_worker
@@ -102,18 +102,29 @@ async def lifespan(app: FastAPI):
         }
     )
 
-    scheduler.start()
-    # 分发侧的后台循环:发布任务、指标抓取。
-    # 都是守护线程,进程退出即结束,不挡 Web。
-    publish_accounts.import_from_file()
-    publish_service.start()
-    metrics_worker.start()
-    team_scheduler.start()
+    # 一个库只让一个进程跑后台循环:抢不到锁说明别的端口上已经有服务在推进这个库,
+    # 本进程只开 Web(见 app/instance_lock.py)。两个调度器推进同一个项目会写坏成片。
+    primary = instance_lock.acquire()
+    HEALTH["background"] = {"ok": primary, "owner": {} if primary else instance_lock.owner()}
+    if primary:
+        scheduler.start()
+        # 分发侧的后台循环:发布任务、指标抓取。
+        # 都是守护线程,进程退出即结束,不挡 Web。
+        publish_accounts.import_from_file()
+        publish_service.start()
+        metrics_worker.start()
+        team_scheduler.start()
+    else:
+        log.warning("这个库已有别的服务在跑后台循环(pid %s),本进程只开 Web:"
+                    "不推进项目、不发布、不跑团队",
+                    HEALTH["background"]["owner"].get("pid", "?"))
     yield
-    await scheduler.stop()
-    publish_service.stop()
-    metrics_worker.stop()
-    team_scheduler.stop()
+    if primary:
+        await scheduler.stop()
+        publish_service.stop()
+        metrics_worker.stop()
+        team_scheduler.stop()
+        instance_lock.release()
     hang_watch.stop()
 
 

@@ -28,6 +28,15 @@
 </details>
 {% endif %}
 
+{# 这个库已有别的服务在跑后台循环:本服务只开 Web。不说清楚的话,在这里建的项目
+   "不动"看上去就像卡死了。 #}
+{% if health.background is defined and not health.background.ok %}
+<div class="callout tone-warning">
+  <span class="row">{{ m.icon("alert-triangle") }}<strong>只读服务:这个库已有另一个服务在推进项目{% if health.background.owner.pid %}(进程 {{ health.background.owner.pid }}){% endif %}</strong></span>
+  <p class="subtle small">本服务不推进项目、不发布、不跑 AI 团队;在这里建的项目和确认的门禁由那个服务接手。要让本服务接管,先停掉那个服务再重启本服务。</p>
+</div>
+{% endif %}
+
 {# 需要人处理的项目(配额暂停 / 失败)顶在最上面 —— 可靠性的一条底线是
    "失败要可见":卡住的项目不该要人自己去列表里翻。 #}
 {% if attention %}
