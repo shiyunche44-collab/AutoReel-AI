@@ -8,6 +8,12 @@
 
 全屏卡片 / 概念动画 / 数字卡拍(`HIDE_LAYOUTS`)期间隐藏,片尾卡不覆盖。任何失败都返回 None,成片照出。
 
+隐藏段按**画面**的时间轴算,不按拍时长:每拍镜头编码后是整帧数(1.422 秒的拍实际 43 帧
+= 1.433 秒),拼接后画面比拍时长之和越走越靠后,46 秒处已差约 0.36 秒。按拍时长算的隐藏段
+会比数据卡早收,主持人回来压住卡片左侧的数字(2026-11-13 审片)。所以 `build` 优先用
+`clip_seconds`(各镜头实测帧数 / fps),两端再各让 `GUARD_FRAMES`;数据卡后一拍若从它叠化
+进来,卡片残影还会留 `render.DISSOLVE_SECONDS`,一并让开。
+
 留人用的三样(都只换贴图,不动任何一拍的时间):
 
 - 开场拍:第一句旁白期间(2-3 秒)放大,说完缩回角落。开场是大字钩子(数据区被大字占着)时,
@@ -42,6 +48,8 @@ HIDDEN = "hidden"
 HIDE_LAYOUTS = frozenset({"card", "concept", "stat", "panel"})
 #: 音量(相对 cue 内 90 分位)超过这两个阈值分别是半张 / 张大
 HALF_AT, OPEN_AT = 0.18, 0.55
+#: 隐藏段两端各多让几帧:探测 / 拼接时间戳差一帧时,主持人也不会提前回来压住卡片
+GUARD_FRAMES = 2
 #: 嘴型最少保持帧数,防止逐帧乱跳
 MIN_HOLD = 2
 BLINK_FRAMES = 3
@@ -143,15 +151,51 @@ def mouth_track(rms: Sequence[float], cues: Sequence[dict], fps: int,
 
 
 def hide_spans(layouts: Sequence[str], durations: Sequence[float], fps: int,
-               n_frames: int) -> np.ndarray:
-    """全屏拍对应的帧标 True。"""
+               n_frames: int, dissolve_into: Sequence[int] = (),
+               dissolve_seconds: float = 0.0) -> np.ndarray:
+    """全屏 / 数据卡拍对应的帧标 True。
+
+    `durations` 应是各镜头**画面**的实际时长(见模块说明);`dissolve_into` 里的拍从上一拍
+    最后一帧叠化进来,上一拍要隐藏时把隐藏段延到叠化结束。两端各让 `GUARD_FRAMES`。"""
     mask = np.zeros(n_frames, bool)
+    fades = set(dissolve_into)
     t = 0.0
-    for lay, dur in zip(layouts, durations, strict=False):
+    for k, (lay, dur) in enumerate(zip(layouts, durations, strict=False)):
         if lay in HIDE_LAYOUTS:
-            mask[int(t * fps): min(n_frames, int((t + dur) * fps))] = True
+            end = t + dur + (dissolve_seconds if k + 1 in fades else 0.0)
+            a = max(0, int(t * fps) - GUARD_FRAMES)
+            b = min(n_frames, int(round(end * fps)) + GUARD_FRAMES)
+            mask[a:b] = True
         t += dur
     return mask
+
+
+def video_seconds(paths: Sequence[Path], fps: int) -> list[float] | None:
+    """各镜头画面的实际时长(视频流帧数 / fps)。任何一个读不出就返回 None,调用方退回拍时长。"""
+    import json
+    import subprocess
+
+    if not config.FFPROBE_PATH:
+        return None
+    out: list[float] = []
+    for path in paths:
+        try:
+            proc = subprocess.run(
+                [str(config.FFPROBE_PATH), "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=nb_frames,duration", "-of", "json", str(path)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            stream = (json.loads(proc.stdout or "{}").get("streams") or [{}])[0]
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        frames = str(stream.get("nb_frames") or "")
+        if frames.isdigit() and int(frames) > 0:
+            out.append(int(frames) / fps)
+            continue
+        try:
+            out.append(round(float(stream["duration"]) * fps) / fps)
+        except (KeyError, TypeError, ValueError):
+            return None
+    return out
 
 
 def placement(size: tuple[int, int], sprite_h: int, sprite_w: int) -> tuple[int, int]:
@@ -364,10 +408,14 @@ class _Painter:
 def build(work_dir: Path, nar: dict, size: tuple[int, int], durations: Sequence[float],
           layouts: Sequence[str], fps: int, seed: int = 0,
           host_id: str | None = None, name: str = "", series: str = "",
-          accent: tuple[int, int, int] = (255, 90, 31)) -> tuple[Path, int, int] | None:
+          accent: tuple[int, int, int] = (255, 90, 31),
+          clip_seconds: Sequence[float] | None = None,
+          dissolve_into: Sequence[int] = ()) -> tuple[Path, int, int] | None:
     """出主持人层:(concat 清单, x, y)。`durations`/`layouts` 只含正片各拍(不含片尾卡)。
 
-    `name` / `series`:收尾贴纸上的称呼和栏目名。帧是整幅的,所以 x = y = 0。"""
+    `name` / `series`:收尾贴纸上的称呼和栏目名。帧是整幅的,所以 x = y = 0。
+    `clip_seconds`:各拍镜头画面的实测时长,给了就按它定隐藏段(嘴型仍跟旁白时间轴);
+    `dissolve_into`:成片里从上一拍叠化进来的拍序号。"""
     if not config.HOST_ENABLED or not available(host_id):
         return None
     try:
@@ -377,7 +425,11 @@ def build(work_dir: Path, nar: dict, size: tuple[int, int], durations: Sequence[
         wav = Path(nar.get("narration_path") or "")
         rms = _rms(wav, fps, n) if wav.is_file() else np.zeros(n)
         states = mouth_track(rms, cues, fps, seed=seed)
-        hide = hide_spans(layouts, durations, fps, n)
+        from .render import DISSOLVE_SECONDS
+
+        picture = (list(clip_seconds[:len(layouts)])
+                   if clip_seconds and len(clip_seconds) >= len(layouts) else list(durations))
+        hide = hide_spans(layouts, picture, fps, n, dissolve_into, DISSOLVE_SECONDS)
 
         out = work_dir / "_host"
         shutil.rmtree(out, ignore_errors=True)
@@ -418,10 +470,14 @@ def build(work_dir: Path, nar: dict, size: tuple[int, int], durations: Sequence[
 
 def for_compose(project_dir: Path, nar: dict, size: tuple[int, int], beats: Sequence[Any],
                 fps: int, seed: int = 0,
-                variant: Mapping[str, Any] | None = None) -> tuple[Path, int, int] | None:
+                variant: Mapping[str, Any] | None = None,
+                clips: Sequence[Path] | None = None,
+                dissolve_into: Sequence[int] = ()) -> tuple[Path, int, int] | None:
     """explainer.compose / recompose 的入口:当前 look 开了 host 才出。
 
-    `variant`:项目变体,收尾贴纸从里面取栏目名。"""
+    `variant`:项目变体,收尾贴纸从里面取栏目名。
+    `clips`:已归一化的各拍镜头(和 `beats` 一一对应),用来量画面实际时长;没给 / 量不出
+    就按拍时长。"""
     from . import looks, series, variety
 
     lk = looks.current()
@@ -430,4 +486,6 @@ def for_compose(project_dir: Path, nar: dict, size: tuple[int, int], beats: Sequ
     return build(project_dir / "_render", nar, size, [b.duration for b in beats],
                  [str(getattr(b, "layout", "") or "") for b in beats], fps, seed=seed,
                  name=variety._host_name(), series=series.of_variant(variant)[0],
-                 accent=tuple(lk.accent))
+                 accent=tuple(lk.accent),
+                 clip_seconds=video_seconds(list(clips)[:len(beats)], fps) if clips else None,
+                 dissolve_into=dissolve_into)

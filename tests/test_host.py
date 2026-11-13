@@ -43,10 +43,130 @@ def test_blink_only_while_closed():
 
 
 def test_hide_spans_cover_fullframe_beats():
+    g = host.GUARD_FRAMES
     mask = host.hide_spans(["broll", "concept", "broll"], [1.0, 1.0, 1.0], FPS, 3 * FPS)
-    assert not mask[:FPS].any()
-    assert mask[FPS:2 * FPS].all()
-    assert not mask[2 * FPS:].any()
+    assert not mask[:FPS - g].any()
+    assert mask[FPS - g:2 * FPS + g].all()
+    assert not mask[2 * FPS + g:].any()
+
+
+def test_hide_spans_cover_dissolve_out_of_card():
+    """数据卡下一拍从卡片最后一帧叠化进来:残影期间主持人也不能回来。"""
+    g = host.GUARD_FRAMES
+    mask = host.hide_spans(["broll", "stat", "broll"], [1.0, 1.0, 1.0], FPS, 3 * FPS,
+                           dissolve_into=[2], dissolve_seconds=0.25)
+    end = round(2.25 * FPS) + g
+    assert mask[FPS:end].all()
+    assert not mask[end:].any()
+
+
+# 2026-11-13 审片(p_ce1d5a3b07d6):每拍镜头编码成整帧,画面比拍时长越走越靠后,
+# 按拍时长算的隐藏段比数据卡早收约 0.2–0.4 秒,主持人压住卡片左侧的数字
+DRIFT_BEATS = [1.422, 1.608, 1.596, 1.904, 3.295, 1.845, 2.252, 2.482, 2.211, 1.892, 3.501, 2.921]
+DRIFT_CLIPS = [43, 49, 48, 58, 99, 56, 68, 75, 67, 57, 105, 88]  # 30fps 实测帧数
+DRIFT_LAYOUTS = ["broll"] * 10 + ["stat", "broll"]
+
+
+def _card_window(fps: int) -> tuple[int, int]:
+    """数据卡在成片画面里实际占的帧区间(按镜头帧数累计)。"""
+    a = sum(DRIFT_CLIPS[:10])
+    return a, a + DRIFT_CLIPS[10]
+
+
+def test_hide_spans_follow_picture_not_beat_durations():
+    fps = 30
+    n = int(round(sum(DRIFT_BEATS) * fps))
+    a, b = _card_window(fps)
+    picture = [f / fps for f in DRIFT_CLIPS]
+    assert host.hide_spans(DRIFT_LAYOUTS, picture, fps, n)[a:b].all()
+    # 旧算法(按拍时长)确实漏了卡片尾部:这条断言守住复现条件本身
+    assert not host.hide_spans(DRIFT_LAYOUTS, DRIFT_BEATS, fps, n)[a:b].all()
+
+
+def _hidden_frames(listing: Path, fps: int) -> np.ndarray:
+    """把主持人 concat 清单展开成逐帧「是否隐藏」。"""
+    flags: list[bool] = []
+    cur = ""
+    for line in listing.read_text(encoding="utf-8").splitlines():
+        if line.startswith("file"):
+            cur = line
+        elif line.startswith("duration"):
+            flags += ["hidden.png" in cur] * int(round(float(line.split()[1]) * fps))
+    return np.array(flags)
+
+
+@pytest.mark.skipif(not host.available(), reason="主持人素材未入库")
+def test_build_hides_host_for_whole_card_on_screen(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOST_ENABLED", True)
+    fps = 30
+    wav = _wav(tmp_path / "n.wav", sum(DRIFT_BEATS))
+    nar = {"narration_path": str(wav), "cues": [{"start": 0.0, "end": sum(DRIFT_BEATS) - 0.5}]}
+    out = host.build(tmp_path, nar, config.PORTRAIT_SIZE, DRIFT_BEATS, DRIFT_LAYOUTS, fps,
+                     clip_seconds=[f / fps for f in DRIFT_CLIPS])
+    assert out is not None
+    hidden = _hidden_frames(out[0], fps)
+    a, b = _card_window(fps)
+    assert hidden[a:b].all()
+    assert not hidden[:a - host.GUARD_FRAMES - 1].any()
+
+
+def test_build_falls_back_to_beat_durations_when_clips_short(tmp_path, monkeypatch):
+    """量出来的镜头数不够(某拍探测失败)就按拍时长,不报错。"""
+    seen = {}
+
+    def fake_hide(layouts, durations, fps, n, *a):
+        seen["d"] = list(durations)
+        return np.zeros(n, bool)
+
+    monkeypatch.setattr(config, "HOST_ENABLED", True)
+    monkeypatch.setattr(host, "available", lambda *_: True)
+    monkeypatch.setattr(host, "hide_spans", fake_hide)
+    monkeypatch.setattr(host, "_Painter", lambda *a, **k: (_ for _ in ()).throw(RuntimeError))
+    host.build(tmp_path, {}, config.PORTRAIT_SIZE, [1.0, 2.0], ["broll", "stat"], FPS,
+               clip_seconds=[1.1])
+    assert seen["d"] == [1.0, 2.0]
+
+
+def test_video_seconds_reads_frame_counts(monkeypatch, tmp_path):
+    import json
+    import subprocess
+
+    frames = iter(["43", "", "105"])
+
+    def fake_run(cmd, **_):
+        nb = next(frames)
+        body = {"streams": [{"nb_frames": nb, "duration": "1.9"}]}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(body), "")
+
+    monkeypatch.setattr(config, "FFPROBE_PATH", tmp_path / "ffprobe.exe")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    got = host.video_seconds([tmp_path / "a.mp4", tmp_path / "b.mp4", tmp_path / "c.mp4"], 30)
+    assert got == pytest.approx([43 / 30, 1.9, 3.5])
+
+
+def test_video_seconds_none_without_ffprobe(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "FFPROBE_PATH", None)
+    assert host.video_seconds([tmp_path / "a.mp4"], 30) is None
+
+
+def test_for_compose_passes_measured_clips_and_dissolves(monkeypatch, tmp_path):
+    from app.pipeline import looks
+
+    class _Beat:
+        def __init__(self, d, lay):
+            self.duration, self.layout = d, lay
+
+    got = {}
+    monkeypatch.setattr(looks, "current",
+                        lambda: type("L", (), {"host": True, "accent": (1, 2, 3)})())
+    monkeypatch.setattr(host, "video_seconds", lambda paths, fps: [0.5] * len(paths))
+    monkeypatch.setattr(host, "build", lambda *a, **k: got.update(k) or None)
+    beats = [_Beat(1.0, "broll"), _Beat(1.0, "stat")]
+    clips = [tmp_path / "n0.mp4", tmp_path / "n1.mp4", tmp_path / "outro.mp4"]
+    host.for_compose(tmp_path, {}, config.PORTRAIT_SIZE, beats, 30, clips=clips,
+                     dissolve_into=[1])
+    assert got["clip_seconds"] == [0.5, 0.5]  # 片尾卡不算
+    assert got["dissolve_into"] == [1]
 
 
 def test_portrait_placement_left_and_below_band():

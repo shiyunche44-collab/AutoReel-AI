@@ -725,6 +725,17 @@ def _dissolve_targets(beats: Sequence[ShotSpec]) -> list[int]:
             if 0 <= k < len(beats) and beats[k].layout not in ("card", "concept")]
 
 
+def _normalised(project_dir: Path, shots: Sequence[Path],
+                size: tuple[int, int]) -> list[Path] | None:
+    """先把各拍归一化好(render.compose 会直接复用 `_render/norm_*.mp4`),给主持人层量画面
+    实际时长。有一拍失败就返回 None,主持人层退回按拍时长。"""
+    try:
+        ok, _ = render_mod.normalise_all(list(shots), project_dir / "_render", size=size, trim=None)
+    except Exception:  # noqa: BLE001 —— 只是给主持人层对时间,失败了 compose 自己会再试
+        return None
+    return ok if len(ok) == len(shots) else None
+
+
 def _host_seed(project_id: str) -> int:
     """眨眼节奏按项目固定,重合成不变。"""
     return sum(ord(c) for c in project_id)
@@ -765,7 +776,9 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
-                                  variant=variety.parse(project.get("variant"))),
+                                  variant=variety.parse(project.get("variant")),
+                                  clips=_normalised(project_dir, shots, size),
+                                  dissolve_into=_dissolve_targets(beats)),
         grade=False,
     )
     if not result.ok or not result.output_path:
@@ -847,7 +860,9 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         intro_path=badge[0] if badge else None, intro_seconds=badge[1] if badge else 0.0,
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
-                                  variant=variety.parse(project.get("variant"))),
+                                  variant=variety.parse(project.get("variant")),
+                                  clips=_normalised(project_dir, shots, size),
+                                  dissolve_into=_dissolve_targets(beats)),
         grade=False,
     )
     if not result.ok or not result.output_path:
