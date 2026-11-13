@@ -78,7 +78,8 @@ def test_due_milestone():
     assert analyst.due_milestone(pub, [{"hours_since_publish": 25}], now) is None
     assert analyst.due_milestone(pub, [{"hours_since_publish": 2}], now) == 24
     assert analyst.due_milestone({"published_at": now - 600}, [], now) is None  # 不到 1 小时
-    assert analyst.due_milestone({"published_at": now - 200 * 3600}, [], now) is None  # 过了 7 天 + 宽限
+    assert analyst.due_milestone({"published_at": now - 200 * 3600}, [], now) == 168  # 7 天点还补
+    assert analyst.due_milestone({"published_at": now - 800 * 3600}, [], now) is None  # 过了 30 天 + 宽限
     assert analyst.due_milestone({"published_at": None}, [], now) is None
 
 

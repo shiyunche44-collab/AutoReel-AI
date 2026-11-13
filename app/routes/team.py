@@ -483,6 +483,26 @@ def team_bench_remove(sec_uid: str):
     return {"ok": True}
 
 
+class SearchTerms(BaseModel):
+    terms: list[dict[str, Any]]
+
+
+@router.post("/api/team/search-terms")
+def team_search_terms_add(payload: SearchTerms):
+    """记一批观众搜索词 [{"term": "元UP落地价", "views": 320, "title": "作品标题"}](周任务从创作者中心读来)。"""
+    from ..team import search_terms
+
+    return {"ok": True, "taken": search_terms.record(payload.terms),
+            "top": search_terms.top()}
+
+
+@router.get("/api/team/search-terms")
+def team_search_terms():
+    from ..team import search_terms
+
+    return {"top": search_terms.top(50)}
+
+
 @router.post("/api/team/events")
 def team_event_add(payload: EventAdd):
     """手动记一个行业事件(上市 / 发布会 / 车展 / OTA / 降价)。"""

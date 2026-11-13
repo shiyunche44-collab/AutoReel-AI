@@ -32,9 +32,11 @@ MIN_N = 6
 HIGH_N = 10
 #: 收缩后至少偏离这么多才写成结论
 MIN_EFFECT = 0.15
-METRICS = ("views", "completion_rate", "avg_watch_sec", "retention_2s")
+#: 涨粉是账号的最终目标(单条作品带来的关注),和播放、留存一起学
+METRICS = ("views", "completion_rate", "avg_watch_sec", "retention_2s", "followers_gained")
 METRIC_LABEL = {"views": "播放", "completion_rate": "完播率",
-                "avg_watch_sec": "平均观看秒数", "retention_2s": "2秒留存"}
+                "avg_watch_sec": "平均观看秒数", "retention_2s": "2秒留存",
+                "followers_gained": "涨粉"}
 
 # --------------------------------------------------------------------------
 # 早期诊断:不等 24 小时,发布后 1 小时那张快照就能看出前 2 秒留没留住人

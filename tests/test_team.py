@@ -637,8 +637,11 @@ def test_monitor_pauses_once_and_resume_sticks(fresh_db):
     day = 86400
     for k, v in enumerate((1000, 1200, 800)):
         _published(fresh_db, f"old{k}", "acc1", now - (10 - k) * day, v)
-    _published(fresh_db, "low", "acc1", now - 2 * day, 50)
+    _published(fresh_db, "low0", "acc1", now - 3 * day, 50)
     _published(fresh_db, "other", "acc2", now - 2 * day, 50)  # 别的账号没基线,不判
+    assert compliance.monitor(now) == []  # 单条低播放只提示,不暂停
+    assert not (fresh_db.get_account_health("acc1") or {}).get("paused")
+    _published(fresh_db, "low", "acc1", now - 2 * day, 50)  # 连续第二条也低
     out = compliance.monitor(now)
     assert len(out) == 1 and "low" in out[0]
     assert fresh_db.get_account_health("acc1")["paused"] == 1

@@ -378,7 +378,7 @@ def run(category: str | None = None, *, llm: Any = None,
     items = scout.fresh_items(category)
     if not items:
         raise TeamError("没有热点可用")
-    from . import benchmark, engagement, events, playbook, preference
+    from . import benchmark, engagement, events, playbook, preference, search_terms
 
     top = top_cars(items)
     learnings = db.list_learnings()
@@ -389,6 +389,7 @@ def run(category: str | None = None, *, llm: Any = None,
     hints = "\n\n".join(t for t in (preference.prompt_text(), playbook.prompt_text(learnings),
                                      engagement.audience_text(now.timestamp(), mark=True),
                                      engagement.topics_text(asked),
+                                     search_terms.prompt_text(now.timestamp()),
                                      events.prompt_text(category, now.date()),
                                      benchmark.prompt_text(now.timestamp()),
                                      rotation_hint(empty), gate_hint(top)) if t)

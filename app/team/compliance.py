@@ -183,6 +183,20 @@ def views_at_day(pub: dict[str, Any]) -> int | None:
     return None
 
 
+#: 低播放结论里的标记(和「卡在审核」那种暂停区分开)
+THROTTLE_MARK = "疑似限流"
+
+
+def _also_low(rows: list[dict[str, Any]], k: int, now: float) -> bool:
+    """这条之前最近一条有结论的作品是不是也判了低播放。"""
+    for j in range(k - 1, -1, -1):
+        what, why = verdict(rows[j], rows[:j], now)
+        if what == "wait":
+            continue
+        return what == "pause" and THROTTLE_MARK in why
+    return False
+
+
 def verdict(pub: dict[str, Any], earlier: list[dict[str, Any]], now: float) -> tuple[str, str]:
     """一条作品的结论:("pause", 原因) / ("pass", "") / ("wait", "")。
 
@@ -209,7 +223,7 @@ def verdict(pub: dict[str, Any], earlier: list[dict[str, Any]], now: float) -> t
         return "pass", ""  # 基数太小(冷启动号),低播放是常态,不当限流
     if median > 0 and views < config.TEAM_THROTTLE_RATIO * median:
         return "pause", (f"24 小时播放 {views},不到账号近 {len(base)} 条中位数 {median:.0f} 的 "
-                         f"{config.TEAM_THROTTLE_RATIO:.0%},疑似限流")
+                         f"{config.TEAM_THROTTLE_RATIO:.0%},{THROTTLE_MARK}")
     return "pass", ""
 
 
@@ -236,6 +250,12 @@ def monitor(now: float | None = None) -> list[str]:
             if what == "wait":
                 continue
             seen.add(pub["id"])
+            if what == "pause" and THROTTLE_MARK in why and not _also_low(rows, k, now):
+                # 搜索流量起量慢,单条 24 小时播放低是常事(实测新片不满一天播放为 0)。
+                # 连续两条都低才当限流暂停,单条只留一条提示
+                db.add_event(pub["project_id"], "team",
+                             reason=f"合规审核官提示:{why}(单条,不暂停;下一条也低才暂停)")
+                continue
             if what == "pause":
                 acc = accounts_mod.get_account(account_id)
                 name = acc.name if acc else account_id
