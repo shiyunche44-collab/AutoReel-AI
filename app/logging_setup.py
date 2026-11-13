@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import queue
 from pathlib import Path
 
 from . import config
@@ -55,9 +56,15 @@ def setup(level: int | str = logging.INFO) -> None:
 
     fmt = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
 
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-    root.addHandler(console)
+    root.addHandler(_nonblocking_console(fmt))
+    # uvicorn 的访问日志 / 错误日志自带直写 stdout 的 handler,而访问日志是在
+    # **事件循环线程**里写的:stdout 一堵,整个 Web 就冻住。摘掉它们的 handler,
+    # 统一走根 logger 上那个不阻塞的控制台。
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        for handler in list(lg.handlers):
+            lg.removeHandler(handler)
+        lg.propagate = True
 
     try:
         config.ensure_dirs()
@@ -72,9 +79,44 @@ def setup(level: int | str = logging.INFO) -> None:
         logging.getLogger(__name__).warning("日志文件不可写,只用控制台输出")
     else:
         file_handler.setFormatter(fmt)
+        # 前端每 5 秒轮询一次状态,访问日志进文件只会刷屏
+        file_handler.addFilter(lambda r: not r.name.startswith("uvicorn.access"))
         root.addHandler(file_handler)
 
     _configured = True
+
+
+#: 控制台队列上限。满了就丢,绝不让业务线程等控制台。
+CONSOLE_QUEUE_MAX = 10_000
+
+
+class _DropWhenFullHandler(logging.handlers.QueueHandler):
+    """入队失败(队列满)就丢掉这条,而不是阻塞或往 stderr 打异常。"""
+
+    dropped = 0
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            type(self).dropped += 1
+
+
+def _nonblocking_console(fmt: logging.Formatter) -> logging.Handler:
+    """控制台输出放到单独线程里写。
+
+    2026-11-13 事故:8848 由一个会话用管道接着 stdout 启动,会话没了、管道没人读,
+    缓冲写满后 `StreamHandler.emit` 永远阻塞 —— 它拿着 handler 锁,于是**所有**
+    打日志的线程(事件循环、调度器、团队线程)一起卡死,CPU 为 0,端口在听却
+    不应答,当天闭环整个没跑。现在只有这个监听线程会被堵住,队列满了就丢日志,
+    文件日志和业务都不受影响。
+    """
+    q: queue.Queue[logging.LogRecord] = queue.Queue(maxsize=CONSOLE_QUEUE_MAX)
+    stream = logging.StreamHandler()
+    stream.setFormatter(fmt)
+    listener = logging.handlers.QueueListener(q, stream, respect_handler_level=True)
+    listener.start()  # 守护线程,进程退出不等它
+    return _DropWhenFullHandler(q)
 
 
 def get_logger(name: str) -> logging.Logger:

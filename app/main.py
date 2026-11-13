@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, costs, db, logging_setup, maintenance
+from . import config, costs, db, hang_watch, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
 from .metrics import worker as metrics_worker
@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI):
     # 日志:控制台 + data/logs/AutoReel-AI.log(按天轮转)。此前整个项目
     # 一次也没用过 logging,排障只能看 serve.ps1 重定向的 stdout 文本。
     logging_setup.setup()
+    hang_watch.start(logging_setup.log_dir())  # 事件循环卡住 60 秒就把全部线程栈落盘
     # 清掉上次的临时物(data/_probe、data/_tmp 与散落的 _tmp_*.mp4)。
     # 它们是纯中间产物,却一直没有清理入口,已经积了 40 多 MB。
     try:
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
     publish_service.stop()
     metrics_worker.stop()
     team_scheduler.stop()
+    hang_watch.stop()
 
 
 app = FastAPI(title="AutoReel-AI", version="0.1.0", lifespan=lifespan)
