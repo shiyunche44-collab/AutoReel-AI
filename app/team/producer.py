@@ -3,7 +3,7 @@
 **开工时间 = 发布时刻 - TEAM_LEAD_HOURS。** 事实别抓太早(热点角度会变味),
 也要给出片和成片审核留出时间。
 
-**只碰门禁,不碰渲染。** 渲染态由服务里原有的 Scheduler 推进,这里不调
+**只碰门禁,不碰备料和渲染。** 这些自动态由服务里的 Scheduler 推进,这里不调
 advance —— 两个执行流同时推进同一个项目以前出过事(成片损坏)。
 
 **自动过闸 = AI 审稿员。** 门禁 A 走 `confirm_gate` 原路(它自己会跑 lint 和
@@ -48,7 +48,8 @@ def due(now: float | None = None) -> list[dict[str, Any]]:
 
 
 def _bootstrap(project_id: str) -> None:
-    """同 main._bootstrap:后台推进到门禁 A,零生成消耗。"""
+    """就地同步推进到门禁 A。只给 `background=False`(测试、离线脚本)用;
+    服务里由调度器的备料通道推进,见 `start`。"""
     from ..pipeline import orchestrator
 
     try:
@@ -76,8 +77,11 @@ def start(item_id: str, *, background: bool = True) -> str:
         db.write_json(project_id, EXCLUDE_FILE, list(item["exclude"]))
     db.add_event(project_id, "team", reason=f"AI 团队按选题单开工({item_id})")
     if background:
-        threading.Thread(target=_bootstrap, args=(project_id,), name=f"team-{project_id}",
-                         daemon=True).start()
+        # 事实→脚本→分镜归调度器的备料通道(重启后会接着推,瞬时失败会退避重试),
+        # 这里只催它马上开始;调度器没在跑时项目留在 DRAFT_INTENT,服务起来就接手
+        from ..scheduler import scheduler
+
+        scheduler.kick(project_id)
     else:
         _bootstrap(project_id)
     return project_id

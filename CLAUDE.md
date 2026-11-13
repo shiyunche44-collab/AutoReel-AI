@@ -18,7 +18,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/AutoReel-AI.db`(`data/aimovice.db` 是 0 字节的旧空文件,别用)。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。启动前先确认端口。
 - `scripts/serve.ps1` 会**杀掉已在监听该端口的进程**。曾因此中断用户正在渲染的项目。先用 `curl --noproxy '*' http://127.0.0.1:<port>/` 探测(不加 `--noproxy` 会走代理返回 000)。
 - **长期跑的 8848 只用 `scripts/ensure_server.ps1` 启动**(stdout/stderr 落到 `data/logs/server-*.log`)。别在会话里 `python run.py` 后台挂着:会话结束后管道没人读,写满就卡死整个进程(2026-11-13 闭环因此停了一天)。控制台日志现已改成队列 + 满了就丢,事件循环卡 60 秒会把全部线程栈写到 `data/logs/hang-*.txt`;ensure_server 对连续约 90 秒不应答的 run.py 会杀掉重启。
-- `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`(DRAFT_RENDERING / FINAL_RENDERING / COMPOSING / QA_PASSED 等)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
+- `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`:除门禁、终态、PAUSED_BUDGET 以外的全部状态。分两条通道 —— 渲染(DRAFT_RENDERING / COMPOSING,`PIPELINE_CONCURRENCY` 路)和备料(门禁 A 之前的事实 / 脚本 / 分镜与 ASSETS_READY,`PREP_CONCURRENCY` 路)。建项目后用 `scheduler.kick(pid)` 催它马上开始,别再起一次性线程去跑 `run_until_waiting`(服务重启后没人接手)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
 - 新增会自动推进的状态,必须加进 `AUTO_ADVANCE_STATES`,漏了就是"静静卡住",没有报错。
 - `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
 

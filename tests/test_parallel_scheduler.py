@@ -189,3 +189,148 @@ def test_still_auto_projects_are_requeued(store, monkeypatch):
 
     asyncio.run(scenario())
     assert len(seen) > 1, "还在自动态的项目应当被反复推进"
+
+
+# --------------------------------------------------------------------------
+# 备料通道:门禁 A 之前的状态也归调度器
+# --------------------------------------------------------------------------
+def test_prep_states_are_picked_up_after_a_restart(store, monkeypatch):
+    """服务重启后,停在事实采集 / 写稿 / 分镜的项目要被扫描接手。
+
+    以前这几步靠建项目时起的一次性线程,重启后项目永远停在原地,没有任何报错。
+    """
+    store.create_project(_project("p_prep", state="DRAFT_INTENT"))
+    order = ["FACTS_RESOLVED", "SCRIPT_READY", "STORYBOARD_READY", "GATE_A"]
+    seen: list[str] = []
+
+    def fake_advance(pid, **kwargs):
+        seen.append(threading.current_thread().name)
+        nxt = order[len(seen) - 1]
+        store.update_project(pid, state=nxt)
+        return {"state": nxt, "waiting": nxt == "GATE_A"}
+
+    monkeypatch.setattr(main.orchestrator, "advance", fake_advance)
+
+    async def scenario() -> None:
+        main.scheduler.start()
+        try:
+            for _ in range(200):
+                if len(seen) >= len(order):
+                    break
+                await asyncio.sleep(0.02)
+            await asyncio.sleep(0.1)  # 到了门禁就该停手
+        finally:
+            await main.scheduler.stop()
+
+    asyncio.run(scenario())
+    assert store.get_project("p_prep")["state"] == "GATE_A"
+    assert len(seen) == len(order), "到门禁 A 之后不该再被推进"
+    assert all(name.startswith("pipeline-prep") for name in seen), seen
+
+
+def test_prep_does_not_wait_behind_a_render(store, monkeypatch):
+    """渲染名额只有 1 个、正被占着时,另一个项目的写稿照样能跑。"""
+    monkeypatch.setattr(config, "PIPELINE_CONCURRENCY", 1)
+    store.create_project(_project("p_render"))
+    store.create_project(_project("p_prep", state="FACTS_RESOLVED"))
+    release = threading.Event()
+    prep_ran = threading.Event()
+
+    def fake_advance(pid, **kwargs):
+        if pid == "p_render":
+            release.wait(timeout=10)
+            return {"state": "DRAFT_RENDERING", "waiting": False}
+        store.update_project(pid, state="GATE_A")
+        prep_ran.set()
+        return {"state": "GATE_A", "waiting": True}
+
+    monkeypatch.setattr(main.orchestrator, "advance", fake_advance)
+
+    async def scenario() -> bool:
+        main.scheduler.start()
+        try:
+            for _ in range(200):
+                if prep_ran.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            return prep_ran.is_set()
+        finally:
+            release.set()
+            await main.scheduler.stop()
+
+    assert asyncio.run(scenario()), "写稿被渲染堵住了"
+
+
+def test_render_queued_in_prep_lane_is_rerouted(store, monkeypatch):
+    """排在备料队列里的项目若已进了渲染态,不能在备料池里渲(会绕过渲染并发上限)。"""
+    store.create_project(_project("p_moved", state="ASSETS_READY"))
+    threads: list[str] = []
+
+    def fake_advance(pid, **kwargs):
+        threads.append(threading.current_thread().name)
+        store.update_project(pid, state="GATE_B")
+        return {"state": "GATE_B", "waiting": True}
+
+    monkeypatch.setattr(main.orchestrator, "advance", fake_advance)
+
+    async def scenario() -> None:
+        sched = main.scheduler
+        sched.start()
+        try:
+            # 入队时还是备料态,轮到它之前被人手动推进到了渲染态
+            sched._queued.discard("p_moved")
+            while not sched._prep_queue.empty():
+                sched._prep_queue.get_nowait()
+            sched._queued.add("p_moved")
+            store.update_project("p_moved", state="DRAFT_RENDERING")
+            sched._prep_queue.put_nowait("p_moved")
+            for _ in range(200):
+                if threads:
+                    break
+                await asyncio.sleep(0.02)
+        finally:
+            await sched.stop()
+
+    asyncio.run(scenario())
+    assert threads and not threads[0].startswith("pipeline-prep"), threads
+
+
+def test_kick_enqueues_from_another_thread(store, monkeypatch):
+    """建项目后 kick 一下就开始,不用等 20 秒一轮的扫描。"""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("app.scheduler"), "SCHEDULER_INTERVAL", 3600)
+    done = threading.Event()
+
+    def fake_advance(pid, **kwargs):
+        store.update_project(pid, state="GATE_A")
+        done.set()
+        return {"state": "GATE_A", "waiting": True}
+
+    monkeypatch.setattr(main.orchestrator, "advance", fake_advance)
+
+    async def scenario() -> bool:
+        main.scheduler.start()
+        try:
+            await asyncio.sleep(0.1)  # 第一轮扫描已过,此时还没有项目
+            store.create_project(_project("p_new", state="DRAFT_INTENT"))
+            t = threading.Thread(target=main.scheduler.kick, args=("p_new",))
+            t.start()
+            for _ in range(200):
+                if done.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            t.join()
+            return done.is_set()
+        finally:
+            await main.scheduler.stop()
+
+    assert asyncio.run(scenario()), "kick 之后项目没有被推进"
+
+
+def test_kick_is_a_noop_when_scheduler_is_not_running(store):
+    """调度器没在跑(测试、离线脚本):不报错,项目留在原状态等服务接手。"""
+    store.create_project(_project("p_idle", state="DRAFT_INTENT"))
+    main.scheduler.kick("p_idle")
+    assert store.get_project("p_idle")["state"] == "DRAFT_INTENT"
+    assert "p_idle" not in main.scheduler._queued

@@ -246,6 +246,10 @@ MOTION_BROWSER_GPU = os.getenv("MOTION_BROWSER_GPU", "auto").strip().lower()
 #: 吃紧就保持 1,确认有余量再往上调。
 PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "1"))
 
+#: 备料通道的并发数:同时有几个项目在采事实 / 写稿 / 做分镜(门禁 A 之前)。
+#: 这几步等的是 LLM 和网络,不占本机内存,所以和渲染分开算,不挤渲染名额。
+PREP_CONCURRENCY = int(os.getenv("PREP_CONCURRENCY", "2"))
+
 #: data/ 体积超过这个值就在首页提示(字节)。默认 10 GB。
 DATA_SIZE_WARN_BYTES = int(os.getenv("DATA_SIZE_WARN_BYTES", str(10 * 1024 ** 3)))
 

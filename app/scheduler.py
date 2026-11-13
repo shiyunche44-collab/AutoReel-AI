@@ -23,10 +23,41 @@ SCHEDULER_INTERVAL = 20
 #: 后台循环会自动推进的状态。缺任何一个都表现为"流水线静静卡住"——
 #: 不会报错、不会告警,镜头只是永远停在 pending。DRAFT_RENDERING 曾被漏掉,
 #: 导致草稿档从来不会自己跑起来。
-AUTO_ADVANCE_STATES = frozenset({
+#:
+#: 分两条通道,各有各的队列、线程池和并发上限:
+#:
+#: - **渲染通道**(`RENDER_STATES`,`PIPELINE_CONCURRENCY` 路):ffmpeg + 概念动画的 Chrome,
+#:   内存是硬约束。
+#: - **备料通道**(`PREP_STATES`,`PREP_CONCURRENCY` 路):事实采集、写稿、分镜 —— 等 LLM 和
+#:   网络为主,不吃本机资源。单独一条通道,新项目写稿不用排在别人的渲染后面,反过来也一样。
+#:
+#: 备料这几个状态原来靠建项目时起的一次性后台线程推进(`_bootstrap`):服务在中途重启,
+#: 项目就永远停在 DRAFT_INTENT / FACTS_RESOLVED,没人接手;而且任何异常都直接判 FAILED。
+#: 现在归调度器:重启后扫描会接着推,瞬时失败走退避重试。
+RENDER_STATES = frozenset({
     str(State.DRAFT_RENDERING),
     str(State.COMPOSING),
 })
+PREP_STATES = frozenset({
+    str(State.DRAFT_INTENT),
+    str(State.FACTS_RESOLVED),
+    str(State.SCRIPT_READY),
+    str(State.STORYBOARD_READY),
+    str(State.ASSETS_READY),
+})
+AUTO_ADVANCE_STATES = RENDER_STATES | PREP_STATES
+
+#: 通道名
+RENDER, PREP = "render", "prep"
+
+
+def lane_of(state: str) -> str | None:
+    """这个状态归哪条通道;不自动推进的状态(门禁、终态、配额暂停)返回 None。"""
+    if state in RENDER_STATES:
+        return RENDER
+    if state in PREP_STATES:
+        return PREP
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -58,8 +89,9 @@ class Scheduler:
 
     - **扫描**(每 `SCHEDULER_INTERVAL` 一轮):把处于自动态的项目**入队**,
       按 id 去重 —— 同一个项目不会在队列里出现两次。
-    - **worker**(`PIPELINE_CONCURRENCY` 个):从队列取项目 → try-lock →
-      在专用线程池里跑 `advance()`。
+    - **worker**:从队列取项目 → try-lock → 在专用线程池里跑 `advance()`。
+      渲染通道 `PIPELINE_CONCURRENCY` 个,备料通道 `PREP_CONCURRENCY` 个(见 `lane_of`),
+      两条通道互不占名额。
 
     于是:同一时刻**不同项目**可以并行渲染,而**同一项目**永远只有一个
     写入者(项目锁保证)。队列化天然是轮转的 —— 一个项目渲 4 拍要 50 秒,
@@ -78,13 +110,19 @@ class Scheduler:
         #: 或测试里再跑一轮时会撞上 "cannot schedule new futures
         #: after shutdown"。
         self._pool: ThreadPoolExecutor | None = None
+        #: 备料通道的线程池(同样惰性创建)
+        self._prep_pool: ThreadPoolExecutor | None = None
         #: project_id -> 连续失败次数
         self._failures: dict[str, int] = {}
         #: project_id -> 下次可重试的时刻(monotonic)
         self._retry_after: dict[str, float] = {}
-        #: 待推进的项目队列
+        #: 待推进的项目队列(渲染通道)
         self._queue: asyncio.Queue[str] | None = None
-        #: 已入队(含正在处理的)—— 去重靠它
+        #: 待推进的项目队列(备料通道)
+        self._prep_queue: asyncio.Queue[str] | None = None
+        #: 调度器所在的事件循环;`kick()` 从别的线程入队要经过它
+        self._loop: asyncio.AbstractEventLoop | None = None
+        #: 已入队(含正在处理的)—— 去重靠它,两条通道共用
         self._queued: set[str] = set()
         #: 正在推进的项目
         self._running: set[str] = set()
@@ -93,13 +131,24 @@ class Scheduler:
         #: 跨线程的停机信号:渲染中的拍做完就收手
         self._drain = threading.Event()
 
-    def _executor(self) -> ThreadPoolExecutor:
-        """取(必要时重建)推进用的线程池。"""
+    def _executor(self, lane: str = RENDER) -> ThreadPoolExecutor:
+        """取(必要时重建)这条通道推进用的线程池。"""
+        if lane == PREP:
+            if self._prep_pool is None:
+                self._prep_pool = ThreadPoolExecutor(
+                    max_workers=max(1, config.PREP_CONCURRENCY),
+                    thread_name_prefix="pipeline-prep")
+            return self._prep_pool
         if self._pool is None:
             self._pool = ThreadPoolExecutor(
                 max_workers=max(1, config.PIPELINE_CONCURRENCY),
                 thread_name_prefix="pipeline")
         return self._pool
+
+    def _queue_for(self, lane: str | None) -> asyncio.Queue[str] | None:
+        if lane == PREP:
+            return self._prep_queue
+        return self._queue if lane == RENDER else None
 
     # ---- 扫描 ----
     async def _run(self) -> None:
@@ -115,7 +164,7 @@ class Scheduler:
 
     def _scan(self) -> None:
         """把处于自动推进态、且不在退避窗口里的项目入队。"""
-        if self._queue is None:
+        if self._queue is None and self._prep_queue is None:
             return
         for row in db.list_projects(limit=100):
             pid = row["id"]
@@ -125,33 +174,68 @@ class Scheduler:
                 continue
             if time.monotonic() < self._retry_after.get(pid, 0.0):
                 continue  # 还在退避窗口里,这一轮跳过
-            self._enqueue(pid)
+            self._enqueue(pid, row["state"])
 
-    def _enqueue(self, pid: str) -> None:
-        """入队(去重)。"""
-        if self._queue is None or pid in self._queued:
+    def _enqueue(self, pid: str, state: str | None = None) -> None:
+        """入队(去重),按**当前状态**进对应通道。不给 `state` 就现读一次。"""
+        if pid in self._queued:
+            return
+        if state is None:
+            state = str((db.get_project(pid) or {}).get("state") or "")
+        queue = self._queue_for(lane_of(state))
+        if queue is None:
             return
         self._queued.add(pid)
-        self._queue.put_nowait(pid)
+        queue.put_nowait(pid)
+
+    def kick(self, pid: str) -> None:
+        """马上把这个项目入队,不等下一轮扫描(建项目后调用,省掉最多 20 秒的空等)。
+
+        **线程安全**:路由和团队角色都跑在别的线程里,而 `asyncio.Queue` 只能在事件循环
+        线程上碰,所以经 `call_soon_threadsafe` 转一道。调度器没在跑(测试、离线脚本)时
+        什么都不做 —— 项目留在原状态,服务起来后扫描会接手。
+        """
+        loop = self._loop
+        if loop is None or self._stop.is_set():
+            return
+        try:
+            loop.call_soon_threadsafe(self._kick, pid)
+        except RuntimeError:  # 事件循环已经关了:等下次启动的扫描
+            log.debug("调度器已停,项目 %s 留给下次扫描", pid)
+
+    def _kick(self, pid: str) -> None:
+        if pid in self._running:
+            return
+        try:
+            self._enqueue(pid)
+        except Exception:  # noqa: BLE001 - 入队失败不要紧,下一轮扫描会补上
+            log.exception("即时入队 %s 失败", pid)
 
     # ---- worker ----
-    async def _worker(self) -> None:
-        """worker:取项目 → 推进 → 还在自动态就重新入队。"""
-        assert self._queue is not None
+    async def _worker(self, lane: str = RENDER) -> None:
+        """worker:取项目 → 推进 → 还在自动态就重新入队(按新状态进对应通道)。"""
+        queue = self._queue_for(lane)
+        assert queue is not None
         while not self._stop.is_set():
             try:
-                pid = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                pid = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
             self._running.add(pid)
             requeue = False
             try:
-                requeue = await self._advance_one(pid)
+                # 排队期间状态可能已经换了通道(比如人在备料态手动推进到了渲染态):
+                # 在备料池里渲染会绕过渲染并发上限,所以不在这里做,改投到对的通道。
+                state = str((db.get_project(pid) or {}).get("state") or "")
+                if lane_of(state) == lane:
+                    requeue = await self._advance_one(pid)
+                else:
+                    requeue = state in AUTO_ADVANCE_STATES
             finally:
                 self._running.discard(pid)
                 self._queued.discard(pid)
                 try:
-                    self._queue.task_done()
+                    queue.task_done()
                 except ValueError:
                     pass
             # 重新入队要等 `_queued` 里的自己被摘掉,否则去重会把它挡回去
@@ -172,7 +256,8 @@ class Scheduler:
         state = str(row.get("state") or "")
         try:
             # 关键:推进放到线程池,事件循环不被占住
-            out = await loop.run_in_executor(self._executor(), self._advance_call, pid)
+            out = await loop.run_in_executor(
+                self._executor(lane_of(state) or RENDER), self._advance_call, pid)
         except orchestrator.StateRaced as exc:
             # 别的执行流已经把状态推走了(比如另一路刚把它合成完):不是项目坏了,
             # 不判死。之前这里和下面的分支一样一律写 FAILED,把已发布的成片标成了失败。
@@ -225,23 +310,30 @@ class Scheduler:
             self._stop.clear()
             self._drain.clear()
             self._executor()  # 池在启动时就建好
+            self._executor(PREP)
+            self._loop = asyncio.get_running_loop()
             self._queue = asyncio.Queue()
+            self._prep_queue = asyncio.Queue()
             self._queued.clear()
             self._running.clear()
             self._task = asyncio.create_task(self._run())
             self._workers = [
-                asyncio.create_task(self._worker())
+                asyncio.create_task(self._worker(RENDER))
                 for _ in range(max(1, config.PIPELINE_CONCURRENCY))
+            ] + [
+                asyncio.create_task(self._worker(PREP))
+                for _ in range(max(1, config.PREP_CONCURRENCY))
             ]
 
     async def stop(self) -> None:
         self._stop.set()   # 停止扫描与 worker
         self._drain.set()  # 让在途的渲染在**拍之间**收手
-        for w in self._workers:
-            try:
-                await asyncio.wait_for(asyncio.shield(w), timeout=60)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
-                log.debug("停机时 worker 未能干净退出", exc_info=True)
+        self._loop = None  # 之后的 kick() 不再入队
+        if self._workers:
+            # 一起等,总共最多 60 秒(逐个等的话 worker 多了会叠成几分钟)
+            _, pending = await asyncio.wait(self._workers, timeout=60)
+            if pending:
+                log.debug("停机时还有 %d 个 worker 没收尾", len(pending))
         self._workers.clear()
         if self._task:
             self._task.cancel()
@@ -250,9 +342,11 @@ class Scheduler:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 log.debug("停机时扫描任务被取消", exc_info=True)
         # 不 wait:在途的那一拍让它跑完(它写的是自己那一拍的文件)
-        pool, self._pool = self._pool, None
-        if pool is not None:
-            pool.shutdown(wait=False, cancel_futures=True)
+        pools = (self._pool, self._prep_pool)
+        self._pool = self._prep_pool = None
+        for pool in pools:
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
 
 
 scheduler = Scheduler()

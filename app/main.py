@@ -273,6 +273,7 @@ def health():
     # 调度器当前盯着的项目与失败次数
     out["scheduler"] = {
         "concurrency": config.PIPELINE_CONCURRENCY,
+        "prep_concurrency": config.PREP_CONCURRENCY,
         "interval": SCHEDULER_INTERVAL,
         "failures": dict(scheduler._failures),
         "busy_projects": locks_busy_ids(),

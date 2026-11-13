@@ -248,6 +248,22 @@ def test_scheduler_covers_every_autonomous_state():
         assert str(state) in AUTO_ADVANCE_STATES, f"调度器未覆盖 {state}"
 
 
+def test_scheduler_covers_every_state_that_moves_without_a_human():
+    """除了门禁、终态、配额暂停,其余状态都得有人推 —— 那个"人"只能是调度器。
+
+    门禁 A 之前的几个状态原来靠建项目时起的一次性线程推进,服务中途重启就没人接手。
+    """
+    from app.main import AUTO_ADVANCE_STATES
+    from app.state import GATE_STATES, TERMINAL_STATES, State
+
+    waits_for_human = GATE_STATES | TERMINAL_STATES | {State.PAUSED_BUDGET}
+    for state in State:
+        if state not in waits_for_human:
+            assert str(state) in AUTO_ADVANCE_STATES, f"调度器未覆盖 {state}"
+        else:
+            assert str(state) not in AUTO_ADVANCE_STATES, f"{state} 要等人,不能自动推进"
+
+
 def test_scheduler_does_not_include_gates():
     """门禁绝不能出现在自动推进集合里 —— 否则人工审核形同虚设。"""
     from app.main import AUTO_ADVANCE_STATES

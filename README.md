@@ -57,7 +57,8 @@ copy .env.example .env
 | `BGM_ENABLED` | `1` | 成片是否配 BGM（混音时对旁白做侧链闪避；开头淡入 1.5 秒、结尾淡出 2.5 秒） |
 | `OPENFILM_ENABLED` | `0` | 成片闸上的「精修」按钮（见下文「成片精修」）。首次要下载约 100 MB 无头浏览器 |
 | `CACHE_TTS_MAX_MB` / `CACHE_MOTION_MAX_MB` | `100` / `500` | TTS 与概念动画缓存的体积上限（超出按最久未用淘汰） |
-| `PIPELINE_CONCURRENCY` | `1` | 同时推进几个项目。内存吃紧就保持 1 |
+| `PIPELINE_CONCURRENCY` | `1` | 同时渲染 / 合成几个项目。内存吃紧就保持 1 |
+| `PREP_CONCURRENCY` | `2` | 同时有几个项目在采事实 / 写稿 / 做分镜(门禁 A 之前)。等 LLM 和网络为主,不占渲染名额 |
 | `YTDLP_PROXY` / `YTDLP_COOKIES` | 空 | 国内访问 YouTube / TikTok 要配代理；B站高清和抖音下载要配 cookies |
 | `HYPERFRAMES_BROWSER_PATH` / `MOTION_NODE` | 自动找 | 概念动画用的 Chrome 和 node 22+（nvm 全局是旧版本时手动指定） |
 | `PLAN_EXPIRES_ON` | 空 | 方舟套餐到期日（如 `2026-12-31`），填了界面上会显示提醒 |

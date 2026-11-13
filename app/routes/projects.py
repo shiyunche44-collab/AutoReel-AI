@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -24,22 +24,15 @@ router = APIRouter()
 
 
 @router.post("/api/projects")
-def create_project(payload: ProjectCreate, background: BackgroundTasks):
+def create_project(payload: ProjectCreate):
     try:
         project_id = orchestrator.create_project(payload)
     except orchestrator.PipelineError as exc:
         raise HTTPException(400, str(exc)) from exc
-    # 后台先跑"零生成消耗"的前置阶段(事实→脚本→分镜),直到门禁 A
-    background.add_task(_bootstrap, project_id)
+    # 前置阶段(事实→脚本→分镜,直到门禁 A)由调度器的备料通道推进:这里只是催它
+    # 马上开始。以前是在这里起一次性后台任务,服务中途重启项目就没人接手了。
+    scheduler.kick(project_id)
     return {"id": project_id, "state": str(State.DRAFT_INTENT)}
-
-
-def _bootstrap(project_id: str) -> None:
-    """在后台把项目推进到门禁 A。不涉及任何生成调用,因此可以自动跑。"""
-    try:
-        orchestrator.run_until_waiting(project_id, max_steps=6)
-    except Exception as exc:  # noqa: BLE001
-        db.update_project(project_id, state=str(State.FAILED), state_reason=str(exc))
 
 
 @router.get("/api/projects")
