@@ -725,12 +725,14 @@ def _dissolve_targets(beats: Sequence[ShotSpec]) -> list[int]:
             if 0 <= k < len(beats) and beats[k].layout not in ("card", "concept")]
 
 
-def _normalised(project_dir: Path, shots: Sequence[Path],
-                size: tuple[int, int]) -> list[Path] | None:
+def _normalised(project_dir: Path, shots: Sequence[Path], size: tuple[int, int],
+                durations: Sequence[float]) -> list[Path] | None:
     """先把各拍归一化好(render.compose 会直接复用 `_render/norm_*.mp4`),给主持人层量画面
-    实际时长。有一拍失败就返回 None,主持人层退回按拍时长。"""
+    实际时长。`durations` 要和传给 compose 的一致(含片尾卡),两边才是同一批帧数精确的缓存。
+    有一拍失败就返回 None,主持人层退回按拍时长。"""
     try:
-        ok, _ = render_mod.normalise_all(list(shots), project_dir / "_render", size=size, trim=None)
+        ok, _ = render_mod.normalise_all(list(shots), project_dir / "_render", size=size, trim=None,
+                                         durations=durations)
     except Exception:  # noqa: BLE001 —— 只是给主持人层对时间,失败了 compose 自己会再试
         return None
     return ok if len(ok) == len(shots) else None
@@ -777,7 +779,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
                                   variant=variety.parse(project.get("variant")),
-                                  clips=_normalised(project_dir, shots, size),
+                                  clips=_normalised(project_dir, shots, size, durations),
                                   dissolve_into=_dissolve_targets(beats)),
         grade=False,
     )
@@ -861,7 +863,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
         host=host_mod.for_compose(project_dir, nar, size, beats, render_mod.FPS,
                                   seed=_host_seed(project_id),
                                   variant=variety.parse(project.get("variant")),
-                                  clips=_normalised(project_dir, shots, size),
+                                  clips=_normalised(project_dir, shots, size, durations),
                                   dissolve_into=_dissolve_targets(beats)),
         grade=False,
     )

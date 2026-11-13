@@ -118,16 +118,51 @@ def _can_copy_video(src: str | Path, w: int, h: int) -> bool:
         return False
 
 
+def frame_counts(durations: Sequence[float], fps: int = FPS) -> list[int]:
+    """各拍该编成几帧:按**累计**时长的帧边界分配,拼接后画面时间轴 = 拍时长之和(差不过半帧)。
+
+    每拍各自取整(1.422 秒 → 43 帧 = 1.433 秒)会让误差一路累加,68 秒的片画面晚近半秒,
+    数据卡比旁白念到数字晚 0.2-0.4 秒。第 i 拍 = round(cum_i·fps) - round(cum_{i-1}·fps),
+    每拍至少 1 帧(极短的拍挤占后一拍,边界之后照样回到累计值上)。"""
+    out: list[int] = []
+    edge, cum = 0, 0.0
+    for d in durations:
+        cum += max(0.0, float(d))
+        nxt = max(edge + 1, int(round(cum * fps)))
+        out.append(nxt - edge)
+        edge = nxt
+    return out
+
+
+def video_frames(path: str | Path) -> int | None:
+    """视频流实际帧数(数包,不解码);读不出返回 None。"""
+    if not config.FFPROBE_PATH:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(config.FFPROBE_PATH), "-v", "error", "-select_streams", "v:0", "-count_packets",
+             "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        return int((proc.stdout or "").strip().splitlines()[0].strip(" ,"))
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        return None
+
+
 def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] | None = None,
-                   trim: float | None = config.SHOT_GRID_SECONDS) -> bool:
+                   trim: float | None = config.SHOT_GRID_SECONDS,
+                   frames: int | None = None) -> bool:
     """把单个镜头归一化为目标画幅(默认 1080×1920)/ 30fps / yuv420p / 静音音轨。
 
     竖屏 9:16 素材源分辨率不统一,统一 scale+crop 到目标画幅可保证拼接不花屏。
     统一生成静音音轨是必需的:concat 要求所有片段的流结构一致。
     `trim` 为 None 时不截断(横屏解说轨的节拍时长各不相同,已经在渲染时定好);
-    若原镜头已满足目标分辨率、像素格式与帧率,视频流直接 `-c:v copy` 免重编码。
+    `frames` 给了就精确编成这么多帧(多了截掉,少了重复末帧补齐,见 `frame_counts`)。
+    若原镜头已满足目标分辨率、像素格式与帧率(且帧数正好),视频流直接 `-c:v copy` 免重编码。
     """
     w, h = _size(size)
+    if frames is not None:
+        return _fit_clip(src, dest, frames, w, h)
     if trim is None and _can_copy_video(src, w, h):
         proc = _run(
             [
@@ -163,6 +198,33 @@ def normalise_clip(src: str | Path, dest: str | Path, *, size: tuple[int, int] |
             "-c:a", "aac", "-b:a", "128k",
             *(["-t", str(trim)] if trim else []),
             str(dest),
+        ],
+        timeout=600,
+    )
+    return proc.returncode == 0 and Path(dest).is_file() and Path(dest).stat().st_size > 0
+
+
+def _fit_clip(src: str | Path, dest: str | Path, frames: int, w: int, h: int) -> bool:
+    """归一化并精确到 `frames` 帧。静音音轨按同样时长生成。"""
+    frames = max(1, int(frames))
+    seconds = f"{frames / FPS:.6f}"
+    silent = ["-f", "lavfi", "-t", seconds, "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+    audio = ["-map", "1:a:0", "-c:a", "aac", "-b:a", "128k", "-t", seconds]
+    if _can_copy_video(src, w, h) and video_frames(src) == frames:
+        proc = _run(["-y", "-v", "error", "-i", str(src), *silent, "-map", "0:v:0",
+                     "-c:v", "copy", *audio, str(dest)], timeout=600)
+        if proc.returncode == 0 and video_frames(dest) == frames:
+            return True
+    # tpad 先在末尾补足够多的重复末帧,-frames:v 再精确截断:短了补、长了裁,一条命令搞定
+    proc = _run(
+        [
+            "-y", "-v", "error", "-i", str(src), *silent,
+            "-vf",
+            (f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+             f"fps={FPS},setsar=1,format=yuv420p,tpad=stop_mode=clone:stop={frames}"),
+            "-map", "0:v:0", "-frames:v", str(frames),
+            "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+            *audio, str(dest),
         ],
         timeout=600,
     )
@@ -256,18 +318,25 @@ def still_to_clip(image: str | Path, dest: str | Path, *, seconds: float | None 
 
 def normalise_all(shot_paths: Sequence[Path], work_dir: Path, *,
                   size: tuple[int, int] | None = None,
-                  trim: float | None = config.SHOT_GRID_SECONDS) -> tuple[list[Path], list[str]]:
-    """归一化全部镜头。返回 (成功列表, 警告列表)。"""
+                  trim: float | None = config.SHOT_GRID_SECONDS,
+                  durations: Sequence[float] | None = None) -> tuple[list[Path], list[str]]:
+    """归一化全部镜头。返回 (成功列表, 警告列表)。
+
+    `durations` 给了(和镜头一一对应)就按 `frame_counts` 把每拍编成精确帧数,
+    拼接后画面时间轴 = 拍时长之和;缓存的 `norm_*.mp4` 帧数不对会重做。"""
     work_dir.mkdir(parents=True, exist_ok=True)
     ok: list[Path] = []
     warnings: list[str] = []
-    for i, src in enumerate(shot_paths):
+    targets: list[int | None] = (list(frame_counts(durations)) if durations is not None
+                                 and len(durations) == len(shot_paths) else [None] * len(shot_paths))
+    for i, (src, frames) in enumerate(zip(shot_paths, targets, strict=True)):
         dest = work_dir / f"norm_{i:03d}.mp4"
-        if dest.is_file() and dest.stat().st_size > 0:
+        if dest.is_file() and dest.stat().st_size > 0 and (frames is None
+                                                           or video_frames(dest) == frames):
             ok.append(dest)
             continue
         try:
-            if normalise_clip(src, dest, size=size, trim=trim):
+            if normalise_clip(src, dest, size=size, trim=trim, frames=frames):
                 ok.append(dest)
             else:
                 warnings.append(f"镜头 {i} 归一化失败,已跳过")
@@ -280,7 +349,8 @@ def normalise_all(shot_paths: Sequence[Path], work_dir: Path, *,
 DISSOLVE_SECONDS = 0.25
 
 
-def _dissolve_heads(clips: Sequence[Path], starts: Sequence[int], work_dir: Path) -> list[Path]:
+def _dissolve_heads(clips: Sequence[Path], starts: Sequence[int], work_dir: Path,
+                    size: tuple[int, int] | None = None) -> list[Path]:
     """这几个镜头的开头从上一镜最后一帧叠化进来。不改任何镜头的时长,旁白和字幕不受影响;
     只动画面,静音音轨原样带过。某一处做失败就留硬切,不拦成片。"""
     out = list(clips)
@@ -294,6 +364,15 @@ def _dissolve_heads(clips: Sequence[Path], starts: Sequence[int], work_dir: Path
         proc = _run(["-y", "-v", "error", "-sseof", "-0.1", "-i", str(clips[k - 1]),
                      "-i", str(clips[k]), "-filter_complex", graph, "-map", "[v]", "-map", "1:a:0",
                      "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-c:a", "copy", str(dest)])
+        want = video_frames(clips[k])
+        if proc.returncode == 0 and dest.is_file() and want is not None \
+                and video_frames(dest) != want:
+            # 叠化后帧数变了会把后面整条画面带偏:裁回原帧数,裁不了就留硬切
+            fitted = work_dir / f"dissolve_{k:03d}_fit.mp4"
+            if not _fit_clip(dest, fitted, want, *_size(size)):
+                log.warning("章节叠化帧数对不上,留硬切: %s", dest.name)
+                continue
+            dest = fitted
         if proc.returncode == 0 and dest.is_file():
             out[k] = dest
         else:
@@ -485,7 +564,8 @@ def compose(
         return RenderResult(ok=False, warnings=["没有可用的成片镜头"])
 
     normalised, warnings = normalise_all(list(shot_paths), work_dir, size=(w, h),
-                                         trim=None if durations else config.SHOT_GRID_SECONDS)
+                                         trim=None if durations else config.SHOT_GRID_SECONDS,
+                                         durations=durations)
     if not normalised:
         return RenderResult(ok=False, warnings=warnings + ["所有镜头归一化失败"])
 
@@ -500,7 +580,7 @@ def compose(
         warnings.append(f"旁白文件不存在,成片将没有解说声:{narration_path}")
 
     if len(normalised) == len(shot_paths):
-        normalised = _dissolve_heads(normalised, dissolve_into, work_dir)
+        normalised = _dissolve_heads(normalised, dissolve_into, work_dir, size=(w, h))
     concat_file = timeline_mod.concat_list_file(normalised, work_dir / "concat.txt")
     total_seconds = sum(durations) if durations else config.SHOT_GRID_SECONDS * len(normalised)
 
