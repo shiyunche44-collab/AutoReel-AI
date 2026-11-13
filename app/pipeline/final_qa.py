@@ -71,11 +71,11 @@ def problems(result: dict, target_lufs: float) -> list[str]:
     return out
 
 
-def inspect(video: Path, timeout: int = 900) -> list[str]:
-    """对成片跑一遍测量,返回警告列表。ffmpeg 不可用或测量失败返回空列表(不阻塞出片)。"""
+def measure(video: Path, timeout: int = 900) -> dict | None:
+    """对成片跑一遍测量,返回 `analyse` 的结果。ffmpeg 不可用或测量失败返回 None。"""
     ffmpeg = config.FFMPEG_PATH
     if not ffmpeg:
-        return []
+        return None
     try:
         proc = subprocess.run(
             [str(ffmpeg), "-hide_banner", "-nostdin", "-v", "info", "-i", str(video),
@@ -86,8 +86,13 @@ def inspect(video: Path, timeout: int = 900) -> list[str]:
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     if proc.returncode != 0:
-        return []
-    return problems(analyse(proc.stderr or "", timeline.probe_safe(video, default=0.0)),
-                    config.TARGET_LUFS)
+        return None
+    return analyse(proc.stderr or "", timeline.probe_safe(video, default=0.0))
+
+
+def inspect(video: Path, timeout: int = 900) -> list[str]:
+    """对成片跑一遍测量,返回警告列表。测量失败返回空列表(不阻塞出片)。"""
+    result = measure(video, timeout)
+    return problems(result, config.TARGET_LUFS) if result else []

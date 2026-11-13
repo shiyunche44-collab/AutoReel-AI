@@ -33,3 +33,11 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "COVER_ART", False)
     # 选题自动放行在测试里默认关(原有测试测 proposed -> approve 流程),专门的测试自己打开
     monkeypatch.setattr(config, "TEAM_AUTO_APPROVE_TOPICS", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_machine_review(monkeypatch):
+    """成片机审要抽帧 + 调视觉模型;默认关,专门的测试(test_cut_review)自己打开。"""
+    from app import config
+
+    monkeypatch.setattr(config, "TEAM_MACHINE_REVIEW", False)

@@ -22,9 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app import config  # noqa: E402
-from app.pipeline import render  # noqa: E402
+from app.pipeline import cut_review, render  # noqa: E402
 
-LOUD_TARGET = -16.0       # LUFS
+LOUD_TARGET = config.TARGET_LUFS  # LUFS,和合成管线同一个目标
 LOUD_TOLERANCE = 3.0
 TRUE_PEAK_MAX = -1.0      # dBTP
 SILENCE_MAX = 1.5         # 秒:超过算长静音
@@ -223,45 +223,15 @@ def contact_sheets(video: Path, out: Path, fps: float, scenes: list[float], dur:
         sheet = sheets_dir / f"sheet_{n // 12:03d}.jpg"
         if chunk and _paste_sheet(chunk, sheet):
             sheets.append(sheet)
+    if not sheets:
+        # 原来抽帧不看返回码:ffmpeg 出错时联系表是空的,报告照样写「0 张,逐张查看」
+        raise RuntimeError(f"联系表一张都没出来(要抽 {len(jobs)} 帧,ffmpeg: {config.FFMPEG_PATH})")
     return sheets
 
 
 def _paste_sheet(chunk: list[tuple[float, Path]], sheet: Path, cols: int = 4) -> bool:
-    """用 PIL 拼一张联系表。原来走 ffmpeg drawtext,Windows 上没配字体就整张出不来(联系表为空)。
-
-    时间戳用 PIL 自带字体,画不上也照样出图 —— 没时间戳的联系表好过没有联系表。
-    """
-    from PIL import Image, ImageDraw, ImageFont
-
-    tiles = []
-    for t, path in chunk:
-        try:
-            with Image.open(path) as im:
-                tiles.append((t, im.convert("RGB")))
-        except OSError:
-            continue
-    if not tiles:
-        return False
-    w, h = tiles[0][1].size
-    rows = (len(tiles) + cols - 1) // cols
-    canvas = Image.new("RGB", (w * cols, h * rows), "black")
-    draw = ImageDraw.Draw(canvas)
-    try:
-        font = ImageFont.load_default(size=18)
-    except Exception:  # noqa: BLE001 - 老版本 Pillow 不收 size
-        font = ImageFont.load_default()
-    for i, (t, im) in enumerate(tiles):
-        x, y = (i % cols) * w, (i // cols) * h
-        canvas.paste(im if im.size == (w, h) else im.resize((w, h)), (x, y))
-        try:
-            label = f"{t:.1f}s"
-            box = draw.textbbox((x + 6, y + 6), label, font=font)
-            draw.rectangle((box[0] - 3, box[1] - 3, box[2] + 3, box[3] + 3), fill=(0, 0, 0))
-            draw.text((x + 6, y + 6), label, fill=(255, 220, 0), font=font)
-        except Exception:  # noqa: BLE001, S110 - 时间戳画不上不影响出图
-            pass
-    canvas.save(sheet, quality=88)
-    return sheet.is_file()
+    """拼一张联系表(实现在 `cut_review.paste_sheet`,服务里的成片机审也用它)。"""
+    return cut_review.paste_sheet(chunk, sheet, cols)
 
 
 def export_all_frames(video: Path, out: Path) -> int:
@@ -311,7 +281,11 @@ def main() -> int:
     scenes = check_black_freeze_scenes(video, rep)
     check_audio(video, dur, rep, pdir)
     check_narration(pdir, rep)
-    sheets = contact_sheets(video, out, args.fps, scenes, dur)
+    try:
+        sheets = contact_sheets(video, out, args.fps, scenes, dur)
+    except RuntimeError as exc:
+        sheets = []
+        rep.add("FAIL", "联系表", str(exc))
     extra = [f"## 联系表({len(sheets)} 张,逐张查看)", ""]
     extra += [f"- {s}" for s in sheets]
     extra += ["", f"场景切换点 {len(scenes)} 个:" + ", ".join(f"{s:.1f}s" for s in scenes[:60]),

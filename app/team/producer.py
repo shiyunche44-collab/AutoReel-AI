@@ -14,6 +14,7 @@ advance —— 两个执行流同时推进同一个项目以前出过事(成片�
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -33,6 +34,8 @@ _GATES = {str(State.GATE_A), str(State.GATE_B)}
 
 #: 正在过闸的项目(门禁 A 要合成旁白,一跑几分钟,别重复起线程)
 _gating: set[str] = set()
+#: 正在跑成片机审的项目
+_reviewing: set[str] = set()
 _gating_lock = threading.Lock()
 
 
@@ -149,6 +152,54 @@ def _gate_async(item: dict[str, Any], state: str, background: bool) -> bool:
     return True
 
 
+def machine_review(item: dict[str, Any]) -> dict[str, Any]:
+    """成片机审:视觉模型把成片看一遍(`pipeline.cut_review`),结论记在选题上。
+
+    通过(或机审没看完)→ 进成片待审,卡片带上结论,终审只需要复核;
+    不通过 → 按机审指出的时间段打回重做(受返工上限约束),不占终审的时间。"""
+    from ..pipeline import cut_review, orchestrator
+    from . import publisher
+
+    report = cut_review.review_project(item["project_id"], llm=orchestrator._llm())
+    brief = {k: report.get(k) for k in ("passed", "inconclusive", "summary", "issues",
+                                         "bad_ranges", "notes", "checked_at", "vlm_calls")}
+    brief["errors"] = (report.get("errors") or [])[:3]
+    if not db.cas_plan_status(item["id"], ("producing",), "review", hold="", hold_state="",
+                              machine_review=json.dumps(brief, ensure_ascii=False)):
+        return report  # 这期间有人动过这条选题
+    if not report.get("passed") and not report.get("inconclusive"):
+        try:
+            publisher.reject_cut(item["id"], str(report.get("summary") or "机审不通过"),
+                                 redo=True, bad_ranges=report.get("bad_ranges") or None)
+        except Exception as exc:  # noqa: BLE001 - 打回不成就留在待审,终审能看到机审结论
+            log.warning("机审打回失败(%s):%s", item["id"], exc)
+    return report
+
+
+def _review_async(item: dict[str, Any], background: bool) -> int:
+    pid = item["project_id"]
+    with _gating_lock:
+        if pid in _reviewing:
+            return 0
+        _reviewing.add(pid)
+
+    def _run() -> None:
+        try:
+            machine_review(item)
+        except Exception as exc:  # noqa: BLE001 - 机审自己坏了不能把片子卡在制作中
+            log.warning("成片机审出错(%s),直接进待审:%s", pid, exc)
+            db.cas_plan_status(item["id"], ("producing",), "review", hold="", hold_state="")
+        finally:
+            with _gating_lock:
+                _reviewing.discard(pid)
+
+    if background:
+        threading.Thread(target=_run, name=f"team-review-{pid}", daemon=True).start()
+    else:
+        _run()
+    return 1
+
+
 def sync(*, background: bool = True) -> int:
     """制作中的选题跟着项目状态走,停在门禁的替人过闸。返回动了几条。"""
     changed = 0
@@ -156,8 +207,12 @@ def sync(*, background: bool = True) -> int:
         project = db.get_project(item["project_id"]) if item["project_id"] else None
         state = project.get("state") if project else str(State.CANCELLED)
         if state in _DONE:
-            db.update_plan_item(item["id"], status="review", hold="", hold_state="")
-            changed += 1
+            if config.TEAM_MACHINE_REVIEW:
+                # 成片先过机审(几分钟,后台跑):通过才进待审,不通过直接打回重做
+                changed += _review_async(item, background)
+            else:
+                db.update_plan_item(item["id"], status="review", hold="", hold_state="")
+                changed += 1
             continue
         if state in _FAILED:
             reason = (project or {}).get("state_reason") or "项目已删除"

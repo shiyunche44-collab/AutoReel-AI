@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import threading
 import time
@@ -104,7 +105,20 @@ def review_view(item: dict[str, Any]) -> dict[str, Any]:
         "cover_url": f"/api/projects/{pid}/cover",
         "publish_at": next_publish_time(item["slot_at"]),
         "pieces": repurpose.view(item),
+        "machine_review": machine_verdict(item),
     }
+
+
+def machine_verdict(item: dict[str, Any]) -> dict[str, Any]:
+    """选题上记的成片机审结论(`producer.machine_review` 写的)。没审过返回空。"""
+    raw = item.get("machine_review") or ""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def approve_cut(item_id: str, account_ids: list[str], *, title: str = "",
