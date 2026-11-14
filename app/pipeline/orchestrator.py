@@ -611,6 +611,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
 
     if state == State.DRAFT_RENDERING:
         specs = _specs(project_id)
+        _resume_orphan_pools(project_id, names or [subject], profile)
         result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
                                           limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
                                           should_stop=(stop_event.is_set if stop_event else None))
@@ -703,6 +704,32 @@ def _start_library_many(project_id: str, names: list[str], profile, llm=None, **
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({'、'.join(started)})")
     except Exception as exc:  # noqa: BLE001
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
+
+
+def _resume_orphan_pools(project_id: str, names: list[str], profile) -> None:
+    """渲染中发现素材池停在「下载完、没打标签」却没有线程在建:接着建。
+
+    建池是服务进程里的后台线程,服务一重启线程就没了,磁盘上的池子永远是 tagging。
+    渲染器把它当成「还在建」干等,20 分钟后整片退成卡片(2026-11-14 样片实跑踩过)。
+    接手时把等素材的计时清零:之前那段没人在建,不该算进等待时间。
+
+    下载被打断时连抽帧都没做完,池子看着是 empty(同一次样片里开场 8 拍因此渲成了空底),
+    所以 empty 也接手一次。**每个项目每台车只接手一次**:真没素材的池子也是 empty,
+    不限次数就会每一轮调度都重建一遍。"""
+    done = set(db.read_json(project_id, "pool_resumed.json", []) or [])
+    orphans = [n for n in names if n not in done
+               and library.pool_status(n) in ("tagging", "empty")]
+    if not orphans:
+        return
+    db.write_json(project_id, "pool_resumed.json", sorted(done | set(orphans)))
+    if len(names) > 1:
+        _start_library_many(project_id, orphans, profile, _llm())
+    else:
+        _start_library(project_id, orphans[0], profile, _llm())
+    if any(library.is_building(n) for n in orphans):
+        db.write_json(project_id, "beats_waiting.json", {})
+        db.add_event(project_id, "assets",
+                     reason=f"素材池没建完就断了(多半是服务重启),已接着建:{'、'.join(orphans)}")
 
 
 def rebuild_library(project_id: str) -> dict[str, Any]:

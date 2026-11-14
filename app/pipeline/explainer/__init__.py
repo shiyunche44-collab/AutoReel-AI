@@ -149,6 +149,7 @@ from .beat_render import (  # noqa: E402,F401
     chapters_of,
     concept_card,
     concept_inputs,
+    ledger_rows,
     concept_style_of,
     hook_background,
     layout_filter,
@@ -427,6 +428,10 @@ def _render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
     size = aspect.frame_size(project)
     # 竖屏标题区常驻的大标题:脚本阶段 LLM 起的片名
     headline = str(project.get("title") or "") if aspect.is_portrait(project) else ""
+    # 片型开了常驻参数清单(横屏才画):本章讲过的参数逐条累加在左上角
+    theme_name = str(project.get("theme") or "")
+    use_ledger = (theme_name in profile.themes and profile.theme_spec(theme_name).ledger
+                  and not aspect.is_portrait(project))
     done, errors = [], []
     notes: list[str] = []
     waiting: list[str] = []
@@ -482,7 +487,9 @@ def _render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        sting=sting_for(specs, where, chapters, s.idx),
                                        style=style, headline=headline, notes=notes,
                                        ranges=profile.vocab.concept_ranges,
-                                       role=beat_role(where, pos, len(chapters)))
+                                       role=beat_role(where, pos, len(chapters)),
+                                       ledger=ledger_rows(specs, where, pos) if use_ledger
+                                       else None)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:
             errors.append(f"第 {s.idx} 拍:{exc}")
             db.update_shot(project_id, s.idx, "draft", status="failed", error=str(exc)[:500])

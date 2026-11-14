@@ -50,6 +50,8 @@ class Ending:
     markers: tuple[tuple[str, ...], ...] = ()
     #: markers 没命中时的提示
     hint: str = ""
+    #: 挂了栏目也不接「下期预告 + 关注」的栏目尾句:这种结尾问完就收
+    solo: bool = False
 
 
 #: 改写非默认变体时补的一句:段落说明里对开场 / 结尾的描述是按默认写法写的
@@ -95,6 +97,14 @@ OPENINGS: dict[str, Opening] = {o.id: o for o in (
         "     (「你们觉得香不香?」「如果是你,愿意花钱吗?」),提问必须围绕刚讲完的事实,不许编造网友说法。"
         + _OVERRIDE,
         stance=False),
+    # 对标「一台车优缺点讲透」:第一句不抛问题,摆两件放在一起就让人想问为什么的事实
+    Opening(
+        "contrast", "反差开场", "开头摆一个反差",
+        "   - 第一句 18 字以内,把两件都是事实、放在一起就让人想问「为什么」的事摆出来\n"
+        "     (「海外卖了近 4 万台,国内却买不到」);句子里的数字必须引用事实,\n"
+        "     不许编造谁「破防了」「慌了」这类没有出处的反应;\n"
+        "     第二句不急着讲参数,先交代这台车的来历。" + _OVERRIDE,
+        stance=False),
 )}
 
 #: 默认结尾的标记词:一句提问,或一句下期预告 / 互动引导
@@ -130,6 +140,14 @@ ENDINGS: dict[str, Ending] = {e.id: e for e in (
         "     1 个下单时机或等待理由(只能来自事实;没有就给不含时间的判断),一句一项,短句。" + _OVERRIDE,
         markers=(("适合", "如果你", "推荐"),),
         hint="决策卡结尾要点出适合哪两类人(适合……的人)"),
+    Ending(
+        "dispute", "争议提问", "结尾抛一个争议问题",
+        "   - 最后一句向观众抛一个两边都说得通的问题(「加价也要买,还是等它便宜?评论区说」):\n"
+        "     问题必须从本期讲过的优点和硬伤里来,不许引入没讲过的东西;\n"
+        "     问完就收,不预告下期、不让观众报预算、不喊关注。" + _OVERRIDE,
+        markers=(("?", "？"), ("评论区", "你觉得", "你怎么看", "你会", "还是")),
+        hint="结尾要抛一个两边都说得通的问题(加价也要买,还是等它便宜?评论区说)",
+        solo=True),
 )}
 
 
@@ -166,7 +184,7 @@ def rule10(variant: Mapping[str, Any] | None, theme=None) -> str:
     from . import series
 
     o, e = opening(variant, theme), ending(variant, theme)
-    tail = series.script_rule(variant, host=_host_name())
+    tail = series.script_rule(variant, host=_host_name(), outro=not e.solo)
     return f"10. **{o.title},{e.title}**:\n{o.rule}\n{e.rule}" + (f"\n{tail}" if tail else "")
 
 

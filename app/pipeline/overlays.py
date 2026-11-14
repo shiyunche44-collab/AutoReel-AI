@@ -205,6 +205,54 @@ def chapter_bar(chapters: Sequence[tuple[str, float]], current: int, size: tuple
     return dest
 
 
+#: 常驻参数清单最多几行。再多就把最早的顶掉 —— 清单是给人扫一眼的,不是参数表
+LEDGER_MAX_ROWS = 6
+
+
+def ledger(rows: Sequence[tuple[str, str]], title: str, size: tuple[int, int],
+           onto: str | Path) -> Path:
+    """左上角常驻参数清单:章名一行,下面是本章讲过的参数,一行一条。直接画在 `onto`
+    (章节条那张透明 PNG)上,所以不占 ffmpeg 输入,重拍单拍也不用改滤镜图。
+
+    垫一块半透明黑底再写白字:实拍底色亮的时候(白车、天空)光靠描边看不清。字号按手机竖着
+    看横屏的尺寸定(1080p 下正文约 44 像素),2026-11-14 样片里 36 像素在手机上太小。
+    竖屏的左上角是标题区,不画。这里只负责画,`rows` 里的数字由调用方保证来自核对过事实的行。"""
+    onto = Path(onto)
+    rows = [(str(k).strip(), str(v).strip()) for k, v in rows if str(v).strip()][-LEDGER_MAX_ROWS:]
+    if not rows or aspect.is_portrait_size(size):
+        return onto
+    w, h = size
+    img = Image.open(onto).convert("RGBA") if onto.is_file() else Image.new("RGBA", size, (0, 0, 0, 0))
+    x, y = int(w * 0.025), int(h * 0.05)
+    max_w = int(w * 0.34)
+    head = max(30, int(h * 0.046))
+    body = max(28, int(h * 0.041))
+    pad = int(body * 0.5)
+    black = (0, 0, 0, 255)
+    probe = ImageDraw.Draw(img)
+    lines: list[tuple[str, Any, tuple[int, int, int, int] | tuple[int, int, int]]] = []
+    if title:
+        t, f = _fit(probe, title, head, max_w, bold=True)
+        lines.append((t, f, _accent()))
+    for label, value in rows:
+        t, f = _fit(probe, f"{label} {value}".strip(), body, max_w, bold=True)
+        lines.append((t, f, _TEXT))
+    steps = [int(head * 1.35) if (title and n == 0) else int(body * 1.32) for n in range(len(lines))]
+    box_w = max(int(probe.textlength(t, font=f)) for t, f, _ in lines) + pad * 2
+    box_h = sum(steps) + pad * 2 - int(body * 0.28)
+    shade = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(shade).rounded_rectangle(
+        (x - pad, y - pad, x - pad + box_w, y - pad + box_h), radius=pad, fill=(0, 0, 0, 150))
+    img = Image.alpha_composite(img, shade)
+    d = ImageDraw.Draw(img)
+    for (t, f, color), step in zip(lines, steps, strict=True):
+        d.text((x, y), t, font=f, fill=color, stroke_width=max(2, body // 16), stroke_fill=black)
+        y += step
+    onto.parent.mkdir(parents=True, exist_ok=True)
+    img.save(onto)
+    return onto
+
+
 # --------------------------------------------------------------------------
 # 大数字滚动(stat 版式)
 # --------------------------------------------------------------------------

@@ -393,6 +393,56 @@ themes:
       - {section: 争议三, weight: 3, drop: 1}
       - {section: 争议结论, weight: 1, remainder: false}
 
+  # 一次讲透:一台车从里到外讲一遍,对标「三分钟带你了解 XX 优缺点」这类垂直合集。
+  # 先用来历和悬念留人,再按 尺寸 → 动力 → 内饰 → 能力 分章讲参数(左上角常驻清单逐条累加),
+  # 然后小结优点、点硬伤,最后抛一个争议问题。只在 vocab.segments 的细分名单里选车。
+  walkthrough:
+    label: 一次讲透
+    intent: >
+      把这台车从里到外讲一遍,让没看过它的人看完就知道它是什么、强在哪、毛病在哪:
+      先用一个反差和它的来历把人留住 → 抛一个后面会回答的悬念 → 尺寸 → 动力底盘 → 座舱配置 →
+      它最拿手的本事 → 优点小结 → 硬伤 → 一个留给观众吵的问题。
+      参数讲全,但每组参数后面都要落到「对用车意味着什么」。
+    max_duration: 240
+    allow_subject_critique: true
+    segment: offroad
+    ledger: true
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.product_news
+      - ifind.tech_news
+      - ifind.compare_news
+      # 媒体试驾与车主口碑:硬伤段只能转述,没有这一条就只剩参数
+      - ifind.review_news
+      # 来历段要的上市时间、订单、销量
+      - ifind.iteration_news
+      - ark.datapro.sales
+    script_rules:
+      - 开场第一句不超过 18 字;不说"大家好""今天来聊聊""欢迎"之类的开场白。
+      - 来历三数段讲 3 个数字(上市时间、订单、销量、价格这一类),每个都引用事实;事实里凑不出 3 个就有几个讲几个,不许编。
+      - 留个悬念段抛一个观众会好奇的问题,答案必须在后面某一章讲到;最后用一句话承诺这期讲什么(「今天把它从里到外聊透」)。
+      - 尺寸身板、动力底盘、座舱配置、看家本领四章,每章第一句先说这章讲什么(「先看尺寸」「动力方面」);一句讲一个参数,带单位;每章最后一句说这组参数对用车意味着什么。
+      - 续航、油耗、电耗、加速这类数字必须带口径或版本,口径取自事实的"口径"一栏。
+      - 优点小结段把前面讲过的优点压成 4 到 5 个短词连着说,不引入新信息。
+      - 硬伤段至少讲 2 条真实的短板:依据只能是事实里写到的问题、转述里的抱怨,或由参数推出的判断(推断要说明是推断);事实里没写到的,不要说成没有。
+      - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据。
+    openings: [contrast, number, myth]
+    endings: [dispute]
+    # 竖屏 60s 只放得下 4 段:按 drop 从小到大砍,留下开场、动力底盘、硬伤、结论
+    blocks:
+      - {section: 讲透开场, weight: 1, remainder: false}
+      - {section: 来历三数, weight: 2, drop: 5}
+      - {section: 留个悬念, weight: 1, remainder: false, drop: 1}
+      - {section: 尺寸身板, weight: 3, drop: 6}
+      - {section: 动力底盘, weight: 4}
+      - {section: 座舱配置, weight: 3, drop: 4}
+      - {section: 看家本领, weight: 3, drop: 3}
+      - {section: 优点小结, weight: 1, remainder: false, drop: 2}
+      - {section: 硬伤, weight: 3}
+      - {section: 讲透结论, weight: 1, remainder: false}
+
 # 版式说明(pipeline/explainer.py):
 #   broll     全屏这台车的宣传片
 #   panel     宣传片 + 左侧参数面板(车名、3–5 项参数)
@@ -728,6 +778,63 @@ sections:
     layouts: [highlight, card, broll]
     card: spec
 
+  # ---- 一次讲透(walkthrough)。参数章用 panel:行经过事实核对,画成左上角的常驻清单 ----
+  讲透开场:
+    beat: 第一句 18 字内摆出这台车身上最大的反差或最硬的一个数字(黄金三秒)
+    chapter: 引言
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  来历三数:
+    beat: 用 3 个数字交代它的来历:什么时候上市、卖了多少、卖多少钱
+    chapter: 引言
+    angle: exterior_45
+    layouts: [broll, stat, highlight]
+    requires_fact: true
+  留个悬念:
+    beat: 抛一个后面会回答的问题,再用一句话承诺这期把它从里到外讲透
+    chapter: 引言
+    angle: exterior_45
+    layouts: [broll, highlight]
+  尺寸身板:
+    beat: 车长、轴距、离地间隙、货箱或后备厢,和同级比大还是小
+    chapter: 尺寸
+    angle: exterior_45
+    layouts: [panel, broll, stat]
+    requires_fact: true
+  动力底盘:
+    beat: 发动机或电机、变速箱、四驱形式、车架和悬架、电池与油耗
+    chapter: 动力
+    angle: exterior_45
+    layouts: [panel, broll, stat, concept]
+    requires_fact: true
+  座舱配置:
+    beat: 屏幕、座椅、舒适和辅助驾驶配置
+    chapter: 内饰
+    angle: interior
+    layouts: [panel, broll, highlight]
+    requires_fact: true
+  看家本领:
+    beat: 这台车最拿手的那件事:拖挂、载重、涉水、脱困、对外放电,挑事实里有的讲
+    chapter: 能力
+    angle: exterior_45
+    layouts: [panel, broll, stat, highlight]
+    requires_fact: true
+  优点小结:
+    beat: 把前面讲过的优点压成四五个短词,一口气说完
+    chapter: 小结
+    angle: exterior_45
+    layouts: [highlight, broll]
+  硬伤:
+    beat: 这台车真实的短板:依据是什么、影响谁
+    chapter: 缺点
+    angle: exterior_45
+    layouts: [highlight, broll, panel]
+  讲透结论:
+    beat: 一句话说它适合谁,再抛一个两边都说得通的问题给观众
+    chapter: 结论
+    angle: exterior_45
+    layouts: [highlight, broll]
+
 visual_keywords: [汽车, 轿车, 新能源汽车, 内饰, 续航, 座舱]
 reference_query_template: "{subject} 实拍 {angle}"
 
@@ -922,9 +1029,10 @@ vocab:
   subject_words: [这台车, 这辆车, 该车, 整车, 续航, 加速, 百公里, 配置, 售价, 电池, 充电]
 
   views: [exterior_front, exterior_side, exterior_45, rear, driving, aerial,
-          interior, screen, seat, detail]
+          interior, screen, seat, detail, engine_bay, chassis, cargo_bed]
   hint_groups:
-    exterior: [exterior_front, exterior_side, exterior_45, rear, driving, aerial]
+    exterior: [exterior_front, exterior_side, exterior_45, rear, driving, aerial,
+               engine_bay, chassis, cargo_bed]
     interior: [interior, screen, seat, detail]
     driving: [driving, aerial, exterior_side]
   hint_of_angle: {interior: interior, screen_spec: interior, detail: interior}
@@ -946,10 +1054,13 @@ vocab:
     seat: interior
     screen: screen_spec
     detail: detail
+    engine_bay: detail
+    chassis: detail
+    cargo_bed: rear
 
   tag_variant_note: 注意同品牌的不同车系(如小米 SU7 与 YU7)是不同车型。
   tag_identify: 画面主体是什么;有车的话是什么品牌和车型,依据是什么(车标、车尾字样、外形),看不出来就直说看不出来;
-  tag_angles: 车头正面、侧面、前 45 度、车尾、行驶中、航拍俯视、车内座舱、中控屏或仪表、座椅、局部特写(轮毂、车灯、门把手等),还是人物、文字卡、其它;
+  tag_angles: 车头正面、侧面、前 45 度、车尾、行驶中、航拍俯视、车内座舱、中控屏或仪表、座椅、局部特写(轮毂、车灯、门把手等)、打开的发动机舱、车底的底盘悬架、皮卡货箱,还是人物、文字卡、其它;
   tag_target_rule: |-
     描述明确认出是目标车型(同品牌同车系;年款、版本不同仍算)→ "yes";
       明确认出是**别的品牌或别的车系** → "no";没点名车型 → "unknown"。
@@ -959,6 +1070,8 @@ vocab:
       rear(车尾 / 后 45 度)、driving(行驶中的外观)、aerial(航拍俯视)、
       interior(座舱全景)、screen(中控屏 / 仪表 / HUD)、seat(座椅 / 后排 / 后备厢)、
       detail(轮毂、车灯、门把手、充电口等局部特写)、
+      engine_bay(打开机盖的发动机舱 / 电驱)、chassis(车底:大梁、悬架、差速器、电池包)、
+      cargo_bed(皮卡货箱 / 货斗)、
   tag_no_subject: 描述里没有任何车辆或车辆部件 → "no_subject"(座舱、局部特写都算有车);
   tag_desc_example: 白色 YU7 前 45 度停在沙漠公路
 
@@ -993,6 +1106,12 @@ vocab:
     topic: 柒哥聊热点
     # 键也可以是片型 id:该片型的选题不按星期,固定挂这个栏目
     buyguide: 柒哥到底该不该买
+    walkthrough: 柒哥一次讲透
+  # 细分名单:片型的 segment 指到这里,主编排这个片型时按名单顺序轮着做
+  segments:
+    offroad: [坦克300, 坦克400, 坦克500, 坦克700, 方程豹豹5, 方程豹钛7, 北京BJ40, 北京BJ30,
+              北京BJ60, 北汽212, 捷途旅行者, 捷途山海T2, 哈弗H9, 哈弗猛龙, 长城炮, 比亚迪鲨鱼,
+              捷途纵横G700, 哈弗H5]
   lenses:
     engineering: 工程取舍:这台车在哪些地方做了取舍,为了什么放弃了什么,数字里能看出哪个工程决定
     definition: 产品定义:它到底是给谁造的,配置和定价暴露了车企心里的目标用户,和宣传说的是否一致
@@ -1044,7 +1163,10 @@ vocab:
     充电: [充电口, 充电枪, 补能口, 慢充, 快充]
     车漆: [车漆, 漆面, 烤漆, 车身颜色]
     屏幕: [屏幕, 显示屏, 中控, 车机]
-  closeup_views: [detail]
+    发动机舱: [发动机, 机舱, 引擎, 机盖, 电驱]
+    底盘: [底盘, 大梁, 车架, 悬架, 差速, 分动箱, 电池包]
+    货箱: [货箱, 货斗, 后斗]
+  closeup_views: [detail, engine_bay, chassis, cargo_bed]
 
   # 挑"车多人少"的视频类型
   discovery_zh: ["{subject} 宣传片", "{subject} 官方", "{subject} 实拍 外观 内饰",

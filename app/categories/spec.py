@@ -114,6 +114,11 @@ class ThemeSpec:
     shots_per_section: int = 0
     #: 横屏一句不超过这么多字就不从中间切(0 = 按拍长上限切)。推理句切开就读不通了
     sentence_keep_chars: int = 0
+    #: 只在这个细分里选车(名单在 vocab.segments)。主编排这个片型时不看全市场榜单,
+    #: 按名单轮着做,连更成一个垂直合集
+    segment: str = ""
+    #: 左上角常驻参数清单:本章讲过的参数逐条累加在屏幕上(横屏;见 beat_render.ledger_rows)
+    ledger: bool = False
 
     @property
     def multi(self) -> bool:
@@ -258,6 +263,8 @@ class Vocab:
     catchphrases: tuple[str, ...] = ()
     #: 栏目:选题类型(model / band / topic,见 team.editor.slot_kind)→ 栏目名。空 = 不挂栏目
     series: dict[str, str] = field(default_factory=dict)
+    #: 细分名单:细分 id → 这个细分里的车(片型的 `segment` 指到这里)
+    segments: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: 分析视角:id -> 这个视角要回答什么
     lenses: dict[str, str] = field(default_factory=dict)
     #: 论证手法库:每章换一种,写进分析和脚本提示词
@@ -408,7 +415,7 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         default = getattr(Vocab(), key)
         if isinstance(default, tuple):
             kwargs[key] = tuple(str(x) for x in (value or ()))
-        elif isinstance(default, dict) and key in ("hint_groups", "coverage_views"):
+        elif isinstance(default, dict) and key in ("hint_groups", "coverage_views", "segments"):
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict) and key == "detail_types":
             # 细节类型 → 各种说法(说法本身是词表,所以是元组)

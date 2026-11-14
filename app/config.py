@@ -479,6 +479,10 @@ TEAM_MACHINE_REVIEW = os.getenv("TEAM_MACHINE_REVIEW", "1") not in ("0", "false"
 TEAM_LANDSCAPE_WEEKDAYS = tuple(
     int(t) for t in os.getenv("TEAM_LANDSCAPE_WEEKDAYS", "").split(",") if t.strip().isdigit())
 TEAM_LANDSCAPE_UNTIL = os.getenv("TEAM_LANDSCAPE_UNTIL", "").strip()
+#: 细分连更:这些星期(0 = 周一)的空档排「一次讲透」这类带细分名单的片型(横屏、取片型最长档),
+#: 车从品类 vocab.segments 的名单里按顺序轮,不看全市场榜单。留空 = 不排。
+TEAM_WALKTHROUGH_WEEKDAYS = tuple(
+    int(t) for t in os.getenv("TEAM_WALKTHROUGH_WEEKDAYS", "").split(",") if t.strip().isdigit())
 #: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)
 TEAM_ASSET_PREBUILD = os.getenv("TEAM_ASSET_PREBUILD", "1") not in ("0", "false", "False")
 #: 合规审核官:成片里第三方视频占比到这个数提醒,到上限不让发

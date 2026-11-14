@@ -309,6 +309,63 @@ def slot_aspect(slot: float) -> str | None:
     return config.LANDSCAPE if day.weekday() in days else None
 
 
+def segment_theme(profile: CategoryProfile) -> Any | None:
+    """品类里带细分名单的片型(「一次讲透」);没有 = None。"""
+    return next((t for t in profile.themes.values()
+                 if t.segment and profile.vocab.segments.get(t.segment)), None)
+
+
+def next_segment_car(names: tuple[str, ...], cooled: set[str], done: set[str]) -> str:
+    """细分名单里下一台该做的车:不在冷却期的里面,先挑没做过的,都做过就从头轮。没有 = 空串。"""
+    fresh = [n for n in names if not _in_car_set(n, cooled)]
+    return next((n for n in fresh if not _in_car_set(n, done)), fresh[0] if fresh else "")
+
+
+def plan_segment(category: str, profile: CategoryProfile, empty: list[float],
+                 now: float) -> tuple[int, list[float]]:
+    """细分连更:配置的星期直接从片型的细分名单里排一台车。返回 (排了几条, 剩下的空档)。
+
+    不问 LLM、不看全市场榜单 —— 硬派越野和皮卡进不了销量榜前 10,按榜单永远排不到;
+    这条线靠同一个细分连着更来攒车粉。名单全在冷却期时空档还给常规选题,不留空。"""
+    days = config.TEAM_WALKTHROUGH_WEEKDAYS
+    theme = segment_theme(profile)
+    if not days or theme is None:
+        return 0, empty
+    from ..pipeline import series
+
+    names = profile.vocab.segments[theme.segment]
+    cooled = cooled_subjects(category, now, config.TEAM_COOLDOWN_DAYS)
+    done = {_norm(p.get("subject")) for p in db.list_projects(limit=300)
+            if p.get("category") == category and p.get("theme") == theme.name
+            and p.get("state") != "CANCELLED"}
+    done.discard("")
+    column = series.name_for(profile.vocab, theme.name) or theme.label
+    made, rest = 0, []
+    used_days: set[dt.date] = set()  # 一天最多一条,当天其余空档还给常规选题
+    for slot in empty:
+        day = dt.datetime.fromtimestamp(slot)
+        car = (next_segment_car(names, cooled, done)
+               if day.weekday() in days and day.date() not in used_days else "")
+        if not car:
+            rest.append(slot)
+            continue
+        used_days.add(day.date())
+        aspect, duration = choose_format(profile, theme.name, aspect=config.LANDSCAPE,
+                                         duration=theme.max_duration or None)
+        db.create_plan_item({
+            "id": new_id("pl_"), "category": category, "slot_at": slot,
+            "status": "approved" if config.TEAM_AUTO_APPROVE_TOPICS else "proposed",
+            "kind": "single", "subject": car, "subjects": [],
+            "angle": "", "theme": theme.name, "aspect": aspect, "duration": duration,
+            "hook": "", "search_terms": "", "evidence": [],
+            "rationale": f"细分连更「{column}」:按名单轮到这台",
+            "heat": 3,
+        })
+        cooled.add(_norm(car))
+        made += 1
+    return made, rest
+
+
 def assign_slots(slots: list[float], ranked: list[Any], kind_of: dict[int, str]) -> list[tuple[float, Any]]:
     """每个空档先挑排名最高的同类选题;该类没有就退而求其次拿排名最高的剩余选题。"""
     left = list(ranked)
@@ -367,7 +424,12 @@ def run(category: str | None = None, *, llm: Any = None,
     window = slot_times(now, config.TEAM_PLAN_DAYS, config.TEAM_DAILY_SLOTS, config.TEAM_SLOT_TIMES)
     planned = db.list_plan_items(category, since=now.timestamp(), limit=500)
     empty = open_slots(window, planned)
+    # 细分连更的日子先排掉(不问 LLM),剩下的空档再走常规选题
+    seg_made, empty = plan_segment(category, profile, empty, now.timestamp())
+    seg_note = f"细分连更排 {seg_made} 条" if seg_made else ""
     if not empty:
+        if seg_made:
+            return seg_note + (f",自动批准 {auto_ok} 条选题" if auto_ok else "")
         if auto_ok:
             return f"自动批准 {auto_ok} 条选题,未来 {config.TEAM_PLAN_DAYS} 天已排满"
         raise Skip(f"未来 {config.TEAM_PLAN_DAYS} 天已排满")
@@ -464,7 +526,8 @@ def run(category: str | None = None, *, llm: Any = None,
     left = len(empty) - made
     label = (f"新排 {made} 条选题(自动批准 {auto_ok} 条)" if config.TEAM_AUTO_APPROVE_TOPICS
              else f"新排 {made} 条待批选题")
-    return label + (f",还有 {left} 个空档没合适的" if left > 0 else "")
+    return ((seg_note + ";" if seg_note else "") + label
+            + (f",还有 {left} 个空档没合适的" if left > 0 else ""))
 
 
 def expire_stale(category: str, now: float | None = None) -> int:

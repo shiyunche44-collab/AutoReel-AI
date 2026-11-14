@@ -17,6 +17,10 @@
 1. **选题闸**(`status=proposed`):看 subject / angle / hook / evidence / heat、`slot_at` 是否未过期、
    和近期已发/在做的是否重复(同车型冷却期内不批)。
    合格 → `POST /api/team/plan/{id}/approve`;不合格 → `POST .../reject` 带 `{"note": 具体原因}`。
+   - **细分连更「一次讲透」(`theme=walkthrough`,横屏 240 秒)**:`.env` 的 `TEAM_WALKTHROUGH_WEEKDAYS`
+     (逗号分隔,0=周一;默认空 = 不排)命中的日子,主编直接从 `auto_long.yaml` 的 `vocab.segments.offroad`
+     名单里按顺序排一台硬派越野 / 皮卡,不问 LLM、不看热度榜前 10,一天一条。这类条目**不要 PATCH 改片型、
+     画幅、时长,也不要因为"车不在热度榜"驳回**;其余审题标准照旧。名单全在冷却期时当天空档回到常规选题。
 2. **门禁挂起**(有 `hold`):读原因。能自己解决(重试即可、素材问题已被后续版本排除)就
    `POST .../retry-gate`;额度用完(PAUSED_BUDGET)或同一条连续 2 次被拦 → 记"需要人",不再重试。
 3. **成片闸**(`status=review`):

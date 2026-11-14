@@ -1,6 +1,7 @@
 """单拍渲染:版式滤镜、背景、概念素材、render_beat。"""
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +28,77 @@ def chapters_of(specs: Sequence[ShotSpec]) -> tuple[list[tuple[str, float]], lis
             chapters.append((name, s.duration))
         where.append(len(chapters) - 1)
     return chapters, where
+
+
+def _spec_rows(spec: ShotSpec) -> list[tuple[str, str]]:
+    """这一拍带的参数行(都在分镜阶段核对过事实):面板 / 概念动画 / 参数卡的行,或大数字那一个。"""
+    ov = spec.overlay or {}
+    if ov.get("kind") == "stat":
+        return [(str(ov.get("label") or ""), str(ov.get("value") or ""))]
+    box = ov if ov.get("kind") in ("panel", "concept") else None
+    if box is None and (spec.card or {}).get("kind") == "spec":
+        box = spec.card
+    return [(str(r.get("label") or ""), str((r.get("values") or [""])[0]))
+            for r in (box or {}).get("rows") or []]
+
+
+#: 旁白里能上清单的数值:带这些单位的才算参数(年份、个数、名次不上)
+_LEDGER_UNIT = (r"(?:毫米|厘米|千瓦时|千瓦|马力|牛·米|牛米|公里/小时|升/100公里|公里|公斤|千克|吨"
+                r"|升|秒|英寸|°|万元)")
+_LEDGER_NUM = re.compile(r"(\d+(?:\.\d+)?)" + _LEDGER_UNIT)
+#: 参数名:紧挨着数字前面、同一个分句里的词(「WLTP纯电续航」「V2L放电」也算)
+_LEDGER_LABEL = re.compile(r"([A-Za-z][A-Za-z0-9]*[一-龥]{1,8}|[一-龥]{1,10})$")
+#: 参数名两头的虚词:「它有」「最高」这类不进清单
+_LEDGER_HEAD = ("它的", "它有", "其", "它", "约", "官方", "但", "就")
+_LEDGER_TAIL = ("最大可达", "可达", "达到", "最高", "约", "达", "为", "是", "有")
+#: 「从 A 升到 B」这类变化句、只有动词的不算参数名
+_LEDGER_BAD_END = ("从", "到", "至", "比")
+_LEDGER_BAD = frozenset(("输出", "纵置", "提升", "增加", "减少", "降低", "多", "少", "快", "慢"))
+
+
+def _narration_rows(text: str) -> list[tuple[str, str]]:
+    """从旁白里抽「参数名 数值」:「车长5457毫米、宽1971毫米」→ [(车长, 5457毫米), (宽, 1971毫米)]。
+
+    旁白里的数字在写稿阶段都核对过事实(没有出处的过不了门禁 A),这里只是换个地方再摆一次。
+    数字前面认不出参数名的(「436马力、321千瓦」的第二个)不上,宁缺毋滥。"""
+    out: list[tuple[str, str]] = []
+    text = re.sub(r"0-100公里/小时", "百公里", text or "")
+    for m in _LEDGER_NUM.finditer(text):
+        before = re.split(r"[，,。；;：:、！!？?\s\-—（(]", text[:m.start()])[-1]
+        hit = _LEDGER_LABEL.search(before)
+        if not hit:
+            continue
+        label = hit.group(1)
+        for head in _LEDGER_HEAD:
+            if label.startswith(head) and len(label) > len(head):
+                label = label[len(head):]
+        for tail in _LEDGER_TAIL:
+            if label.endswith(tail) and len(label) > len(tail):
+                label = label[:-len(tail)]
+        if label in _LEDGER_BAD or label.endswith(_LEDGER_BAD_END) or not 1 <= len(label) <= 8:
+            continue
+        out.append((label, m.group(0)))
+    return out
+
+
+def ledger_rows(specs: Sequence[ShotSpec], where: Sequence[int], pos: int) -> list[tuple[str, str]]:
+    """常驻参数清单在第 `pos` 拍该显示哪些行:本章从头到这一拍讲过的参数,同名的留最新的。
+
+    参数来自这一拍的数据卡 / 大数字,和旁白里念到的带单位数值(解说向视觉包里大部分拍是纯实拍,
+    只看数据卡清单会一直是空的)。换章清空;开头章和最后一章不显示(开头有片头标和大字,
+    结论不再报参数)。"""
+    ch = where[pos]
+    if ch == 0 or ch == max(where):
+        return []
+    rows: dict[str, str] = {}
+    for n in range(pos + 1):
+        if where[n] != ch:
+            continue
+        for label, value in _spec_rows(specs[n]) + _narration_rows(specs[n].narration_zh):
+            if label and value:
+                rows.pop(label, None)
+                rows[label] = value
+    return list(rows.items())
 
 
 def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool = True) -> str:
@@ -260,7 +332,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 style: str | None = None, headline: str = "",
                 notes: list[str] | None = None,
                 ranges: dict[str, str] | None = None,
-                role: str = "body") -> tuple[Path, list[dict]]:
+                role: str = "body",
+                ledger: Sequence[tuple[str, str]] | None = None) -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
@@ -269,6 +342,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     `notes` 给了就往里记降级说明(竖屏模版没适配 → 换模版 / 退回数据卡),调用方写进项目事件。
     `ranges` 是品类的概念动画量程(`vocab.concept_ranges`),动画里表示数量的图形按它画。
     `role` 是这一拍在片子里的位置(`beat_role`),决定背景能不能用第三方视频(见 `library.fill`)。
+    `ledger` 给了(哪怕是空的)= 这个片型开了常驻参数清单(`ledger_rows`):行画在左上角,
+    参数面板不再单独画 —— 同一批行不摆两遍。
 
     竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
     放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
@@ -296,7 +371,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
                                chapters=chapters, chapter_idx=chapter_idx, used=used,
                                card_bg=card_bg, recent=recent, sting=sting, style=style,
-                               headline=headline, ranges=ranges, role=role)
+                               headline=headline, ranges=ranges, role=role, ledger=ledger)
     elif spec.layout == "card" and spec.card:
         base = cards.render(spec.card, subject, work / "card.mp4", seconds=seconds,
                             background=card_bg, size=size)
@@ -327,10 +402,14 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     # 竖屏标题区:大标题让位时只留章节进度
     bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png",
                                headline="" if clear_title else headline)
+    # 整屏数据卡 / 概念动画自己就是一屏参数,不再压清单
+    if ledger and spec.layout not in ("card", "concept"):
+        name = chapters[chapter_idx][0] if 0 <= chapter_idx < len(chapters) else ""
+        overlays.ledger(ledger, name, size, bar)
     layer: Path | None = None
     layer_input: list[str] = []
     flt = spec.layout
-    no_panel = spec.layout == "panel" and not looks.current().panel
+    no_panel = spec.layout == "panel" and (not looks.current().panel or ledger is not None)
     if spec.layout == "panel" and spec.overlay and not no_panel:
         layer = overlays.panel(spec.overlay, subject, size, work / "layer.png")
     elif spec.layout == "highlight" and spec.overlay:

@@ -59,12 +59,17 @@ def chip(variant: Mapping[str, Any] | None) -> str:
     return f"{name}·第{ep}期" if ep > 0 else name
 
 
-def script_rule(variant: Mapping[str, Any] | None, host: str = "") -> str:
-    """脚本提示词里的栏目要求;没栏目 = 空串(提示词与以前逐字一样)。"""
+def script_rule(variant: Mapping[str, Any] | None, host: str = "", outro: bool = True) -> str:
+    """脚本提示词里的栏目要求;没栏目 = 空串(提示词与以前逐字一样)。
+
+    `outro=False`:结尾写法自己问完就收(`variety.Ending.solo`),不接下期预告和关注口播。"""
     name, ep = of_variant(variant)
     if not name:
         return ""
     who = host or "我"
     nth = f"第 {ep} 期" if ep > 0 else ""
+    if not outro:
+        return (f"   - 这是栏目「{name}」{nth}。结尾按上面的写法收,"
+                "不加下期预告,也不加关注口播。")
     return (f"   - 这是栏目「{name}」{nth}。最后一句先预告具体的下期内容,"
             f"再用一句短话请观众关注{who},下期「{name}」接着聊。")

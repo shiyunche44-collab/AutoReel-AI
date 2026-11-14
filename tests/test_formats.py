@@ -11,7 +11,7 @@ from app.categories import load_profile
 from app.models import Fact, ProjectCreate, ScriptSegment, ShotSpec, SubjectEntry
 from app.pipeline import explainer, intake, script_gen
 
-NEW = ("deepdive", "qa", "pk", "debate")
+NEW = ("deepdive", "qa", "pk", "debate", "walkthrough")
 PAIR = ["小米YU7", "特斯拉Model Y"]
 
 

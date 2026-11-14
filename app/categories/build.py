@@ -102,6 +102,8 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         lenses=tuple(str(x) for x in (raw.get("lenses") or ())),
         shots_per_section=int(raw.get("shots_per_section", 0) or 0),
         sentence_keep_chars=int(raw.get("sentence_keep_chars", 0) or 0),
+        segment=str(raw.get("segment") or "").strip(),
+        ledger=bool(raw.get("ledger", False)),
     )
 
 
@@ -254,6 +256,9 @@ def _validate(profile: CategoryProfile) -> None:
         bad = [x for x in theme.lenses if x not in profile.vocab.lenses]
         if bad:
             raise ProfileError(f"品类 {profile.name} 方向 {tname}: vocab.lenses 里没有分析视角 {bad}")
+        if theme.segment and not profile.vocab.segments.get(theme.segment):
+            raise ProfileError(
+                f"品类 {profile.name} 方向 {tname}: vocab.segments 里没有细分 {theme.segment!r} 的名单")
         if theme.roundup:
             lo, hi = theme.subject_count
             if not 1 <= lo <= hi:
