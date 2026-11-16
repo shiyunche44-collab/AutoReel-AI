@@ -76,6 +76,14 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 - 要长期运行就用 `serve.ps1`：它会起一个独立进程，日志写到 `data/logs/server-*.log`。直接运行 `python run.py` 的话，进程会被托管任务的 1 小时上限一起收走。
 - `serve.ps1` 会先**杀掉已经占用该端口的进程**，启动前先确认端口上没有正在渲染的服务。
+- **日常的 8848 交给看门狗。** `scripts\install_autostart.ps1` 注册计划任务 `AutoReel-AI-Server`,登录时和之后每 5 分钟跑一次 `ensure_server.ps1`:没有服务就拉起,连续约 90 秒不应答就杀掉重启,应答的服务不碰。日志在 `data/logs/watchdog.log`。
+- **要重启(比如让新代码生效)用 `restart_server.ps1`:**
+
+  ```bash
+  powershell -ExecutionPolicy Bypass -File scripts\restart_server.ps1 -Reason "加载新提交"
+  ```
+
+  服务忙时它不重启,退出码 1。忙指三种情况:调度器手里有项目(渲染 / 合成 / 备料)、有发布正在上传、有团队角色在跑。加 `-WaitMinutes 30` 会等它空下来再重启,`-DryRun` 只说要做什么。服务不应答时它也拒绝,退出码 2:卡死归看门狗处理,确实要强制就加 `-Force`。每次重启和拒绝都会带上 `-Reason` 写进 `watchdog.log`,事后能分清是人为重启还是服务挂了。单独看忙不忙用 `python -I scripts\server_busy.py`。
 - **只能跑一个服务。** 两个服务连同一个库时，两边的调度器会同时推进同一个项目，结果是重复渲染、成片损坏。开发调试用 `.claude/launch.json` 里的 `AutoReel-AI-dev`（端口 8849），并且要另配 `DATA_DIR`。
 - 给 AI 助手和协作者的避坑规则（服务器与调度器、测试隔离、Git 习惯、平台抓取限制）集中在 [CLAUDE.md](CLAUDE.md)。
 
