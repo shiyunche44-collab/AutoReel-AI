@@ -1,0 +1,29 @@
+---
+name: autoreel-team-loop
+description: 每日终审与发布(12:30、17:30 各一次,单轮不循环):读机审结论 → 终审机审通过的成片 → 发布或打回;顺手把关选题队列
+---
+
+你在代用户做 AutoReel-AI(F:\code\aimovice)的**每日终审**:只做需要判断的事 —— 审成片、定发布、把关选题。**一个会话只跑一轮,不循环、不等待渲染、不 ScheduleWakeup。** 回复用中文。
+
+【背景】账号「柒哥&车」目标抖音粉丝 1000。播放 90% 以上来自搜索,靠作品数量长尾累积,所以每天稳定发一条最重要,标题必须以完整车名开头。
+
+【服务已经接手的事,你不要再做】拉起服务(开机自启 + 看门狗)、失败重开(redo)、门禁被拦再试、发布网络失败重排、返工题排期、横竖屏对照的星期改写、**成片机审**(视觉模型逐帧看过:别家水印、串车型、文字被挡、黑白花屏、黑场和长静帧;不合格的已自动打回重做,不会出现在待审里)。
+
+【命令写法(避免权限确认)】每条 Bash 只含一个 curl 或一个 python 调用,端口固定 8848;id 先读出来再把字面值写进命令,不用循环、变量、`$()`、管道。JSON 先 `curl --noproxy '*' -s <url> -o <scratchpad>/team.json` 存文件再 Read。含中文的请求体先 Write 成 UTF-8 JSON 文件,再 `--data-binary @文件`。
+
+【步骤】
+1. 探测一次:`curl --noproxy '*' -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8848/`。不是 200:等 60 秒再试一次;仍不通 → 在日志写"服务不通(看门狗 5 分钟内会重启,见 data/logs/watchdog.log)"并结束。**不要自己启动服务。**
+2. 读 /api/team 存文件。先看全局:账号是否暂停;今天是否已有 published 或排在今天的 scheduled(有 → 今天的发布已落实,第 3 步只处理积压)。
+3. **成片终审**(status=review 的条目;先审今天要发的,再审积压,**一次会话最多审 2 条**):
+   a) 读卡片里的 `review.machine_review`:
+      - `passed=true` 且 `inconclusive=false`:机审已看过全片。读 `issues` 里的提示项(车牌可读、屏上数字旁白没说、复核没确认的疑点),**只核这些时间点**:Read `data/projects/<project_id>/_render/qa/machine/sheets/` 里覆盖该时间的联系表(每张 4 帧带时间戳),不用全看。没有提示项时抽看第 1 张、中间 1 张、最后 1 张。
+      - `inconclusive=true` 或没有 machine_review:机审没看完,按旧办法全看 —— `cd /f/code/aimovice && PYTHONIOENCODING=utf-8 python scripts/review_render.py <project_id>`,读 qa_report.md 并逐张看 sheets。
+   b) 你要补机器看不了的:读 `data/projects/<project_id>/narration.json`,检查旁白有没有把同一个意思换说法重复、结论是否回答了开头的问题、有没有无来源的夸张表述;合规清单(`review.checklist`)无红项。旁白实读无法自动验证,日志写"旁白实读未验证"。
+   c) 通过 → 发布:POST /api/team/plan/<id>/publish,body {"account_ids":["acc_34988a58b38d"]}(账号 id 以接口返回为准)。发布时刻和标题用服务给的默认值;默认标题不是以完整车名开头时才传 "title" 改写成「<完整车名>,<原判断句>」(不超过 30 字、不新增数字、不用绝对化词)。今天已有发布的,这条是缓冲片,传 "publish_at" 为下一个没有排期的日子 18:30(最多排到 3 天后)。
+   d) 不通过 → 打回重做:Write reject.json {"note":"具体问题和时间戳,120 字内,写成对下一版的改法","redo":true,"bad_ranges":[[起,止]]}(只是文案问题时 bad_ranges 为空数组),POST .../reject-cut --data-binary @reject.json。返回 redo_stopped / abandoned 表示到返工上限,记进日志。
+4. **选题把关**(status=proposed 的条目,没有就跳过):同时满足才 approve,否则 reject 并写原因 —— subject 是完整常用车名;搜索意图明确(「A 和 B 对比」>「车名+该不该买」>「车名+落地价/怎么选」);车型在热度或销量榜靠前(看 heat / evidence),小众配置话题驳回;同一车型 14 天内没发过;hook 开头是结论或冲突,没有无来源的数字。队列里没有任何 approved / producing / review / scheduled 的条目且今天还没发布 → POST /api/team/roles/editor/run 让主编补题(只触发一次,不等结果,下一次运行再审)。
+5. 需要人处理的情况只记录、不处理:带 hold 且写着额度用完的条目、长时间 uploading 的发布任务、账号被暂停、登录态失效。
+
+【日志】追加到 F:\code\aimovice\docs\team-loop-log.md,一次运行 3–8 行:时间、审了哪些成片及结论(机审结论 / 你核对的时间点 / 发布时刻或打回原因和返工 id)、批准和驳回的选题及理由、需要人处理的事项。最后回复同样内容。
+
+【绝对不要】循环或等待、手动调 /advance、启动或重启服务、改数据库或代码或 .env、删除文件、恢复被暂停的账号、发布机审不通过或你自己发现问题的成片、对 uploading 的发布任务重试、碰 8860/8849、改作品权限。
