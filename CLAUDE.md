@@ -71,5 +71,5 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 外部服务依赖
 
-- TTS / 看图 / 搜索 / 专业数据集走火山方舟 Agent Plan 专属 Key(`app/providers/ark_*.py`);文字工作走 DeepSeek。代码里已无 `MINIMAX_PLAN_KEY` 引用,别再按 MiniMax 通道写新功能。
+- TTS / 看图 / 搜索 / 专业数据集走火山方舟 Agent Plan 专属 Key(`app/providers/ark_*.py`)。文字工作仍用 `DeepSeekProvider`,但 2026-11-16 起默认经方舟调 `deepseek-v4.1-flash`(`config.text_llm()`,`TEXT_LLM=deepseek` 退回官方接口)。代码里已无 `MINIMAX_PLAN_KEY` 引用,别再按 MiniMax 通道写新功能。
 - MiniMax Music 曾对新用户返回 410;BGM 来自 `data/bgm/` 与 Mixkit 自动采集(`bgm_source.py`)。

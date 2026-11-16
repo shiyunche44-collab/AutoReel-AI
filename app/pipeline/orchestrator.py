@@ -29,7 +29,8 @@ log = logging.getLogger(__name__)
 
 #: 需要 LLM 的阶段在缺 Key 时的提示
 LLM_REQUIRED_HINT = (
-    "未配置 DEEPSEEK_API_KEY。请复制 .env.example 为 .env 并填入 Key 后重启服务。"
+    "未配置文字模型的 Key(TEXT_LLM=ark 用 ARK_API_KEY,=deepseek 用 DEEPSEEK_API_KEY)。"
+    "请在 .env 填入后重启服务。"
 )
 
 class PipelineError(RuntimeError):

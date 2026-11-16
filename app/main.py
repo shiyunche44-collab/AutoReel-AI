@@ -96,6 +96,8 @@ async def lifespan(app: FastAPI):
             "llm": {
                 "deepseek": deepseek.available(),
                 "active": "deepseek" if deepseek.available() else None,
+                "channel": config.text_llm(),
+                "model": deepseek.model,
             },
             "plan_expires_on": config.PLAN_EXPIRES_ON,
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),

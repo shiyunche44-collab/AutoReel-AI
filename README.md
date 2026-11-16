@@ -44,10 +44,11 @@
 copy .env.example .env
 ```
 
-至少填 `DEEPSEEK_API_KEY` 和 `ARK_API_KEY`，其余都有默认值。常改的几项：
+至少填 `ARK_API_KEY`，其余都有默认值。文字工作默认也走方舟（`TEXT_LLM=ark`，模型 `deepseek-v4.1-flash`）；想用 DeepSeek 官方接口就设 `TEXT_LLM=deepseek` 并填 `DEEPSEEK_API_KEY`。常改的几项：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `TEXT_LLM` / `ARK_TEXT_MODEL` | `ark` / `deepseek-v4.1-flash` | 文字通道与方舟上的文字模型 |
 | `DEFAULT_CATEGORY` | `auto_long` | 默认品类 |
 | `TEAM_ENABLED` | `1` | AI 团队总开关。开着时，服务一启动就会按节奏真实调用 LLM、抓数据 |
 | `TEAM_AUTO_GATES` | `1` | 团队出的片零 blocker 时自动过门禁 A/B |

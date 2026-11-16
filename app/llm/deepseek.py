@@ -31,8 +31,9 @@ class DeepSeekProvider:
 
     def _ensure(self) -> None:
         if not self.api_key:
+            key = "ARK_API_KEY" if config.text_llm() == "ark" else "DEEPSEEK_API_KEY"
             raise LLMNotConfigured(
-                "未配置 DEEPSEEK_API_KEY。请复制 .env.example 为 .env 并填入 Key。"
+                f"未配置 {key}(文字通道 TEXT_LLM={config.text_llm()})。请在 .env 填入 Key。"
             )
 
     def chat(

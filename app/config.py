@@ -337,7 +337,7 @@ ARK_BASE_URL = os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/
 ARK_TTS_VOICE = os.getenv("ARK_TTS_VOICE", "zh_male_dayi_uranus_bigtts").strip()
 #: 看图用的模型
 ARK_VLM_MODEL = os.getenv("ARK_VLM_MODEL", "doubao-seed-2.1-pro").strip()
-#: 写脚本用哪家:deepseek(默认)| ark(豆包 Seed)。只影响脚本阶段,事实抽取等仍走 DeepSeek
+#: 写脚本用哪家:deepseek(默认,即 TEXT_LLM 选的文字通道)| ark(豆包 Seed)。只影响脚本阶段
 SCRIPT_LLM = os.getenv("SCRIPT_LLM", "deepseek").strip().lower()
 ARK_SCRIPT_MODEL = os.getenv("ARK_SCRIPT_MODEL", "doubao-seed-2.1-pro").strip()
 #: Seed 写脚本时的思考开关:enabled | disabled | 空(模型默认,会想几分钟)
@@ -393,15 +393,29 @@ OUTRO_TEXT = os.getenv("OUTRO_TEXT", "关注我,看更多真实数据解读").st
 CONNECTOR_TIMEOUT_DEFAULT = 180
 
 
+#: 文字工作(事实抽取、写稿、选题、团队角色……)走哪个通道:
+#:   ark(默认)= 方舟 Agent Plan 上的 DeepSeek,复用 ARK_API_KEY / ARK_BASE_URL,模型 ARK_TEXT_MODEL;
+#:   deepseek = DeepSeek 官方接口,用 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL。
+#: 2026-11-16 起默认走方舟;想退回官方接口设 TEXT_LLM=deepseek。
+def text_llm() -> str:
+    return os.getenv("TEXT_LLM", "ark").strip().lower() or "ark"
+
+
 def deepseek_api_key() -> str:
+    if text_llm() == "ark":
+        return os.getenv("ARK_API_KEY", "").strip()
     return os.getenv("DEEPSEEK_API_KEY", "").strip()
 
 
 def deepseek_base_url() -> str:
+    if text_llm() == "ark":
+        return os.getenv("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3").rstrip("/")
     return os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
 
 
 def deepseek_model() -> str:
+    if text_llm() == "ark":
+        return os.getenv("ARK_TEXT_MODEL", "deepseek-v4.1-flash").strip() or "deepseek-v4.1-flash"
     return os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 
