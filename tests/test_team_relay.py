@@ -132,7 +132,8 @@ def test_slot_aspect_follows_weekday_until_end(monkeypatch):
     mon = dt.datetime(2026, 11, 16, 18, 30).timestamp()
     tue = dt.datetime(2026, 11, 17, 18, 30).timestamp()
     late = dt.datetime(2026, 11, 30, 18, 30).timestamp()  # 周一,但对照已结束
-    assert editor.slot_aspect(mon) is None  # 默认不做对照
+    monkeypatch.setattr(config, "TEAM_LANDSCAPE_WEEKDAYS", ())  # 不读本机 .env 的对照设置
+    assert editor.slot_aspect(mon) is None  #默认不做对照
     monkeypatch.setattr(config, "TEAM_LANDSCAPE_WEEKDAYS", (0, 2, 4))
     monkeypatch.setattr(config, "TEAM_LANDSCAPE_UNTIL", "2026-11-27")
     assert editor.slot_aspect(mon) == config.LANDSCAPE

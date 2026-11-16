@@ -30,12 +30,13 @@ def _pub(db, pid="pub1", *, age=3600.0, remote="w1", piece=None, comment="选低
     return proj
 
 
-def test_off_by_default(fresh_db):
+def test_off_by_default(fresh_db, monkeypatch):
     from app.team import first_comment
 
+    # 开关关着就不发。不读本机 .env 的值(用户的 .env 开着 DOUYIN_FIRST_COMMENT)
+    monkeypatch.setattr(config, "DOUYIN_FIRST_COMMENT", False)
     _pub(fresh_db)
     sent = []
-    assert config.DOUYIN_FIRST_COMMENT is False
     assert first_comment.run_once(lambda a, t: sent.append((a, t))) == "" and not sent
 
 

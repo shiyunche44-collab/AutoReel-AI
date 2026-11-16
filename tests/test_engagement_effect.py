@@ -125,6 +125,8 @@ def test_editor_boosts_and_tags_asked_cars(fresh_db, monkeypatch):
     monkeypatch.setattr(config, "TEAM_PLAN_DAYS", 1)
     monkeypatch.setattr(config, "TEAM_DAILY_SLOTS", 1)
     monkeypatch.setattr(config, "TEAM_SLOT_TIMES", ("18:30",))
+    # 关掉按星期轮换:观众问的车算「热点话题」,轮到「热门车型」的日子(如周一)会被挤掉,测试就看日子过不过
+    monkeypatch.setattr(config, "TEAM_WEEK_PLAN", ())
     _seed_trends(fresh_db)
     _pub(fresh_db)
     # 固定在当天上午:窗口只有 1 天 1 个档期(默认 18:30),用真实时间的话过了档期就排满了

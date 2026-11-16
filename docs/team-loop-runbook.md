@@ -20,20 +20,17 @@
 
 ## 触发与防重入
 
-- 每天触发 3 次:13:00 主跑,18:00、21:00 补跑(主跑因额度用完等原因启动失败时由补跑接上)。
-- 同一时间只能有一个会话在跑。心跳文件 `data/_team_logs/loop_<YYYYMMDD>.md`:
-  启动时最后一行是 40 分钟以内的「心跳」→ 立刻结束,不做任何事。
-  每轮开始、每次安排下一轮之前各追加一行「HH:MM 心跳 第N轮」;循环结束追加「HH:MM 结束:原因」。
-  两轮之间的间隔不超过 25 分钟。
+- 每天 12:30、17:30 各触发一次,**单轮不循环**:不写心跳、不等渲染、不 ScheduleWakeup。
+  一次会话最多审 2 条成片。
 
 ## 安全边界(硬规则)
 
 - 只调用 `http://127.0.0.1:8848` 上的 `/api/team/*` 和 `/api/publish/{id}/retry`。
-  先探测 `curl --noproxy '*' -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8848/`。不是 200 就**拉起服务**:
-  `powershell -NoProfile -ExecutionPolicy Bypass -File F:\code\aimovice\scripts\ensure_server.ps1`
-  (没有服务时启动;端口在听但连续约 90 秒不应答的 run.py 判为卡死,由它自己杀掉重启,
-  会话本身仍不杀进程),等约 30 秒再探测,最多 3 轮;仍不通才写"服务起不来"并结束。
-  不运行 `scripts/serve.ps1`、不手动 `python run.py`、不杀端口、不换端口。
+  先探测 `curl --noproxy '*' -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8848/`。不是 200 等 60 秒再试一次,
+  仍不通就在日志写"服务不通(看门狗 5 分钟内会重启,见 data/logs/watchdog.log)"并结束。
+  **不自己启动服务**:看门狗(计划任务 `AutoReel-AI-Server`,`scripts/install_autostart.ps1` 注册,
+  登录时 + 每 5 分钟跑 `ensure_server.ps1`)负责拉起和重启卡死的服务。
+  不运行 `scripts/serve.ps1` / `ensure_server.ps1`、不手动 `python run.py`、不杀端口、不换端口。
 - 不调 `/advance`(与调度器抢写会损坏 mp4)、不改 `.env`、不删数据、不碰 `accounts/{id}/resume`
   (限流暂停的账号留给人)、不改作品权限(公开 / 私密)。
 - 不确定的事不替人决定:写进日志"需要人",不要硬批。
