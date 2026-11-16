@@ -20,16 +20,20 @@ if ($Remove) {
     exit 0
 }
 
-$script = Join-Path $PSScriptRoot 'ensure_server.ps1'
+# Launch through wscript + a VBS wrapper: powershell.exe flashes a console
+# window on every run even with -WindowStyle Hidden.
+$script = Join-Path $PSScriptRoot 'ensure_server_hidden.vbs'
 $root = Split-Path -Parent $PSScriptRoot
-$arg = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -Port $Port"
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg -WorkingDirectory $root
+$arg = "//B //Nologo `"$script`" $Port"
+$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arg -WorkingDirectory $root
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
-# Repeat indefinitely after logon.
-$rep = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+# Two triggers: at logon, plus a time trigger that starts now and repeats
+# forever. The repetition used to hang off the logon trigger only, so the task
+# never ran until the next logon (2026-11-15 8848 stayed down a whole day).
+$logon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$every = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes $EveryMinutes)
-$trigger.Repetition = $rep.Repetition
+$trigger = @($logon, $every)
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew `
