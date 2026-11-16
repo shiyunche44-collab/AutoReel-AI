@@ -192,9 +192,9 @@ class _LLM:
 
 GOOD = {
     "titles": [
-        {"kind": "stake", "text": "23.35万YU7,买屏还是买电?"},
-        {"kind": "number", "text": "YU7补能15分钟,够用吗"},
-        {"kind": "person", "text": "天天跑高速,YU7选哪版"},
+        {"kind": "stake", "text": "小米YU7,23.35万买屏还是买电?"},
+        {"kind": "number", "text": "小米YU7补能15分钟,够用吗"},
+        {"kind": "person", "text": "小米YU7天天跑高速选哪版"},
     ],
     "comment": {"text": "你选标准版还是GT?评论区投一票", "options": ["标准版", "GT"]},
     "replies": ["补能15分钟是官方口径", "价格以官方当期为准", "有出入欢迎指出"],
@@ -215,7 +215,8 @@ def _project(fresh_db):
          "confidence": "high", "enabled": False},
         {"id": "f_4", "claim": "零百 1.2 秒", "scope": "product", "confidence": "low"},
     ])
-    fresh_db.write_json(pid, "script.json", [{"text": "这车第一眼就是大"}])
+    fresh_db.write_json(pid, "script.json", [{"text": "这车第一眼就是大"},
+                                             {"text": "23.35万起,15分钟补能"}])
     return pid
 
 
@@ -304,5 +305,55 @@ def test_title_rejects_model_absent_from_script():
     known = "哈弗长城H10 H10五座六座 续航15公里 第2期"
     bad = pk.check_title("H10和钛7怎么选", {"5", "6", "15"}, name="哈弗长城H10", known=known)
     assert any("钛7" in p for p in bad)
-    assert not pk.check_title("天天通勤带家人,H10选五座还是六座", {"5", "6", "15"}, name="哈弗长城H10", known=known)
+    assert not pk.check_title("H10选五座还是六座,天天通勤带家人", {"5", "6", "15"}, name="哈弗长城H10", known=known)
     assert not pk.check_title("H10续航15公里够不够", {"5", "6", "15"}, name="哈弗长城H10", known=known)
+
+
+def test_single_car_title_must_lead_with_name():
+    probs = pk.check_title("天天通勤带家人,H10选五座还是六座", ALLOWED, name="哈弗长城H10")
+    assert any("开头" in p for p in probs)
+    assert not pk.check_title("哈弗长城H10选五座还是六座", {"5", "6"}, name="哈弗长城H10")
+    assert not pk.check_title("小鹏 MONA L03 值不值", ALLOWED, name="小鹏MONA L03")
+
+
+def test_lead_full_name_expands_short_name():
+    assert pk.lead_full_name("荣放等新款还是抄底现款", "丰田RAV4荣放") == "丰田RAV4荣放等新款还是抄底现款"
+    assert pk.lead_full_name("L03,先看你是哪类人", "小鹏MONA L03") == "小鹏MONA L03,先看你是哪类人"
+    assert pk.lead_full_name("丰田RAV4荣放值不值", "丰田RAV4荣放") == "丰田RAV4荣放值不值"
+    assert pk.lead_full_name("买荣放别盯新款", "丰田RAV4荣放") == "买荣放别盯新款"  # 不是简称开头不动
+    long = "荣放" + "很" * 27
+    assert pk.lead_full_name(long, "丰田RAV4荣放") == long  # 换了超长就不换
+
+
+def test_build_titles_upgrades_short_name_and_drops_unled():
+    raw = [{"kind": "stake", "text": "荣放等新款还是抄底现款"},
+           {"kind": "person", "text": "预算有限,荣放选哪版"}]
+    titles, _ = pk.build_titles(raw, "丰田RAV4荣放", allowed=ALLOWED, name="丰田RAV4荣放")
+    assert titles[0].text == "丰田RAV4荣放等新款还是抄底现款"
+    for t in titles:
+        assert pk.leads_with_subject(t.text, "丰田RAV4荣放"), t.text
+
+
+def test_fallback_titles_lead_with_name():
+    for kind in pk.KINDS:
+        text = pk.fallback_title(kind, "小米YU7", thesis="买的是电池不是屏幕", allowed=ALLOWED,
+                                 name="小米YU7")
+        assert text.startswith("小米YU7"), (kind, text)
+
+
+def test_roundup_title_cannot_borrow_another_cars_number():
+    script = [{"subject": "", "text": "10万级新能源汽车"},
+              {"subject": "比亚迪元UP", "text": "CLTC续航301、401、501公里"},
+              {"subject": "比亚迪海豚", "text": "520版冬天能跑约350到380公里"}]
+    owners = pk.figure_owners(script)
+    allowed = {"10", "301", "401", "501", "520", "350", "380"}
+    bad = pk.check_title("比亚迪元UP 501公里版,冬季实测约350公里", allowed, owners=owners)
+    assert any("350" in p and "比亚迪海豚" in p for p in bad)
+    assert not pk.check_title("比亚迪元UP和海豚对比,501还是520", allowed, owners=owners)
+    assert not pk.check_title("10万级纯电,续航350够不够", allowed, owners=owners)  # 没点名车不查
+
+
+def test_title_figures_must_be_spoken():
+    probs = pk.check_title("小米YU7补能15分钟", ALLOWED, spoken={"2335"})
+    assert any("片里没说" in p for p in probs)
+    assert not pk.check_title("小米YU7补能15分钟", ALLOWED, spoken={"15"})

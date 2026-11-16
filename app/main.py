@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import mimetypes
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -103,6 +104,9 @@ async def lifespan(app: FastAPI):
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
+    # 磁盘水位先在后台算好,第一次 /api/health 不用现等遍历 data/
+    threading.Thread(target=maintenance.data_size_cached, name="data-size-warm",
+                     daemon=True).start()
 
     # 一个库只让一个进程跑后台循环:抢不到锁说明别的端口上已经有服务在推进这个库,
     # 本进程只开 Web(见 app/instance_lock.py)。两个调度器推进同一个项目会写坏成片。
@@ -294,7 +298,7 @@ def health():
         "running": sorted(scheduler._running),
     }
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
-    size = maintenance.data_size()
+    size = maintenance.data_size_cached()
     out["disk"] = {
         "data_bytes": size,
         "data_human": maintenance.human(size),

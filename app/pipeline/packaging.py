@@ -149,6 +149,56 @@ def mentions_subject(text: str, subject: str) -> bool:
     return not names or any(n in t for n in names)
 
 
+def _lead_name(text: str, subject: str) -> str:
+    """标题开头用的那种叫法(小写、去空白,取最长的);不是以车型名开头返回空串。"""
+    t = re.sub(r"\s+", "", text or "").lower()
+    return max((n for n in subject_names(subject) if t.startswith(n)), key=len, default="")
+
+
+def leads_with_subject(text: str, subject: str) -> bool:
+    """标题以车型名(某种叫法)开头。搜索流量靠车型名,越靠前越容易被搜到。"""
+    return not subject_names(subject) or bool(_lead_name(text, subject))
+
+
+def lead_full_name(text: str, subject: str) -> str:
+    """开头是简称(「荣放」「H10」)就换成完整车名(「丰田RAV4荣放」);换完超长或不是简称开头就原样返回。"""
+    text = str(text or "").strip()
+    full = (subject or "").strip()
+    lead = _lead_name(text, full)
+    if not lead or lead == re.sub(r"\s+", "", full).lower():
+        return text
+    # 把开头那段简称(按去空白后的字数)在原文里定位出来
+    taken, cut = 0, 0
+    while cut < len(text) and taken < len(lead):
+        if not text[cut].isspace():
+            taken += 1
+        cut += 1
+    rest = text[cut:]
+    out = full + rest
+    return out if spoken_len(out) <= TITLE_MAX_CHARS else text
+
+
+def misattributed(text: str, owners: Mapping[str, set[str]] | None) -> list[str]:
+    """横评标题点了某几台车、却用了只属于另一台车的数字(「元UP 冬季实测约350公里」,350 是海豚的)。
+
+    `owners`:车型名 → 这台车的事实 / 旁白里的数字;键 "" 是不属于哪台车的共用数字。
+    标题没点名任何一台车时不查(按价位段 / 人群写的标题)。"""
+    if not owners:
+        return []
+    named = [s for s in owners if s and mentions_subject(text, s)]
+    if not named:
+        return []
+    ok = set(owners.get("", set()))
+    for s in named:
+        ok |= owners[s]
+    out: list[str] = []
+    for fig in sorted(figures_in(text) - ok):
+        others = [s for s in owners if s and s not in named and fig in owners[s]]
+        if others:
+            out.append(f"{fig}(是{'、'.join(others)}的)")
+    return out
+
+
 #: 疑似车型名的词:字母+数字(YU7 / H10)或 汉字+数字(钛7;取最后一个汉字,够用即可)。
 _UNIT_AFTER = "公万元年月日期号个人座辆台米秒分时天度%千克升排项条次倍成岁档款代"
 _MODEL_TOKEN = re.compile(rf"[A-Za-z]+\d+[A-Za-z0-9]*|[{_CJK}]\d+[A-Za-z]?(?![\d.{_UNIT_AFTER}])")
@@ -169,10 +219,15 @@ def unknown_models(text: str, known: str) -> list[str]:
 
 
 def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
-                avoid: Sequence[str] = TITLE_AVOID, name: str = "", known: str = "") -> list[str]:
+                avoid: Sequence[str] = TITLE_AVOID, name: str = "", known: str = "",
+                owners: Mapping[str, set[str]] | None = None,
+                spoken: set[str] | None = None) -> list[str]:
     """标题的问题清单,空 = 合格。
 
-    `name` = 单车片的车型名:给了就要求标题带上它的某种叫法(搜索流量靠车型名);横评不传。"""
+    `name` = 单车片的车型名:给了就要求标题以它的某种叫法开头(搜索流量靠车型名);横评不传。
+    `owners` = 横评每台车自己的数字(见 `misattributed`);单车片不传。
+    `spoken` = 旁白里说过的数字(加入门价):给了就要求标题的数字片里真说过 ——
+    事实层里有、片里没讲的数字放进标题,观众点进来找不到(2026-11 元UP「冬季约350公里」)。"""
     text = str(text or "").strip()
     if not text:
         return ["空标题"]
@@ -191,8 +246,17 @@ def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
     loose = sorted(figures_in(text) - allowed)
     if loose:
         problems.append("数字在事实层里找不到:" + "、".join(loose))
+    unsaid = sorted(figures_in(text) - set(spoken)) if spoken is not None else []
+    unsaid = [f for f in unsaid if f not in loose]
+    if unsaid:
+        problems.append("数字片里没说:" + "、".join(unsaid))
     if name and not mentions_subject(text, name):
         problems.append(f"没带车型名「{name}」")
+    elif name and not leads_with_subject(text, name):
+        problems.append(f"没以车型名「{name}」开头")
+    wrong = misattributed(text, owners)
+    if wrong:
+        problems.append("数字安错了车:" + "、".join(wrong))
     if name and known:
         stray = unknown_models(text, known)
         if stray:
@@ -268,12 +332,13 @@ def fallback_title(kind: str, subject: str, *, thesis: str = "", price: str = ""
     pool = set(allowed or ())
     pool |= figures_in(price)
     if kind == KIND_STAKE:
-        cands = [thesis, f"{subject},到底该不该买?", f"{subject}买不买?", "这台车到底买不买?"]
+        cands = [thesis, *([f"{subject}:{thesis}"] if thesis else []),
+                 f"{subject},到底该不该买?", f"{subject}买不买?", "这台车到底买不买?"]
     elif kind == KIND_NUMBER:
         cands = ([f"{subject}{price},这价位怎么选", f"{subject}{price},值吗?", f"{price},怎么选"]
                  if price else []) + [f"{subject}这几个数字要看懂", f"{subject}的关键数字"]
     else:
-        cands = [f"想买{subject}?先看你是哪类人", f"{subject}适合谁?", "这台车适合谁?"]
+        cands = [f"{subject},想买先看你是哪类人", f"{subject}适合谁?", "这台车适合谁?"]
     found = _first_valid(cands, pool, terms, avoid, name=name)
     if found:
         return found
@@ -304,10 +369,12 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
                  thesis: str = "", price: str = "",
                  avoid: Sequence[str] = TITLE_AVOID,
                  order: Sequence[str] = KINDS, name: str = "",
-                 known: str = "") -> tuple[list[TitleOption], bool]:
+                 known: str = "", owners: Mapping[str, set[str]] | None = None,
+                 spoken: set[str] | None = None) -> tuple[list[TitleOption], bool]:
     """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。
 
-    `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。"""
+    `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。
+    单车片开头是简称的,换成完整车名(放得下的话)。"""
     terms = tuple(terms)
     chosen: dict[str, TitleOption] = {}
     for item in raw if isinstance(raw, list) else []:
@@ -316,7 +383,10 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         text = str(d.get("text") or "").strip()
         if kind not in KINDS or kind in chosen:
             continue
-        if check_title(text, allowed, terms, avoid, name=name, known=known):
+        if name:
+            text = lead_full_name(text, name)
+        if check_title(text, allowed, terms, avoid, name=name, known=known, owners=owners,
+                       spoken=spoken):
             continue
         chosen[kind] = TitleOption(text=text, kind=kind, note=str(d.get("note") or "").strip()[:40])
     used_llm = bool(chosen)
@@ -363,13 +433,15 @@ def build_replies(raw: Any, *, allowed: set[str], terms: Iterable[str] = ()) -> 
 def assemble(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] = (),
              thesis: str = "", price: str = "", now: float = 0.0,
              avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS,
-             name: str = "", known: str = "") -> Packaging:
+             name: str = "", known: str = "",
+             owners: Mapping[str, set[str]] | None = None,
+             spoken: set[str] | None = None) -> Packaging:
     """LLM 原始输出 → 合规的 Packaging。`raw` 可以是 None 或残缺的字典,都能出结果。"""
     d = _as_dict(raw)
     terms = tuple(terms)
     titles, t_llm = build_titles(d.get("titles"), subject, allowed=allowed, terms=terms,
                                  thesis=thesis, price=price, avoid=avoid, order=order,
-                                 name=name, known=known)
+                                 name=name, known=known, owners=owners, spoken=spoken)
     comment, c_llm = build_comment(d.get("comment"), subject, allowed=allowed, terms=terms)
     replies = build_replies(d.get("replies"), allowed=allowed, terms=terms)
     return Packaging(titles=titles, comment=comment, replies=replies,
@@ -397,7 +469,8 @@ SYSTEM = """你是中文{domain}短视频账号的运营,负责给一条已经�
 - 每条都**以车型名开头**(完整车名,如「比亚迪海鸥」「小米YU7」;对比片写「A和B对比」):
   账号的播放九成来自搜索,观众搜的就是车名,车名越靠前、越完整越容易被搜到。
   车名后面接搜索时会带的词:「该不该买」「落地价」「怎么选」「值不值」。
-  横评可以写价位段或人群代替车名。
+  不以车型名开头的单车片标题会被直接丢弃。横评可以写价位段或人群代替车名;
+  横评标题点了哪台车,数字就只能用那台车自己的(别把 A 车的续航安到 B 车头上)。
 - 标题里出现的每一个数字必须逐字来自下面的事实或入门价,不许四舍五入、不许换算、不许编。
 - 标题只能是主论点的另一种说法,不许引入片里没有的新判断。
 - 不许用这些词:{forbidden}。不许写成一串关键词堆出来的标题,也不许出现这些词:{avoid}。
@@ -434,6 +507,20 @@ def _enabled_facts(facts: Iterable[Any]) -> list[Any]:
             and _fact_value(f, "confidence", "") != "low"]
 
 
+def figure_owners(script: Iterable[Any], extra: Iterable[str] = ()) -> dict[str, set[str]]:
+    """横评:车型名 → 旁白讲这台车时说的数字;"" → 不属于哪台车的(开场、结论、入门价)。
+
+    只看旁白不看事实:标题要对得上片里怎么说。事实层里元UP 也有「冬季约350」,
+    但片里 350 是在讲海豚时说的,标题写「元UP 冬季约350」观众就会对不上。"""
+    out: dict[str, set[str]] = {"": set()}
+    items = [(s.get("subject"), s.get("text")) for s in script or [] if isinstance(s, Mapping)]
+    items += [("", e) for e in extra]
+    for subj, text in items:
+        key = str(subj or "").strip()
+        out.setdefault(key, set()).update(grounding.numbers_in(str(text or "")))
+    return out
+
+
 def build_inputs(project_id: str, profile: Any) -> dict[str, Any]:
     """从项目已有产物取出生成包装需要的全部输入。"""
     from .. import db
@@ -455,6 +542,7 @@ def build_inputs(project_id: str, profile: Any) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         ending = ""
     terms = tuple(dict.fromkeys((*profile.forbidden_terms, *AD_ABSOLUTE_TERMS)))
+    roundup = bool(db.project_subjects(project))
     fact_lines = []
     for f in facts:
         basis = str(_fact_value(f, "basis", "") or "")
@@ -463,7 +551,9 @@ def build_inputs(project_id: str, profile: Any) -> dict[str, Any]:
     return {
         "subject": str(project.get("subject") or ""),
         # 单车片标题必须带车型名;横评(subjects 非空)的 subject 是话题,不查
-        "name": "" if db.project_subjects(project) else str(project.get("subject") or ""),
+        "name": "" if roundup else str(project.get("subject") or ""),
+        "owners": figure_owners(script, [price]) if roundup else None,
+        "spoken": allowed_figures((), texts, [price]),
         "thesis": str(project.get("thesis") or "").strip(),
         "price": price,
         "title": str(project.get("title") or ""),
@@ -564,7 +654,7 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
     return assemble(raw, inp["subject"], allowed=inp["allowed"], terms=inp["terms"],
                     thesis=inp["thesis"], price=inp["price"], avoid=inp["avoid"],
                     now=time.time() if now is None else now, order=title_order(project_id),
-                    name=inp["name"],
+                    name=inp["name"], owners=inp.get("owners"), spoken=inp.get("spoken"),
                     known=" ".join([inp["subject"], *inp["script_texts"], *inp["fact_lines"]]))
 
 

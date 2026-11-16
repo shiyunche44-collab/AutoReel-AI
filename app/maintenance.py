@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -125,8 +126,40 @@ def report() -> dict[str, Any]:
 
 
 def data_size() -> int:
-    """data/ 的总字节数(健康检查用)。"""
+    """data/ 的总字节数。要遍历整个 data/(17 GB+、几十万个文件),健康检查请用 `data_size_cached`。"""
     return dir_size(config.DATA_DIR)
+
+
+#: 磁盘水位缓存:(算完的时刻, 字节数)。渲染时遍历 data/ 要十几秒,
+#: 健康检查每次现算会让 /api/health 慢到探测超时(2026-11-16 实测 18 秒)
+DATA_SIZE_MAX_AGE = 600.0
+_size_cache: tuple[float, int] | None = None
+_size_lock = threading.Lock()
+_size_refreshing = False
+
+
+def _refresh_size() -> None:
+    global _size_cache, _size_refreshing
+    try:
+        _size_cache = (time.time(), data_size())
+    finally:
+        _size_refreshing = False
+
+
+def data_size_cached(max_age: float = DATA_SIZE_MAX_AGE) -> int:
+    """data/ 的总字节数,最多 `max_age` 秒前的值。过期了在后台线程重算,本次先返回旧值;
+    第一次(还没有任何值)才同步算一次。"""
+    global _size_refreshing
+    cached = _size_cache
+    if cached is None:
+        _refresh_size()
+        return _size_cache[1] if _size_cache else 0
+    if time.time() - cached[0] > max_age:
+        with _size_lock:
+            if not _size_refreshing:
+                _size_refreshing = True
+                threading.Thread(target=_refresh_size, name="data-size", daemon=True).start()
+    return cached[1]
 
 
 # --------------------------------------------------------------------------

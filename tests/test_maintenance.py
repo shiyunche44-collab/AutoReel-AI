@@ -320,3 +320,23 @@ def test_prune_finished_projects_only_done_and_old(store):
     assert not (config.PROJECTS_DIR / "p_old_done" / "drafts" / "0.mp4").exists()
     assert (config.PROJECTS_DIR / "p_new_done" / "drafts" / "0.mp4").exists()
     assert (config.PROJECTS_DIR / "p_old_failed" / "drafts" / "0.mp4").exists()
+
+
+def test_data_size_cached_serves_stale_value_without_walking(monkeypatch):
+    import time as _time
+
+    from app import maintenance
+
+    calls = []
+    monkeypatch.setattr(maintenance, "data_size", lambda: calls.append(1) or 42)
+    monkeypatch.setattr(maintenance, "_size_cache", None)
+    monkeypatch.setattr(maintenance, "_size_refreshing", False)
+    assert maintenance.data_size_cached() == 42 and len(calls) == 1
+    assert maintenance.data_size_cached() == 42 and len(calls) == 1  # 新鲜,不再遍历
+    monkeypatch.setattr(maintenance, "_size_cache", (_time.time() - 10_000, 7))
+    assert maintenance.data_size_cached() == 7  # 过期:先给旧值,后台重算
+    for _ in range(100):
+        if maintenance._size_cache[1] == 42:
+            break
+        _time.sleep(0.01)
+    assert maintenance._size_cache[1] == 42
