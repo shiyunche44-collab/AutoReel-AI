@@ -28,6 +28,14 @@
 </details>
 {% endif %}
 
+{% if health.env is defined and health.env.problems %}
+<div class="callout tone-warning">
+  <span class="row">{{ m.icon("alert-triangle") }}<strong>.env 有 {{ health.env.problems|length }} 处可能不生效的配置</strong></span>
+  <ul class="subtle small">{% for p in health.env.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  <p class="subtle small">改完 .env 要重启服务才生效。</p>
+</div>
+{% endif %}
+
 {# 这个库已有别的服务在跑后台循环:本服务只开 Web。不说清楚的话,在这里建的项目
    "不动"看上去就像卡死了。 #}
 {% if health.background is defined and not health.background.ok and health.background.mode == 'web' %}

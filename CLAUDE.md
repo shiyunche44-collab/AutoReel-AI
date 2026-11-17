@@ -27,6 +27,12 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - 项目写锁(`pipeline/locks.py`)是两层:进程内锁 + 库里的项目租约(`project_leases`,TTL 120 秒,后台续租),所以只读服务上的写接口和主服务的调度器也互斥。进程被强杀后该项目最多 2 分钟内推进不了(等租约过期),正常停机会立刻放掉。调度器的连续失败次数 / 退避窗口在 `projects.advance_failures` / `advance_retry_at`,状态一变就清零。
 - `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
 
+## 观测与分层
+
+- 模型调用账本 `llm_calls`(`app/llm/ledger.py`):文字 / 看图 / 生图每次调用一行,带调用方、项目 / 角色、token、耗时。新增模型通道要在出口调 `ledger.record`;要按项目归账就用 `ledger.tag(project_id=...)` 包住。查看:`/api/llm/usage?by=purpose|model|project_id|role|day`、`/api/llm/calls`。
+- `tests/test_layers.py` 守模块分层(下层不许 import 上层,含函数内的延迟 import)。新模块要在 `RANK` 里定层;`KNOWN` 里的旧例外只许减不许增。
+- 启动时检查 `.env` 的重复键 / 空值覆盖(`config.env_file_problems`),结果进日志、首页横幅和 `/api/health` 的 `env`。
+
 ## 测试
 
 - `tests/conftest.py` 的 autouse fixture 已把 `DATA_DIR` 指到临时目录;别用 `monkeypatch.undo()`(会连它一起撤掉,改用 `monkeypatch.context()`)。测试里调用 `orchestrator.create_project` 等会写库的函数,仍**建议用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的库(现在是 `data/AutoReel-AI.db`)。
@@ -60,7 +66,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 平台抓取与发布
 
-- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。
+- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。被风控后 `providers/cooldown.py` 记冷却(`cooldowns` 表,连续被拦翻倍,跨进程 / 重启有效),冷却期内不发请求;抖音搜索页撞验证码同理(`douyin.search`,6 小时)。新接一个会被风控的接口也用 `cooldown.check / trip`,别在内存里自己记。冷却中的在 `/api/health` 的 `cooldowns`,确认恢复后 `DELETE /api/cooldowns/<key>`。
 - 不要抓懂车帝的参数配置页(`auto/params-carIds-*`),返回空 200,疑似反爬。图库需要登录,状态在 `data/_browser/dongchedi.json`。
 - 浏览器会话共用 profile,同一 profile 在进程内有锁(`BrowserSession`);`BROWSER_PATH` 默认是 chrome-headless-shell,需要有界面登录时用 `publish/browser.headed_browser` 换真 Chrome。
 - 抖音评论回复的真实发送路径、小红书图文上传(`_publish_note`)、对标账号抓取,都**没在真实账号上完整跑过**。首次启用要盯着。
@@ -71,7 +77,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 - `python -c` 里的中文参数会乱码:写成 UTF-8 脚本文件再运行。
 - `.ps1` 文件保持纯 ASCII(PowerShell 5.1 会按 ANSI 读),说明写进 README。
-- `.env` 里重复的空行 `KEY=` 会覆盖真实值,改 `.env` 后检查是否有重复键。
+- `.env` 里重复的空行 `KEY=` 会覆盖真实值。启动自检会报出来(首页横幅),改完 `.env` 看一眼。
 - ffmpeg 不在 PATH,在 `.env` 的 `FFMPEG_BIN` 指定。
 
 ## 外部服务依赖

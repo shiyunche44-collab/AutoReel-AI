@@ -446,6 +446,16 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(at);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls(project_id);
 
+-- 外部接口的冷却登记(见 app/providers/cooldown.py):被风控 / 验证码拦了就记下
+-- "到什么时候之前别再碰",跨进程、跨重启都作数。
+CREATE TABLE IF NOT EXISTS cooldowns (
+    key        TEXT PRIMARY KEY,
+    until      REAL NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    tripped_at REAL NOT NULL,
+    trips      INTEGER NOT NULL DEFAULT 1
+);
+
 -- 跨进程"催一下调度器":Web 进程建了项目 / 点了推进,调度器在 worker 进程里,
 -- 内存队列够不着,就记一行;调度器每秒取走入队。
 CREATE TABLE IF NOT EXISTS scheduler_kicks (

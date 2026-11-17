@@ -83,9 +83,13 @@ async def lifespan(app: FastAPI):
                 "model": deepseek.model,
             },
             "plan_expires_on": config.PLAN_EXPIRES_ON,
+            # .env 的重复键 / 空值覆盖之类(只报行号和键名,不含值)
+            "env": {"problems": config.env_file_problems()},
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
+    for problem in HEALTH["env"]["problems"]:
+        log.warning(".env:%s", problem)
     # 磁盘水位先在后台算好,第一次 /api/health 不用现等遍历 data/
     threading.Thread(target=maintenance.data_size_cached, name="data-size-warm",
                      daemon=True).start()
@@ -260,6 +264,15 @@ async def _refresh_background(request: Request, call_next):
     return await call_next(request)
 
 
+@app.delete("/api/cooldowns/{key}")
+def clear_cooldown(key: str):
+    """人确认接口已恢复(比如手动过了验证码):解除冷却。"""
+    from .providers import cooldown
+
+    cooldown.clear(key)
+    return {"ok": True}
+
+
 @app.get("/api/llm/usage")
 def llm_usage(days: float = 7, by: str = "purpose"):
     """模型调用账本汇总:最近 `days` 天,按 purpose / model / kind / project_id / role / day 分组。"""
@@ -300,6 +313,13 @@ def health():
                     "attempts": j["attempts"], "error": j["error"][:200]}
                    for j in db.list_jobs(limit=50)],
     }
+    # 冷却中的外部接口(被风控 / 验证码拦了,到点前不再碰)
+    try:
+        from .providers import cooldown
+
+        out["cooldowns"] = cooldown.active()
+    except Exception:  # noqa: BLE001
+        out["cooldowns"] = []
     # 模型调用账本:最近 24 小时按类型汇总(细节见 /api/llm/usage)
     try:
         out["llm_calls_24h"] = db.llm_usage(time.time() - 86400, "kind")

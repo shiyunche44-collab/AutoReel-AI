@@ -78,10 +78,9 @@ def start(item_id: str, *, background: bool = True) -> str:
     db.add_event(project_id, "team", reason=f"AI 团队按选题单开工({item_id})")
     if background:
         # 事实→脚本→分镜归调度器的备料通道(重启后会接着推,瞬时失败会退避重试),
-        # 这里只催它马上开始;调度器没在跑时项目留在 DRAFT_INTENT,服务起来就接手
-        from ..scheduler import scheduler
-
-        scheduler.kick(project_id)
+        # 这里只催它马上开始:记进 scheduler_kicks,调度器每秒取走(同进程、跨进程都一样,
+        # 也不用反向依赖调度器)。调度器没在跑时项目留在 DRAFT_INTENT,服务起来就接手
+        db.request_kick(project_id)
     else:
         _bootstrap(project_id)
     return project_id

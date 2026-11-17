@@ -35,6 +35,9 @@ MIN_LIKES = 500
 #: 官方号 / 门店 / 营销号
 _SKIP_NAME = re.compile(r"官方|旗舰|4S|专营|经销|销售|门店|直营|集团|有限公司|汽车之家|懂车帝|车市")
 NOTE = "自动发现"
+#: 搜索页被拦(验证码中间页)后冷却多久;连着被拦会翻倍(见 providers/cooldown.py)
+SEARCH_COOLDOWN = 6 * 3600.0
+SEARCH_COOLDOWN_KEY = "douyin.search"
 
 
 def keywords(category: str, limit: int = MAX_KEYWORDS) -> list[str]:
@@ -110,6 +113,13 @@ def discover(category: str, *, search: Callable[[str], list[dict[str, Any]]] | N
     if room <= 0:
         out["error"] = f"对标账号已满 {benchmark.MAX_ACCOUNTS} 个"
         return out
+    from ..providers import cooldown
+
+    try:
+        cooldown.check(SEARCH_COOLDOWN_KEY)
+    except cooldown.Cooling as exc:
+        out["error"] = str(exc)
+        return out
     fetch = search or douyin.fetch_search_posts
     batches: list[list[dict[str, Any]]] = []
     for i, kw in enumerate(keywords(category)):
@@ -121,6 +131,9 @@ def discover(category: str, *, search: Callable[[str], list[dict[str, Any]]] | N
             if exc.credential:
                 db.set_team_setting(benchmark._LOGIN_KEY, time.time())
             out["error"] = f"搜「{kw}」:{exc}"
+            if not exc.credential:
+                # 验证码中间页 / 风控:隔一段再试,别每轮都去撞(登录失效另有提醒,不在这里冷却)
+                cooldown.trip(SEARCH_COOLDOWN_KEY, SEARCH_COOLDOWN, out["error"])
             break
         out["keywords"] += 1
     exclude = {a["id"] for a in db.list_benchmark_accounts()}
