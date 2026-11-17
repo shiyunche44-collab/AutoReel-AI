@@ -165,3 +165,15 @@ def test_punch_times_skip_hook_busy_and_respect_gap():
     assert tl.punches == [10.7, 14.2]
     back = edl.Timeline.from_props(tl.to_props())
     assert back.punches == tl.punches
+
+
+def test_short_tail_piece_is_merged_into_previous():
+    def pick(spec, seconds, text, role):
+        return [{"kind": "video", "path": "/a.mp4", "start": 0, "length": seconds - 0.1},
+                {"kind": "video", "path": "/b.mp4", "start": 0, "length": 5}]
+
+    tl = edl.build_timeline([_spec(0, 6.0, chapter="x")], [], size=(1080, 1920), fps=30,
+                            pick=pick, beat_files={})
+    body = [c for c in tl.clips if c.start >= edl.HOOK_SECONDS]
+    assert all(c.dur >= edl.MIN_PIECE for c in tl.clips)
+    assert all(c.src == "/a.mp4" for c in body)

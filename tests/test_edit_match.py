@@ -131,3 +131,7 @@ def test_theme_colors_readable_on_dark_cards():
             rgb = tuple(int(th[key][i:i + 2], 16) for i in (1, 3, 5))
             assert edit_project._luma(rgb) >= edit_project.MIN_LUMA, (lk.id, key, th[key])
         assert th["subs"] in ("box", "outline", "band")
+
+
+def test_sitting_inside_means_interior(vocab):
+    assert "interior" in match.views_for("坐进车里", vocab)

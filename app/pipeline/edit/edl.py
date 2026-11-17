@@ -24,6 +24,8 @@ from typing import Any
 #: 实拍子镜头的时长范围(秒)。竖屏信息类对标中位约 2 秒一刀
 MIN_SHOT = 1.2
 MAX_SHOT = 2.8
+#: 一刀里拼接的几段素材,每段至少这么长;更短的尾巴并进前一段
+MIN_PIECE = 0.5
 #: 钩子段:开头多少秒、每刀最长多少秒
 HOOK_SECONDS = 3.0
 HOOK_SHOT = 1.0
@@ -401,6 +403,9 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                     break
                 length = float(p.get("length") or left)
                 d = left if j == len(got) - 1 else min(left, length)
+                if left - d < MIN_PIECE:
+                    # 后面只剩一小截:并进这一段(多放零点几秒同一素材),别切出一闪而过的碎刀
+                    d = left
                 kind = str(p.get("kind") or "video")
                 if k == 0 and j == 0:
                     if not tl.clips:

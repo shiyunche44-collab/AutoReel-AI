@@ -79,6 +79,19 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
 
 ## 试点怎么验证
 
+**先试已经出过片的项目(推荐)**:不改项目状态、不覆盖原成片,只把合成换成 v2,出一份对比图。
+
+```bash
+python -I scripts/edit_v2_trial.py --list          # 已完成的竖屏项目
+python -I scripts/edit_v2_trial.py                 # 自动挑最近一条
+python -I scripts/edit_v2_trial.py p_xxx --no-rerank
+```
+
+产物在项目目录:`output_v2_trial.mp4`(新片)、`_edit/compare.jpg`(上排旧片、下排新片)、
+`edit_timeline.json`(每一刀念到的半句、取的素材、对没对上题)。
+
+**再在流水线里开**:
+
 1. 本机 `remotion/` 下 `npm ci`;`.env` 加 `EDIT_V2=1`;用 `scripts/restart_server.ps1 -Reason "开剪辑v2试点"` 重启。
 2. 找一个竖屏项目在门禁 B 通过,等 COMPOSING 自动出片;`render.json` 的 warnings 第一条是「剪辑 v2 合成」。
 3. 失败时看项目事件 `edit_v2:fallback`(已退回旧成片)。`edit_timeline.json` 里每刀的 `text` 就是它取材用的半句。
