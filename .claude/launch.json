@@ -26,6 +26,18 @@
         "8849"
       ],
       "port": 8849
+    },
+    {
+      "name": "AutoReel-AI-sandbox",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "scripts/sandbox_server.py",
+        "--port",
+        "8849",
+        "--name",
+        "mech"
+      ],
+      "port": 8849
     }
   ]
 }

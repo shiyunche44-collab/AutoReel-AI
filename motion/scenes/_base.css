@@ -128,3 +128,34 @@ html, body { background: rgb(var(--bg)); }
 .dp-it.chip i { position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background-color: rgb(var(--acc)); transform-origin: 50% 0; }
 .dp-it .co-tag { margin-top: 4px; font-size: 20px; color: rgb(var(--acc)); opacity: 0.85; }
 .dp .fn { position: absolute; right: 0; bottom: 0; top: auto; font-size: 20px; max-width: 100%; }
+
+/* ======================================================================
+   机构画面(HF.mech):画框 + 文字区。画框里是 1000x640 的 SVG 或剖视图
+   ====================================================================== */
+.mx-frame { position: absolute; overflow: hidden; border-radius: 22px;
+  border: 1.5px solid rgba(var(--ink), 0.14);
+  background: radial-gradient(ellipse 70% 60% at 50% 42%, rgba(var(--studio-light), 0.10) 0%, rgba(var(--studio-light), 0) 100%),
+              linear-gradient(180deg, var(--studio-top) 0%, var(--studio-mid) 100%); }
+.mx-frame svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.mx-frame text { font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif; font-weight: 600; }
+.mx-tag { position: absolute; right: 18px; bottom: 14px; font-size: 20px; letter-spacing: 0.1em;
+  color: rgba(var(--ink), 0.42); }
+.mx-panel { position: absolute; }
+.mx-kick { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 600; letter-spacing: 0.1em;
+  color: rgba(var(--ink), 0.66); white-space: nowrap; }
+.mx-kick i { display: block; width: 5px; height: 24px; border-radius: 3px; background-color: rgb(var(--acc)); }
+.mx-ttl { margin-top: 8px; font-size: 46px; font-weight: 800; line-height: 1.15; white-space: nowrap; }
+.mx-cols { display: flex; align-items: flex-start; gap: 36px; margin-top: 14px; }
+.mx-marks { flex: 1 1 auto; min-width: 0; }
+.mx-mark { position: relative; padding: 5px 0 5px 22px; font-size: 40px; font-weight: 700; line-height: 1.2;
+  white-space: nowrap; }
+.mx-mark i { position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 2px;
+  background-color: rgb(var(--acc)); transform-origin: 50% 0; }
+.mx-nums { flex: 0 0 auto; }
+.mx-num { margin-bottom: 10px; white-space: nowrap; }
+.mx-num .co-lab { font-size: 24px; margin-bottom: 2px; }
+.mx-num .co-tag { margin-top: 2px; font-size: 18px; color: rgb(var(--acc)); opacity: 0.85; }
+.mx-panel:not(.portrait) .mx-ttl { font-size: 60px; white-space: normal; }
+.mx-panel:not(.portrait) .mx-cols { display: block; margin-top: 30px; }
+.mx-panel:not(.portrait) .mx-mark { font-size: 50px; padding: 10px 0 10px 28px; }
+.mx-panel:not(.portrait) .mx-nums { margin-top: 30px; }

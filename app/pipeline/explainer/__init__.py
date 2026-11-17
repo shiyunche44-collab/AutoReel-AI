@@ -84,6 +84,7 @@ from .text import (  # noqa: E402,F401
     ground_note,
     ground_stat,
 )
+from . import mech  # noqa: E402,F401
 from .concepts import (  # noqa: E402,F401
     concept_guide,
     concept_min,
@@ -221,7 +222,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
             view_enum=vocab.view_enum, view_guide=vocab.view_guide,
             count=len(segments), note_chars=STAT_NOTE_CHARS,
             broll_cap=max(1, int(len(segments) * rhythm.BROLL_RATIO_MAX)),
-            concept_guide=concept_guide(vocab, len(segments)))
+            concept_guide=concept_guide(vocab, len(segments)),
+            mech_guide=mech.mech_guide(vocab, mech.enabled(profile, segments)))
         if subjects:
             system = system.replace("\n\n必需键: beats", ROUNDUP_BEAT_RULE + "\n\n必需键: beats")
         if lite:
@@ -248,6 +250,8 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
              for i, seg in enumerate(segments)]
     # 卡片 / 概念动画里旁白没说过的数字先去掉(见 drop_unsaid_numbers),退回 broll 的拍交给下面兜底
     specs = drop_unsaid_numbers(specs, card_log)
+    # 原理拆解:机构画面不到六成就把 broll 补成 mech(见 mech.promote_mech);别的片型原样返回
+    specs = mech.promote_mech(specs, profile)
     # broll 兜底:这一拍讲的数字还有事实支撑,就把它放上屏(见 rescue_broll)
     # 视频优先的视觉包不跑这两步:broll 就是它的主画面,转成面板正好相反
     if not lite:
@@ -497,7 +501,7 @@ def _render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
         db.write_json(project_id, f"beats/{s.idx:03d}.json", pieces)
         db.update_shot(project_id, s.idx, "draft", status="succeeded", draft_path=str(path),
                        provider_task_id=None, error=None, est_cost=0.0,
-                       consistency="card" if s.layout in ("card", "concept") else "real")
+                       consistency="card" if s.layout in ("card", "concept", "mech") else "real")
         done.append(s.idx)
     own_used = {k: n - seed.get(k, 0) for k, n in used.items()
                 if n - seed.get(k, 0) > 0 or k in own_used}
@@ -694,8 +698,8 @@ def _reveal_sfx_times(beats: Sequence[ShotSpec]) -> list[float]:
         ov = s.overlay or s.card or {}
         if s.layout == "stat" and isinstance(ov.get("at"), (int, float)):
             out.append(round(acc + float(ov["at"]), 3))
-        elif s.layout in ("panel", "card", "concept"):
-            for r in (ov.get("rows") or []):
+        elif s.layout in ("panel", "card", "concept", "mech"):
+            for r in [*(ov.get("marks") or []), *(ov.get("rows") or [])]:
                 if isinstance(r, dict) and isinstance(r.get("at"), (int, float)):
                     out.append(round(acc + float(r["at"]), 3))
                     break
@@ -729,7 +733,7 @@ def _sfx_track(project_dir: Path, nar: dict, size: tuple[int, int], beats: Seque
 def _dissolve_targets(beats: Sequence[ShotSpec]) -> list[int]:
     """章节交界短叠化:整屏卡片与概念动画自带入场动效,不叠化(避免与上一拍实拍画面糊在一起)。"""
     return [k for k in chapter_starts(beats)
-            if 0 <= k < len(beats) and beats[k].layout not in ("card", "concept")]
+            if 0 <= k < len(beats) and beats[k].layout not in ("card", "concept", "mech")]
 
 
 def _normalised(project_dir: Path, shots: Sequence[Path], size: tuple[int, int],

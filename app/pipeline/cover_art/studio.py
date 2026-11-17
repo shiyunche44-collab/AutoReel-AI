@@ -120,7 +120,7 @@ def gradient_bg(tone: Tone, size: tuple[int, int]) -> Any:
         t = y / max(1, h - 1)
         d.line([(0, y), (w, y)], fill=tuple(int(a + (b - a) * t) for a, b in zip(tone.top, tone.bottom)))
     glow = Image.new("L", size, 0)
-    ImageDraw.Draw(glow).ellipse((w * 0.1, h * 0.72, w * 0.9, h * 1.02), fill=70)
+    ImageDraw.Draw(glow).ellipse((w * 0.1, h * 0.72, w * 0.9, h * 1.02), fill=22 if tone.dark else 70)
     glow = glow.filter(ImageFilter.GaussianBlur(max(w, h) // 12))
     im.paste(Image.new("RGB", size, (255, 255, 255)), (0, 0), glow)
     return im
@@ -141,6 +141,9 @@ def _fit_bg(path: Path, size: tuple[int, int]) -> Any:
 
 def background(tone: Tone, size: tuple[int, int]) -> tuple[Any, str]:
     """(画布, "studio"|"gradient")"""
+    if tone.dark:
+        # 暗底不生图:上面要叠剖视图,底越干净越好
+        return gradient_bg(tone, size), "gradient"
     bg = studio_bg(tone, ratio_of(size))
     if bg is not None:
         try:

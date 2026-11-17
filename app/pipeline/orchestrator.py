@@ -168,6 +168,10 @@ def create_project(payload: ProjectCreate) -> str:
     project_aspect = wanted_aspect or aspect.normalise(profile.aspect_ratio)
     # 时长档位跟画幅走:竖屏 60/90/120/180,横屏 120/240/360/480
     durations = profile.supported_durations(project_aspect)
+    # 片型自带档位的(原理拆解的竖屏 240 / 300 秒)在下面按片型再核一次,这里先放行
+    own = profile.themes.get((payload.theme or "").strip())
+    if own is not None and payload.duration in profile.theme_durations(own, project_aspect):
+        durations = (*durations, payload.duration)
     if payload.duration not in durations:
         raise PipelineError(
             f"{aspect.label(project_aspect)}不支持时长 {payload.duration}s。可选:{list(durations)}"

@@ -26,10 +26,14 @@ class Tone:
     accent: tuple[int, int, int]
     #: 底图平均亮度的合格区间(浅底配深字要够亮,灰绿底配白字要够暗)
     luma: tuple[int, int] = (150, 250)
+    #: 暗底(不生成影棚底图,直接用代码渐变;字要垫投影)
+    dark: bool = False
+    #: 色带副标上的字色(None = 按强调色深浅自动取)
+    on_accent: tuple[int, int, int] | None = None
 
     @property
     def light_text(self) -> bool:
-        return sum(self.text) > 600
+        return self.dark or sum(self.text) > 600
 
 
 TONES = (
@@ -42,6 +46,14 @@ TONES = (
     Tone("silver", "light neutral silver grey", (232, 232, 230), (204, 204, 202),
          (30, 32, 36), (178, 56, 44)),
 )
+
+#: 片型指定的封面色调(`ThemeSpec.cover_tone`)。不进 `TONES`:项目按 ID 散列挑色调时不会落到它们。
+#: teardown = 原理拆解:深色底 + 两行大黄字问题 + 剖视图,对标拆解号的封面;
+#: 主页一排里它和浅色的「该不该买」封面本来就该一眼分得开(两条内容线)
+THEME_TONES = {
+    "teardown": Tone("teardown", "", (26, 28, 32), (9, 10, 12), (255, 216, 20), (246, 246, 242),
+                     luma=(0, 90), dark=True, on_accent=(18, 20, 24)),
+}
 
 STUDIO_PROMPT = (
     "Minimalist seamless photo studio backdrop for a premium car advertisement, {tone} colour, "
@@ -113,5 +125,21 @@ def _picked_tone(project_id: str) -> str:
         return ""
 
 
+def theme_tone(project_id: str) -> Tone | None:
+    """项目的片型指定了封面色调就用它(A / B 版同一个色调);没指定返回 None。"""
+    from ... import db
+
+    try:
+        from ...categories import load_profile
+
+        project = db.get_project(project_id) or {}
+        if not project.get("theme"):
+            return None
+        theme = load_profile(project.get("category") or "auto_long").theme_spec(project["theme"])
+        return THEME_TONES.get(theme.cover_tone)
+    except Exception:  # noqa: BLE001 - 读不到项目 / 片型就按散列挑
+        return None
+
+
 def tone_of(project_id: str, variant: str = "a") -> Tone:
-    return TONES[bg_index(project_id, variant)]
+    return theme_tone(project_id) or TONES[bg_index(project_id, variant)]

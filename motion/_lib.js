@@ -771,6 +771,110 @@
     return pts;
   };
 
+  // ======================================================================
+  // 机构画面(mech 版式:motion/scenes/piston / powerflow / cutaway)
+  // ======================================================================
+
+  /**
+   * 机构画面的公共版式:一块画机构的画框 + 一块文字区(栏目、小标题、标注、数字)。
+   * 机构统一画在 1000×640 的 SVG 坐标里,横竖屏只是画框摆的位置不同:
+   *   竖屏  画框在标题区下面(常驻大标题由成片叠上去),文字区在画框和字幕之间
+   *   横屏  画框在左,文字区在右
+   * 标注(D.marks)是旁白里原样说过的词,在旁白说到它的那一刻(at)出现,没给时刻就匀着排。
+   * 这一版式不做退场:连着几拍讲同一个机构时是硬切,不闪黑。
+   * 返回 { box, frame, svg, panel }。
+   */
+  HF.mech = function (tl, opt) {
+    const W = D.words || {};
+    const S = HF.seconds;
+    const P = HF.portrait;
+    // 竖屏:画框下面是文字区。这一拍没有标题 / 标注 / 数字时文字区是空的 ——
+    // 画框往下挪到中间;模版说自己能铺高(opt.tall,剖视图)就把画框拉高,别留半屏空底
+    const bare = !D.title && !(Array.isArray(D.marks) && D.marks.length) && !HF.rows.length;
+    const tall = !!(opt && opt.tall);
+    const box = !P ? { x: 90, y: 236, w: 1030, h: 659 }
+      : tall ? { x: 40, y: 596, w: 1000, h: bare ? 880 : 700 }
+      : { x: 40, y: bare ? 716 : 596, w: 1000, h: 640 };
+    const frame = HF.add(HF.el("div", "mx-frame"));
+    Object.assign(frame.style, { left: box.x + "px", top: box.y + "px", width: box.w + "px", height: box.h + "px" });
+    const svg = HF.svg("svg", { width: box.w, height: box.h, viewBox: "0 0 1000 640" }, frame);
+    if (W.sketch) frame.appendChild(HF.el("div", "mx-tag", W.sketch));
+    const panel = HF.add(HF.el("div", "mx-panel" + (P ? " portrait" : "")));
+    if (P) Object.assign(panel.style, { left: "64px", top: (box.y + box.h + 20) + "px", width: (HF.safe.rightLow - 64) + "px" });
+    else Object.assign(panel.style, { left: "1190px", top: "250px", width: "640px" });
+    const kick = HF.el("div", "mx-kick");
+    kick.appendChild(HF.el("i"));
+    kick.appendChild(HF.el("span", "", [D.subject, D.kicker].filter(Boolean).join(" · ")));
+    panel.appendChild(kick);
+    let ttl = null;
+    if (D.title) { ttl = HF.el("div", "mx-ttl", D.title); panel.appendChild(ttl); }
+    const cols = HF.el("div", "mx-cols"); panel.appendChild(cols);
+    const list = HF.el("div", "mx-marks"); cols.appendChild(list);
+    tl.fromTo(frame, { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power1.out" }, 0);
+    tl.fromTo([kick, ttl].filter(Boolean), { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out", stagger: 0.08 }, 0.1);
+
+    // 标注:说到哪条亮哪条,前面的退成次要
+    const marks = (Array.isArray(D.marks) ? D.marks : []).slice(0, 3);
+    const hi = Math.max(0.6, S - 1.0);
+    let lastAt = 0.2;
+    const items = marks.map((m, n) => {
+      const it = HF.el("div", "mx-mark"); it.appendChild(HF.el("i")); it.appendChild(HF.el("span", "", m.text));
+      list.appendChild(it);
+      let at = typeof m.at === "number" ? m.at : 0.7 + (hi - 0.7) * n / Math.max(1, marks.length);
+      at = Math.max(lastAt + 0.35, Math.min(hi, at));
+      lastAt = at;
+      return { it, at };
+    });
+    items.forEach((x, n) => {
+      tl.fromTo(x.it, { opacity: 0, x: -18 }, { opacity: 1, x: 0, duration: 0.35, ease: "power3.out" }, x.at);
+      tl.fromTo(x.it.firstChild, { scaleY: 0 }, { scaleY: 1, duration: 0.3, ease: "power2.out" }, x.at);
+      if (items[n + 1]) tl.to(x.it, { opacity: 0.5, duration: 0.3 }, items[n + 1].at);
+    });
+
+    // 数字(核对过事实、这一拍旁白说过的才会到这里)
+    const rows = HF.rows.slice(0, 2);
+    if (rows.length) {
+      const nums = HF.el("div", "mx-nums"); cols.appendChild(nums);
+      rows.forEach((r, n) => {
+        const it = HF.el("div", "mx-num");
+        const lab = HF.el("div", "co-lab", r.label); const val = HF.el("div");
+        it.appendChild(lab); it.appendChild(val);
+        if (r.tag) it.appendChild(HF.el("div", "co-tag", r.tag));
+        nums.appendChild(it);
+        const big = HF.bigNumber(val, r.value, HF.fitSize(r.value, 300, marks.length || rows.length > 1 ? 72 : 96), { unitScale: 0.36 });
+        const at = Math.max(0.4, Math.min(hi, typeof r.at === "number" ? r.at : 0.9 + n * 0.8));
+        tl.fromTo(it, { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, at);
+        HF.countHero(tl, big, at, 0.8);
+      });
+    }
+    return { box, frame, svg, panel };
+  };
+
+  /** 沿折线匀速流动的光点:pts = [[x,y]...](SVG 坐标),返回 update(phase, 显隐 0..1) */
+  HF.flowDots = function (svg, pts, n, color, r) {
+    const segs = []; let total = 0;
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const len = Math.hypot(pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]);
+      segs.push([pts[k], pts[k + 1], len]); total += len;
+    }
+    const dots = Array.from({ length: n }, () => HF.svg("circle", { r: r || 6, fill: color, opacity: 0 }, svg));
+    const at = (f) => {
+      let d = (((f % 1) + 1) % 1) * total;
+      for (const sg of segs) {
+        if (d <= sg[2]) { const u = sg[2] ? d / sg[2] : 0; return [HF.lerp(sg[0][0], sg[1][0], u), HF.lerp(sg[0][1], sg[1][1], u)]; }
+        d -= sg[2];
+      }
+      return pts[pts.length - 1];
+    };
+    return function (phase, alpha) {
+      dots.forEach((c, k) => {
+        const f = phase + k / n, p = at(f), e = ((f % 1) + 1) % 1;
+        c.setAttribute("cx", p[0].toFixed(1)); c.setAttribute("cy", p[1].toFixed(1));
+        c.setAttribute("opacity", (alpha * Math.min(1, e * 8, (1 - e) * 8)).toFixed(3));
+      });
+    };
+  };
+
   HF.register = function (tl) {
     window.__timelines = window.__timelines || {};
     window.__timelines["main"] = tl;

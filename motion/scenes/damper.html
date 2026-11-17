@@ -1,0 +1,127 @@
+<!-- Mechanism animation: one corner of the suspension as a quarter-car model.
+     The road throws bumps at the wheel; the spring carries the body and the damper
+     turns the bounce into heat, so the body moves far less than the wheel.
+     mode "coil" steel coil spring          mode "air" air spring fed by a compressor
+     A schematic only: no numbers are drawn here. All on-screen words come from the
+     data (words.*), this file stays ASCII.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .dp-lab { font-size: 26px; fill: rgba(var(--ink), 0.75); }
+    .dp-big { font-size: 30px; font-weight: 700; fill: rgb(var(--ink)); }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl);
+    const sv = M.svg, W = D.words || {};
+    const air = D.mode === "air";
+    const CAMS = [null, [32, 60, 1.0, 1.2], [32, 35, 1.28, 1.1], [50, 50, 1.12, 1.0]];
+    const cam = CAMS[(D.variant || 0) % CAMS.length];
+    if (cam) {
+      sv.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
+      tl.fromTo(sv, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+    }
+    const ACC = HF.c("acc"), COOL = HF.c("acc2"), HOT = "rgb(255, 150, 80)";
+    const X0 = 320, SX = 250, DX = 390, BODY_Y = 150, HUB_Y = 372, WHEEL_Y = 452, WR = 80, ROAD_Y = 536;
+
+    // ---- motion, closed-form in t: a bump reaches the wheel every PERIOD seconds ----
+    const PERIOD = 2.3, FIRST = 0.9, AMP = 40, SPEED = 300;
+    const eachBump = (t, fn) => { for (let k = -1; k <= Math.ceil(t / PERIOD) + 1; k++) fn(t - (FIRST + k * PERIOD)); };
+    const wheelUp = (t) => { let v = 0; eachBump(t, (u) => { v += AMP * Math.exp(-(u / 0.13) * (u / 0.13)); }); return v; };
+    const bodyUp = (t) => { let v = 0; eachBump(t, (u) => { if (u > 0) v += (air ? 9 : 15) * Math.exp(-u * (air ? 3.4 : 2.6)) * Math.sin(u * 8.5); }); return v; };
+
+    // ---- road with the bumps scrolling towards the left ----
+    const road = HF.svg("path", { fill: "none", stroke: HF.c("ink", 0.7), "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    HF.svg("rect", { x: 30, y: ROAD_Y + 6, width: 560, height: 60, fill: HF.c("ink", 0.05) }, sv);
+
+    // ---- spring ----
+    const spring = air ? HF.svg("g", {}, sv)
+      : HF.svg("path", { fill: "none", stroke: ACC, "stroke-width": 9, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    let bellows = [];
+    if (air) {
+      for (let k = 0; k < 3; k++) bellows.push(HF.svg("rect", { x: SX - 52, width: 104, rx: 24, fill: HF.c("acc2", 0.22), stroke: COOL, "stroke-width": 4 }, spring));
+    }
+    // ---- damper: cylinder on the wheel side, rod and piston on the body side ----
+    const cyl = HF.svg("rect", { x: DX - 26, width: 52, rx: 8, fill: HF.c("ink", 0.10), stroke: HF.c("ink", 0.8), "stroke-width": 4 }, sv);
+    const oil = HF.svg("rect", { x: DX - 21, width: 42, rx: 4, fill: HOT, opacity: 0.2 }, sv);
+    const rodL = HF.svg("line", { x1: DX, x2: DX, stroke: HF.c("ink", 0.85), "stroke-width": 10, "stroke-linecap": "round" }, sv);
+    const pist = HF.svg("rect", { x: DX - 22, width: 44, height: 14, rx: 4, fill: HF.c("ink", 0.9) }, sv);
+
+    // ---- wheel, hub link, body ----
+    const hub = HF.svg("g", {}, sv);
+    HF.svg("rect", { x: SX - 66, y: HUB_Y - 8, width: DX - SX + 132, height: 16, rx: 8, fill: HF.c("ink", 0.8) }, hub);
+    HF.svg("line", { x1: X0, y1: HUB_Y, x2: X0, y2: WHEEL_Y, stroke: HF.c("ink", 0.8), "stroke-width": 14 }, hub);
+    HF.svg("circle", { cx: X0, cy: WHEEL_Y, r: WR, fill: HF.c("bg", 0.9), stroke: HF.c("ink", 0.85), "stroke-width": 16 }, hub);
+    const spokes = HF.svg("g", {}, hub);
+    for (let k = 0; k < 5; k++) {
+      const a = k * Math.PI * 2 / 5;
+      HF.svg("line", { x1: X0, y1: WHEEL_Y, x2: (X0 + Math.cos(a) * 60).toFixed(1), y2: (WHEEL_Y + Math.sin(a) * 60).toFixed(1), stroke: HF.c("ink", 0.6), "stroke-width": 8, "stroke-linecap": "round" }, spokes);
+    }
+    const body = HF.svg("g", {}, sv);
+    HF.svg("path", { d: "M70 " + BODY_Y + " L70 96 Q70 56 110 56 L530 56 Q570 56 570 96 L570 " + BODY_Y + " Z", fill: HF.c("acc", 0.10), stroke: ACC, "stroke-width": 4, "stroke-linejoin": "round" }, body);
+    const bt = HF.svg("text", { x: X0, y: 116, "text-anchor": "middle", class: "dp-big", fill: HF.c("ink") }, body); bt.textContent = W.body || "";
+
+    // labels beside the parts
+    const lab = (x, y, text, anchor) => { const t = HF.svg("text", { x: x, y: y, "text-anchor": anchor || "start", class: "dp-lab" }, sv); t.textContent = text || ""; return t; };
+    lab(SX - 76, 268, air ? W.air_spring : W.spring, "end");
+    lab(DX + 44, 268, W.damper);
+
+    // air supply line into the air spring
+    let airDots = null;
+    if (air) {
+      const line = [[36, 300], [36, 186], [SX - 52, 186]];
+      HF.svg("path", { d: "M" + line.map((p) => p[0] + " " + p[1]).join(" L"), fill: "none", stroke: HF.c("acc2", 0.4), "stroke-width": 8, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+      HF.svg("rect", { x: 8, y: 300, width: 56, height: 44, rx: 10, fill: HF.c("acc2", 0.2), stroke: COOL, "stroke-width": 3 }, sv);
+      airDots = HF.flowDots(sv, line, 3, COOL, 6);
+    }
+
+    // ---- scope on the right: wheel travel against body travel ----
+    const SC = { x: 640, w: 320, wy: 210, by: 440 };
+    lab(SC.x, SC.wy - 86, W.wheel_move).setAttribute("class", "dp-big");
+    lab(SC.x, SC.by - 86, W.body_move).setAttribute("class", "dp-big");
+    [SC.wy, SC.by].forEach((y) => HF.svg("line", { x1: SC.x, y1: y, x2: SC.x + SC.w, y2: y, stroke: HF.c("ink", 0.2), "stroke-width": 2, "stroke-dasharray": "6 8" }, sv));
+    const trW = HF.svg("path", { fill: "none", stroke: HOT, "stroke-width": 5, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    const trB = HF.svg("path", { fill: "none", stroke: ACC, "stroke-width": 5, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    const WINDOW = 3.2, N = 80;
+
+    HF.drive(tl, (t) => {
+      const w = wheelUp(t), b = bodyUp(t);
+      const top = BODY_Y - b, low = HUB_Y - w;
+      // road: the bump under the wheel at time t was further right earlier
+      let d = "";
+      for (let x = 30; x <= 590; x += 10) d += (x === 30 ? "M" : "L") + x + " " + (ROAD_Y - wheelUp(t - (x - X0) / SPEED)).toFixed(1) + " ";
+      road.setAttribute("d", d);
+      hub.setAttribute("transform", "translate(0 " + (-w).toFixed(1) + ")");
+      spokes.setAttribute("transform", "rotate(" + (t * 210).toFixed(1) + " " + X0 + " " + WHEEL_Y + ")");
+      body.setAttribute("transform", "translate(0 " + (-b).toFixed(1) + ")");
+      const len = low - 8 - top;
+      if (air) {
+        bellows.forEach((r, k) => { r.setAttribute("y", (top + len * k / 3).toFixed(1)); r.setAttribute("height", Math.max(8, len / 3 - 3).toFixed(1)); });
+        airDots(t * 0.5, 0.9);
+      } else {
+        let p = "M" + SX + " " + top.toFixed(1) + " L" + SX + " " + (top + 12).toFixed(1);
+        const turns = 7, span = len - 24;
+        for (let k = 0; k < turns * 2; k++) p += " L" + (SX + (k % 2 ? 44 : -44)) + " " + (top + 12 + span * (k + 0.5) / (turns * 2)).toFixed(1);
+        p += " L" + SX + " " + (top + 12 + span).toFixed(1) + " L" + SX + " " + (low - 8).toFixed(1);
+        spring.setAttribute("d", p);
+      }
+      const cylTop = low - 8 - 128;
+      cyl.setAttribute("y", cylTop.toFixed(1)); cyl.setAttribute("height", 128);
+      oil.setAttribute("y", (cylTop + 5).toFixed(1)); oil.setAttribute("height", 118);
+      const py = Math.max(cylTop + 8, Math.min(cylTop + 106, top + 62));
+      rodL.setAttribute("y1", top.toFixed(1)); rodL.setAttribute("y2", py.toFixed(1));
+      pist.setAttribute("y", py.toFixed(1));
+      // the damper works when the two ends move against each other: the oil warms up
+      const rel = Math.abs((wheelUp(t + 0.02) - bodyUp(t + 0.02)) - (w - b)) / 0.02;
+      oil.setAttribute("opacity", Math.min(0.85, 0.18 + rel / 420).toFixed(3));
+      let a = "", c = "";
+      for (let k = 0; k <= N; k++) {
+        const u = t - WINDOW * (1 - k / N), x = SC.x + SC.w * k / N;
+        a += (k ? "L" : "M") + x.toFixed(1) + " " + (SC.wy - wheelUp(u) * 1.5).toFixed(1) + " ";
+        c += (k ? "L" : "M") + x.toFixed(1) + " " + (SC.by - bodyUp(u) * 1.5).toFixed(1) + " ";
+      }
+      trW.setAttribute("d", a); trB.setAttribute("d", c);
+    }, 0, S);
+    HF.grain();
+    HF.register(tl);
+  </script>

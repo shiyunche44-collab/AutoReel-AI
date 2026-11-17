@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Sequence
 from ... import db
 from ...models import ShotSpec
-from .. import aspect, cards, library, looks, motion, motion_assets, overlays
+from .. import aspect, cards, library, looks, mechanism_art, motion, motion_assets, overlays
 from .. import render as render_mod
 
 from .consts import HOOK_CUT, HOOK_CUT_RETRIES, HOOK_SECONDS, SAFE_LAYOUT, SPLIT_MIN_SECONDS, _ENC, _log
+from . import mech
 from .planning_b import broll_style
 from .ffmpeg import CONCEPT_FOOTAGE_HINT, _clip_luma, _ff, _framed, _piece_clip, background_clip, concept_background, footage_size, motion_for, split_clip
 
@@ -318,6 +319,34 @@ def portrait_concept_style(scene: str, style: str | None,
     return None, f"模版「{chosen}」与默认模版都还没有竖屏版,画成数据卡"
 
 
+def render_mech(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int],
+                work: Path, ranges: dict[str, str] | None = None) -> Path:
+    """渲染一拍机构画面(mech)。用场景专用模版,不跟项目的概念动画风格走 ——
+    通用模版只会排参数行,画不了机构。剖视图(cutaway)要先有图,见 `mechanism_art`。"""
+    ov = spec.overlay or {}
+    scene = str(ov.get("scene") or "")
+    if scene not in motion.available_scenes():
+        raise motion.MotionError(f"没有机构模版 {scene or '(空)'}")
+    if aspect.is_portrait_size(size) and not motion.supports_portrait(motion.DEFAULT_STYLE, scene):
+        raise motion.MotionError(f"机构模版 {scene} 还没有竖屏版")
+    data = mech.scene_data(ov, subject, spec.idx)
+    data["kicker"] = motion.KICKERS.get(scene, "")
+    assets: dict[str, Path] = {}
+    if scene == "cutaway":
+        part = str(ov.get("part") or "")
+        art, view = str(ov.get("art") or ""), int(ov.get("view") or 0)
+        try:
+            img = mechanism_art.cutaway(part, art, view=view)
+        except mechanism_art.MechArtError:
+            if not view:
+                raise
+            img = mechanism_art.cutaway(part, art)  # 换视角的图没出来:用整体剖视那张
+        assets["part.png"] = img
+        data["image"] = motion.asset_data("part.png", img)
+    return motion.render(scene, data, seconds, size, work / "mech.mp4",
+                         style=motion.DEFAULT_STYLE, assets=assets)
+
+
 def concept_style_of(project_id: str) -> str:
     """项目选定的概念动画风格(`concept_style.json`);没单独选过 = 视觉包配的那套模版。"""
     got = db.read_json(project_id, "concept_style.json", {}) or {}
@@ -394,6 +423,25 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             _log.warning("第 %s 拍概念动画 %s 退回数据卡:%s", spec.idx, scene, exc)
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
+    elif spec.layout == "mech" and spec.overlay:
+        try:
+            base = render_mech(spec, subject, seconds, size, work, ranges)
+        except (motion.MotionError, mechanism_art.MechArtError) as exc:
+            # 机构画面做不出来(生图失败 / 模版没有竖屏版 / 渲染失败):退回实拍底,
+            # 有核对过的行就照面板画。要留痕 —— 这个片型的看点就是机构画面
+            _log.warning("第 %s 拍机构画面 %s 退回实拍:%s", spec.idx, spec.overlay.get("part"), exc)
+            if notes is not None:
+                notes.append(f"第 {spec.idx} 拍机构画面({spec.overlay.get('part')})没做出来,退回实拍:{exc}")
+            rows = spec.overlay.get("rows") or []
+            fallback = spec.model_copy(update={
+                "layout": "panel" if rows else SAFE_LAYOUT,
+                "overlay": {"kind": "panel", "title": spec.overlay.get("title", ""), "rows": rows,
+                            "source": spec.overlay.get("source", "")} if rows else None})
+            return render_beat(fallback, subject=subject, size=size, out_dir=out_dir,
+                               chapters=chapters, chapter_idx=chapter_idx, used=used,
+                               card_bg=card_bg, recent=recent, sting=sting, style=style,
+                               headline=headline, notes=notes, ranges=ranges, role=role,
+                               ledger=ledger)
     else:
         base, pieces = _broll_base(spec, subject, seconds, fsize, work, used, recent, card_bg,
                                    role=role)
@@ -403,7 +451,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     bar = overlays.chapter_bar(chapters, chapter_idx, size, work / "bar.png",
                                headline="" if clear_title else headline)
     # 整屏数据卡 / 概念动画自己就是一屏参数,不再压清单
-    if ledger and spec.layout not in ("card", "concept"):
+    if ledger and spec.layout not in ("card", "concept", "mech"):
         name = chapters[chapter_idx][0] if 0 <= chapter_idx < len(chapters) else ""
         overlays.ledger(ledger, name, size, bar)
     layer: Path | None = None

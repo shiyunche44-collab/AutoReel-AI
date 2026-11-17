@@ -30,6 +30,7 @@ from .tone import (  # noqa: E402,F401
     RATIOS,
     STUDIO_PROMPT,
     STYLE_VERSION,
+    THEME_TONES,
     TONES,
     Tone,
     VLM_CHECK,
@@ -39,6 +40,7 @@ from .tone import (  # noqa: E402,F401
     cache_dir,
     log,
     ratio_of,
+    theme_tone,
     tone_of,
 )
 from .studio import (  # noqa: E402,F401
@@ -119,7 +121,9 @@ from .layout import (  # noqa: E402,F401
     _text,
     _title_lines,
     model_word,
+    place_art,
     place_car,
+    question_part,
     render,
     short_name,
     split_title,

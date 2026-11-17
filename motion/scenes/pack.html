@@ -1,0 +1,99 @@
+<!-- Mechanism animation: a battery pack seen from above, long cells side by side
+     on a cooling plate.
+     mode "charge"    current runs in from the charge port and the cells fill up
+     mode "discharge" current runs out to the motor
+     mode "cool"      coolant snakes under the cells and carries the heat away
+     A schematic only: the cell count is not a real pack and no numbers are drawn.
+     All on-screen words come from the data (words.*), this file stays ASCII.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .bp-lab { font-size: 26px; fill: rgba(var(--ink), 0.75); }
+    .bp-big { font-size: 30px; font-weight: 700; }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl);
+    const sv = M.svg, W = D.words || {};
+    const mode = ["charge", "discharge", "cool"].includes(D.mode) ? D.mode : "charge";
+    const CAMS = [null, [50, 55, 1.0, 1.18], [30, 50, 1.25, 1.08], [70, 50, 1.1, 1.0]];
+    const cam = CAMS[(D.variant || 0) % CAMS.length];
+    if (cam) {
+      sv.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
+      tl.fromTo(sv, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+    }
+    const ACC = HF.c("acc"), COOL = HF.c("acc2"), HOT = "rgb(255, 150, 80)", ELEC = HF.c("hi");
+    const BOX = { x: 190, y: 170, w: 620, h: 340 }, N = 12;
+    const CW = 38, GAP = (BOX.w - 40 - N * CW) / (N - 1), CY0 = BOX.y + 46, CH = BOX.h - 92;
+
+    // ---- coolant channel under the cells (drawn first) ----
+    const snake = [[BOX.x - 90, BOX.y + BOX.h - 30]];
+    for (let k = 0; k < 6; k++) {
+      const x = BOX.x + 40 + k * (BOX.w - 80) / 5;
+      const up = k % 2 === 0;
+      snake.push([x, up ? BOX.y + BOX.h - 30 : BOX.y + 30], [x, up ? BOX.y + 30 : BOX.y + BOX.h - 30]);
+    }
+    snake.push([BOX.x + BOX.w + 90, BOX.y + BOX.h - 30]);
+    const poly = (pts) => "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" L");
+    const cooling = mode === "cool";
+    HF.svg("path", { d: poly(snake), fill: "none", stroke: cooling ? HF.c("acc2", 0.45) : HF.c("ink", 0.12), "stroke-width": 22, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    const coolDots = cooling ? HF.flowDots(sv, snake, 16, COOL, 7) : null;
+
+    // ---- frame and cells ----
+    HF.svg("rect", { x: BOX.x, y: BOX.y, width: BOX.w, height: BOX.h, rx: 26, fill: HF.c("ink", 0.05), stroke: HF.c("ink", 0.8), "stroke-width": 5 }, sv);
+    const cells = [];
+    for (let k = 0; k < N; k++) {
+      const x = BOX.x + 20 + k * (CW + GAP);
+      HF.svg("rect", { x: x, y: CY0, width: CW, height: CH, rx: 7, fill: HF.c("bg", 0.75), stroke: HF.c("ink", 0.55), "stroke-width": 2 }, sv);
+      const fill = HF.svg("rect", { x: x + 4, y: CY0 + 4, width: CW - 8, height: CH - 8, rx: 5, fill: ACC, opacity: 0.5 }, sv);
+      HF.svg("rect", { x: x + CW / 2 - 7, y: CY0 - 9, width: 14, height: 9, rx: 3, fill: HF.c("ink", 0.7) }, sv);
+      cells.push({ fill, x });
+    }
+    // busbar over the cell terminals
+    const busY = CY0 - 22;
+    HF.svg("line", { x1: BOX.x + 20, y1: busY, x2: BOX.x + BOX.w - 20, y2: busY, stroke: cooling ? HF.c("ink", 0.3) : HF.c("hi", 0.5), "stroke-width": 8, "stroke-linecap": "round" }, sv);
+
+    // ---- outside: charge port on the left, motor on the right ----
+    const node = (x, y, w, h, text, live) => {
+      HF.svg("rect", { x: x, y: y, width: w, height: h, rx: 16, fill: live ? HF.c("acc", 0.12) : HF.c("ink", 0.05), stroke: live ? ACC : HF.c("ink", 0.45), "stroke-width": live ? 4 : 2 }, sv);
+      const t = HF.svg("text", { x: x + w / 2, y: y + h / 2 + 10, "text-anchor": "middle", class: "bp-big", fill: HF.c("ink", live ? 1 : 0.5) }, sv);
+      t.textContent = text || "";
+    };
+    node(30, 40, 170, 76, W.charge_port, mode === "charge");
+    node(800, 40, 170, 76, W.motor, mode === "discharge");
+    const inPath = [[115, 116], [115, busY], [BOX.x + 20, busY], [BOX.x + BOX.w - 20, busY]];
+    const outPath = [[BOX.x + 20, busY], [BOX.x + BOX.w - 20, busY], [885, busY], [885, 116]];
+    [[inPath, mode === "charge"], [outPath, mode === "discharge"]].forEach((e) => {
+      HF.svg("path", { d: poly(e[0]), fill: "none", stroke: e[1] ? HF.c("hi", 0.5) : HF.c("ink", 0.14), "stroke-width": 8, "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "2 14" }, sv);
+    });
+    const elecDots = mode === "charge" ? HF.flowDots(sv, inPath, 9, ELEC, 8) : mode === "discharge" ? HF.flowDots(sv, outPath, 9, ELEC, 8) : null;
+
+    const lab = (x, y, text, anchor) => { const t = HF.svg("text", { x: x, y: y, "text-anchor": anchor || "start", class: "bp-lab" }, sv); t.textContent = text || ""; };
+    lab(BOX.x + BOX.w / 2, BOX.y + BOX.h + 44, W.cells, "middle");
+    lab(BOX.x - 96, BOX.y + BOX.h + 16, cooling ? W.coolant_in : W.cool_plate, "start");
+    if (cooling) lab(BOX.x + BOX.w + 96, BOX.y + BOX.h + 16, W.coolant_out, "end");
+
+    HF.drive(tl, (t) => {
+      const loop = (t % 5.0) / 5.0;
+      cells.forEach((c, k) => {
+        const f = k / (N - 1);
+        let level = 0.7, color = ACC, op = 0.5;
+        if (mode === "charge") { level = Math.max(0.12, Math.min(1, 0.15 + loop * 1.35 - f * 0.35)); op = 0.55 + 0.25 * Math.sin(t * 6 - k); }
+        else if (mode === "discharge") { level = Math.max(0.12, Math.min(1, 1.05 - loop * 0.9 - (1 - f) * 0.1)); }
+        else {
+          // heat: cells warm up, the coolant front sweeps along and brings them back
+          const heat = Math.max(0, Math.min(1, 0.5 + 0.5 * Math.sin(t * 1.4 - f * 5.0)));
+          color = heat > 0.5 ? HOT : ACC; op = 0.3 + 0.45 * Math.abs(heat - 0.5) * 2; level = 0.8;
+        }
+        const h = (CH - 8) * level;
+        c.fill.setAttribute("y", (CY0 + 4 + (CH - 8) - h).toFixed(1));
+        c.fill.setAttribute("height", h.toFixed(1));
+        c.fill.setAttribute("fill", color);
+        c.fill.setAttribute("opacity", Math.max(0.15, Math.min(0.9, op)).toFixed(3));
+      });
+      if (elecDots) elecDots(t * 0.5, 1);
+      if (coolDots) coolDots(t * 0.22, 1);
+    }, 0, S);
+    HF.grain();
+    HF.register(tl);
+  </script>

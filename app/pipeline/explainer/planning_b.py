@@ -272,6 +272,6 @@ def validate_beats(specs: Sequence[ShotSpec]) -> list[str]:
             errors.append(f"第 {s.idx} 拍没有旁白(时长由旁白决定,空拍无法定长)")
         if s.layout == "card" and not s.card:
             errors.append(f"第 {s.idx} 拍是 card 但没有卡片数据")
-        if s.layout in ("panel", "highlight", "stat", "concept", "hook") and not s.overlay:
+        if s.layout in ("panel", "highlight", "stat", "concept", "hook", "mech") and not s.overlay:
             errors.append(f"第 {s.idx} 拍是 {s.layout} 但没有叠加数据")
     return errors

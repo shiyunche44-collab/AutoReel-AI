@@ -111,7 +111,11 @@ class CategoryProfile:
 
     def theme_durations(self, theme: ThemeSpec, aspect: str | None = None) -> tuple[int, ...]:
         """这个片型在这个画幅下可选的时长:画幅档位里不超过片型 `max_duration` 的那些。"""
+        from .. import config
+
         durations = self.supported_durations(aspect)
+        if aspect == config.PORTRAIT and theme.durations_portrait:
+            durations = theme.durations_portrait
         if not theme.max_duration:
             return durations
         return tuple(d for d in durations if d <= theme.max_duration) or durations[:1]
@@ -121,7 +125,8 @@ class CategoryProfile:
         from .. import config
 
         return tuple(sorted({*self.supported_durations(config.LANDSCAPE),
-                             *self.supported_durations(config.PORTRAIT)}))
+                             *self.supported_durations(config.PORTRAIT),
+                             *(d for t in self.themes.values() for d in t.durations_portrait)}))
 
     def shots_for(self, duration: int) -> int:
         """该时长铺几个镜头(解说轨叫节拍)。按本 profile 的栅格四舍五入。

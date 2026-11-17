@@ -41,7 +41,7 @@ def test_auto_long_is_landscape_and_self_contained():
     # 原先从竖屏 auto 继承的官方渠道、合规词表、BGM 现在直接写在 auto_long 里
     assert "xiaomi" in p.official_sites and p.forbidden_terms and p.music_prompt
     assert set(p.themes) == {"review", "buyguide", "roundup", "priceband", "deepdive", "qa", "pk", "debate",
-                             "walkthrough"}
+                             "walkthrough", "mechanism"}
     for d in p.supported_durations():
         assert len(p.plan_for(d)) == p.shots_for(d)
 

@@ -1,0 +1,87 @@
+<!-- Mechanism animation: how an electric motor turns. Three-phase currents light the
+     stator coils one after another, the magnetic field sweeps round, and the magnets
+     in the rotor are dragged along with it.
+     A schematic only: pole and slot counts are not a real motor and no numbers are drawn.
+     All on-screen words come from the data (words.*), this file stays ASCII.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .mt-lab { font-size: 26px; fill: rgba(var(--ink), 0.75); }
+    .mt-big { font-size: 30px; font-weight: 700; }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl);
+    const sv = M.svg, W = D.words || {};
+    const CAMS = [null, [32, 50, 1.0, 1.22], [32, 28, 1.3, 1.1], [45, 60, 1.12, 1.0]];
+    const cam = CAMS[(D.variant || 0) % CAMS.length];
+    if (cam) {
+      sv.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
+      tl.fromTo(sv, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+    }
+    const PH = [HF.c("hi"), HF.c("acc"), HF.c("acc2")];
+    const NPOLE = "rgb(255, 120, 90)", SPOLE = HF.c("acc2");
+    const CX = 320, CY = 320, RO = 268, RI = 196, RR = 150;
+
+    // ---- stator: iron ring with six coils (two per phase, opposite each other) ----
+    HF.svg("circle", { cx: CX, cy: CY, r: (RO + RI) / 2, fill: "none", stroke: HF.c("ink", 0.16), "stroke-width": RO - RI }, sv);
+    HF.svg("circle", { cx: CX, cy: CY, r: RO, fill: "none", stroke: HF.c("ink", 0.7), "stroke-width": 4 }, sv);
+    HF.svg("circle", { cx: CX, cy: CY, r: RI, fill: "none", stroke: HF.c("ink", 0.35), "stroke-width": 2 }, sv);
+    const coils = [];
+    for (let k = 0; k < 6; k++) {
+      const a = k * Math.PI / 3 - Math.PI / 2, rm = (RO + RI) / 2;
+      const g = HF.svg("g", { transform: "translate(" + (CX + Math.cos(a) * rm).toFixed(1) + " " + (CY + Math.sin(a) * rm).toFixed(1) + ") rotate(" + (a * 180 / Math.PI + 90).toFixed(1) + ")" }, sv);
+      const body = HF.svg("rect", { x: -44, y: -26, width: 88, height: 52, rx: 12, fill: PH[k % 3], opacity: 0.25, stroke: PH[k % 3], "stroke-width": 3 }, g);
+      [-22, 0, 22].forEach((x) => HF.svg("line", { x1: x, y1: -20, x2: x, y2: 20, stroke: HF.c("bg", 0.55), "stroke-width": 4 }, g));
+      coils.push({ body, phase: k % 3, flip: k >= 3 ? -1 : 1 });
+    }
+    // ---- rotating field arrow (under the rotor) ----
+    const field = HF.svg("g", {}, sv);
+    HF.svg("line", { x1: -RI + 14, y1: 0, x2: RI - 30, y2: 0, stroke: HF.c("hi", 0.55), "stroke-width": 8, "stroke-dasharray": "4 14", "stroke-linecap": "round" }, field);
+    HF.svg("path", { d: "M" + (RI - 12) + " 0 L" + (RI - 46) + " -18 L" + (RI - 46) + " 18 Z", fill: HF.c("hi", 0.8) }, field);
+    // ---- rotor: iron core with four magnets ----
+    const rotor = HF.svg("g", {}, sv);
+    HF.svg("circle", { cx: 0, cy: 0, r: RR, fill: HF.c("bg", 0.92), stroke: HF.c("ink", 0.8), "stroke-width": 4 }, rotor);
+    for (let k = 0; k < 4; k++) {
+      const g = HF.svg("g", { transform: "rotate(" + (k * 90) + ")" }, rotor);
+      HF.svg("rect", { x: RR - 46, y: -44, width: 30, height: 88, rx: 8, fill: k % 2 ? SPOLE : NPOLE, opacity: 0.9 }, g);
+    }
+    HF.svg("circle", { cx: 0, cy: 0, r: 30, fill: HF.c("ink", 0.85) }, rotor);
+    HF.svg("line", { x1: 0, y1: 0, x2: RR - 56, y2: 0, stroke: HF.c("ink", 0.5), "stroke-width": 6, "stroke-linecap": "round" }, rotor);
+
+    const lab = (x, y, text, cls, anchor) => { const t = HF.svg("text", { x: x, y: y, "text-anchor": anchor || "start", class: cls || "mt-lab" }, sv); t.textContent = text || ""; return t; };
+    lab(CX, 38, W.stator, "mt-lab", "middle");
+    lab(CX, CY + RR + 34, W.rotor, "mt-lab", "middle");
+
+    // ---- three-phase current traces on the right ----
+    const SC = { x: 650, w: 310, y: 320, amp: 92 };
+    lab(SC.x, SC.y - 150, W.phase_current, "mt-big").setAttribute("fill", HF.c("ink"));
+    lab(SC.x, SC.y + 190, W.field, "mt-lab");
+    HF.svg("line", { x1: SC.x, y1: SC.y, x2: SC.x + SC.w, y2: SC.y, stroke: HF.c("ink", 0.2), "stroke-width": 2, "stroke-dasharray": "6 8" }, sv);
+    const traces = PH.map((c) => HF.svg("path", { fill: "none", stroke: c, "stroke-width": 5, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv));
+    const heads = PH.map((c) => HF.svg("circle", { cx: SC.x + SC.w, r: 9, fill: c }, sv));
+
+    // electrical speed; with two pole pairs the rotor turns at half of it
+    const WE = 3.0, WINDOW = 3.0, N = 70;
+    const cur = (t, p) => Math.cos(WE * t - p * Math.PI * 2 / 3);
+    HF.drive(tl, (t) => {
+      const th = WE * t;
+      field.setAttribute("transform", "translate(" + CX + " " + CY + ") rotate(" + (th / 2 * 180 / Math.PI - 90).toFixed(2) + ")");
+      rotor.setAttribute("transform", "translate(" + CX + " " + CY + ") rotate(" + (th / 2 * 180 / Math.PI - 90 - 16).toFixed(2) + ")");
+      coils.forEach((c) => {
+        const i = cur(t, c.phase) * c.flip;
+        c.body.setAttribute("opacity", (0.16 + 0.74 * Math.abs(i)).toFixed(3));
+      });
+      traces.forEach((p, k) => {
+        let d = "";
+        for (let n = 0; n <= N; n++) {
+          const u = t - WINDOW * (1 - n / N);
+          d += (n ? "L" : "M") + (SC.x + SC.w * n / N).toFixed(1) + " " + (SC.y - cur(u, k) * SC.amp).toFixed(1) + " ";
+        }
+        p.setAttribute("d", d);
+        heads[k].setAttribute("cy", (SC.y - cur(t, k) * SC.amp).toFixed(1));
+      });
+    }, 0, S);
+    HF.grain();
+    HF.register(tl);
+  </script>

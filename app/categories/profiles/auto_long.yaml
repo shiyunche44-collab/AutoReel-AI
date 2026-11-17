@@ -268,6 +268,60 @@ themes:
       - {section: 对谁有用, weight: 1, drop: 1}
       - {section: 深挖结论, weight: 1, remainder: false}
 
+  # 原理拆解(栏目「柒哥拆给你看」):整期只拆一个机构,回答一个带车名的反常识问题。
+  # 推荐向、竖屏 3–5 分钟;画面以机构动画和剖视图(mech 版式)为主,实拍只在开场和结论。
+  mechanism:
+    label: 原理拆解
+    intent: >
+      整期回答选题角度里的那一个问题(这台车的某个部件 / 技术,凭什么做到一件反常识的事):
+      开场把问题抛出来 → 先用一句话给答案 → 把这套东西拆成两三个部件,每个部件讲
+      它是什么、怎么动、所以能做到什么 → 这套设计的代价 → 对哪类人有用 →
+      一句有态度的结论,预告下期拆什么。讲机理为主,数字只在撑判断时出现。
+    requires_angle: true
+    max_duration: 300
+    # 竖屏通用档位到 180 秒为止;这个片型对标 3–5 分钟的拆解片,单独放开
+    durations_portrait: [180, 240, 300]
+    # 两条样片实测 6.0 / 6.9 字/秒(连着讲机理,拍间停顿少);按通用的 4.7 算会短两成
+    chars_per_second: 6.2
+    cover_tone: teardown
+    title_style: question
+    # 推荐向:话题挂知识类的,不挂「XX怎么选」「购车指南」
+    tags: [汽车知识, 汽车原理, 机械原理]
+    reviewer: true
+    allow_subject_critique: true
+    lenses: [engineering, contrarian, definition]
+    sentence_keep_chars: 36
+    brief_rule: 全片只回答本期选题角度里的那一个问题。thesis 就是那句答案。arguments 每条对应一个部件,heading 是部件名(8 字内),claim 说这个部件让这台车做到了什么。weakness 写这套设计的代价。
+    required_scopes: [product]
+    fact_sources:
+      - dongchedi.lineup
+      - autohome.specs
+      - ifind.tech_news
+      - ifind.product_news
+      - ifind.review_news
+    script_rules:
+      - 全片只回答选题角度里的那一个问题;跟它无关的参数、配置、价格一概不提,哪怕事实清单里有。
+      - 开场第一句不超过 18 字,是一个带车名的问题或反常识判断;不说"大家好""今天来聊聊"。
+      - 「一句答案」段用一两句大白话把答案先说出来,后面再拆,不卖关子。
+      - 「部件」段每段给一个 heading:这一章拆的部件名,8 字以内(如「米勒循环」「电控离合器」)。同一章拆成多段时 heading 写同一句。
+      - 每个部件按「它是什么 → 它怎么动 → 所以这台车能做到什么」讲,必须有"所以"那一句,不许只念结构。
+      - 讲机理引用原理清单(k_ 开头),用自己的话讲,不照抄原话;打一个生活里的比方,全片不超过 3 个。
+      - 机构参数(缸径、行程、压缩比、齿比、电机转速)事实里没有就不说数字,只讲机理;不许凭印象报数。
+      - 「代价旧账」段说真实的代价,依据可以是原理条目、事实里写到的问题,或由事实推出的判断(说清是你的推断)。
+      - 结论一句有态度的话,然后说"关注柒哥,下期接着拆",不报具体车型。
+      - 不许用"很猛""很良心""有诚意""闭眼入"这类空洞评价代替论据。
+    openings: [question, myth, number]
+    endings: [verdict, next_episode]
+    blocks:
+      - {section: 拆解开场, weight: 1, remainder: false}
+      - {section: 一句答案, weight: 1, remainder: false}
+      - {section: 部件一, weight: 4}
+      - {section: 部件二, weight: 4}
+      - {section: 部件三, weight: 3, drop: 2}
+      - {section: 代价旧账, weight: 2}
+      - {section: 适合谁, weight: 1, drop: 1}
+      - {section: 拆解结论, weight: 1, remainder: false}
+
   # 问答式:每章回答一个买家最常问的问题,章节名就是问题(脚本给 heading)。
   qa:
     label: 问答式
@@ -620,6 +674,46 @@ sections:
     angle: exterior_45
     layouts: [highlight, card, broll]
     card: spec
+
+  # ---- 原理拆解(mechanism)。部件章节名用脚本给的 heading(部件名)----
+  拆解开场:
+    beat: 第一句 18 字内抛出本期的问题(带车名),或这个问题上最反常识的判断
+    chapter: 开头
+    angle: exterior_45
+    layouts: [hook, highlight, broll]
+  一句答案:
+    beat: 一两句大白话先把答案说出来,点出待会要拆的两三个部件
+    chapter: 答案
+    angle: exterior_45
+    layouts: [mech, highlight, broll]
+  部件一: &mech_part
+    beat: 拆一个部件:它是什么、怎么动、所以这台车能做到什么
+    chapter: 部件一
+    argument: true
+    heading: true
+    angle: detail
+    layouts: [mech, stat, concept, highlight]
+  部件二:
+    <<: *mech_part
+    chapter: 部件二
+  部件三:
+    <<: *mech_part
+    chapter: 部件三
+  代价旧账:
+    beat: 这套设计的代价:什么情况下它不灵、要多付出什么
+    chapter: 代价
+    angle: exterior_45
+    layouts: [mech, highlight, panel, broll]
+  适合谁:
+    beat: 这套东西对哪类人是刚需、对哪类人可有可无
+    chapter: 适合谁
+    angle: interior
+    layouts: [broll, highlight]
+  拆解结论:
+    beat: 一句有态度的结论,再预告下期接着拆
+    chapter: 结论
+    angle: exterior_45
+    layouts: [highlight, broll]
 
   # ---- 问答式(qa)。章节名用脚本给的 heading(问题本身)----
   问答开场:
@@ -1107,11 +1201,36 @@ vocab:
     # 键也可以是片型 id:该片型的选题不按星期,固定挂这个栏目
     buyguide: 柒哥到底该不该买
     walkthrough: 柒哥一次讲透
+    mechanism: 柒哥拆给你看
   # 细分名单:片型的 segment 指到这里,主编排这个片型时按名单顺序轮着做
   segments:
     offroad: [坦克300, 坦克400, 坦克500, 坦克700, 方程豹豹5, 方程豹钛7, 北京BJ40, 北京BJ30,
               北京BJ60, 北汽212, 捷途旅行者, 捷途山海T2, 哈弗H9, 哈弗猛龙, 长城炮, 比亚迪鲨鱼,
               捷途纵横G700, 哈弗H5]
+  # 原理拆解的选题种子:主编在 TEAM_MECHANISM_WEEKDAYS 的日子按顺序排。part 是部件大类,
+  # 同一类不连排超过 2 期,所以相邻几条尽量换着来。angle 就是这一期要回答的问题,不写数字。
+  # 只选现有机构动画配得上的部件(发动机 / 混动 / 变速箱 / 电机 / 电池 / 悬架)
+  mechanism_topics:
+    - {car: 比亚迪秦L DM-i, part: 混动, angle: "多一道能量转换,凭什么反而更省油"}
+    - {car: 奥迪A6L, part: 发动机, angle: "小排量涡轮,凭什么带得动行政级的车身"}
+    - {car: 丰田凯美瑞, part: 变速箱, angle: "双擎没有离合器也没有挡位,凭什么能变速"}
+    - {car: 极氪001, part: 悬架, angle: "一袋空气,凭什么托得住整台车"}
+    - {car: 理想L6, part: 混动, angle: "发动机不驱动车轮,为什么还要一直背着它"}
+    - {car: 小米SU7, part: 变速箱, angle: "只有一个挡位,凭什么起步和高速都够用"}
+    - {car: 特斯拉Model Y, part: 电池, angle: "去充电的路上,为什么要先给电池加热"}
+    - {car: 本田思域, part: 发动机, angle: "排量这么小,凭什么有大排量的劲"}
+    - {car: 本田雅阁, part: 混动, angle: "混动版的发动机多数时候不直接带车轮,凭什么还省油"}
+    - {car: 吉利星越L, part: 变速箱, angle: "挡位越多,凭什么越省油"}
+    - {car: 比亚迪海豹, part: 电池, angle: "电池直接当车身地板,凭什么敢这么做"}
+    - {car: 特斯拉Model 3, part: 电机, angle: "前后装两种不一样的电机,图什么"}
+    - {car: 比亚迪汉, part: 悬架, angle: "减震器的软硬能变,靠的是什么"}
+    - {car: 丰田卡罗拉, part: 发动机, angle: "双擎的发动机故意少吸一口气,凭什么更省油"}
+    - {car: 问界M7, part: 混动, angle: "先用油发电再驱动,为什么不直接烧油"}
+    - {car: 小鹏G6, part: 电池, angle: "电压平台做高了,凭什么就充得快"}
+    - {car: 丰田RAV4荣放, part: 电机, angle: "双擎四驱没有传动轴,凭什么算四驱"}
+    - {car: 大众迈腾, part: 变速箱, angle: "两个离合器轮流干活,凭什么换挡这么快"}
+    - {car: 理想L9, part: 悬架, angle: "车身能升能降,空气弹簧是怎么做到的"}
+    - {car: 奔驰C级, part: 混动, angle: "轻混不能纯电开,那装它图什么"}
   lenses:
     engineering: 工程取舍:这台车在哪些地方做了取舍,为了什么放弃了什么,数字里能看出哪个工程决定
     definition: 产品定义:它到底是给谁造的,配置和定价暴露了车企心里的目标用户,和宣传说的是否一致
@@ -1219,6 +1338,121 @@ vocab:
     "探测|米": 150-300
     "距离|米": 150-300
 
+  # 机构画面(mech 版式,只有段落里写了 mech 的片型会用到):部件 → 怎么画。
+  #   scene  motion/scenes/ 下的模版:piston / powerflow / planetary / damper / pack / motor 是画出来的
+  #          机构动画,cutaway 是剖视静帧慢推。动画排在同类剖视图前面:词命中一样多时先用动画
+  #   mode   给模版的变体(powerflow:series 串联 / parallel 并联直驱 / ev 纯电 / assist 轻混助力;
+  #          piston:na 自吸 / turbo 增压;planetary:split 功率分流 / reduce 减速;
+  #          damper:coil 螺旋弹簧 / air 空气弹簧;pack:charge 充电 / discharge 放电 / cool 液冷)
+  #   when   什么时候用(进分镜提示词)
+  #   keys   命中它的词(分镜没选对时按旁白兜底)
+  #   art    剖视静帧的生图描述(英文,只给 cutaway 用;画面里不许有文字和数字)
+  mech_parts:
+    engine_cycle:
+      scene: piston
+      mode: na
+      when: 讲发动机怎么做功、四冲程、米勒 / 阿特金森循环、压缩比、热效率
+      keys: 四冲程, 活塞, 气缸, 压缩比, 热效率, 米勒, 阿特金森, 做功, 气门
+    engine_turbo:
+      scene: piston
+      mode: turbo
+      when: 讲涡轮增压、小排量凭什么有大扭矩、增压压力、涡轮迟滞
+      keys: 涡轮, 增压, 迟滞, 小排量, 建压
+    hybrid_series:
+      scene: powerflow
+      mode: series
+      when: 讲串联 / 增程:发动机只发电,电机驱动车轮
+      keys: 串联, 增程, 发电, 发电机, 只发电
+    hybrid_parallel:
+      scene: powerflow
+      mode: parallel
+      when: 讲并联 / 直驱:离合器结合,发动机直接驱动车轮
+      keys: 并联, 直驱, 离合器结合, 直接驱动
+    hybrid_ev:
+      scene: powerflow
+      mode: ev
+      when: 讲纯电行驶:电池给电机供电,发动机不工作
+      keys: 纯电, 电池供电, 满电
+    hybrid_assist:
+      scene: powerflow
+      mode: assist
+      when: 讲轻混:发动机驱动车轮,电机用电池的电在起步、加速时搭把手
+      keys: 轻混, 助力, 帮起步, 电机辅助, 搭把手
+    gear_split:
+      scene: planetary
+      mode: split
+      when: 讲行星齿轮怎么分配动力(功率分流):太阳轮、行星架、齿圈各接一头,转速互相牵着
+      keys: 行星齿轮, 太阳轮, 行星架, 齿圈, 功率分流, 行星排
+    gear_reduce:
+      scene: planetary
+      mode: reduce
+      when: 讲减速器 / 减速比:电机转得快、车轮转得慢,扭矩被放大
+      keys: 减速器, 减速比, 单挡, 放大扭矩
+    motor_field:
+      scene: motor
+      when: 讲电机怎么转:定子通电产生旋转磁场,带着转子里的磁铁转
+      keys: 定子, 转子, 旋转磁场, 永磁, 同步电机, 扁线, 绕组
+    battery_charge:
+      scene: pack
+      mode: charge
+      when: 讲电池怎么充电、快充、高压平台:电流从充电口进电芯
+      keys: 快充, 充电, 补能, 充电桩, 高压平台, 充电口
+    battery_discharge:
+      scene: pack
+      mode: discharge
+      when: 讲电池放电:电芯的电送去电机,电池当功率缓冲
+      keys: 放电, 削峰填谷, 电池调峰, 功率型电池
+    battery_cool:
+      scene: pack
+      mode: cool
+      when: 讲电池热管理:冷却液在电芯下面流,把热带走或者给电池预热
+      keys: 热管理, 液冷, 冷却液, 温控, 预热, 直冷
+    damper_coil:
+      scene: damper
+      mode: coil
+      when: 讲减振器和弹簧怎么配合:弹簧托着车身,减振器把弹跳吃掉
+      keys: 减振器, 阻尼, 螺旋弹簧, 滤震, 颠簸, 弹跳, 减震
+    damper_air:
+      scene: damper
+      mode: air
+      when: 讲空气悬架:空气弹簧充气放气,软硬和高度可调
+      keys: 空气悬架, 空气弹簧, 空悬, 气囊, 车身高度
+    gearbox:
+      scene: cutaway
+      when: 讲变速箱、齿轮组、换挡、双离合、行星齿轮
+      keys: 变速箱, 齿轮组, 换挡, 双离合, 挡位
+      art: cutaway technical illustration of an automotive automatic transmission, exposed gear sets, clutch packs and shafts, sectioned aluminium housing
+    turbocharger:
+      scene: cutaway
+      when: 讲涡轮增压器本体的结构:涡轮、压气机、中冷
+      keys: 涡轮增压器, 压气机, 中冷, 叶轮
+      art: cutaway technical illustration of an automotive turbocharger, exposed turbine wheel and compressor wheel on one shaft, sectioned housing
+    engine_block:
+      scene: cutaway
+      when: 讲发动机整体结构、缸体、曲轴、配气机构
+      keys: 缸体, 曲轴, 凸轮轴, 配气, 发动机结构
+      art: cutaway technical illustration of an inline four cylinder car engine, exposed pistons, crankshaft, valves and camshafts, sectioned block
+    hybrid_unit:
+      scene: cutaway
+      when: 讲混动电驱总成的结构:双电机、电控、减速器装在一个壳体里
+      keys: 电驱, 总成, 双电机, 电控, 电混
+      art: cutaway technical illustration of a compact hybrid electric drive unit, two electric motors with copper windings, reduction gears and a clutch, sectioned housing
+    battery_pack:
+      scene: cutaway
+      when: 讲电池包内部结构、电芯排布、冷却
+      keys: 电池包, 电芯, 刀片, 模组, 磷酸铁锂, 三元锂
+      art: cutaway technical illustration of an electric vehicle battery pack, rows of long prismatic cells, cooling plate and frame, lid removed
+    suspension:
+      scene: cutaway
+      when: 讲悬架结构、减振器、空气弹簧、连杆
+      keys: 悬架结构, 连杆, 摆臂, 双叉臂, 麦弗逊, 多连杆
+      art: cutaway technical illustration of a car front suspension corner, control arms, coil spring over sectioned damper, brake disc and knuckle
+    quattro:
+      scene: cutaway
+      when: 讲四驱系统、差速器、分动箱、传动轴
+      keys: 四驱, 差速器, 分动, 传动轴, 托森
+      art: cutaway technical illustration of an all wheel drive drivetrain, longitudinal engine, gearbox, centre differential, propeller shaft and rear differential
+
   ui_subject_label: 选题 / 车型
   ui_placeholder: 例:比亚迪汉 EV 2026 款
   ui_help: 尽量写全品牌、车型和年款,事实采集会更准。
@@ -1303,3 +1537,27 @@ principles:
     terms: [一体压铸]
     explain: 一体压铸把大量冲压焊接的小零件合成一个大铸件,车身更轻、精度更一致,生产也更快。
     tradeoff: 碰撞受损后很难局部修复,维修成本可能更高。
+  - id: k_miller
+    terms: [米勒循环, 阿特金森, 米勒, 高压缩比, 热效率]
+    explain: 米勒循环和阿特金森循环让进气门晚一点或早一点关,真正被压缩的混合气比气缸容积少,做功时却能把整个行程用满。膨胀比大于压缩比,同样一口油推活塞走得更远,热效率就高。
+    tradeoff: 每次吸进来的气变少,同排量的动力更弱;要么配电机补低速,要么配涡轮把气压回去。
+  - id: k_turbo
+    terms: [涡轮增压, 增压发动机, TSI, TFSI, T发动机]
+    explain: 涡轮增压用排出去的废气推一个涡轮,同轴带动压气机,把更多空气压进气缸。空气多了就能多喷油,小排量也能烧出大排量的扭矩,而且扭矩在很低的转速就能给足。
+    tradeoff: 废气不够时涡轮转不起来,会有迟滞;进气被压热要靠中冷降温,对机油和散热的要求更高。
+  - id: k_series_parallel
+    terms: [DM-i, 串并联, 双电机混动, 电混, 插电混动, 插混, DHT]
+    explain: 串并联混动有两台电机:低速时发动机只带发电机发电,由驱动电机推车,发动机可以一直待在最省油的转速;高速时离合器结合,发动机直接驱动车轮,省掉发电再用电的两道转换。
+    tradeoff: 电池没电后要拖着一套电驱和电池的重量;高速直驱通常只有一个固定传动比,急加速和很高的车速下发动机离开高效区,油耗会上来。
+  - id: k_range_extender
+    terms: [增程, 增程器, 增程式]
+    explain: 增程式的发动机不连车轮,只带发电机发电,车轮永远由电机驱动。发动机转速和车速脱钩,可以稳在高效区,开起来就是一台电车的感觉。
+    tradeoff: 油先变成电再变成动力,多了两道转换损失;高速巡航时不如发动机直接驱动省油。
+  - id: k_dct
+    terms: [双离合, DCT, DSG, S tronic]
+    explain: 双离合变速箱有两套离合器,一套管单数挡、一套管双数挡。当前挡位在出力时,下一个挡位已经预先挂好,换挡只是两个离合器一松一合,动力几乎不中断。
+    tradeoff: 低速走走停停时离合器反复半联动,容易发热和顿挫;结构比手动挡复杂,维修更贵。
+  - id: k_awd_torsen
+    terms: [quattro, 托森, 全时四驱, 适时四驱, 中央差速器]
+    explain: 四驱系统靠中央差速器或多片离合器把动力分给前后轴。哪一轴的轮子抓地力更好,就多分一些扭矩过去,打滑的那一边少给,车才能把动力落到地上。
+    tradeoff: 多了一套传动机构,车更重、传动损失更大,日常铺装路面上油耗会比两驱高。

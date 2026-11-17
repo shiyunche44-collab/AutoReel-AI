@@ -1,0 +1,100 @@
+<!-- Mechanism animation: where the energy goes in a two-motor hybrid.
+     mode "series"   engine spins the generator, the drive motor turns the wheels
+     mode "parallel" clutch closed, engine drives the wheels directly
+     mode "ev"       battery feeds the drive motor, engine off
+     mode "assist"   engine drives the wheels, the motor adds battery power on top (mild hybrid)
+     A schematic only: no numbers are drawn here. All on-screen words come from the
+     data (words.*), this file stays ASCII.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .pf-lab { font-size: 30px; font-weight: 700; }
+    .pf-sub { font-size: 24px; fill: rgba(var(--ink), 0.7); }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl);
+    const sv = M.svg, W = D.words || {};
+    const mode = ["series", "parallel", "ev", "assist"].includes(D.mode) ? D.mode : "series";
+    const MECH = HF.c("acc"), ELEC = HF.c("acc2"), OFF = HF.c("ink", 0.16);
+
+    const NODES = {
+      engine: { x: 60, y: 110, w: 210, h: 130, name: W.engine },
+      generator: { x: 395, y: 110, w: 210, h: 130, name: W.generator },
+      battery: { x: 395, y: 350, w: 210, h: 110, name: W.battery },
+      motor: { x: 640, y: 225, w: 200, h: 130, name: W.motor },
+    };
+    const WHEEL = { x: 925, y: 290, r: 54 };
+    // edges: [from, to, kind, points]
+    const EDGES = {
+      eg: ["mech", [[270, 175], [395, 175]]],
+      gm: ["elec", [[605, 175], [740, 175], [740, 225]]],
+      gb: ["elec", [[500, 240], [500, 350]]],
+      bm: ["elec", [[605, 405], [740, 405], [740, 355]]],
+      mw: ["mech", [[840, 290], [871, 290]]],
+      d1: ["mech", [[165, 240], [165, 560], [470, 560]]],
+      d2: ["mech", [[560, 560], [925, 560], [925, 344]]],
+    };
+    const ON = {
+      series: { nodes: ["engine", "generator", "motor"], edges: ["eg", "gm", "mw"], soft: ["gb"] },
+      parallel: { nodes: ["engine"], edges: ["d1", "d2"], soft: [] },
+      ev: { nodes: ["battery", "motor"], edges: ["bm", "mw"], soft: [] },
+      assist: { nodes: ["engine", "battery", "motor"], edges: ["d1", "d2", "bm", "mw"], soft: [] },
+    }[mode];
+
+    const poly = (pts) => "M" + pts.map((p) => p[0] + " " + p[1]).join(" L");
+    const flows = [];
+    Object.keys(EDGES).forEach((id) => {
+      const kind = EDGES[id][0], pts = EDGES[id][1];
+      const live = ON.edges.includes(id), soft = ON.soft.includes(id);
+      const color = kind === "mech" ? MECH : ELEC;
+      HF.svg("path", { d: poly(pts), fill: "none", stroke: live || soft ? color : OFF, "stroke-width": live ? 10 : 6,
+        "stroke-linecap": "round", "stroke-linejoin": "round", opacity: live ? 0.45 : soft ? 0.3 : 1,
+        "stroke-dasharray": kind === "elec" ? "2 14" : "none" }, sv);
+      if (live || soft) flows.push({ run: HF.flowDots(sv, pts, Math.max(2, Math.round(pts.length * 1.5)), color, live ? 9 : 6), a: live ? 1 : 0.6, sp: kind === "elec" ? 0.75 : 0.55 });
+    });
+
+    // clutch on the direct path
+    const closed = mode === "parallel" || mode === "assist";
+    const cl = HF.svg("g", {}, sv);
+    const gap = closed ? 6 : 26;
+    [-1, 1].forEach((s) => HF.svg("rect", { x: 515 + s * gap - 8, y: 520, width: 16, height: 80, rx: 5, fill: closed ? MECH : HF.c("ink", 0.5) }, cl));
+    const clt = HF.svg("text", { x: 515, y: 508, "text-anchor": "middle", class: "pf-sub" }, sv);
+    clt.textContent = (closed ? W.clutch_closed : W.clutch_open) || "";
+    if (closed) clt.setAttribute("fill", HF.c("ink"));
+
+    const boxes = {};
+    Object.keys(NODES).forEach((id) => {
+      const n = NODES[id], live = ON.nodes.includes(id);
+      const g = HF.svg("g", { opacity: live ? 1 : 0.42 }, sv);
+      const r = HF.svg("rect", { x: n.x, y: n.y, width: n.w, height: n.h, rx: 18, fill: live ? HF.c("acc", 0.10) : HF.c("ink", 0.05),
+        stroke: live ? HF.c("acc") : HF.c("ink", 0.5), "stroke-width": live ? 4 : 2 }, g);
+      const t = HF.svg("text", { x: n.x + n.w / 2, y: n.y + n.h / 2 + 11, "text-anchor": "middle", class: "pf-lab", fill: HF.c("ink") }, g);
+      t.textContent = n.name || "";
+      boxes[id] = { g, r, live };
+    });
+    // battery cells
+    for (let k = 0; k < 5; k++) HF.svg("rect", { x: 415 + k * 36, y: 440, width: 26, height: 10, rx: 3, fill: mode === "ev" ? ELEC : HF.c("ink", 0.3) }, sv);
+
+    // wheel
+    HF.svg("circle", { cx: WHEEL.x, cy: WHEEL.y, r: WHEEL.r, fill: HF.c("bg", 0.9), stroke: HF.c("ink", 0.85), "stroke-width": 10 }, sv);
+    const spokes = HF.svg("g", {}, sv);
+    for (let k = 0; k < 5; k++) {
+      const a = k * Math.PI * 2 / 5;
+      HF.svg("line", { x1: WHEEL.x, y1: WHEEL.y, x2: (WHEEL.x + Math.cos(a) * 40).toFixed(1), y2: (WHEEL.y + Math.sin(a) * 40).toFixed(1),
+        stroke: HF.c("ink", 0.7), "stroke-width": 7, "stroke-linecap": "round" }, spokes);
+    }
+    const wt = HF.svg("text", { x: WHEEL.x, y: WHEEL.y - 72, "text-anchor": "middle", class: "pf-sub" }, sv);
+    wt.textContent = W.wheels || "";
+
+    HF.drive(tl, (t) => {
+      flows.forEach((f) => f.run(t * f.sp, f.a));
+      spokes.setAttribute("transform", "rotate(" + (t * 150).toFixed(1) + " " + WHEEL.x + " " + WHEEL.y + ")");
+      const pulse = 0.5 + 0.5 * Math.sin(t * 5.2);
+      Object.keys(boxes).forEach((id) => {
+        if (boxes[id].live) boxes[id].r.setAttribute("fill", HF.c("acc", 0.08 + 0.10 * pulse));
+      });
+    }, 0, S);
+    HF.grain();
+    HF.register(tl);
+  </script>

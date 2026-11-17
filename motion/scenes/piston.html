@@ -1,0 +1,164 @@
+<!-- Mechanism animation: a four-stroke cylinder in cross-section (intake, compression,
+     power, exhaust). mode "turbo" adds a turbocharger fed by the exhaust that pushes
+     air back into the intake. A schematic only: no numbers are drawn here.
+     All on-screen words come from the data (words.*), this file stays ASCII.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .ps-metal { fill: rgba(var(--ink), 0.10); stroke: rgba(var(--ink), 0.75); stroke-width: 3; stroke-linejoin: round; }
+    .ps-wall { fill: none; stroke: rgba(var(--ink), 0.8); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+    .ps-duct { fill: none; stroke: rgba(var(--ink), 0.22); stroke-width: 26; stroke-linecap: round; stroke-linejoin: round; }
+    .ps-lab { fill: rgba(var(--ink), 0.72); font-size: 26px; }
+    .ps-stroke { fill: rgb(var(--bg)); font-size: 34px; font-weight: 800; }
+    .ps-step { fill: rgba(var(--ink), 0.4); font-size: 30px; }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl);
+    // consecutive beats reuse this scene: move the camera so they do not read as one frozen shot
+    const PCAMS = [null, [26, 55, 1.0, 1.3], [84, 38, 1.32, 1.12], [50, 50, 1.14, 1.0]];
+    const pcam = PCAMS[(D.variant || 0) % PCAMS.length];
+    if (pcam) {
+      M.svg.style.transformOrigin = pcam[0] + "% " + pcam[1] + "%";
+      tl.fromTo(M.svg, { scale: pcam[2] }, { scale: pcam[3], duration: S, ease: "none" }, 0);
+    }
+    const sv = M.svg, W = D.words || {};
+    const turbo = D.mode === "turbo";
+    const HOT = "rgb(255, 150, 80)", COOL = HF.c("acc2"), ACC = HF.c("acc");
+    const cx = turbo ? 300 : 430;
+    const BORE = 90, HEAD = 120, CRANK_Y = 490, R = 85, L = 210, PIN = 45, PH = 92;
+    const inX = cx - 45, exX = cx + 45;
+
+    // ---- ducts (drawn first, under the engine) ----
+    let inPath, exPath;
+    if (turbo) {
+      exPath = [[exX, HEAD - 4], [exX, 60], [780, 60], [780, 118]];
+      inPath = [[780, 452], [780, 606], [120, 606], [120, 60], [inX, 60], [inX, HEAD - 4]];
+    } else {
+      inPath = [[cx - 230, 50], [inX, 50], [inX, HEAD - 4]];
+      exPath = [[exX, HEAD - 4], [exX, 50], [cx + 230, 50]];
+    }
+    const poly = (pts) => "M" + pts.map((p) => p[0] + " " + p[1]).join(" L");
+    HF.svg("path", { class: "ps-duct", d: poly(inPath) }, sv);
+    HF.svg("path", { class: "ps-duct", d: poly(exPath) }, sv);
+    let outPath = null, freshPath = null;
+    if (turbo) {
+      outPath = [[842, 180], [968, 180]];
+      freshPath = [[968, 392], [842, 392]];
+      HF.svg("path", { class: "ps-duct", d: poly(outPath) }, sv);
+      HF.svg("path", { class: "ps-duct", d: poly(freshPath) }, sv);
+    }
+
+    // ---- gas in the chamber (under the piston drawing order) ----
+    const gas = HF.svg("rect", { x: cx - BORE + 4, y: HEAD + 3, width: BORE * 2 - 8, height: 10, fill: COOL, opacity: 0 }, sv);
+    const flash = HF.svg("ellipse", { cx: cx, cy: HEAD + 30, rx: 70, ry: 26, fill: "rgb(255, 214, 140)", opacity: 0 }, sv);
+
+    // ---- crankcase, crank, rod, piston ----
+    HF.svg("path", { class: "ps-wall", d: "M" + (cx - BORE) + " " + HEAD + " L" + (cx - BORE) + " 372 Q" + (cx - 150) + " 400 " + (cx - 150) + " " + CRANK_Y +
+      " Q" + (cx - 150) + " 590 " + cx + " 590 Q" + (cx + 150) + " 590 " + (cx + 150) + " " + CRANK_Y + " Q" + (cx + 150) + " 400 " + (cx + BORE) + " 372 L" + (cx + BORE) + " " + HEAD }, sv);
+    HF.svg("circle", { cx: cx, cy: CRANK_Y, r: R, fill: "none", stroke: HF.c("ink", 0.18), "stroke-width": 2, "stroke-dasharray": "6 8" }, sv);
+    const web = HF.svg("line", { x1: cx, y1: CRANK_Y, x2: cx, y2: CRANK_Y - R, stroke: HF.c("ink", 0.8), "stroke-width": 22, "stroke-linecap": "round" }, sv);
+    const rod = HF.svg("line", { x1: cx, y1: 0, x2: cx, y2: 0, stroke: HF.c("ink", 0.62), "stroke-width": 16, "stroke-linecap": "round" }, sv);
+    HF.svg("circle", { cx: cx, cy: CRANK_Y, r: 20, class: "ps-metal" }, sv);
+    const pinDot = HF.svg("circle", { cx: cx, cy: 0, r: 13, fill: ACC }, sv);
+    const piston = HF.svg("g", {}, sv);
+    HF.svg("rect", { x: cx - BORE + 5, y: 0, width: BORE * 2 - 10, height: PH, rx: 10, fill: HF.c("ink", 0.86), stroke: HF.c("ink"), "stroke-width": 2 }, piston);
+    [16, 30].forEach((y) => HF.svg("line", { x1: cx - BORE + 5, y1: y, x2: cx + BORE - 5, y2: y, stroke: HF.c("bg", 0.5), "stroke-width": 3 }, piston));
+    const strokeTxt = HF.svg("text", { x: cx, y: 72, "text-anchor": "middle", class: "ps-stroke" }, piston);
+
+    // ---- head and valves ----
+    HF.svg("path", { class: "ps-wall", d: "M" + (cx - BORE) + " " + HEAD + " L" + (inX - 24) + " " + HEAD + " M" + (inX + 24) + " " + HEAD + " L" + (exX - 24) + " " + HEAD +
+      " M" + (exX + 24) + " " + HEAD + " L" + (cx + BORE) + " " + HEAD }, sv);
+    const valve = (x, color) => {
+      const g = HF.svg("g", {}, sv);
+      HF.svg("line", { x1: x, y1: HEAD - 46, x2: x, y2: HEAD + 2, stroke: color, "stroke-width": 6, "stroke-linecap": "round" }, g);
+      HF.svg("path", { d: "M" + (x - 25) + " " + (HEAD + 3) + " L" + (x + 25) + " " + (HEAD + 3) + " L" + (x + 10) + " " + (HEAD - 9) + " L" + (x - 10) + " " + (HEAD - 9) + " Z", fill: color }, g);
+      return g;
+    };
+    const vIn = valve(inX, COOL), vEx = valve(exX, HOT);
+    const spark = HF.svg("path", { d: "M" + cx + " " + (HEAD - 20) + " L" + cx + " " + (HEAD + 14), stroke: HF.c("hi"), "stroke-width": 5, "stroke-linecap": "round" }, sv);
+
+    // ---- turbocharger ----
+    let turbine = null, comp = null;
+    const wheel = (x, y, color) => {
+      HF.svg("circle", { cx: x, cy: y, r: 62, fill: HF.c("bg", 0.85), stroke: color, "stroke-width": 4 }, sv);
+      const g = HF.svg("g", {}, sv);
+      for (let k = 0; k < 9; k++) {
+        const a = k * Math.PI * 2 / 9;
+        HF.svg("path", { d: "M" + (x + Math.cos(a) * 14).toFixed(1) + " " + (y + Math.sin(a) * 14).toFixed(1) + " Q" + (x + Math.cos(a + 0.5) * 36).toFixed(1) + " " +
+          (y + Math.sin(a + 0.5) * 36).toFixed(1) + " " + (x + Math.cos(a + 0.75) * 54).toFixed(1) + " " + (y + Math.sin(a + 0.75) * 54).toFixed(1),
+          fill: "none", stroke: color, "stroke-width": 5, "stroke-linecap": "round" }, g);
+      }
+      HF.svg("circle", { cx: x, cy: y, r: 12, fill: color }, sv);
+      return { g, x, y };
+    };
+    if (turbo) {
+      HF.svg("line", { x1: 780, y1: 242, x2: 780, y2: 330, stroke: HF.c("ink", 0.7), "stroke-width": 12 }, sv);
+      turbine = wheel(780, 180, HOT);
+      comp = wheel(780, 392, COOL);
+      HF.svg("text", { x: 700, y: 186, "text-anchor": "end", class: "ps-lab" }, sv).textContent = W.turbo || "";
+      HF.svg("text", { x: 700, y: 400, "text-anchor": "end", class: "ps-lab" }, sv).textContent = W.compressor || "";
+      HF.svg("text", { x: 560, y: 100, "text-anchor": "middle", class: "ps-lab" }, sv).textContent = W.exhaust || "";
+      HF.svg("text", { x: 620, y: 584, "text-anchor": "middle", class: "ps-lab" }, sv).textContent = W.intake || "";
+    } else {
+      HF.svg("text", { x: cx - 236, y: 100, "text-anchor": "start", class: "ps-lab" }, sv).textContent = W.intake || "";
+      HF.svg("text", { x: cx + 236, y: 100, "text-anchor": "end", class: "ps-lab" }, sv).textContent = W.exhaust || "";
+    }
+
+    // ---- stroke list (naturally aspirated layout has room on the right) ----
+    const names = Array.isArray(W.strokes) ? W.strokes : ["", "", "", ""];
+    const steps = [];
+    if (!turbo) {
+      names.forEach((n, k) => {
+        const y = 250 + k * 74;
+        const dot = HF.svg("circle", { cx: 742, cy: y - 10, r: 9, fill: HF.c("ink", 0.3) }, sv);
+        const t = HF.svg("text", { x: 768, y: y, class: "ps-step" }, sv); t.textContent = n;
+        steps.push({ dot, t });
+      });
+    }
+
+    const dIn = HF.flowDots(sv, inPath, turbo ? 9 : 5, turbo ? HF.c("hi2") : COOL, 6);
+    const dEx = HF.flowDots(sv, exPath, turbo ? 7 : 5, HOT, 6);
+    const dOut = outPath ? HF.flowDots(sv, outPath, 3, "rgb(190, 170, 160)", 6) : null;
+    const dFresh = freshPath ? HF.flowDots(sv, freshPath, 3, COOL, 6) : null;
+
+    // ---- drive: one stroke = half a crank turn ----
+    const STROKE = 0.95;
+    const rot = (w, deg) => w.g.setAttribute("transform", "rotate(" + deg.toFixed(1) + " " + w.x + " " + w.y + ")");
+    HF.drive(tl, (t) => {
+      const th = Math.PI * t / STROKE;
+      const k = Math.floor(th / Math.PI) % 4, f = (th / Math.PI) % 1;
+      const pinY = CRANK_Y - (R * Math.cos(th) + Math.sqrt(L * L - R * R * Math.sin(th) * Math.sin(th)));
+      const jx = cx + R * Math.sin(th), jy = CRANK_Y - R * Math.cos(th);
+      const top = pinY - PIN;
+      piston.setAttribute("transform", "translate(0 " + top.toFixed(1) + ")");
+      pinDot.setAttribute("cy", pinY.toFixed(1));
+      rod.setAttribute("y1", pinY.toFixed(1)); rod.setAttribute("x2", jx.toFixed(1)); rod.setAttribute("y2", jy.toFixed(1));
+      web.setAttribute("x2", jx.toFixed(1)); web.setAttribute("y2", jy.toFixed(1));
+      strokeTxt.textContent = names[k] || "";
+      // valves: intake open on stroke 0, exhaust open on stroke 3
+      const lift = Math.sin(Math.PI * f) * 24;
+      vIn.setAttribute("transform", "translate(0 " + (k === 0 ? lift : 0).toFixed(1) + ")");
+      vEx.setAttribute("transform", "translate(0 " + (k === 3 ? lift : 0).toFixed(1) + ")");
+      // chamber gas
+      gas.setAttribute("height", Math.max(2, top - HEAD - 4).toFixed(1));
+      const look = k === 0 ? [COOL, 0.22 + 0.1 * f] : k === 1 ? [COOL, 0.32 + 0.4 * f] : k === 2 ? [HOT, 0.85 - 0.45 * f] : ["rgb(170, 160, 150)", 0.4 - 0.15 * f];
+      gas.setAttribute("fill", look[0]); gas.setAttribute("opacity", look[1].toFixed(3));
+      flash.setAttribute("opacity", (k === 2 ? Math.max(0, 1 - f * 5) : 0).toFixed(3));
+      spark.setAttribute("opacity", (k === 2 && f < 0.12 ? 1 : 0.25).toFixed(2));
+      steps.forEach((s, n) => {
+        s.dot.setAttribute("fill", n === k ? ACC : HF.c("ink", 0.3));
+        s.dot.setAttribute("r", n === k ? 12 : 9);
+        s.t.setAttribute("fill", n === k ? HF.c("ink") : HF.c("ink", 0.4));
+      });
+      if (turbo) {
+        // the turbo keeps spinning between pulses: ducts flow all the time
+        dIn(t * 0.42, 1); dEx(t * 0.9, 1); dOut(t * 0.8, 0.8); dFresh(t * 0.8, 1);
+        rot(turbine, t * 520); rot(comp, t * 520);
+      } else {
+        dIn(f * 0.9, k === 0 ? 1 : 0); dEx(f * 0.9, k === 3 ? 1 : 0);
+      }
+    }, 0, S);
+    HF.grain();
+    HF.register(tl);
+  </script>

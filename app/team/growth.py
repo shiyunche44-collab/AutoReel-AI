@@ -31,6 +31,23 @@ GOALS = (
     ("completion_5s", "5 秒完播", ">", 0.45, "开场拍:第一句说完人就走了,判断要更硬、更短"),
 )
 
+#: 片型自己的一套目标:这些片型的作品不进上面那套(搜索向)目标,单独判断。
+#: 原理拆解走推荐流量,通过线比搜索向高,数据也涨得慢(72 小时才算数)。
+#: 「推荐页流量占比 ≥30%」没法在这里算 —— 服务没抓流量来源,那一项看周报里创作者中心的数
+THEME_GOALS: dict[str, dict[str, Any]] = {
+    "mechanism": {
+        "min_works": 8,
+        "mature_hours": 72.0,
+        "metrics": (
+            ("views", "中位播放", ">=", 500, "分发:没进推荐。看开场 3 秒有没有把问题和车亮出来、封面是不是问题句"),
+            ("completion_5s", "5 秒完播", ">", 0.50, "开场:问题不够反常识,或者第一个画面不是机构"),
+            ("followers_gained", "条均涨粉", ">=", 3, "转化:看完不关注。改结尾的下期预告、合集和主页定位,不动片型",
+             "mean"),
+        ),
+        "passed": "三项都达标:这条线跑通了,可以加到每周 5 条并继续扩部件动画",
+    },
+}
+
 
 def _followers(days: int, now: float) -> list[dict[str, Any]]:
     since = (dt.date.fromtimestamp(now) - dt.timedelta(days=days)).isoformat()
@@ -69,35 +86,40 @@ def _since_ts(since: str | None) -> float | None:
         return None
 
 
-def goals(works: list[dict[str, Any]], since: str | None = None) -> dict[str, Any]:
+def goals(works: list[dict[str, Any]], since: str | None = None,
+          spec: dict[str, Any] | None = None) -> dict[str, Any]:
     """两周目标的达标情况。只算发布满 `GOAL_MATURE_HOURS` 小时、有快照的主片;
-    `since`(YYYY-MM-DD)给了就只算那天之后发的。"""
+    `since`(YYYY-MM-DD)给了就只算那天之后发的。`spec`:某个片型自己的一套目标(`THEME_GOALS`)。"""
+    spec = spec or {}
+    min_works = spec.get("min_works", GOAL_MIN_WORKS)
+    hours = spec.get("mature_hours", GOAL_MATURE_HOURS)
     t0 = _since_ts(since)
     mature = [w for w in works
               if w.get("views") is not None
-              and (w.get("hours_since_publish") or 0) >= GOAL_MATURE_HOURS
+              and (w.get("hours_since_publish") or 0) >= hours
               and (t0 is None or (w.get("published_at") or 0) >= t0)]
-    ready = len(mature) >= GOAL_MIN_WORKS
+    ready = len(mature) >= min_works
     metrics = []
-    for key, label, op, target, layer in GOALS:
+    for key, label, op, target, layer, *how in spec.get("metrics", GOALS):
         vals = [w[key] for w in mature if w.get(key) is not None]
-        value = round(statistics.median(vals), 4) if vals else None
+        agg = statistics.mean if how and how[0] == "mean" else statistics.median
+        value = round(agg(vals), 4) if vals else None
         met = None if value is None else (value >= target if op == ">=" else
                                           value < target if op == "<" else value > target)
         metrics.append({"key": key, "label": label, "op": op, "target": target, "value": value,
                         "n": len(vals), "met": met, "layer": layer})
     missed = [m for m in metrics if m["met"] is False]
     if not mature:
-        verdict = "还没有发布满 24 小时的作品,没有可判断的数据"
+        verdict = f"还没有发布满 {hours:g} 小时的作品,没有可判断的数据"
     elif not ready:
-        verdict = (f"才发满 {len(mature)}/{GOAL_MIN_WORKS} 条:样本不够,先别改打法"
+        verdict = (f"才发满 {len(mature)}/{min_works} 条:样本不够,先别改打法"
                    + (";目前差在:" + "、".join(m["label"] for m in missed) if missed else ""))
     elif not missed and all(m["met"] for m in metrics):
-        verdict = "三项都达标:留人这一关过了,可以开始盯涨粉(关注引导、栏目、置顶评论)"
+        verdict = spec.get("passed") or "三项都达标:留人这一关过了,可以开始盯涨粉(关注引导、栏目、置顶评论)"
     else:
         verdict = "没达标:" + ";".join(m["layer"] for m in missed) if missed else "有指标没数据,判断不了"
     return {"since": since if t0 is not None else None, "works": len(mature),
-            "min_works": GOAL_MIN_WORKS, "ready": ready, "hold": not ready,
+            "min_works": min_works, "mature_hours": hours, "ready": ready, "hold": not ready,
             "metrics": metrics, "verdict": verdict}
 
 
@@ -157,6 +179,7 @@ def summary(days: int = 14, now: float | None = None, since: str | None = None) 
     followers = _followers(days, now)
     gained = [w["followers_gained"] for w in works if w["followers_gained"] is not None]
     views = [w["views"] for w in works if w["views"] is not None]
+    goal_since = since if since is not None else config.TEAM_GOAL_SINCE
     return {
         "days": days,
         "generated_at": now,
@@ -167,7 +190,9 @@ def summary(days: int = 14, now: float | None = None, since: str | None = None) 
         "totals": {"works": len(works), "views": sum(views),
                    "followers_gained": sum(gained)},
         "conversion": _conversion(works),
-        "goals": goals(works, since if since is not None else config.TEAM_GOAL_SINCE),
+        "goals": goals([w for w in works if w.get("theme") not in THEME_GOALS], goal_since),
+        "goals_by_theme": {name: goals([w for w in works if w.get("theme") == name], goal_since, spec)
+                           for name, spec in THEME_GOALS.items()},
         "works": works,
         "accounts": [{"account_id": a["account_id"], "paused": bool(a.get("paused")),
                       "reason": a.get("reason"), "paused_at": a.get("paused_at")}

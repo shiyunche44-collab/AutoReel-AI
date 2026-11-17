@@ -45,7 +45,7 @@ ASSET_ROOT = Path(__file__).resolve().parents[1] / "assets" / "host"
 STATES = ("closed", "half", "open", "blink")
 HIDDEN = "hidden"
 #: 全屏卡片 / 概念动画会被挡;stat / panel 的数字卡画在竖屏数据区,和主持人同一位置
-HIDE_LAYOUTS = frozenset({"card", "concept", "stat", "panel"})
+HIDE_LAYOUTS = frozenset({"card", "concept", "stat", "panel", "mech"})
 #: 竖屏多藏一种:重点词大字也画在数据区,主持人站在同一块地方会压住字
 #: (成片被打回过:头像遮数据卡)。横屏的重点词在画面另一侧,不用藏
 PORTRAIT_HIDE_LAYOUTS = HIDE_LAYOUTS | {"highlight"}

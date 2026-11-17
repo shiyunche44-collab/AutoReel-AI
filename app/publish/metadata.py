@@ -51,6 +51,8 @@ class ContentContext:
     series: str = ""
     #: 横评 / 合集片:主体名不是一台车,不派生「X怎么选」
     roundup: bool = False
+    #: 片型自带的话题(`ThemeSpec.tags`):有就排在车名、栏目后面,并且不派生「X怎么选」
+    theme_tags: tuple[str, ...] = ()
 
 
 def clamp_title(text: str, limit: int, soft: int = 0) -> str:
@@ -95,7 +97,9 @@ def build_tags(ctx: ContentContext, limit: int) -> list[str]:
 
     _add(ctx.subject)
     _add(ctx.series)
-    if ctx.subject and not ctx.roundup:
+    for tag in ctx.theme_tags:
+        _add(tag)
+    if ctx.subject and not ctx.roundup and not ctx.theme_tags:
         _add(re.sub(r"\s+", "", ctx.subject) + "怎么选")
     for topic in ctx.topics:
         _add(topic)

@@ -87,12 +87,15 @@ def build_context(project_id: str) -> md.ContentContext:
     render = db.read_json(project_id, "render.json", {}) or {}
     disclaimers: list[str] = []
     subject_label = "产品"
+    theme_tags: tuple[str, ...] = ()
     try:
         from ..categories import load_profile
 
         profile = load_profile(row.get("category") or "auto_long")
         disclaimers = list(profile.required_disclaimers)
         subject_label = profile.vocab.subject_label
+        if row.get("theme"):
+            theme_tags = tuple(profile.theme_spec(row["theme"]).tags)
     except Exception as exc:  # noqa: BLE001 - 品类配置坏了不该拦住发布
         log.warning("品类配置坏了不该拦住发布: %s", exc)
     topics: list[str] = []
@@ -112,6 +115,7 @@ def build_context(project_id: str) -> md.ContentContext:
         subject_label=subject_label,
         series=_series_name(row),
         roundup=len(db.project_subjects(row)) > 1,
+        theme_tags=theme_tags,
     )
 
 

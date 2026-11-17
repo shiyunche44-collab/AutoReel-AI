@@ -42,6 +42,10 @@ GENERIC_REPLIES = (
     "说得对的地方记下了,下一期会把大家问得最多的点展开讲。",
 )
 
+#: 标题写法(`ThemeSpec.title_style`)。question = 原理拆解:车名开头 + 一个反常识的问题句
+TITLE_STYLES = ("", "question")
+_ASKS_RE = re.compile(r"凭什么|为什么|为何|怎么|靠什么|靠的是什么|图什么|吗|[?？]")
+
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 #: 型号代号(YU7、X5、Model3)里的数字是名字不是参数
 _MODEL_CODE_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{1,5}\s?\d{1,2}(?![\d.])[A-Za-z]*")
@@ -201,7 +205,13 @@ def misattributed(text: str, owners: Mapping[str, set[str]] | None) -> list[str]
 
 #: 疑似车型名的词:字母+数字(YU7 / H10)或 汉字+数字(钛7;取最后一个汉字,够用即可)。
 _UNIT_AFTER = "公万元年月日期号个人座辆台米秒分时天度%千克升排项条次倍成岁档款代"
-_MODEL_TOKEN = re.compile(rf"[A-Za-z]+\d+[A-Za-z0-9]*|[{_CJK}]\d+[A-Za-z]?(?![\d.{_UNIT_AFTER}])")
+#: 数字后面跟的是计量单位(1896kg、340N·m、48V)或区间(20-30km/h):那是一个量,不是车型名。
+#: 原理拆解的标题常带这类数,以前会被当成「片里没有的车型」整条丢掉(样片里「拉得动1896kg的车」)
+_UNIT_LATIN = r"(?:kwh|kw|kg|km|nm|n·m|mm|cm|ps|hp|l|v|w|g|s|h)(?![A-Za-z])"
+_MODEL_TOKEN = re.compile(
+    rf"[A-Za-z]+\d+[A-Za-z0-9]*"
+    rf"|[{_CJK}]\d+(?![\d.\-~/{_UNIT_AFTER}]|{_UNIT_LATIN})[A-Za-z]?(?![\d.{_UNIT_AFTER}])",
+    re.IGNORECASE)
 #: 这些字后面跟数字是量词 / 序数(第2期、近3年),不是车型名
 _NOT_MODEL_LEAD = set("第近前后约超共每仅只含满上下去今这那")
 
@@ -221,8 +231,10 @@ def unknown_models(text: str, known: str) -> list[str]:
 def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
                 avoid: Sequence[str] = TITLE_AVOID, name: str = "", known: str = "",
                 owners: Mapping[str, set[str]] | None = None,
-                spoken: set[str] | None = None) -> list[str]:
+                spoken: set[str] | None = None, style: str = "") -> list[str]:
     """标题的问题清单,空 = 合格。
+
+    `style` = "question"(原理拆解):标题还得是一个问题句,且不许写成「该不该买」的导购标题。
 
     `name` = 单车片的车型名:给了就要求标题以它的某种叫法开头(搜索流量靠车型名);横评不传。
     `owners` = 横评每台车自己的数字(见 `misattributed`);单车片不传。
@@ -257,6 +269,12 @@ def check_title(text: str, allowed: set[str], terms: Iterable[str] = (),
     wrong = misattributed(text, owners)
     if wrong:
         problems.append("数字安错了车:" + "、".join(wrong))
+    if style == "question":
+        if not _ASKS_RE.search(text):
+            problems.append("不是问题句")
+        buy = [w for w in ("该不该买", "值不值", "怎么选", "落地价", "买不买") if w in text]
+        if buy:
+            problems.append("原理拆解不写导购标题:" + "、".join(buy))
     if name and known:
         stray = unknown_models(text, known)
         if stray:
@@ -316,21 +334,42 @@ def check_reply(text: str, allowed: set[str], terms: Iterable[str] = ()) -> list
 # 兜底模板
 # --------------------------------------------------------------------------
 def _first_valid(candidates: Iterable[str], allowed: set[str], terms: Iterable[str],
-                 avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> str:
+                 avoid: Sequence[str] = TITLE_AVOID, name: str = "", style: str = "") -> str:
     for cand in candidates:
-        if not check_title(cand, allowed, terms, avoid, name=name):
+        if not check_title(cand, allowed, terms, avoid, name=name, style=style):
             return cand
     return ""
 
 
 def fallback_title(kind: str, subject: str, *, thesis: str = "", price: str = "",
                    allowed: set[str] | None = None, terms: Iterable[str] = (),
-                   avoid: Sequence[str] = TITLE_AVOID, name: str = "") -> str:
-    """一种写法的模板标题。多个模板按优先级试,第一个合格的胜出;全不合格就裁主体名。"""
+                   avoid: Sequence[str] = TITLE_AVOID, name: str = "",
+                   style: str = "", angle: str = "") -> str:
+    """一种写法的模板标题。多个模板按优先级试,第一个合格的胜出;全不合格就裁主体名。
+
+    `style` = "question":模板是问题句,优先用选题角度(建项目时定的那个问题)。"""
+    spaced = (subject or "").strip()
     subject = re.sub(r"\s+", "", subject or "") or "这台车"
     # 兜底用的数字(价格)自己就来自事实层,放进允许集合
     pool = set(allowed or ())
     pool |= figures_in(price)
+    if style == "question":
+        # 选题角度当标题:句中的逗号去掉(车名后面已经有一个),补上问号
+        ask = re.sub(r"[\s,,]+", "", angle or "").strip("。.??")
+        ask = ask + "?" if ask and _ASKS_RE.search(ask) else ""
+        if ask and spaced:
+            # 车名保留原来的空格(「比亚迪秦L DM-i」),挤掉以后「秦LDM-i」读不出来
+            first = _first_valid([f"{spaced},{ask}"], pool, terms, avoid, name=name, style=style)
+            if first and kind == KIND_STAKE:
+                return first
+        if kind == KIND_STAKE:
+            cands = ([f"{subject},{ask}"] if ask else []) + [f"{subject}这套设计,到底图什么?"]
+        elif kind == KIND_NUMBER:
+            cands = [f"{subject},这套东西凭什么敢这么设计?"]
+        else:
+            cands = [f"{subject}开起来的感觉,是怎么来的?"]
+        found = _first_valid(cands, pool, terms, avoid, name=name, style=style)
+        return found or f"{subject}凭什么?"[:TITLE_MAX_CHARS]
     if kind == KIND_STAKE:
         cands = [thesis, *([f"{subject}:{thesis}"] if thesis else []),
                  f"{subject},到底该不该买?", f"{subject}买不买?", "这台车到底买不买?"]
@@ -370,7 +409,8 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
                  avoid: Sequence[str] = TITLE_AVOID,
                  order: Sequence[str] = KINDS, name: str = "",
                  known: str = "", owners: Mapping[str, set[str]] | None = None,
-                 spoken: set[str] | None = None) -> tuple[list[TitleOption], bool]:
+                 spoken: set[str] | None = None, style: str = "",
+                 angle: str = "") -> tuple[list[TitleOption], bool]:
     """每种写法取 LLM 给的第一条合格标题,缺的用模板补。返回 (恰好 3 条, 是否用了 LLM)。
 
     `order` 是三种写法的排列顺序,第一条就是默认发布用的标题(见 `title_order`)。
@@ -386,7 +426,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         if name:
             text = lead_full_name(text, name)
         if check_title(text, allowed, terms, avoid, name=name, known=known, owners=owners,
-                       spoken=spoken):
+                       spoken=spoken, style=style):
             continue
         chosen[kind] = TitleOption(text=text, kind=kind, note=str(d.get("note") or "").strip()[:40])
     used_llm = bool(chosen)
@@ -396,7 +436,7 @@ def build_titles(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[s
         opt = chosen.get(kind)
         if opt is None or opt.text in seen:
             text = fallback_title(kind, subject, thesis=thesis, price=price, allowed=allowed,
-                                  terms=terms, avoid=avoid, name=name)
+                                  terms=terms, avoid=avoid, name=name, style=style, angle=angle)
             opt = TitleOption(text=text, kind=kind, note="模板")
         seen.add(opt.text)
         out.append(opt)
@@ -435,13 +475,14 @@ def assemble(raw: Any, subject: str, *, allowed: set[str], terms: Iterable[str] 
              avoid: Sequence[str] = TITLE_AVOID, order: Sequence[str] = KINDS,
              name: str = "", known: str = "",
              owners: Mapping[str, set[str]] | None = None,
-             spoken: set[str] | None = None) -> Packaging:
+             spoken: set[str] | None = None, style: str = "", angle: str = "") -> Packaging:
     """LLM 原始输出 → 合规的 Packaging。`raw` 可以是 None 或残缺的字典,都能出结果。"""
     d = _as_dict(raw)
     terms = tuple(terms)
     titles, t_llm = build_titles(d.get("titles"), subject, allowed=allowed, terms=terms,
                                  thesis=thesis, price=price, avoid=avoid, order=order,
-                                 name=name, known=known, owners=owners, spoken=spoken)
+                                 name=name, known=known, owners=owners, spoken=spoken,
+                                 style=style, angle=angle)
     comment, c_llm = build_comment(d.get("comment"), subject, allowed=allowed, terms=terms)
     replies = build_replies(d.get("replies"), allowed=allowed, terms=terms)
     return Packaging(titles=titles, comment=comment, replies=replies,
@@ -486,6 +527,31 @@ SYSTEM = """你是中文{domain}短视频账号的运营,负责给一条已经�
 - 只准引用下面事实里的数字;事实里没有的优点、缺点一律不许说。
 
 通用规则:数字只能来自事实;不许编造事实里没有的参数、事件或评价。"""
+
+
+#: 原理拆解(title_style = question)的标题规则,替换 SYSTEM 里「标题(titles)」那一节
+QUESTION_TITLES = """标题(titles):**正好 3 条,kind 各一种,写法不同,不是同义改写**。这条是原理拆解片,
+观众是刷到的,不是搜来的:标题要让不打算买这台车的人也想点进来看个究竟。
+- 三条都是「完整车名 + 一个问题句」:车名开头(搜索还认它),后面接一个反常识的问题,
+  用「凭什么」「为什么」「靠什么」「怎么做到的」这类问法,让人想知道答案。
+- stake:反常识。把片里那个最违反直觉的点问出来(「奥迪A6L,两升排量凭什么拉得动一吨八的车?」)。
+- number:带一个数字的问题。数字撑起反差(「比亚迪秦L DM-i,热效率46.06%是怎么抠出来的?」)。
+- person:体感 / 场景。从开车的人感觉到的现象问起(「奥迪A6L堵车一顿一顿,问题出在哪?」)。
+- 不写导购标题:不许出现「该不该买」「值不值」「怎么选」「落地价」;不报价格。
+- 每条 {title_max} 字以内,手机上一眼看完;车名和问题之间用逗号隔开。
+- 标题里出现的每一个数字必须逐字来自下面的事实,而且片里说过;不许四舍五入、不许换算、不许编。
+- 问题的答案必须是这条片讲了的,不许问一个片里没回答的问题。
+- 不许用这些词:{forbidden}。也不许出现这些词:{avoid}。
+- note:一句话说明这条的角度(20 字内)。"""
+
+
+def system_for(style: str = "") -> str:
+    """包装提示词模板。默认写法原样返回 SYSTEM;question 换掉标题那一节,其余不动。"""
+    if style != "question":
+        return SYSTEM
+    head, rest = SYSTEM.split("标题(titles):", 1)
+    _, tail = rest.split("\n\n置顶评论", 1)
+    return head + QUESTION_TITLES + "\n\n置顶评论" + tail
 
 
 def default_llm():
@@ -557,6 +623,8 @@ def build_inputs(project_id: str, profile: Any) -> dict[str, Any]:
         "thesis": str(project.get("thesis") or "").strip(),
         "price": price,
         "title": str(project.get("title") or ""),
+        "style": str(getattr(theme, "title_style", "") or ""),
+        "angle": str(project.get("angle") or "").strip(),
         "ending": ending,
         "terms": terms,
         "avoid": tuple(dict.fromkeys((*TITLE_AVOID, *getattr(profile, "title_avoid", ())))),
@@ -572,7 +640,9 @@ def _user_prompt(inp: Mapping[str, Any]) -> str:
     head = [f"主体:{inp['subject']}", f"片名:{inp['title']}"]
     if inp["thesis"]:
         head.append(f"主论点:{inp['thesis']}")
-    if inp["price"]:
+    if inp.get("angle"):
+        head.append(f"本期要回答的问题:{inp['angle']}")
+    if inp["price"] and inp.get("style") != "question":
         head.append(f"入门价:{inp['price']}")
     script = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(inp["script_texts"][:40]))
     return ("\n".join(head) + "\n\n事实(id | 内容):\n" + "\n".join(inp["fact_lines"][:60])
@@ -641,7 +711,7 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
     inp = build_inputs(project_id, profile)
     raw: Any = None
     if llm is not None:
-        system = SYSTEM.format(
+        system = system_for(inp["style"]).format(
             domain=inp["domain"], subject_label=inp["subject_label"], title_max=TITLE_MAX_CHARS,
             forbidden="、".join(f"「{t}」" for t in inp["terms"]),
             avoid="、".join(f"「{t}」" for t in inp["avoid"]), opt_max=OPTION_MAX_CHARS,
@@ -653,7 +723,10 @@ def generate(project_id: str, profile: Any, llm: Any = None, *, now: float | Non
             logging.getLogger(__name__).warning("包装生成失败,改用模板:%s", exc)
     return assemble(raw, inp["subject"], allowed=inp["allowed"], terms=inp["terms"],
                     thesis=inp["thesis"], price=inp["price"], avoid=inp["avoid"],
-                    now=time.time() if now is None else now, order=title_order(project_id),
+                    now=time.time() if now is None else now,
+                    # 问题句标题不参与「该不该买」那套写法的效果排序:固定反常识那条排第一
+                    order=KINDS if inp["style"] else title_order(project_id),
+                    style=inp["style"], angle=inp["angle"],
                     name=inp["name"], owners=inp.get("owners"), spoken=inp.get("spoken"),
                     known=" ".join([inp["subject"], *inp["script_texts"], *inp["fact_lines"]]))
 

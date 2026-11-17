@@ -35,18 +35,45 @@ class Frame:
         return int(self.top + self.height * k)
 
 
-def _car_fit(car: Any, f: Frame) -> tuple[Any, int, int]:
-    """车的尺寸和位置:竖屏占满宽度落在安全区下部,横屏放右半边。返回 (缩放后的车, x, 地面 y)。"""
+def _car_fit(car: Any, f: Frame, small: bool = False) -> tuple[Any, int, int]:
+    """车的尺寸和位置:竖屏占满宽度落在安全区下部,横屏放右半边。返回 (缩放后的车, x, 地面 y)。
+    `small`:拆解封面,主角是剖视图,车缩小靠右下角。"""
     from PIL import Image
 
-    if f.landscape:
+    if small:
+        max_w, max_h, floor = (f.w * 0.36, f.h * 0.34, f.y(0.93)) if f.landscape \
+            else (f.w * 0.60, f.height * 0.24, f.y(0.935))
+    elif f.landscape:
         max_w, max_h, floor = f.w * 0.60, f.h * 0.60, f.y(0.90)
     else:
         max_w, max_h, floor = f.w * 1.0, f.height * 0.42, f.y(0.90)
     k = min(max_w / car.width, max_h / car.height)
     car = car.resize((max(1, int(car.width * k)), max(1, int(car.height * k))), Image.LANCZOS)
-    x = int(f.w - f.margin * 0.5 - car.width) if f.landscape else (f.w - car.width) // 2
+    if f.landscape or small:
+        x = int(f.w - f.margin * 0.5 - car.width)
+    else:
+        x = (f.w - car.width) // 2
     return car, x, int(floor)
+
+
+def place_art(canvas: Any, art: Any, f: Frame) -> None:
+    """拆解封面的剖视图:铺在安全区中下部(横屏在右半边),四边羽化进深色底。直接画在 canvas 上。"""
+    from PIL import Image, ImageDraw, ImageFilter
+
+    im = Image.open(art).convert("RGB") if not hasattr(art, "size") else art.convert("RGB")
+    if f.landscape:
+        w = int(f.w * 0.60)
+        x, y = f.w - w + int(f.w * 0.03), int(f.h * 0.5 - w * im.height / im.width * 0.5)
+    else:
+        w = int(f.w * 1.12)
+        x, y = (f.w - w) // 2, f.y(0.375)
+    im = im.resize((w, max(1, int(w * im.height / im.width))), Image.LANCZOS)
+    mask = Image.new("L", im.size, 0)
+    pad = int(min(im.size) * 0.10)
+    ImageDraw.Draw(mask).rounded_rectangle((pad, pad, im.width - pad, im.height - pad),
+                                           radius=pad * 2, fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(pad * 0.7))
+    canvas.paste(im, (x, y), mask)
 
 
 def _ghost(canvas: Any, f: Frame, tone: Tone, word: str, car_box: tuple[int, int, int, int]) -> None:
@@ -73,11 +100,12 @@ def _ghost(canvas: Any, f: Frame, tone: Tone, word: str, car_box: tuple[int, int
     canvas.paste(Image.new("RGB", canvas.size, ink), (0, 0), layer)
 
 
-def place_car(canvas: Any, cut: Any, f: Frame, *, tone: Tone | None = None, ghost: str = "") -> None:
+def place_car(canvas: Any, cut: Any, f: Frame, *, tone: Tone | None = None, ghost: str = "",
+              small: bool = False) -> None:
     """车落在地面线上:背后型号大字 → 淡倒影 → 接触阴影 → 车。直接画在 canvas 上。"""
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-    car, x, floor = _car_fit(_car_layer(cut), f)
+    car, x, floor = _car_fit(_car_layer(cut), f, small)
     y = floor - car.height
     if tone is not None:
         _ghost(canvas, f, tone, ghost, (x, y, x + car.width, floor))
@@ -183,6 +211,20 @@ def _soft_cuts(title: str) -> list[int]:
     return out
 
 
+_ASK_WORDS = ("凭什么", "为什么", "为啥", "到底", "怎么", "靠什么")
+
+
+def _ask_cuts(title: str) -> list[int]:
+    """问题句断在疑问词的前面或后面(「两升排量凭什么 / 带得动一吨八的车?」),不把「带得动」
+    拆成两行。两头哪个离中间近由调用方挑;太靠头或太靠尾的不要,免得断成一长一短。"""
+    n = len(title)
+    for w in _ASK_WORDS:
+        k = title.find(w)
+        if k >= 0:
+            return [c for c in (k, k + len(w)) if n // 3 <= c <= n - n // 3]
+    return []
+
+
 def _title_lines(title: str, bold: str | None, max_width: int, biggest: int,
                  smallest: int = 56) -> tuple[list[str], Any]:
     """一段字最多两行:放得下就一行;否则断在标点 / 安全位置上,在 biggest..smallest 里取最大字号。"""
@@ -191,16 +233,20 @@ def _title_lines(title: str, bold: str | None, max_width: int, biggest: int,
     font = _font(bold, biggest)
     if font.getlength(title) <= max_width:
         return [title], font
-    cuts = [k + 1 for k, ch in enumerate(title[:-1]) if ch in _COVER_BREAK] or _soft_cuts(title)
+    cuts = ([k + 1 for k, ch in enumerate(title[:-1]) if ch in _COVER_BREAK] + _ask_cuts(title)
+            or _soft_cuts(title))
     if cuts:
-        k = min(cuts, key=lambda c: (abs(c - len(title) / 2), -c))  # 一样近取靠后的,上行长一点
-        halves = [title[:k].strip(), title[k:].strip()]
+        # 离中间最近的断点先试(一样近取靠后的,上行长一点);它放不下再试下一个 ——
+        # 只试一个的话,标点偏在一头时会掉进按宽度硬折,把「凭什么」拆成两行
+        order = sorted(set(cuts), key=lambda c: (abs(c - len(title) / 2), -c))
         for size in range(biggest, smallest - 1, -6):
             font = _font(bold, size)
             if font.getlength(title) <= max_width:
                 return [title], font
-            if all(font.getlength(x) <= max_width for x in halves):
-                return halves, font
+            for k in order:
+                halves = [title[:k].strip(), title[k:].strip()]
+                if all(font.getlength(x) <= max_width for x in halves):
+                    return halves, font
     size = biggest
     while True:
         font = _font(bold, size)
@@ -244,6 +290,25 @@ def split_title(title: str, name: str = "") -> tuple[str, str]:
         rest = title[len(name):].strip(" :：") if title.startswith(name) else title
         return name, rest or title
     return title, ""
+
+
+def question_part(title: str, subject: str) -> str:
+    """拆解封面的大字:标题去掉开头的车名,只留问题句(「比亚迪秦L DM-i,多转一次凭什么更省」
+    →「多转一次凭什么更省」)。车名在角标里已经有了;剩下的太短就用整条标题。"""
+    from ..packaging import _lead_name
+
+    title = (title or "").strip()
+    lead = _lead_name(title, subject)
+    if not lead:
+        return title
+    n, k = 0, 0
+    for k, ch in enumerate(title):  # noqa: B007 - 按「去空白后的长度」找到车名在原文里的终点
+        if not ch.isspace():
+            n += 1
+        if n >= len(lead):
+            break
+    rest = title[k + 1:].strip(" ,,::、")
+    return rest if len(rest) >= 5 else title
 
 
 def strip_figure(text: str, figure: str) -> str:
@@ -311,12 +376,13 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
     _faces()
     f = Frame.of(canvas.size)
     shadow = 90 if tone.light_text else 0
-    band_text = tone.text if _ink(tone.accent) > 150 else (255, 255, 255)
+    band_text = tone.on_accent or (tone.text if _ink(tone.accent) > 150 else (255, 255, 255))
     chip_fill, chip_text = tone.text, tone.top
     if f.landscape:
         col_w = int(f.w * 0.48)
         x, y = f.margin, f.y(0.12)
-        mains, mf = _fit(main, HEAVY, col_w, int(f.h * 0.16), int(f.h * 0.07), int(f.h * 0.10))
+        mains, mf = _title_lines(main, HEAVY, col_w, int(f.h * 0.15), int(f.h * 0.07)) if tone.dark \
+            else _fit(main, HEAVY, col_w, int(f.h * 0.16), int(f.h * 0.07), int(f.h * 0.10))
         if chip:
             cf = _font(BOLD, int(f.h * 0.05))
             y += _pill(canvas, (x, y), chip, cf, chip_fill, chip_text)[1] + int(cf.size * 0.55)
@@ -333,7 +399,9 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
     else:
         max_w = f.w - f.margin * 2
         y = f.y(0.07)
-        mains, mf = _fit(main, HEAVY, max_w, int(f.w * 0.21), int(f.w * 0.09), int(f.w * 0.12))
+        # 暗底(拆解封面)的大字是一句问题:宁可两行大字,也不缩成一行小字
+        mains, mf = _title_lines(main, HEAVY, max_w, int(f.w * 0.17), int(f.w * 0.09)) if tone.dark \
+            else _fit(main, HEAVY, max_w, int(f.w * 0.21), int(f.w * 0.09), int(f.w * 0.12))
         if chip:
             cf = _font(BOLD, int(f.w * 0.042))
             bw = cf.getbbox(chip)[2] - cf.getbbox(chip)[0] + int(cf.size * 1.0)

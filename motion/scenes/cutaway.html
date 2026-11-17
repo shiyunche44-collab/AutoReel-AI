@@ -1,0 +1,37 @@
+<!-- Mechanism still: a generated cutaway image with a slow camera move and a scan sweep.
+     The image itself carries no text or numbers; marks and rows come from the data.
+     @portrait yes -->
+<meta name="hf-bg" content="studio" />
+<style>
+    .cut-img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+    .cut-shade { position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse 80% 75% at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.6) 100%); }
+    .cut-scan { position: absolute; top: -5%; height: 110%; width: 26%; pointer-events: none;
+      background: linear-gradient(90deg, rgba(var(--hi), 0) 0%, rgba(var(--hi), 0.22) 50%, rgba(var(--hi), 0) 100%); }
+  </style>
+<script>
+    const { tl, D, S } = HF.boot();
+    const M = HF.mech(tl, { tall: true });
+    const frame = M.frame;
+    // camera variants: [origin x%, origin y%, scale from, scale to]
+    const CAMS = [[50, 50, 1.0, 1.22], [24, 42, 1.5, 1.22], [76, 56, 1.18, 1.55], [50, 72, 1.5, 1.2]];
+    const cam = CAMS[(D.variant || 0) % CAMS.length];
+    if (D.image && D.image.src) {
+      const img = HF.el("img", "cut-img");
+      img.src = D.image.src;
+      img.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
+      frame.insertBefore(img, frame.firstChild);
+      tl.fromTo(img, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+    }
+    const shade = HF.el("div", "cut-shade");
+    const scan = HF.el("div", "cut-scan");
+    frame.insertBefore(scan, M.svg);
+    frame.insertBefore(shade, M.svg);
+    // a light sweep every few seconds keeps a still image alive
+    const period = 3.6;
+    for (let t = 0.2; t < S - 0.4; t += period) {
+      tl.fromTo(scan, { xPercent: -120, opacity: 1 }, { xPercent: 420, duration: Math.min(1.6, S - t), ease: "power1.inOut", immediateRender: false }, t);
+    }
+    HF.grain();
+    HF.register(tl);
+  </script>

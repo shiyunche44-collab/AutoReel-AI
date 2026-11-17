@@ -1,6 +1,7 @@
 """把 YAML 原始字典构建成 `CategoryProfile`,并做一致性校验。"""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .profile import (  # noqa: F401
@@ -95,6 +96,11 @@ def _build_theme(name: str, raw: dict[str, Any]) -> ThemeSpec:
         versus=versus,
         requires_angle=bool(raw.get("requires_angle", False)),
         max_duration=int(raw.get("max_duration", 0) or 0),
+        durations_portrait=tuple(int(d) for d in (raw.get("durations_portrait") or ())),
+        chars_per_second=float(raw.get("chars_per_second", 0) or 0),
+        cover_tone=str(raw.get("cover_tone") or "").strip(),
+        title_style=str(raw.get("title_style") or "").strip(),
+        tags=tuple(str(t).strip() for t in (raw.get("tags") or ()) if str(t).strip()),
         roster_label=str(raw.get("roster_label", "") or ""),
         roster_placeholder=str(raw.get("roster_placeholder", "") or ""),
         reviewer=bool(raw.get("reviewer", False)),
@@ -213,7 +219,8 @@ def _min_supported_shots(profile: CategoryProfile) -> int:
 
 
 #: 解说轨的版式名。与 pipeline/explainer.LAYOUTS 保持一致(这里不反向导入流水线)
-EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook")
+EXPLAINER_LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept",
+                                      "hook", "mech")
 
 
 def _validate(profile: CategoryProfile) -> None:
@@ -227,6 +234,21 @@ def _validate(profile: CategoryProfile) -> None:
         if "concept" in sec.layouts and not profile.vocab.concept_scenes:
             raise ProfileError(f"品类 {profile.name} 段落 {sname}: 用了 concept 版式,"
                                "但 vocab.concept_scenes 没配任何动画模板")
+        if "mech" in sec.layouts and not profile.vocab.mech_parts:
+            raise ProfileError(f"品类 {profile.name} 段落 {sname}: 用了 mech 版式,"
+                               "但 vocab.mech_parts 没配任何部件")
+    for part, spec in profile.vocab.mech_parts.items():
+        if not spec.get("scene") or not spec.get("when"):
+            raise ProfileError(f"品类 {profile.name} mech_parts.{part}: scene 和 when 必填")
+        if re.search(r"\d", spec.get("art", "")):
+            raise ProfileError(f"品类 {profile.name} mech_parts.{part}: art 里不许写数字"
+                               "(画面上的数字只能来自事实)")
+    for n, topic in enumerate(profile.vocab.mechanism_topics):
+        if not all(topic.get(k) for k in ("car", "part", "angle")):
+            raise ProfileError(f"品类 {profile.name} mechanism_topics[{n}]: car / part / angle 必填")
+        if re.search(r"\d", topic["angle"]):
+            raise ProfileError(f"品类 {profile.name} mechanism_topics[{n}]: angle 里不许写数字"
+                               "(数字只能来自事实)")
 
     # 1. 老写法:手写 section_plan
     for duration, plan in profile.section_plan.items():

@@ -25,7 +25,8 @@ from .. import db
 DIMENSIONS = (("beat_layout", "逐拍·版式"), ("beat_role", "逐拍·位置"),
               ("beat_footage", "逐拍·素材"), ("beat_section", "逐拍·段落"))
 LAYOUT_LABEL = {"broll": "实拍空镜", "panel": "参数面板", "highlight": "关键词大字",
-                "card": "数据卡", "stat": "大数字", "concept": "概念动画", "hook": "开场大字"}
+                "card": "数据卡", "stat": "大数字", "concept": "概念动画", "hook": "开场大字",
+                "mech": "机构画面"}
 ROLE_LABEL = {"hook": "开头章", "body": "正文", "ending": "结论章"}
 FOOTAGE_LABEL = {"official": "官方实拍", "still": "静图", "third_party": "第三方视频",
                  "rendered": "纯渲染"}

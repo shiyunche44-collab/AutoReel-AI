@@ -497,6 +497,12 @@ TEAM_LANDSCAPE_UNTIL = os.getenv("TEAM_LANDSCAPE_UNTIL", "").strip()
 #: 车从品类 vocab.segments 的名单里按顺序轮,不看全市场榜单。留空 = 不排。
 TEAM_WALKTHROUGH_WEEKDAYS = tuple(
     int(t) for t in os.getenv("TEAM_WALKTHROUGH_WEEKDAYS", "").split(",") if t.strip().isdigit())
+#: 原理拆解:这些星期(0 = 周一)的空档排 mechanism 片型(竖屏),题目从品类 vocab.mechanism_topics
+#: 的种子里按顺序取:同车型冷却期内不排,同一类部件不连排超过 2 期。留空 = 不排。
+TEAM_MECHANISM_WEEKDAYS = tuple(
+    int(t) for t in os.getenv("TEAM_MECHANISM_WEEKDAYS", "").split(",") if t.strip().isdigit())
+#: 原理拆解默认排多长(秒);落到片型允许的竖屏档位上
+TEAM_MECHANISM_DURATION = int(os.getenv("TEAM_MECHANISM_DURATION", "240"))
 #: 素材官:已批选题的车,确认本车视频少于这么多秒就提前建池(花视觉打标签的额度)
 TEAM_ASSET_PREBUILD = os.getenv("TEAM_ASSET_PREBUILD", "1") not in ("0", "false", "False")
 #: 合规审核官:成片里第三方视频占比到这个数提醒,到上限不让发

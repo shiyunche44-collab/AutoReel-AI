@@ -9,7 +9,8 @@ from ... import config
 from .tone import Tone, log, tone_of
 from .studio import background
 from .car_ai import pick_visual
-from .layout import Frame, model_word, place_car, render, short_name, split_title, strip_figure, usable_hook
+from .layout import (Frame, model_word, place_art, place_car, question_part, render, short_name,
+                     split_title, strip_figure, usable_hook)
 
 
 # --------------------------------------------------------------------------
@@ -26,10 +27,16 @@ def _save(image: Any, dest: Path) -> None:
 
 
 def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str = "",
-            name: str = "", brand: str = "", series: str = "") -> tuple[Any, str]:
-    """底图 → 型号大字 + 车 → 字。返回 (图, 底图来源)。"""
+            name: str = "", brand: str = "", series: str = "",
+            art: Any = None) -> tuple[Any, str]:
+    """底图 → 型号大字 + 车 → 字。返回 (图, 底图来源)。
+    `art`:拆解封面的剖视图(暗底色调才用):图当主角,车缩小放右下角,不画型号大字。"""
     canvas, source = background(tone, size)
-    place_car(canvas, cut, Frame.of(size), tone=tone, ghost=model_word(name))
+    if tone.dark and art is not None:
+        place_art(canvas, art, Frame.of(size))
+        place_car(canvas, cut, Frame.of(size), tone=tone, small=True)
+    else:
+        place_car(canvas, cut, Frame.of(size), tone=tone, ghost="" if tone.dark else model_word(name))
     # 车名角标**始终画**:主页一排封面靠它认出同一个号(账号里已发的几条都有这块)。
     # 以前是「主标题已经是车名就不重复」—— 大唐、小米YU7 那几条的角标能出现是因为
     # 大字和车名不是同一个字符串,纯属巧合;蔚来ES8 这种大字就是车名的就整个没了,
@@ -65,6 +72,16 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
             # 大字是那个数字,副标里就别再出现一遍
             sub = strip_figure(sub, hook) or sub
         tone = tone_of(project_id, variant)
+        art = None
+        if tone.dark and variant == "b":
+            # 拆解封面不出 B 版:B 版的大字是「带数字的钩子」(入门价、扭矩),放在问题句封面的
+            # 版式里既不是这条片的问题,数字还会被拆成半截(样片出过「340 / N·m怎么做出…」)
+            return None
+        if tone.dark:
+            # 拆解封面:大字是问题句(车名在角标里),配这条片用得最多的那张剖视图
+            if not hook:
+                main, sub = question_part(title, subject), ""
+            art = _mech_art(project_id)
         short = min(size)
         jobs = [(Path(dest), size),
                 (cover_3x4_path(dest), (short, short * 4 // 3)),
@@ -72,7 +89,7 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         name = short_name(kicker)
         series_chip = _series_chip(project_id)
         rendered = [(path, compose(cut, tone, sz, main=main, sub=sub, name=name,
-                                   brand=config.COVER_BRAND, series=series_chip))
+                                   brand=config.COVER_BRAND, series=series_chip, art=art))
                     for path, sz in jobs]
         for path, (im, _) in rendered:
             _save(im, path)
@@ -81,6 +98,30 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
     except Exception as exc:  # noqa: BLE001
         log.warning("统一风格封面失败,退回老封面:%s", exc)
         return None
+
+
+def _mech_art(project_id: str) -> Path | None:
+    """这条片的机构画面里用得最多的那张剖视图(已经生成过、在缓存里的);没有返回 None。
+    只读缓存不出新图:封面不该因为生图失败拦住成片。"""
+    from collections import Counter
+
+    from ... import db
+    from .. import mechanism_art
+
+    try:
+        beats = db.read_json(project_id, "storyboard.json", []) or []
+        arts = Counter((str(ov.get("part") or ""), str(ov.get("art") or ""))
+                       for b in beats if isinstance(b, dict)
+                       for ov in [b.get("overlay") or {}]
+                       if b.get("layout") == "mech" and ov.get("art"))
+        for (part, art), _ in arts.most_common():
+            try:
+                return mechanism_art.cutaway(part, art, generate=False)
+            except mechanism_art.MechArtError:
+                continue
+    except Exception as exc:  # noqa: BLE001
+        log.info("封面:取剖视图失败,只放车:%s", exc)
+    return None
 
 
 def _series_chip(project_id: str) -> str:

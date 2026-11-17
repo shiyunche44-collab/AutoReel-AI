@@ -96,6 +96,18 @@ class ThemeSpec:
     requires_angle: bool = False
     #: 这个片型最长做多少秒(0 = 不限)。只讲一个点的片子拉到 8 分钟就是注水
     max_duration: int = 0
+    #: 这个片型自己的竖屏时长档位(空 = 用品类的 `durations_portrait`)。
+    #: 原理拆解要 3–5 分钟,而别的竖屏片型最长 180 秒 —— 档位不该为了它整体放开
+    durations_portrait: tuple[int, ...] = ()
+    #: 竖屏字数预算用的语速(字/秒,0 = 用 `script_gen.fit` 的通用值)。原理拆解一拍接一拍
+    #: 讲机理、拍间停顿少,实测 6.0–6.9 字/秒;按通用的 4.7 算,180 秒的片只出 140 秒
+    chars_per_second: float = 0.0
+    #: 封面色调(`cover_art.tone.THEME_TONES` 里的名字;空 = 按项目散列挑浅色影棚底)
+    cover_tone: str = ""
+    #: 发布时排在车名、栏目后面的话题(空 = 按「车名怎么选」+ 事实主题 + 品类通用词派生)
+    tags: tuple[str, ...] = ()
+    #: 发布标题的写法(`packaging.TITLE_STYLES` 里的名字;空 = 默认的「该不该买」搜索向写法)
+    title_style: str = ""
     #: 允许的开头 / 结尾写法(id 见 pipeline.variety),第一个是默认。空 = 只有默认那一种
     openings: tuple[str, ...] = ()
     endings: tuple[str, ...] = ()
@@ -323,6 +335,14 @@ class Vocab:
     #: (零百秒数)。没配上量程的参数只做排版强调,不画表示数量的图形
     concept_ranges: dict[str, str] = field(default_factory=dict)
 
+    # ---- 机构画面(解说轨 mech 版式:机构动画 / 剖视静帧)----
+    #: 部件 id → {scene 模版名, mode 变体, when 什么时候用, keys 命中词(逗号分隔), art 剖视图的生图描述}。
+    #: 空 = 这个品类不开 mech 版式。提示词里只有段落允许 mech 的片型才会出现这份清单
+    mech_parts: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: 原理拆解的选题种子,主编按顺序排(`team.editor.plan_mechanism`)。每条 {car 车型, part 部件大类
+    #: (用来避免连着几期拆同一类东西), angle 这一期要回答的问题}。angle 里不写数字 —— 数字只能来自事实
+    mechanism_topics: tuple[dict[str, str], ...] = ()
+
     # ---- 前端 ----
     ui_subject_label: str = "产品"
     ui_placeholder: str = "例如:某品牌某型号"
@@ -413,7 +433,10 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         if key not in known:
             raise ProfileError(f"vocab 里的未知字段 {key!r}")
         default = getattr(Vocab(), key)
-        if isinstance(default, tuple):
+        if key == "mechanism_topics":
+            kwargs[key] = tuple({str(a): str(b).strip() for a, b in (x or {}).items()}
+                                for x in (value or ()))
+        elif isinstance(default, tuple):
             kwargs[key] = tuple(str(x) for x in (value or ()))
         elif isinstance(default, dict) and key in ("hint_groups", "coverage_views", "segments"):
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
@@ -423,6 +446,9 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
         elif isinstance(default, dict) and key == "concept_scene_keys":
             # 模板名 → 命中它的关键词(词表)
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
+        elif isinstance(default, dict) and key == "mech_parts":
+            kwargs[key] = {str(k): {str(a): str(b).strip() for a, b in (v or {}).items()}
+                           for k, v in (value or {}).items()}
         elif isinstance(default, dict):
             kwargs[key] = {str(k): str(v) for k, v in (value or {}).items()}
         else:

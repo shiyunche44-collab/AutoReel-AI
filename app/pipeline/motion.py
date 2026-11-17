@@ -105,7 +105,9 @@ _SCENE_PHOTO = "scene"
 _META = re.compile(r"@(\w[\w-]*)\s+(.+)")
 #: 场景的中文栏目名(通用模版的眉标用)
 KICKERS = {"accel": "加速", "battery": "电池", "charging": "补能", "chip": "智驾芯片",
-           "compare": "对比", "dims": "尺寸", "lidar": "感知"}
+           "compare": "对比", "dims": "尺寸", "lidar": "感知",
+           "piston": "发动机", "powerflow": "能量流", "cutaway": "结构",
+           "planetary": "行星齿轮", "damper": "悬架", "pack": "电池", "motor": "电机"}
 
 
 @dataclass(frozen=True)
@@ -341,6 +343,11 @@ def cache_key(scene: str, data: dict[str, Any], seconds: float, size: tuple[int,
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:20]
 
 
+def asset_data(name: str, src: str | Path) -> dict[str, str]:
+    """额外图片在模版数据里的写法:{src 文件名, sha 内容指纹}。指纹进了数据也就进了缓存键。"""
+    return {"src": name, "sha": _file_sha(Path(src))[:16]}
+
+
 def _env() -> dict[str, str]:
     env = {**os.environ, "HYPERFRAMES_NO_TELEMETRY": "1", "DO_NOT_TRACK": "1"}
     if config.MOTION_BROWSER:
@@ -404,8 +411,9 @@ def _inputs(background: str | Path | None, photo: Cutout | None) -> tuple[Path |
 
 
 def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: Path | None,
-             photo: Cutout | None, style: str | None, size: tuple[int, int]) -> None:
-    """渲染 / 截图共用的工作目录:index.html + 公用文件 + gsap + 底 + 车图。"""
+             photo: Cutout | None, style: str | None, size: tuple[int, int],
+             assets: dict[str, Path] | None = None) -> None:
+    """渲染 / 截图共用的工作目录:index.html + 公用文件 + gsap + 底 + 车图 + 模版自带的图。"""
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, exist_ok=True)
     (work / "index.html").write_text(
@@ -418,6 +426,8 @@ def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: P
         shutil.copyfile(photo.png, work / PHOTO_FILE)
         if photo.edges and Path(photo.edges).is_file():
             shutil.copyfile(photo.edges, work / EDGES_FILE)
+    for name, src in (assets or {}).items():
+        shutil.copyfile(src, work / name)
     for name in SHARED_FILES:
         shutil.copyfile(config.MOTION_DIR / name, work / name)
     shutil.copyfile(_gsap(), work / "gsap.min.js")
@@ -429,12 +439,15 @@ def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: P
 
 def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, int],
            dest: str | Path, background: str | Path | None = None,
-           photo: Cutout | None = None, style: str | None = None) -> Path:
+           photo: Cutout | None = None, style: str | None = None,
+           assets: dict[str, Path] | None = None) -> Path:
     """渲染一段概念动画到 `dest`(mp4,size 画幅,FPS 与成片一致)。失败抛 MotionError。
     size:横屏 1920×1080 或竖屏 1080×1920(`size_for(aspect)`),别的尺寸拒绝。
     background:这一拍的实拍底(mp4),动画压在它上面;不给就用暗色径向底(或模板自带影棚)。
     photo:抠好的车图(`motion_assets.hero_still`),不给时模板走无车图版本。
-    style:风格 id(`styles()`),不给 / 不认识用默认风格。"""
+    style:风格 id(`styles()`),不给 / 不认识用默认风格。
+    assets:模版要用的额外图片 {工作目录里的文件名: 源文件}(机构画面的剖视图)。缓存键不看
+    文件内容,调用方要把图的指纹放进 data(见 `asset_data`)。"""
     _check(size)
     seconds = max(1.0, float(seconds))
     dest = Path(dest)
@@ -448,7 +461,7 @@ def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, in
 
     work = cache_dir() / f"_work_{key}"
     try:
-        _prepare(work, scene, data, seconds, bg, photo, style, size)
+        _prepare(work, scene, data, seconds, bg, photo, style, size, assets)
         out = work / "out.mp4"
         proc = _run_cli(scene, work, out, seconds)
         if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
@@ -484,7 +497,8 @@ def snapshot_names(scene: str, data: dict[str, Any], seconds: float, at: list[fl
 
 def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
              size: tuple[int, int], dest_dir: str | Path, background: str | Path | None = None,
-             photo: Cutout | None = None, style: str | None = None) -> list[Path]:
+             photo: Cutout | None = None, style: str | None = None,
+             assets: dict[str, Path] | None = None) -> list[Path]:
     """只截几个时刻的 PNG(不渲整段视频),给选风格用。返回按 `at` 顺序的图片路径。
     同样按内容缓存:同一拍同一风格再看一次不重截。失败抛 MotionError。"""
     _check(size)
@@ -500,7 +514,7 @@ def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
         return names
     work = cache_dir() / f"_snap_{key}_{tag}"
     try:
-        _prepare(work, scene, data, seconds, bg, photo, style, size)
+        _prepare(work, scene, data, seconds, bg, photo, style, size, assets)
         shots = work / "snaps"
         base = [config.motion_node() or "node", str(_cli()), "snapshot", str(work), "-o", str(shots),
                 "--at", ",".join(f"{t:g}" for t in at), "--no-end", "--describe", "false",

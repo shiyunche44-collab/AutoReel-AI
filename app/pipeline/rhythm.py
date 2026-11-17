@@ -38,7 +38,8 @@ MAX_SAME_RUN = 2
 HOOK_CHANGE_SECONDS = 3.0
 #: 视频优先的视觉包:带信息叠加的时长占比上限
 INFO_RATIO_MAX = 0.35
-#: 算信息叠加的版式;panel 只在视觉包画面板时算
+#: 算信息叠加的版式;panel 只在视觉包画面板时算。
+#: mech(机构画面)不在内:它是原理拆解的主画面,按叠加限时会被撤掉一半
 INFO_LAYOUTS = ("hook", "highlight", "stat", "card", "concept")
 
 
@@ -61,7 +62,8 @@ def _overlay_signature(spec: ShotSpec) -> tuple:
     rows = ov.get("rows") or []
     lines = ov.get("lines") or []
     # 视频优先:每拍都换镜头,没有两拍算同一屏
-    shot = spec.idx if looks.current().video_first else None
+    # 机构画面同理:每拍是一段新的动画 / 新的剖视机位,标注也跟着旁白换
+    shot = spec.idx if looks.current().video_first or spec.layout == "mech" else None
     return (shot, spec.layout, spec.chapter or spec.section,
             tuple(r.get("fact_id", "") for r in rows if isinstance(r, dict)),
             tuple(str(x) for x in lines))
@@ -133,7 +135,7 @@ def quiet_gaps(specs: Sequence[ShotSpec]) -> list[float]:
             if start is not None:
                 gaps.append(t - start)
             start = None
-        if s.layout != "concept":
+        if s.layout not in ("concept", "mech"):
             if start is None:
                 start = t + (min(HOOK_CHANGE_SECONDS, dur) if fast else 0.0)
         t += dur

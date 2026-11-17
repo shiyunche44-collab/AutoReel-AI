@@ -41,7 +41,7 @@ CUT_LEAD_OF_GAP = 0.6
 JCUT_INFO_MAX = 0.30
 #: 上一拍是信息画面、下一拍是实拍时,画面晚切这么多秒(L-cut):让上一张图的动画收完再走
 LCUT_LAG = 0.15
-_INFO_LAYOUTS = ("concept", "card", "stat")
+_INFO_LAYOUTS = ("concept", "card", "stat", "mech")
 
 
 def cut_leads(cues: Sequence[Any], count: int, layouts: Sequence[str] | None = None
@@ -151,6 +151,13 @@ def mark_reveal_times(specs: Sequence[ShotSpec], cues: Sequence[Any],
         if s.layout in ("concept", "panel") and s.overlay and s.overlay.get("rows"):
             rows = list(s.overlay.get("rows") or [])
             s.overlay = {**s.overlay, "rows": _stamp_rows(rows, mine, s.duration, lead)}
+        elif s.layout == "mech" and s.overlay:
+            # 标注跟着旁白说到它的那一刻出现;行(有的话)照参数的规矩来
+            probe = [{"label": m.get("text", ""), "values": []} for m in s.overlay.get("marks") or []]
+            marks = [{"text": p["label"], **({"at": p["at"]} if "at" in p else {})}
+                     for p in _stamp_rows(probe, mine, s.duration, lead)]
+            rows = _stamp_rows(list(s.overlay.get("rows") or []), mine, s.duration, lead)
+            s.overlay = {**s.overlay, "marks": marks, "rows": rows}
         elif s.layout == "card" and s.card and s.card.get("rows"):
             rows = list(s.card.get("rows") or [])
             s.card = {**s.card, "rows": _stamp_rows(rows, mine, s.duration, lead)}

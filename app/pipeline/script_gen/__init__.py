@@ -212,9 +212,10 @@ def generate(
     angle = (angle or "").strip()
     vocab = profile.vocab
     # 语速旋钮调快 / 调慢时,同样时长能念的字数按同一比例变(默认 1.0,字数预算不变)
-    budget = narration_budget_chars(
-        duration, (PORTRAIT_CHARS_PER_SECOND if portrait else LANDSCAPE_CHARS_PER_SECOND)
-        * knobs.speed_factor())
+    cps = PORTRAIT_CHARS_PER_SECOND if portrait else LANDSCAPE_CHARS_PER_SECOND
+    if portrait and getattr(theme, "chars_per_second", 0):
+        cps = float(theme.chars_per_second)  # 片型自己测过的语速(原理拆解)
+    budget = narration_budget_chars(duration, cps * knobs.speed_factor())
     shot_count = max(1, len(plan))
     scope_label = {"product": "product", "company": "company", "industry": "industry"}
     facts = usable_facts(facts)

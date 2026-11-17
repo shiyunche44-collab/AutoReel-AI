@@ -6,6 +6,7 @@ from typing import Any, Sequence
 from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment, ShotSpec
 from .. import cards, knobs, rhythm
+from . import mech
 from ..grounding import numbers_in
 
 from .consts import LAYOUTS, MAX_BROLL_RUN, SAFE_LAYOUT
@@ -91,6 +92,13 @@ def sync_narration(specs: Sequence[ShotSpec], segments: Sequence[ScriptSegment],
                 spec.layout = SAFE_LAYOUT
                 spec.card = None
                 spec.visual_zh = re.sub(r"^\[[^\]]*\]", f"[{SAFE_LAYOUT}]", spec.visual_zh)
+        elif isinstance(ov, dict) and ov.get("kind") == "mech":
+            # 标注是照抄旁白的词,行只留这一拍说过的数字:旁白一改都要重核。画面本身(部件)不动
+            said_now = numbers_in(text)
+            spec.overlay = {**ov, "marks": mech.ground_marks(ov.get("marks"), text),
+                            "rows": [r for r in ov.get("rows") or []
+                                     if all(numbers_in(str(v)) <= said_now
+                                            for v in r.get("values") or [])]}
         out.append(spec)
     # 卡片 / 概念动画按改完的全片旁白重核:改稿删掉的数字不留在屏上
     return drop_unsaid_numbers(out)
@@ -237,6 +245,10 @@ def _ground_beat(i: int, seg: ScriptSegment, item: dict, subject: str, profile: 
                     overlay, layout = rescued, "panel"
                 else:
                     layout = SAFE_LAYOUT
+    elif layout == "mech":
+        overlay, dropped = mech.ground_mech(item.get("mech"), seg.text, facts, profile.vocab)
+        if overlay is None:
+            layout = SAFE_LAYOUT
     elif layout == "card":
         raw_card = item.get("card")
         kind = sec.card or (raw_card.get("kind") if isinstance(raw_card, dict) else "") or "spec"

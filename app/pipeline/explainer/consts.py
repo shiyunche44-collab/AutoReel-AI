@@ -9,7 +9,8 @@ from .. import render as render_mod
 
 _log = logging.getLogger(__name__)
 
-LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook")
+LAYOUTS: tuple[str, ...] = ("broll", "panel", "highlight", "card", "stat", "concept", "hook",
+                            "mech")
 #: 不需要任何数据就能成立的版式 —— 其它版式核对失败都退回它
 SAFE_LAYOUT = "broll"
 #: 黄金三秒:开场拍前几秒是快切 + 大字的冷开场,每刀多长、大字停多久
@@ -62,7 +63,7 @@ SYSTEM = """你是信息型{domain}解说视频(横屏 16:9,对标「三驱兄�
   `values` 按 `columns` 的顺序给两台车的取值,只填这一条 fact_id。两台车没写在同一条事实里
   就别做对比卡 —— 核不过会自动作废。口径不一致的数字不放在一起比。
 - stat:宣传片压暗 + 中央一个大数字滚动。旁白只围绕**一个**核心数字时用({stat_examples})。给 `stat`:{{"label": "参数名(8 字内)", "value": "取值含单位", "fact_id": "f_xxx",
-  "note": "这个数字对观众意味着什么({note_chars} 字内,从这一拍旁白里取,如「吃顿饭的工夫」「同价位最低一档」)"}}{concept_guide}
+  "note": "这个数字对观众意味着什么({note_chars} 字内,从这一拍旁白里取,如「吃顿饭的工夫」「同价位最低一档」)"}}{concept_guide}{mech_guide}
 
 硬性要求:
 1. 只输出一个 JSON 对象,不要 Markdown 围栏或解释文字。

@@ -366,6 +366,100 @@ def plan_segment(category: str, profile: CategoryProfile, empty: list[float],
     return made, rest
 
 
+#: 原理拆解片型的 id(选题种子在 vocab.mechanism_topics)
+MECHANISM_THEME = "mechanism"
+#: 同一类部件最多连排几期
+MECHANISM_PART_RUN = 2
+
+
+def _topic_key(car: Any, angle: Any) -> tuple[str, str]:
+    return _norm(car), re.sub(r"[\s,,。.??!!]+", "", str(angle or ""))
+
+
+def next_mechanism_topic(topics: tuple[dict[str, str], ...], cooled: set[str],
+                         done: set[tuple[str, str]], recent_parts: list[str],
+                         wanted: set[str] | None = None) -> dict[str, str] | None:
+    """种子里下一条该做的题:车不在冷却期、这道题没做过、不会让同一类部件连排超过
+    `MECHANISM_PART_RUN` 期;观众在评论里点过的车优先,其余按种子顺序。没有 = None。"""
+    tail = recent_parts[-MECHANISM_PART_RUN:]
+    block = tail[0] if len(tail) == MECHANISM_PART_RUN and len(set(tail)) == 1 else None
+    ok = [t for t in topics
+          if not _in_car_set(t["car"], cooled)
+          and _topic_key(t["car"], t["angle"]) not in done
+          and (block is None or t["part"] != block)]
+    asked = next((t for t in ok if wanted and _in_car_set(t["car"], wanted)), None)
+    return asked or (ok[0] if ok else None)
+
+
+def plan_mechanism(category: str, profile: CategoryProfile, empty: list[float], now: float,
+                   wanted: set[str] | None = None) -> tuple[int, list[float]]:
+    """原理拆解:配置的星期从选题种子里排一条竖屏拆解片。返回 (排了几条, 剩下的空档)。
+
+    不问 LLM:这条线的题目是「车 + 部件 + 一个反常识的问题」,要配得上现成的机构动画,
+    让模型临场出题容易出到没有画面可配的部件上。种子用完或都在冷却期时,空档还给常规选题。"""
+    days = config.TEAM_MECHANISM_WEEKDAYS
+    topics = profile.vocab.mechanism_topics
+    if not days or not topics or MECHANISM_THEME not in profile.themes:
+        return 0, empty
+    from ..pipeline import series
+
+    theme = profile.themes[MECHANISM_THEME]
+    part_of = {_topic_key(t["car"], t["angle"]): t["part"] for t in topics}
+    cooled = cooled_subjects(category, now, config.TEAM_COOLDOWN_DAYS)
+    done = {_topic_key(p.get("subject"), p.get("angle")) for p in db.list_projects(limit=300)
+            if p.get("category") == category and p.get("theme") == theme.name
+            and p.get("state") != "CANCELLED"}
+    past = sorted((i for i in db.list_plan_items(category, statuses=HOLDING, limit=500)
+                   if i.get("theme") == theme.name), key=lambda i: i["slot_at"])
+    done |= {_topic_key(i["subject"], i.get("angle")) for i in past}
+    column = series.name_for(profile.vocab, theme.name) or theme.label
+    made, rest = 0, []
+    used_days: set[dt.date] = set()  # 一天最多一条
+    for slot in empty:
+        day = dt.datetime.fromtimestamp(slot)
+        topic = None
+        if day.weekday() in days and day.date() not in used_days:
+            # 「连排」按发布时间算:只看排在这个空档之前的那几期
+            recent = [part_of.get(_topic_key(i["subject"], i.get("angle")), "")
+                      for i in past if i["slot_at"] < slot]
+            topic = next_mechanism_topic(topics, cooled, done, recent, wanted)
+        if topic is None:
+            rest.append(slot)
+            continue
+        used_days.add(day.date())
+        aspect, duration = choose_format(profile, theme.name, aspect=config.PORTRAIT,
+                                         duration=config.TEAM_MECHANISM_DURATION)
+        asked = bool(wanted) and _in_car_set(topic["car"], wanted or set())
+        item = {
+            "id": new_id("pl_"), "category": category, "slot_at": slot,
+            "status": "approved" if config.TEAM_AUTO_APPROVE_TOPICS else "proposed",
+            "kind": "single", "subject": topic["car"], "subjects": [],
+            "angle": topic["angle"], "theme": theme.name, "aspect": aspect, "duration": duration,
+            "hook": "", "search_terms": "", "evidence": [],
+            "rationale": (f"「{column}」:拆{topic['part']}"
+                          + (";评论区有人点这台车" if asked else "")),
+            "heat": 3,
+        }
+        db.create_plan_item(item)
+        past = sorted([*past, item], key=lambda i: i["slot_at"])
+        done.add(_topic_key(topic["car"], topic["angle"]))
+        cooled.add(_norm(topic["car"]))
+        made += 1
+    return made, rest
+
+
+def mechanism_wanted(now: float) -> set[str]:
+    """观众在评论里点过的车(`engagement.audience_topics`);读不到就当没有,不挡排题。"""
+    if not config.TEAM_MECHANISM_WEEKDAYS:
+        return set()
+    try:
+        from . import engagement
+
+        return {_norm(t["car"]) for t in engagement.audience_topics(now) if t.get("car")}
+    except Exception:  # noqa: BLE001 - 点播只是加分项
+        return set()
+
+
 def assign_slots(slots: list[float], ranked: list[Any], kind_of: dict[int, str]) -> list[tuple[float, Any]]:
     """每个空档先挑排名最高的同类选题;该类没有就退而求其次拿排名最高的剩余选题。"""
     left = list(ranked)
@@ -426,7 +520,11 @@ def run(category: str | None = None, *, llm: Any = None,
     empty = open_slots(window, planned)
     # 细分连更的日子先排掉(不问 LLM),剩下的空档再走常规选题
     seg_made, empty = plan_segment(category, profile, empty, now.timestamp())
-    seg_note = f"细分连更排 {seg_made} 条" if seg_made else ""
+    mech_made, empty = plan_mechanism(category, profile, empty, now.timestamp(),
+                                      mechanism_wanted(now.timestamp()))
+    seg_note = ",".join(x for x in (f"细分连更排 {seg_made} 条" if seg_made else "",
+                                    f"原理拆解排 {mech_made} 条" if mech_made else "") if x)
+    seg_made += mech_made
     if not empty:
         if seg_made:
             return seg_note + (f",自动批准 {auto_ok} 条选题" if auto_ok else "")
