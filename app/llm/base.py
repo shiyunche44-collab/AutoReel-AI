@@ -24,6 +24,10 @@ class LLMOutputInvalid(LLMError):
     """模型没有按要求返回可解析的 JSON。"""
 
 
+class LLMTruncated(LLMError):
+    """输出撞到长度上限被截断(finish_reason=length)。原样重试只会再截一次,不重试。"""
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     name: str
@@ -101,6 +105,13 @@ def extract_json(text: str) -> dict[str, Any]:
                             return parsed
                     except json.JSONDecodeError:
                         break
+        else:
+            # 开头的花括号到文末都没配平 = 输出半截断了。再往里找只会捞到某个内层对象
+            # (曾把脚本的第一个段落当成整份返回,报成"缺少必需字段",查了半天)。
+            # 前面有解释文字时不算:那可能只是正文里一个落单的花括号
+            if raw[:start].strip() in ("", "```", "```json"):
+                raise LLMOutputInvalid(
+                    f"输出的 JSON 不完整(疑似被截断),结尾:{raw[-120:]}")
         start = raw.find("{", start + 1)
 
     raise LLMOutputInvalid(f"无法从输出中提取 JSON: {raw[:300]}")

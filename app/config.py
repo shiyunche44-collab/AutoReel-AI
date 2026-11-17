@@ -342,6 +342,9 @@ SCRIPT_LLM = os.getenv("SCRIPT_LLM", "deepseek").strip().lower()
 ARK_SCRIPT_MODEL = os.getenv("ARK_SCRIPT_MODEL", "doubao-seed-2.1-pro").strip()
 #: Seed 写脚本时的思考开关:enabled | disabled | 空(模型默认,会想几分钟)
 ARK_SCRIPT_THINKING = os.getenv("ARK_SCRIPT_THINKING", "").strip()
+#: Seed 写脚本时正文的长度上限(token,不含思考)。方舟不传就按 4096 算,
+#: 8 分钟横评(60 段)的 JSON 写到一半就断(2026-11-17)。0 = 不传
+ARK_SCRIPT_MAX_TOKENS = int(os.getenv("ARK_SCRIPT_MAX_TOKENS", "16000") or 0)
 
 #: 「豆包搜索 Custom 版」。Agent Plan 的 Key 可直接用,单独建了搜索 Key 就配 ARK_SEARCH_API_KEY
 ARK_SEARCH_API_KEY = os.getenv("ARK_SEARCH_API_KEY", "").strip() or ARK_API_KEY

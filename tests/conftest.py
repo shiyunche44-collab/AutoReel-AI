@@ -33,6 +33,8 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "COVER_ART", False)
     # 选题自动放行在测试里默认关(原有测试测 proposed -> approve 流程),专门的测试自己打开
     monkeypatch.setattr(config, "TEAM_AUTO_APPROVE_TOPICS", False)
+    # 原理拆解的排期日来自 .env;开着时主编会先占掉当天的档,别的排题测试就看星期几过不过
+    monkeypatch.setattr(config, "TEAM_MECHANISM_WEEKDAYS", ())
 
 
 @pytest.fixture(autouse=True)

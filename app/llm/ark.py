@@ -23,6 +23,7 @@ class ArkProvider(DeepSeekProvider):
             model=model or config.ARK_SCRIPT_MODEL,
             timeout=timeout,
         )
+        self.max_tokens = config.ARK_SCRIPT_MAX_TOKENS
         thinking = (thinking if thinking is not None else config.ARK_SCRIPT_THINKING).strip().lower()
         # enabled / disabled / 空(= 模型默认)
         self.extra_payload = {"thinking": {"type": thinking}} if thinking in ("enabled", "disabled") else {}

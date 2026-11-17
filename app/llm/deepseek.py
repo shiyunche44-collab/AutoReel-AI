@@ -11,13 +11,15 @@ from typing import Any
 import httpx
 
 from .. import config
-from .base import LLMError, LLMNotConfigured, extract_json, require_keys
+from .base import LLMError, LLMNotConfigured, LLMTruncated, extract_json, require_keys
 
 
 class DeepSeekProvider:
     name = "deepseek"
     #: 并进每次请求体的额外字段(子类用,如方舟的 thinking 开关)
     extra_payload: dict[str, Any] = {}
+    #: 正文长度上限(token);0 = 不传,用接口默认。方舟默认只给 4096,长稿会被截断
+    max_tokens: int = 0
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  model: str | None = None, timeout: int = 120) -> None:
@@ -57,6 +59,8 @@ class DeepSeekProvider:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if self.max_tokens:
+            payload["max_tokens"] = self.max_tokens
         payload.update(self.extra_payload)
 
         url = f"{self.base_url}/chat/completions"
@@ -76,9 +80,19 @@ class DeepSeekProvider:
             raise LLMError(f"DeepSeek 网络错误: {exc}") from exc
 
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]
+            content = choice["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"DeepSeek 返回结构异常: {str(data)[:300]}") from exc
+        if choice.get("finish_reason") == "length":
+            usage = data.get("usage") or {}
+            thought = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            raise LLMTruncated(
+                f"{self.model} 的输出撞到长度上限被截断(正文 {len(content)} 字,"
+                f"输出 {usage.get('completion_tokens', '?')} token"
+                + (f",其中思考 {thought}" if thought else "")
+                + f";max_tokens={self.max_tokens or '接口默认'})。调大 max_tokens 或缩短要写的内容。")
+        return content
 
     def structured(
         self,
@@ -98,6 +112,8 @@ class DeepSeekProvider:
                 data = extract_json(text)
                 require_keys(data, required_keys)
                 return data
+            except LLMTruncated:
+                raise
             except Exception as exc:  # noqa: BLE001 - 统一转为重试
                 last = exc
                 if attempt < max_retries:
