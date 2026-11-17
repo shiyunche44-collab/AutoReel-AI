@@ -4,7 +4,7 @@ import { AbsoluteFill, useCurrentFrame, useVideoConfig, spring, interpolate } fr
 const FONT = '"Noto Sans SC Black","Microsoft YaHei",sans-serif';
 
 // 一条字幕:整句白字描边,关键词(hot)变强调色并弹出放大;整句 0.12s 弹入
-const Cue = ({ cue, style }) => {
+export const Cue = ({ cue, style }) => {
   const frame = useCurrentFrame();
   const { fps, height } = useVideoConfig();
   const t = frame / fps - cue.start;

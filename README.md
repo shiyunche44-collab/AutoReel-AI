@@ -149,6 +149,10 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 脚本保存后会同步写进分镜（`explainer.sync_narration`），因为旁白是按分镜合成的。照抄旁白的大字、引用了已删数字的大字会被丢掉，两行都丢光的拍退回 `broll`。
 
+### 剪辑 v2(试点,默认关)
+
+`EDIT_V2=1` 后竖屏成片改由 Remotion 按统一时间线合成:实拍在分句处切成 1–3 秒的子镜头、每刀按它那半句取材,开头 3 秒快切钩子,换章 whip 转场,叠加层和花字字幕都是 Remotion 动效。失败自动退回旧合成。需要先在 `remotion/` 下 `npm ci`。设计和后续阶段见 [docs/edit-v2.md](docs/edit-v2.md)。
+
 ### 门禁 B 和收尾
 
 - 门禁 B 审已经渲好的各拍，不满意的可以点「换背景重拍」。
