@@ -769,6 +769,61 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     size = aspect.frame_size(project)
     # 拼接缓存按序号命名,重拍过的拍必须重新归一化
     shutil.rmtree(project_dir / "_render", ignore_errors=True)
+    result = _compose_v2(project_id, specs, rows, nar, project, size, title,
+                         vocab=profile.vocab, llm=llm)
+    if result is None:
+        result = _compose_v1(project_id, beats, rows, nar, project, project_dir, size)
+    return _finish_compose(project_id, specs, profile, title, llm, beats, nar, project,
+                           project_dir, size, result)
+
+
+def _compose_v2(project_id: str, specs: Sequence[ShotSpec], rows: dict, nar: dict,
+                project: dict, size: tuple[int, int], title: str, *,
+                vocab: Vocab | None = None, llm: Any = None) -> Any:
+    """剪辑 v2(`EDIT_V2`,见 pipeline/edit/):没开返回 None;失败记一条事件也返回 None,退回旧合成。"""
+    from .. import edit
+
+    if not edit.enabled(aspect.is_portrait(project)):
+        return None
+    from ..edit import project as edit_project
+
+    try:
+        result = edit_project.compose(
+            project_id, specs, rows, nar, size=size,
+            title=str(project.get("title") or title), subject=str(project.get("subject") or ""),
+            output_name=aspect.output_name(project), vocab=vocab, llm=llm)
+    except Exception as exc:  # noqa: BLE001 —— 新剪辑是试点,任何失败都退回旧合成,不拦出片
+        _log.warning("剪辑 v2 合成失败,退回旧合成", exc_info=True)
+        db.add_event(project_id, "edit_v2:fallback", reason=str(exc)[:300])
+        degrade.note("edit_v2.to_v1", f"合成:{exc}", project_id=project_id)
+        return None
+    result.warnings = ["剪辑 v2 合成", *(result.warnings or [])]
+    return result
+
+
+def _recompose_v2(project_id: str, nar: dict, project: dict) -> Any:
+    """上次成片走的是剪辑 v2:沿用它的时间线只换字幕。没开 / 没有时间线 / 失败返回 None。"""
+    from .. import edit
+
+    if not edit.enabled(aspect.is_portrait(project)):
+        return None
+    from ..edit import project as edit_project
+
+    try:
+        result = edit_project.recompose(project_id, nar, output_name=aspect.output_name(project))
+    except Exception as exc:  # noqa: BLE001 —— 退回旧合成
+        _log.warning("剪辑 v2 重合成失败,退回旧合成", exc_info=True)
+        db.add_event(project_id, "edit_v2:fallback", reason=str(exc)[:300])
+        degrade.note("edit_v2.to_v1", f"重合成:{exc}", project_id=project_id)
+        return None
+    if result is None or not result.ok:
+        return None
+    return result
+
+
+def _compose_v1(project_id: str, beats: Sequence[ShotSpec], rows: dict, nar: dict,
+                project: dict, project_dir: Path, size: tuple[int, int]) -> Any:
+    """旧合成:各拍成品 concat + ASS / 花字层 + 主持人层。"""
     layer_path = _caption_layer(project_dir, nar, size, sum(s.duration for s in beats))
     sfx_path = _sfx_track(project_dir, nar, size, beats, sum(s.duration for s in beats))
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
@@ -795,6 +850,13 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
                                   dissolve_into=_dissolve_targets(beats)),
         grade=False,
     )
+    return result
+
+
+def _finish_compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
+                    title: str, llm: Any, beats: Sequence[ShotSpec], nar: dict, project: dict,
+                    project_dir: Path, size: tuple[int, int], result: Any) -> dict[str, Any]:
+    """出片之后:封面、包装、render.json、复盘特征。新旧合成共用。"""
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
     total = sum(s.duration for s in beats)
@@ -853,6 +915,12 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     project = db.get_project(project_id) or {}
     size = aspect.frame_size(project)
     total = sum(s.duration for s in beats)
+    result = _recompose_v2(project_id, nar, project)
+    if result is not None:
+        payload = {**(db.read_json(project_id, "render.json", {}) or {}), **result.to_dict(),
+                   "narration": nar}
+        db.write_json(project_id, "render.json", payload)
+        return payload
     layer_path = _caption_layer(project_dir, nar, size, total)
     sfx_path = _sfx_track(project_dir, nar, size, beats, total)
     shots = [Path(rows[s.idx]["final_path"]) for s in beats]
