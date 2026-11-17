@@ -54,15 +54,27 @@ const transitionStyle = (kind, t) => {
   return {};
 };
 
-const Media = ({ clip, fps, cover = true }) => {
+// 主体在原片的水平位置 fx → object-position 百分比:让主体尽量落在框的正中。
+// cover 时原片按高度撑满,横向多出 (sw - bw);窗口左边 = p × 多出的部分
+export const objectX = (fx, srcAR, box) => {
+  if (fx == null || !box) return 0.5;
+  const sw = box.h * (srcAR || 16 / 9);
+  if (sw <= box.w + 1) return 0.5;
+  return Math.min(1, Math.max(0, (fx * sw - box.w / 2) / (sw - box.w)));
+};
+
+const Media = ({ clip, fps, cover = true, box = null }) => {
   const frame = useCurrentFrame();
   const total = Math.max(1, Math.round(clip.dur * fps));
   const p = Math.min(1, frame / total);
   // 去角标 / 去烧录字幕:四边收 crop_edge,底部再裁 crop_bottom
   const crop = 1 / Math.max(0.5, 1 - 2 * (clip.crop_edge || 0) - (clip.crop_bottom || 0));
   const shiftY = (clip.crop_bottom || 0) * 50;
+  // 自动重构图:裁切窗口和推拉中心都对准主体(focus 由 Python 按边缘能量算出,缺省居中)
+  const fx = `${(objectX(clip.focus, clip.ar, box) * 100).toFixed(1)}%`;
   const style = {
     width: "100%", height: "100%", objectFit: cover ? "cover" : "contain",
+    objectPosition: `${fx} 50%`, transformOrigin: `${fx} 50%`,
     transform: `${motionTransform(clip.motion, p)} scale(${crop}) translateY(-${shiftY}%)`,
   };
   if (clip.kind === "still") return <Img src={src(clip.src)} style={style} />;
@@ -80,12 +92,12 @@ const Flash = ({ clip, fps }) => {
   return <AbsoluteFill style={{ background: "#fff", opacity: o }} />;
 };
 
-const BandClip = ({ clip, fps }) => {
+const BandClip = ({ clip, fps, box = null }) => {
   const frame = useCurrentFrame();
   return (
     <AbsoluteFill style={{ overflow: "hidden" }}>
       <AbsoluteFill style={transitionStyle(clip.transition, frame / fps)}>
-        <Media clip={clip} fps={fps} />
+        <Media clip={clip} fps={fps} box={box} />
       </AbsoluteFill>
       <Flash clip={clip} fps={fps} />
     </AbsoluteFill>
@@ -384,7 +396,7 @@ export const Edit = (props) => {
         <AbsoluteFill style={{ transform: `scale(${punchScale(props.punches || [], now)})` }}>
           {clips.filter((c) => c.kind !== "beat").map((c, i) => (
             <Sequence key={`c${i}`} {...seq(c.start, c.dur)}>
-              <BandClip clip={c} fps={fps} />
+              <BandClip clip={c} fps={fps} box={{ w: width, h: g.band.height }} />
             </Sequence>
           ))}
         </AbsoluteFill>

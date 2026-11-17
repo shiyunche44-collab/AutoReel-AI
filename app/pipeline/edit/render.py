@@ -18,12 +18,13 @@ from ... import config
 from .. import caption_layer, final_qa
 from .. import render as render_mod
 from .. import timeline as timeline_mod
+from . import reframe
 from .edl import Timeline
 
 log = logging.getLogger(__name__)
 
 #: 版本进缓存键:组件 / 规则改了升这个数
-EDIT_VERSION = 2
+EDIT_VERSION = 3
 RENDER_TIMEOUT = int(os.getenv("EDIT_V2_TIMEOUT", "3600"))
 
 
@@ -57,22 +58,31 @@ def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
                 shutil.copy2(src, dest)
         clip["src"] = name
         if clip["kind"] != "beat" and portrait:
-            bd = public / f"bd_{Path(name).stem}_{int(float(clip.get('src_in') or 0) * 10)}.jpg"
-            if bd.is_file() or _backdrop(Path(src), float(clip.get("src_in") or 0.0), bd):
-                clip["backdrop"] = bd.name
+            _reframe(clip, Path(src), public)
     return props
 
 
-def _backdrop(src: Path, at: float, dest: Path) -> bool:
-    """竖屏底图:抽一帧,缩小、高斯模糊、压暗。失败就不要底图(纯色底),不拦出片。"""
-    args = ["-y", "-v", "error"]
-    if src.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
-        args += ["-ss", f"{max(0.0, at):.3f}"]
-    args += ["-i", str(src), "-frames:v", "1",
-             "-vf", "scale=360:-2,gblur=sigma=14,eq=brightness=-0.22:saturation=1.1", "-q:v", "4",
-             str(dest)]
-    proc = render_mod._run(args, timeout=60)
-    return proc.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
+def _reframe(clip: dict[str, Any], src: Path, public: Path) -> None:
+    """竖屏:抽一帧,算主体位置(`focus`)并做模糊底图(`backdrop`)。失败就居中、不要底图,不拦出片。"""
+    at = float(clip.get("src_in") or 0.0) + min(1.0, float(clip.get("dur") or 0.0) / 2)
+    stem = f"{Path(clip['src']).stem}_{int(at * 10)}"
+    frame, bd = public / f"fr_{stem}.jpg", public / f"bd_{stem}.jpg"
+    if not frame.is_file():
+        args = ["-y", "-v", "error"]
+        if src.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+            args += ["-ss", f"{max(0.0, at):.3f}"]
+        args += ["-i", str(src), "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "3", str(frame)]
+        proc = render_mod._run(args, timeout=60)
+        if proc.returncode != 0 or not frame.is_file():
+            return
+    try:
+        clip["focus"] = reframe.analyse(frame, None if bd.is_file() else bd)
+        clip["ar"] = reframe.aspect_of(frame)
+    except (OSError, ValueError):
+        log.warning("重构图分析失败:%s", src, exc_info=True)
+        return
+    if bd.is_file():
+        clip["backdrop"] = bd.name
 
 
 def render_video(tl: Timeline, work: Path) -> Path:
