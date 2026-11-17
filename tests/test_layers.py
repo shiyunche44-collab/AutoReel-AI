@@ -4,7 +4,7 @@
 
     0  config state models logging_setup hang_watch instance_lock templating
     1  db
-    2  costs llm jobs
+    2  costs llm jobs degrade
     3  categories
     4  providers
     5  pipeline
@@ -27,7 +27,7 @@ RANK = {
     **dict.fromkeys(("config", "state", "models", "logging_setup", "hang_watch",
                      "instance_lock", "templating"), 0),
     "db": 1,
-    **dict.fromkeys(("costs", "llm", "jobs"), 2),
+    **dict.fromkeys(("costs", "llm", "jobs", "degrade"), 2),
     "categories": 3,
     "providers": 4,
     "pipeline": 5,

@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import background, config, costs, db, hang_watch, jobs, logging_setup, maintenance
+from . import background, config, costs, db, degrade, hang_watch, jobs, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
 from .pipeline import aspect, explainer, library, orchestrator
@@ -273,6 +273,15 @@ def clear_cooldown(key: str):
     return {"ok": True}
 
 
+@app.get("/api/degradations")
+def degradations(days: float = 7, kind: str = "", project_id: str = "", limit: int = 0):
+    """降级路径汇总(按 kind);给 `kind` / `project_id` 或 `limit` 时返回明细。"""
+    if kind or project_id or limit:
+        return {"items": degrade.recent(min(500, max(1, limit or 50)), kind=kind,
+                                        project_id=project_id)}
+    return {"days": days, "rows": degrade.summary(time.time() - max(0.0, days) * 86400)}
+
+
 @app.get("/api/llm/usage")
 def llm_usage(days: float = 7, by: str = "purpose"):
     """模型调用账本汇总:最近 `days` 天,按 purpose / model / kind / project_id / role / day 分组。"""
@@ -320,6 +329,11 @@ def health():
         out["cooldowns"] = cooldown.active()
     except Exception:  # noqa: BLE001
         out["cooldowns"] = []
+    # 降级路径:最近 24 小时哪些"质量打折但照样出片"的路走了几次(细节见 /api/degradations)
+    try:
+        out["degradations_24h"] = degrade.summary(time.time() - 86400)
+    except Exception:  # noqa: BLE001
+        out["degradations_24h"] = []
     # 模型调用账本:最近 24 小时按类型汇总(细节见 /api/llm/usage)
     try:
         out["llm_calls_24h"] = db.llm_usage(time.time() - 86400, "kind")

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .. import config
+from .. import config, degrade
 from .timeline import probe_safe
 
 log = logging.getLogger(__name__)
@@ -189,6 +189,7 @@ def load_asr() -> Transcriber | None:
             _model = WhisperModel(config.VOICE_QA_MODEL, device="cpu", compute_type="int8")
         except Exception as exc:  # noqa: BLE001 - 模型下载/加载失败不能拦出片
             log.warning("语音质检:转写模型加载失败,退回信号检查:%s", exc)
+            degrade.note("voice_qa.no_asr", str(exc))
             _model_failed = True
             return None
     model = _model

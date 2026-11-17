@@ -151,6 +151,9 @@ def start() -> bool:
         from . import db
 
         db.prune_llm_calls(90)  # 调用账本留 90 天
+        from . import degrade
+
+        degrade.prune(90)
     except Exception:  # noqa: BLE001
         log.warning("清理模型调用账本失败", exc_info=True)
     scheduler.start()

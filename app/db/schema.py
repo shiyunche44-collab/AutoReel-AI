@@ -456,6 +456,17 @@ CREATE TABLE IF NOT EXISTS cooldowns (
     trips      INTEGER NOT NULL DEFAULT 1
 );
 
+-- 降级记录(见 app/degrade.py):"概念动画退回数据卡""封面退回老封面"这类不报错、
+-- 片子照样出、但质量打了折的路径,每走一次记一行。原来只在日志里,看不出哪条天天在触发。
+CREATE TABLE IF NOT EXISTS degradations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         REAL NOT NULL,
+    kind       TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_degradations_at ON degradations(at);
+
 -- 跨进程"催一下调度器":Web 进程建了项目 / 点了推进,调度器在 worker 进程里,
 -- 内存队列够不着,就记一行;调度器每秒取走入队。
 CREATE TABLE IF NOT EXISTS scheduler_kicks (

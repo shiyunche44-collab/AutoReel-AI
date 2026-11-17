@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from .. import config, costs, db
+from .. import config, costs, db, degrade
 from ..categories import ProfileError, load_profile
 from ..llm import ledger
 from ..llm.ark import ArkProvider
@@ -63,6 +63,7 @@ def _script_llm(default):
         if ark.available():
             return ark
         log.warning("SCRIPT_LLM=ark 但没配 ARK_API_KEY,脚本退回默认模型")
+        degrade.note("script_llm.to_default", "SCRIPT_LLM=ark 但没配 ARK_API_KEY")
     return default
 
 
@@ -507,6 +508,10 @@ def _stage_draft_intent(c: _Ctx) -> dict[str, Any]:
         # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
         first = report["sources_failed"][0]
         raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
+    for failed in report.get("sources_failed") or []:
+        # 某个事实源挂了就跳过它:事实少了,但片子照样往下做
+        degrade.note("facts.source_failed",
+                     f"{failed.get('tool', '?')}:{str(failed.get('error', ''))[:200]}")
     db.update_project(project_id, shot_count=profile.shots_for(project["duration"]))
     thin = report.get("subjects_thin") or []
     _set_state(project_id, state, State.FACTS_RESOLVED,

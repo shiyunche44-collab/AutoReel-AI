@@ -35,7 +35,7 @@ import zlib  # noqa: F401
 from dataclasses import replace  # noqa: F401
 from pathlib import Path  # noqa: F401
 from typing import Any, Sequence  # noqa: F401
-from ... import config, db  # noqa: F401
+from ... import config, db, degrade  # noqa: F401
 from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
 from .. import aspect, cards, knobs, library, looks, motion, motion_assets, narration, intro, outro, overlays, rhythm  # noqa: F401
@@ -687,6 +687,7 @@ def _caption_layer(project_dir: Path, nar: dict, size: tuple[int, int], total: f
         return caption_layer.render_layer(layer, project_dir / "_captions")
     except Exception:  # noqa: BLE001 —— 花字只是加分项,不能让成片失败
         _log.warning("花字层生成失败,退回 ASS 字幕", exc_info=True)
+        degrade.note("captions.to_ass", "花字层生成失败")
         return None
 
 

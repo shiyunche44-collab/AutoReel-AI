@@ -30,6 +30,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 ## 观测与分层
 
 - 模型调用账本 `llm_calls`(`app/llm/ledger.py`):文字 / 看图 / 生图每次调用一行,带调用方、项目 / 角色、token、耗时。新增模型通道要在出口调 `ledger.record`;要按项目归账就用 `ledger.tag(project_id=...)` 包住。查看:`/api/llm/usage?by=purpose|model|project_id|role|day`、`/api/llm/calls`。
+- 降级路径(概念动画退回数据卡、封面退回老封面、事实源跳过、整段 TTS 退回逐句……)每走一次调 `degrade.note(kind, detail)` 记进 `degradations`,项目自动从账本上下文取。新加降级分支也要记,只写日志等于看不见。查看:`/api/degradations`,`/api/health` 的 `degradations_24h`。
 - `tests/test_layers.py` 守模块分层(下层不许 import 上层,含函数内的延迟 import)。新模块要在 `RANK` 里定层;`KNOWN` 里的旧例外只许减不许增。
 - 启动时检查 `.env` 的重复键 / 空值覆盖(`config.env_file_problems`),结果进日志、首页横幅和 `/api/health` 的 `env`。
 
