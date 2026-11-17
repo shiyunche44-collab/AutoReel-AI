@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ... import config, db
+from ... import config, db, degrade
 from ...categories import Vocab
 from ...models import ShotSpec
 from .. import caption_layer, library, looks, outro, sfx
@@ -131,6 +131,9 @@ def compose(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mappi
     )
     tl.theme = theme_of(lk)
     stats = tl.match_stats()
+    if stats["fallback"]:
+        degrade.note("edit_v2.shot_to_beat", f"{stats['fallback']} 刀取不到素材,用了逐拍成品",
+                     project_id=project_id)
     db.write_json(project_id, "edit_timeline.json",
                   tl.to_props() | {"notes": tl.notes, "match": stats})
     result = edit_render.compose(

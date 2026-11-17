@@ -48,3 +48,13 @@ def test_fallback_paths_are_wired():
 
     assert 'degrade.note("concept.to_card"' in inspect.getsource(beat_render)
     assert 'degrade.note("facts.source_failed"' in inspect.getsource(orchestrator)
+
+
+def test_edit_v2_fallbacks_are_recorded():
+    import inspect
+
+    from app.pipeline import explainer
+    from app.pipeline.edit import project as edit_project
+
+    assert inspect.getsource(explainer).count('degrade.note("edit_v2.to_v1"') == 2
+    assert 'degrade.note("edit_v2.shot_to_beat"' in inspect.getsource(edit_project)

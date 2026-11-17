@@ -795,6 +795,7 @@ def _compose_v2(project_id: str, specs: Sequence[ShotSpec], rows: dict, nar: dic
     except Exception as exc:  # noqa: BLE001 —— 新剪辑是试点,任何失败都退回旧合成,不拦出片
         _log.warning("剪辑 v2 合成失败,退回旧合成", exc_info=True)
         db.add_event(project_id, "edit_v2:fallback", reason=str(exc)[:300])
+        degrade.note("edit_v2.to_v1", f"合成:{exc}", project_id=project_id)
         return None
     result.warnings = ["剪辑 v2 合成", *(result.warnings or [])]
     return result
@@ -813,6 +814,7 @@ def _recompose_v2(project_id: str, nar: dict, project: dict) -> Any:
     except Exception as exc:  # noqa: BLE001 —— 退回旧合成
         _log.warning("剪辑 v2 重合成失败,退回旧合成", exc_info=True)
         db.add_event(project_id, "edit_v2:fallback", reason=str(exc)[:300])
+        degrade.note("edit_v2.to_v1", f"重合成:{exc}", project_id=project_id)
         return None
     if result is None or not result.ok:
         return None
