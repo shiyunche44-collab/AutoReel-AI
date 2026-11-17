@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .. import config
+from . import ledger
 from .base import LLMError, LLMNotConfigured, LLMTruncated, extract_json, require_keys
 
 
@@ -68,6 +69,15 @@ class DeepSeekProvider:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        started = time.monotonic()
+        data: dict[str, Any] = {}
+
+        def _log(ok: bool, error: str = "", finish: str = "") -> None:
+            ledger.record(kind="text", provider=self.name, model=self.model, started=started,
+                          ok=ok, usage=data.get("usage") if isinstance(data, dict) else None,
+                          system=system, prompt_chars=len(system) + len(user),
+                          finish_reason=finish, error=error)
+
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(url, headers=headers, json=payload)
@@ -75,23 +85,29 @@ class DeepSeekProvider:
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             detail = exc.response.text[:300] if exc.response is not None else ""
+            _log(False, f"HTTP {exc.response.status_code}: {detail}")
             raise LLMError(f"DeepSeek HTTP {exc.response.status_code}: {detail}") from exc
         except httpx.HTTPError as exc:
+            _log(False, f"网络错误: {exc}")
             raise LLMError(f"DeepSeek 网络错误: {exc}") from exc
 
         try:
             choice = data["choices"][0]
             content = choice["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as exc:
+            _log(False, f"返回结构异常: {str(data)[:200]}")
             raise LLMError(f"DeepSeek 返回结构异常: {str(data)[:300]}") from exc
-        if choice.get("finish_reason") == "length":
+        finish = str(choice.get("finish_reason") or "")
+        if finish == "length":
             usage = data.get("usage") or {}
             thought = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            _log(False, "输出被截断", finish)
             raise LLMTruncated(
                 f"{self.model} 的输出撞到长度上限被截断(正文 {len(content)} 字,"
                 f"输出 {usage.get('completion_tokens', '?')} token"
                 + (f",其中思考 {thought}" if thought else "")
                 + f";max_tokens={self.max_tokens or '接口默认'})。调大 max_tokens 或缩短要写的内容。")
+        _log(True, finish=finish)
         return content
 
     def structured(

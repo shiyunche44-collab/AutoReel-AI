@@ -1,7 +1,6 @@
 """AI 团队:待办、排期、角色动态、评论、偏好、对标。"""
 from __future__ import annotations
 
-import threading
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -49,11 +48,9 @@ def team_run_role(name: str):
     from .. import team
 
     try:
-        team.role(name)
+        team.run_role_later(name, "manual")
     except KeyError as exc:
         raise HTTPException(404, "没有这个角色") from exc
-    threading.Thread(target=team.run_role, args=(name, "manual"), name=f"team-manual-{name}",
-                     daemon=True).start()
     return {"ok": True}
 
 
@@ -99,8 +96,7 @@ def _wake_asset() -> None:
     """选题刚批:素材官马上看一眼要不要提前建池,不等下一个半小时。"""
     from .. import team
 
-    threading.Thread(target=team.run_role, args=("asset", "approve"), name="team-asset-wake",
-                     daemon=True).start()
+    team.run_role_later("asset", "approve")
 
 
 @router.post("/api/team/plan/{item_id}/approve")
@@ -350,11 +346,9 @@ def team_active_run():
     from .. import team
 
     try:
-        team.role("activator")
+        team.run_role_later("activator", "manual")
     except KeyError as exc:
         raise HTTPException(404, "没有这个角色") from exc
-    threading.Thread(target=team.run_role, args=("activator", "manual"),
-                     name="team-manual-activator", daemon=True).start()
     return {"ok": True}
 
 

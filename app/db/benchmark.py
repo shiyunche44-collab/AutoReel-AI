@@ -144,7 +144,8 @@ def list_benchmark_posts(*, account_id: str | None = None, since: float | None =
                          min_burst: float | None = None, limit: int = 200) -> list[dict[str, Any]]:
     """新发的在前。"""
     init_db()
-    where, args = [], []
+    where: list[str] = []
+    args: list[Any] = []
     if account_id:
         where.append("account_id = ?")
         args.append(account_id)

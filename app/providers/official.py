@@ -34,7 +34,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Sequence
 
-from .. import config
+from .. import config, degrade
 from . import browser_fetch, clips, platform_video, webassets
 from .images import ImageRef
 
@@ -242,6 +242,7 @@ def bilibili_official(subject: str, aliases: Sequence[str], *, markers: Sequence
         except platform_video.PlatformError as exc:
             if errors is not None:
                 errors.append(f"B 站官方号投稿拉取失败({acct['name']}):{str(exc)[:100]}")
+            degrade.note("bili_space.skipped", f"{acct['name']}:{str(exc)[:200]}")
             continue
         for h in hits:
             if not _names_model(h.title, keyword) or any(_names_model(h.title, s) for s in siblings):

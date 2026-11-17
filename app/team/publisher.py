@@ -14,12 +14,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import threading
 import time
 import uuid
 from typing import Any
 
-from .. import config, db
+from .. import config, db, jobs
 from . import Skip, chief, compliance, preference, repurpose
 from .plan import PlanError
 
@@ -337,35 +336,45 @@ def refine_apply(item_id: str) -> dict[str, Any]:
     return out
 
 
-#: 后台应用精修的任务状态,按选题 id 存(只在内存里:服务重启就丢,成片本身不受影响)
-_refine_jobs: dict[str, dict[str, Any]] = {}
-_refine_lock = threading.Lock()
+#: 应用精修的后台任务类型(见 `app/jobs.py`)。去重键是选题 id:同一条同一时刻只跑一个。
+#: 原来进度只存在内存里,服务重启后页面直接变回"未开始",在途的合成也没人接着做。
+REFINE_JOB = "refine.apply"
+
+
+def _refine_job(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return refine_apply(str(payload["item_id"]))
+    except PlanError as exc:
+        # 字幕改动没过检查、选题状态变了:重跑也一样,别重试
+        raise jobs.Permanent(str(exc)) from exc
+
+
+# max_attempts=2:项目被调度器占着(ProjectBusy)之类的瞬时失败退避后再试一次
+jobs.register(REFINE_JOB, resource="refine", max_attempts=2, lease=300.0)(_refine_job)
 
 
 def refine_apply_start(item_id: str) -> dict[str, Any]:
     """后台应用精修:立刻返回,页面轮询 `refine_status`。同一条选题同一时刻只跑一个。"""
     _refine_item(item_id)  # 开关 / 选题状态的错在这里就抛,不用等到后台
-    with _refine_lock:
-        if (_refine_jobs.get(item_id) or {}).get("state") == "running":
-            return dict(_refine_jobs[item_id])
-        _refine_jobs[item_id] = {"state": "running", "started_at": time.time()}
-
-    def _run() -> None:
-        try:
-            result = refine_apply(item_id)
-            job = {"state": "done", "result": result}
-        except Exception as exc:  # noqa: BLE001 - 失败原因交给页面显示
-            job = {"state": "failed", "error": str(exc)}
-        with _refine_lock:
-            _refine_jobs[item_id] = {**_refine_jobs[item_id], **job, "finished_at": time.time()}
-
-    threading.Thread(target=_run, name=f"refine-{item_id}", daemon=True).start()
-    return dict(_refine_jobs[item_id])
+    jobs.submit(REFINE_JOB, key=item_id, payload={"item_id": item_id})
+    return refine_status(item_id)
 
 
 def refine_status(item_id: str) -> dict[str, Any]:
-    with _refine_lock:
-        return dict(_refine_jobs.get(item_id) or {"state": "idle"})
+    """页面看的精修进度:idle / running / done(带 result)/ failed(带 error)。"""
+    job = jobs.latest(REFINE_JOB, item_id)
+    if not job:
+        return {"state": "idle"}
+    out: dict[str, Any] = {"started_at": job.get("started_at") or job.get("created_at")}
+    if job["state"] in ("queued", "running"):
+        out["state"] = "running"
+        if job["state"] == "queued" and job.get("error"):
+            out["retrying"] = job["error"]  # 上一次失败了,在等退避后重试
+    elif job["state"] == "done":
+        out.update(state="done", result=job.get("result"), finished_at=job.get("finished_at"))
+    else:
+        out.update(state="failed", error=job.get("error") or "", finished_at=job.get("finished_at"))
+    return out
 
 
 #: 错误信息里有这些词才算网络问题(登录失效、审核不过、验证码都不该自动重发)

@@ -391,6 +391,95 @@ CREATE TABLE IF NOT EXISTS industry_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_day ON industry_events(category, day);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_key ON industry_events(category, day, title);
+
+-- 持久化的后台任务(见 app/jobs.py)。原来素材池构建、精修这类活跑在临时线程里,
+-- 服务一重启就没了,还会留下永远"在建"的池子和没结算的额度预留。
+CREATE TABLE IF NOT EXISTS jobs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL,
+    -- 去重键:同 kind 同 key 同一时刻只有一个排队 / 在跑(见下面的唯一索引)
+    key              TEXT NOT NULL DEFAULT '',
+    payload          TEXT NOT NULL DEFAULT '{}',
+    -- queued / running / done / failed
+    state            TEXT NOT NULL DEFAULT 'queued',
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    max_attempts     INTEGER NOT NULL DEFAULT 3,
+    next_run_at      REAL NOT NULL DEFAULT 0,
+    -- 租约:谁在跑、跑到什么时候还算活着(心跳续期)。过期的 running 可被接手
+    lease_owner      TEXT NOT NULL DEFAULT '',
+    lease_expires_at REAL NOT NULL DEFAULT 0,
+    result           TEXT,
+    error            TEXT NOT NULL DEFAULT '',
+    created_at       REAL NOT NULL,
+    started_at       REAL,
+    finished_at      REAL,
+    updated_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_pick ON jobs(state, next_run_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active ON jobs(kind, key)
+    WHERE state IN ('queued', 'running');
+
+-- 项目租约:同一时刻一个项目只有一个写入者,**跨进程**也成立(见 pipeline/locks.py)。
+-- 进程内锁管不到另一个进程:只读服务上的「保存脚本」「重拍」会和主服务的调度器撞车。
+-- 持有者每 TTL/3 续一次;进程死了,过期后别人可以接手。
+-- 模型调用账本(见 app/llm/ledger.py):每次文字 / 看图 / 生图调用一行。
+-- 原来额度烧在哪、哪个提示词最慢最容易失败,只能估。
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    at                REAL NOT NULL,
+    kind              TEXT NOT NULL,              -- text / vision / image
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    purpose           TEXT NOT NULL DEFAULT '',   -- 调用方(模块.函数),自动从调用栈取
+    project_id        TEXT NOT NULL DEFAULT '',
+    role              TEXT NOT NULL DEFAULT '',   -- 团队角色
+    system_hash       TEXT NOT NULL DEFAULT '',   -- 系统提示词的指纹:提示词改版前后对比用
+    prompt_chars      INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    reasoning_tokens  INTEGER,
+    latency_ms        INTEGER NOT NULL,
+    ok                INTEGER NOT NULL,
+    finish_reason     TEXT NOT NULL DEFAULT '',
+    error             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(at);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls(project_id);
+
+-- 外部接口的冷却登记(见 app/providers/cooldown.py):被风控 / 验证码拦了就记下
+-- "到什么时候之前别再碰",跨进程、跨重启都作数。
+CREATE TABLE IF NOT EXISTS cooldowns (
+    key        TEXT PRIMARY KEY,
+    until      REAL NOT NULL,
+    reason     TEXT NOT NULL DEFAULT '',
+    tripped_at REAL NOT NULL,
+    trips      INTEGER NOT NULL DEFAULT 1
+);
+
+-- 降级记录(见 app/degrade.py):"概念动画退回数据卡""封面退回老封面"这类不报错、
+-- 片子照样出、但质量打了折的路径,每走一次记一行。原来只在日志里,看不出哪条天天在触发。
+CREATE TABLE IF NOT EXISTS degradations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    at         REAL NOT NULL,
+    kind       TEXT NOT NULL,
+    detail     TEXT NOT NULL DEFAULT '',
+    project_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_degradations_at ON degradations(at);
+
+-- 跨进程"催一下调度器":Web 进程建了项目 / 点了推进,调度器在 worker 进程里,
+-- 内存队列够不着,就记一行;调度器每秒取走入队。
+CREATE TABLE IF NOT EXISTS scheduler_kicks (
+    project_id TEXT PRIMARY KEY,
+    at         REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_leases (
+    project_id  TEXT PRIMARY KEY,
+    owner       TEXT NOT NULL,
+    acquired_at REAL NOT NULL,
+    expires_at  REAL NOT NULL
+);
 """
 
 
@@ -430,6 +519,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "aspect" not in _column_names(conn, "projects"):
         # 画幅:16:9 | 9:16。老库的项目一律横屏 —— 与它们改造前的行为一致。
         conn.execute("ALTER TABLE projects ADD COLUMN aspect TEXT NOT NULL DEFAULT '16:9'")
+    for col, ddl in (
+        # 调度器的连续失败次数与退避到期时刻(epoch 秒)。原来只在内存里:服务一重启,
+        # 退避窗口和"还差几次判死"全清零,坏项目立刻又被高频重试。
+        ("advance_failures", "INTEGER NOT NULL DEFAULT 0"),
+        ("advance_retry_at", "REAL NOT NULL DEFAULT 0"),
+    ):
+        if col not in _column_names(conn, "projects"):
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {ddl}")
     if "variant" not in _column_names(conn, "publications"):
         # 发布时用的标题写法 / 封面版本,数据回流后按它比 A/B。老记录是空对象。
         conn.execute("ALTER TABLE publications ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
@@ -488,4 +585,4 @@ def init_db() -> None:
             conn.commit()
         finally:
             conn.close()
-        pkg._INITIALISED = True
+        setattr(pkg, "_INITIALISED", True)  # 标志挂在包上(见模块说明),mypy 看不到动态属性

@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Sequence
 
-from .. import config
+from .. import config, degrade
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ def transcribe_words(path: Path) -> list[tuple[str, float, float]] | None:
                 for s in segments for w in (s.words or [])]
     except Exception as exc:  # noqa: BLE001 - 字幕细节不能拦出片
         log.warning("逐字时间:转写失败,退回字数比例:%s", exc)
+        degrade.note("word_timing.to_ratio", str(exc))
         return None
 
 

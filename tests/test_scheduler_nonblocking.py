@@ -27,8 +27,6 @@ def store(tmp_path, monkeypatch):
     db.init_db()
     # 调度器是全局单例,失败计数与退避窗口也得清 —— 否则上一个用例
     # 留下的退避窗口会让下一个用例的项目被直接跳过。
-    main.scheduler._failures.clear()
-    main.scheduler._retry_after.clear()
     yield db
     db._INITIALISED = False
 

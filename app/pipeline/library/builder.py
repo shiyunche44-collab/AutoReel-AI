@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -114,73 +113,90 @@ def build(subject: str, *, profile: Any = None, brand: str = "", llm: Any = None
     return stats
 
 
-_running: set[str] = set()
-_running_lock = threading.Lock()
+#: 建池的后台任务类型(见 `app/jobs.py`)。去重键是车型 slug,同一台车同一时刻只建一份。
+BUILD_JOB = "library.build"
+
+#: 能放进任务载荷的构建参数(其余参数是对象,不能落库)
+_BUILD_OPTS = ("enough_seconds", "max_sources", "rediscover", "budget", "brand")
 
 
-def build_async(subject: str, *, on_done: Any = None, **kwargs: Any) -> bool:
-    """后台线程里构建。同一车型已经在建就不重复起。返回是否起了新线程。
+def build_async(subject: str, *, profile: Any = None, category: str = "",
+                project_id: str = "", reserved: float = 0.0, vlm_before: int = 0,
+                **opts: Any) -> bool:
+    """排一个后台建池任务。同一车型已经在排 / 在建就不重复排。返回是否排上了。
 
     分镜阶段调用:用户审脚本、分镜的这几分钟正好拿来攒素材,
     门禁 A 确认时取材直接用池子里已有的,不在确认请求里等下载。
 
-    `on_done`:构建结束后回调一次,参数是这次构建的统计(用于把
-    视觉调用的开销记到项目账上)。回调出错不影响构建结果。
+    原来是起一次性线程:服务一重启线程就没了,池子永远停在「待打标签」,预留的额度
+    也没人结算。现在是持久化任务,重启后接着建、建完结算。
+
+    `project_id` / `reserved` / `vlm_before`:建池前给项目预留的额度,建完按实际视觉
+    调用数结算(`costs.commit_project`)。`llm` 之类的对象参数不再接收:任务里现取。
     """
-    key = slug(subject)
-    with _running_lock:
-        if key in _running:
-            return False
-        _running.add(key)
+    from ... import jobs
 
-    def _run() -> None:
-        try:
-            stats = build(subject, **kwargs)
-            if on_done is not None:
-                try:
-                    on_done(stats)
-                except Exception as exc:  # noqa: BLE001 - 记账失败不该影响建池
-                    log.warning("记账失败不该影响建池: %s", exc)
-        finally:
-            with _running_lock:
-                _running.discard(key)
-
-    threading.Thread(target=_run, name=f"library-{key}", daemon=True).start()
-    return True
+    unknown = set(opts) - set(_BUILD_OPTS) - {"llm"}
+    if unknown:
+        raise TypeError(f"build_async 不认识的参数:{sorted(unknown)}")
+    if not category and profile is not None:
+        category = str(getattr(profile, "name", "") or "")
+    payload = {"subject": subject, "category": category, "project_id": project_id,
+               "reserved": float(reserved), "vlm_before": int(vlm_before),
+               "opts": {k: v for k, v in opts.items() if k in _BUILD_OPTS}}
+    return jobs.submit(BUILD_JOB, key=slug(subject), payload=payload) is not None
 
 
 def build_many_async(subjects: list[str], **kwargs: Any) -> list[str]:
-    """多台车的素材池:**一个**后台线程按顺序逐台构建(VLM 打标签有限流,并发只会排队)。
+    """多台车的素材池:每台车一个任务,按资源类 `library` 的并发上限排队跑
+    (VLM 打标签有限流,并发多了只会排队)。已经在建的车跳过。返回这次排上的车名。"""
+    return [name for name in subjects if build_async(name, **kwargs)]
 
-    已经在建的车跳过。返回这次接手构建的车名。
-    """
-    mine: list[str] = []
-    with _running_lock:
-        for name in subjects:
-            key = slug(name)
-            if key not in _running:
-                _running.add(key)
-                mine.append(name)
-    if not mine:
-        return []
 
-    def _run() -> None:
-        for name in mine:
+def _build_job(payload: dict[str, Any]) -> dict[str, Any]:
+    """建池任务的 handler。`build` 全程不抛异常;额度预留无论成败都要结算。"""
+    from ... import costs
+    from ...categories import load_profile
+    from .. import orchestrator
+
+    subject = str(payload["subject"])
+    category = str(payload.get("category") or "")
+    project_id = str(payload.get("project_id") or "")
+    reserved = float(payload.get("reserved") or 0.0)
+    stats: dict[str, Any] = {}
+    try:
+        from ...llm import ledger
+
+        profile = load_profile(category) if category else None
+        with ledger.tag(project_id=project_id):  # 打标签的看图调用记到项目名下
+            stats = build(subject, profile=profile, llm=orchestrator._llm(),
+                          **dict(payload.get("opts") or {}))
+        return stats
+    finally:
+        if project_id:
+            delta = max(0, int(stats.get("vlm_calls") or 0) - int(payload.get("vlm_before") or 0))
             try:
-                build(name, **kwargs)
-            except Exception as exc:  # noqa: BLE001 - 一台车失败不能让后面的车永远卡在"在建"
-                log.warning("一台车失败不能让后面的车永远卡在'在建': %s", exc)
-            finally:
-                with _running_lock:
-                    _running.discard(slug(name))
+                costs.commit_project(project_id, reserved, costs.estimate_library(delta))
+            except Exception:  # noqa: BLE001 - 记账失败不该影响建池
+                log.warning("素材池记账失败(%s)", project_id, exc_info=True)
 
-    threading.Thread(target=_run, name=f"library-many-{slug(mine[0])}", daemon=True).start()
-    return mine
+
+def _register_jobs() -> None:
+    from ... import jobs
+
+    # max_attempts=1:build 本身不抛异常,抛了就是配置问题(品类不存在之类),重试无益;
+    # 而且额度已在 finally 里结算,重跑会重复结算。进程被杀导致的中断不算尝试,照样接着跑。
+    jobs.register(BUILD_JOB, resource="library", max_attempts=1, lease=180.0)(_build_job)
+
+
+_register_jobs()
 
 
 def is_building(subject: str) -> bool:
-    with _running_lock:
-        return slug(subject) in _running
+    """这台车的素材池是否在排队 / 在建(查任务表,跨进程、跨重启都准)。"""
+    from ... import jobs
+
+    return jobs.active(BUILD_JOB, slug(subject))
 
 
 def pool_status(subject: str) -> str:

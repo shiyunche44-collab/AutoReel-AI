@@ -4,13 +4,14 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app import config
+from app import config, db
 from app.providers import browser_fetch, car_specs, webassets
 
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(db, "_INITIALISED", False)
     monkeypatch.setattr(config, "BROWSER_FETCH", True)
     monkeypatch.setattr(config, "BROWSER_FETCH_HOSTS", [])
     monkeypatch.setattr(browser_fetch, "_MIN_INTERVAL", 0)
@@ -127,7 +128,15 @@ def test_fetch_caches_and_gives_up_after_fails(monkeypatch):
     for _ in range(browser_fetch._MAX_FAILS):
         with pytest.raises(browser_fetch.BrowserFetchError, match="timeout"):
             browser_fetch.fetch("https://b.com/p")
-    with pytest.raises(browser_fetch.BrowserFetchError, match="不再试"):
+    with pytest.raises(browser_fetch.BrowserFetchError, match="冷却中"):
+        browser_fetch.fetch("https://b.com/p")
+    # 冷却落库:换个进程(这里清掉内存计数模拟重启)也还在冷却
+    browser_fetch._fails.clear()
+    with pytest.raises(browser_fetch.BrowserFetchError, match="冷却中"):
+        browser_fetch.fetch("https://b.com/p")
+    # 人工过了验证 / 解除拦截:冷却一起清掉
+    browser_fetch.clear_blocked("b.com")
+    with pytest.raises(browser_fetch.BrowserFetchError, match="timeout"):
         browser_fetch.fetch("https://b.com/p")
 
 

@@ -14,15 +14,18 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from .. import config, costs, db
+from .. import config, costs, db, degrade
 from ..categories import ProfileError, load_profile
+from ..llm import ledger
 from ..llm.ark import ArkProvider
 from ..llm.deepseek import DeepSeekProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
-from ..state import State, assert_transition, can_transition
+from ..state import (GATE_STATES, TERMINAL_STATES, State, assert_transition,
+                     can_transition)
 from . import (aspect, concept_styles, explainer, intake, knobs, library, locks, looks, motion,
                rhythm, script_gen, variety)
 
@@ -60,6 +63,7 @@ def _script_llm(default):
         if ark.available():
             return ark
         log.warning("SCRIPT_LLM=ark 但没配 ARK_API_KEY,脚本退回默认模型")
+        degrade.note("script_llm.to_default", "SCRIPT_LLM=ark 但没配 ARK_API_KEY")
     return default
 
 
@@ -368,7 +372,8 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         try:
             # 这一步里画的面板、数据卡、章节条、字幕、封面都用项目的视觉包
             # 剪辑节奏、开场画面、语速这些旋钮也按项目变体走
-            with looks.use(looks.of_project(project_id)), knobs.use(_variant_of(project_id)):
+            with looks.use(looks.of_project(project_id)), knobs.use(_variant_of(project_id)), \
+                    ledger.tag(project_id=project_id):
                 return _advance(project_id, confirmed=confirmed, force=force,
                                 stop_event=stop_event)
         except costs.BudgetExceeded as exc:
@@ -438,259 +443,363 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     subjects = db.project_subjects(project) if theme.multi else []
     names = [s["name"] for s in subjects]
 
-    if state in (State.GATE_A, State.GATE_B) and not confirmed:
+    if state in GATE_STATES and not confirmed:
         return {"state": str(state), "action": "等待人工确认", "waiting": True}
-    if state in (State.DONE, State.FAILED, State.CANCELLED):
+    if state in TERMINAL_STATES:
         return {"state": str(state), "action": "已结束", "waiting": False}
     if state == State.PAUSED_BUDGET:
         return {"state": str(state), "action": "已暂停(配额)", "waiting": True}
 
-    llm = _llm()
+    ctx = _Ctx(project_id=project_id, project=project, profile=profile, theme=theme,
+               subject=subject, angle=angle, subjects=subjects, names=names, llm=_llm(),
+               force=force, stop_event=stop_event)
+    handler = STAGES.get(state)
+    if handler is None:
+        return {"state": str(state), "action": "无可执行步骤"}
+    return handler(ctx)
 
-    if state == State.DRAFT_INTENT:
-        topic = db.read_json(project_id, "topic.json", {}) or {}
-        # 配额:事实抽取要调 LLM 与检索接口,调用前先预留额度
-        with costs.project_spend(project_id, costs.stage_reserve("facts")):
-            if theme.multi:
-                facts, report = intake.run_roundup(project_id, profile, subjects,
-                                                   theme=theme.name, angle=angle,
-                                                   angle_search=topic.get("search", ""),
-                                                   evidence=topic.get("evidence") or (), llm=llm)
-            else:
-                facts, report = intake.run(project_id, profile, subject, theme=theme.name,
-                                           angle=angle, angle_search=topic.get("search", ""),
-                                           evidence=topic.get("evidence") or (), llm=llm)
-        if not report.get("sources_ok") and report.get("sources_failed"):
-            # 一个来源都没通是环境问题(CLI 缺失、登录失效),不是"这款车没数据"。
-            # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
-            first = report["sources_failed"][0]
-            raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
-        db.update_project(project_id, shot_count=profile.shots_for(project["duration"]))
-        thin = report.get("subjects_thin") or []
-        _set_state(project_id, state, State.FACTS_RESOLVED,
-                   reason=f"采集 {len(report['sources_ok'])} 个来源,"
-                          f"抽取 {len(facts)} 条事实(方向:{theme.label})"
-                          + (f";缺事实的车:{'、'.join(thin)}" if thin else ""))
-        return {"state": str(State.FACTS_RESOLVED), "facts": len(facts), "report": report}
 
-    if state == State.FACTS_RESOLVED:
-        if llm is None:
-            raise PipelineError(LLM_REQUIRED_HINT)
-        portrait = aspect.is_portrait(project)
-        intake.sync_owner_facts(project_id, project.get("owner_notes") or "")
-        facts = _facts(project_id)
-        slots = profile.drop_unbacked_slots(
-            profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait,
-                              variant=_variant(project)),
-            (f.topic for f in facts if f.enabled))
-        plan = [s.section for s in slots]
-        topic = db.read_json(project_id, "topic.json", {}) or {}
-        hook = str(topic.get("hook") or "")
-        script_llm = _script_llm(llm)
-        # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
-        with costs.project_spend(project_id, costs.stage_reserve("script")):
-            # 车评片型:写稿前先做分析,论点和章名都从这台车自己的矛盾里来
-            brief = None
-            if theme.reviewer:
-                brief = script_gen.write_brief(
-                    subject=subject, profile=profile, facts=facts, llm=script_llm,
-                    n_args=len(script_gen.argument_slots(plan, profile)),
-                    lens=str(_variant(project).get("lens") or ""), angle=angle,
-                    why=str(topic.get("why") or ""), history=_review_history(project),
-                    rule=theme.brief_rule, sections=script_gen.argument_slots(plan, profile))
-                if brief:
-                    db.write_json(project_id, "review_brief.json", brief)
-                    slots = script_gen.align_slots(slots, brief, profile)
-                    plan = [s.section for s in slots]
-            # 服务里先写几版第一句、评审挑一句(`script_gen.hook_candidates`,默认不挑);
-            # 落选的连分数存下来,复盘时对照
-            picked = None
-            if script_gen.hook_candidates >= 2:
-                picked = script_gen.choose_hook(subject=subject, profile=profile, facts=facts,
-                                                llm=script_llm, n=script_gen.hook_candidates,
-                                                angle=angle, hook=hook,
-                                                tension=str((brief or {}).get("tension") or ""))
-                if picked:
-                    db.write_json(project_id, "hook_candidates.json", picked)
-                    hook = picked["chosen"]
-            segments, title, thesis = script_gen.generate(
-                subject=subject, profile=profile, facts=facts, plan=plan,
-                duration=project["duration"], llm=script_llm, theme=theme, angle=angle,
-                portrait=portrait, hook=hook, variant=_variant(project),
-                hook_locked=bool(picked), brief=brief,
-                **({"slots": slots, "subjects": subjects} if theme.multi else {}),
-            )
-        segments = script_gen.normalize_segments(segments, slots)
-        # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次;竖屏 4–5 秒)。
-        # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
-        segments = script_gen.split_segments(
-            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX,
-            keep_chars=0 if portrait else theme.sentence_keep_chars)
-        # 口播清洗:去"我没有数字"类自曝句,把碎句和半句并进相邻的拍(拆完再清,否则拆分又造出碎句)
-        segments = script_gen.clean_spoken(
-            segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
-        # 自修:换说法的重复删掉,没出处的数字补引用 / 改写 / 删句。原来这两类只报不修,
-        # 项目停在门禁 A 等人,人不在就断更。
-        segments, fixes = script_gen.repair(segments, facts, profile, llm=script_llm, angle=angle)
-        # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
-        # 发布简介由 publish.metadata 带上品类免责声明。
-        issues =script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
-                                            variant=_variant(project), angle=angle)
-        blocking = [i for i in issues if i.is_error]
-        files: dict[str, Any] = {"lint.json": [i.to_dict() for i in issues],
-                                 "script.json": [s.model_dump() for s in segments]}
-        if fixes:
-            files["repair.json"] = fixes
-        _commit_stage(project_id, state, State.SCRIPT_READY,
-                      reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条",
-                      files=files,
-                      before=[("script", f"写稿自修 {len(fixes)} 处:" + ";".join(fixes)[:240])]
-                      if fixes else ())
-        # 标题 / 论点在抢到状态之后才写:抢输的那一路不该改掉赢家的标题
-        db.update_project(project_id, title=title, thesis=thesis)
-        return {"state": str(State.SCRIPT_READY), "segments": len(segments),
-                "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
+@dataclass
+class _Ctx:
+    """一步推进要用的上下文(`_advance` 读好项目后传给各阶段处理器)。"""
 
-    if state == State.SCRIPT_READY:
-        if names:
-            _start_library_many(project_id, names, profile, llm)
+    project_id: str
+    project: dict[str, Any]
+    profile: Any
+    theme: Any
+    subject: str
+    angle: str
+    subjects: list[dict[str, Any]]
+    names: list[str]
+    llm: Any
+    force: bool = False
+    stop_event: threading.Event | None = None
+
+
+# --------------------------------------------------------------------------
+# 各阶段处理器:一个状态一个函数,`STAGES` 登记。
+# 自动态和门禁态都必须有处理器(`tests/test_state_machine.py` 守着);
+# 每个处理器做完一步就 CAS 到 `state.SPECS[该状态].next`。
+# --------------------------------------------------------------------------
+def _stage_draft_intent(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    project = c.project
+    state = State.DRAFT_INTENT
+    profile = c.profile
+    theme = c.theme
+    subject = c.subject
+    angle = c.angle
+    subjects = c.subjects
+    llm = c.llm
+    topic = db.read_json(project_id, "topic.json", {}) or {}
+    # 配额:事实抽取要调 LLM 与检索接口,调用前先预留额度
+    with costs.project_spend(project_id, costs.stage_reserve("facts")):
+        if theme.multi:
+            facts, report = intake.run_roundup(project_id, profile, subjects,
+                                               theme=theme.name, angle=angle,
+                                               angle_search=topic.get("search", ""),
+                                               evidence=topic.get("evidence") or (), llm=llm)
         else:
-            _start_library(project_id, subject, profile, llm)
-        segments = _script(project_id)
-        facts = _facts(project_id)
-        log: list[dict] = []
-        if llm is None:
-            specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments,
-                                             subjects=names)
-        else:
-            # 配额:逐拍版式是一次 LLM 调用
-            with costs.project_spend(project_id, costs.stage_reserve("beats")):
-                specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
-                                              facts=facts, llm=llm, card_log=log, subjects=subjects)
-                # 没数据可上屏的观点拍连成一串时,配不重复旁白的关键词大字,压低静默时长
-                specs = explainer.add_keyword_beats(specs, segments, facts, profile, llm,
-                                                    portrait=aspect.is_portrait(project))
-        problems = explainer.validate_beats(specs)
-        if problems:
-            raise PipelineError("分镜自检未通过:" + "; ".join(problems))
-        counts: dict[str, int] = {}
-        for s in specs:
-            counts[s.layout] = counts.get(s.layout, 0) + 1
-        _commit_stage(project_id, state, State.STORYBOARD_READY,
-                      reason=f"分镜 {len(specs)} 拍(" + ",".join(
-                          f"{k} {v}" for k, v in sorted(counts.items())) + ")"
-                             + (f",{len(log)} 拍的叠加数据核对后降级" if log else ""),
-                      files={"storyboard.json": [s.model_dump() for s in specs],
-                             "cards.json": log})
-        db.update_project(project_id, shot_count=len(specs))
-        return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "layouts": counts}
+            facts, report = intake.run(project_id, profile, subject, theme=theme.name,
+                                       angle=angle, angle_search=topic.get("search", ""),
+                                       evidence=topic.get("evidence") or (), llm=llm)
+    if not report.get("sources_ok") and report.get("sources_failed"):
+        # 一个来源都没通是环境问题(CLI 缺失、登录失效),不是"这款车没数据"。
+        # 放行的话会拿 0 条事实写出一份全是定性描述的脚本,看上去还像成功了。
+        first = report["sources_failed"][0]
+        raise PipelineError(f"事实来源全部失败,已停在事实采集:{first.get('error', '')}")
+    for failed in report.get("sources_failed") or []:
+        # 某个事实源挂了就跳过它:事实少了,但片子照样往下做
+        degrade.note("facts.source_failed",
+                     f"{failed.get('tool', '?')}:{str(failed.get('error', ''))[:200]}")
+    db.update_project(project_id, shot_count=profile.shots_for(project["duration"]))
+    thin = report.get("subjects_thin") or []
+    _set_state(project_id, state, State.FACTS_RESOLVED,
+               reason=f"采集 {len(report['sources_ok'])} 个来源,"
+                      f"抽取 {len(facts)} 条事实(方向:{theme.label})"
+                      + (f";缺事实的车:{'、'.join(thin)}" if thin else ""))
+    return {"state": str(State.FACTS_RESOLVED), "facts": len(facts), "report": report}
 
-    if state == State.STORYBOARD_READY:
-        _set_state(project_id, state, State.GATE_A, reason="等待确认脚本与分镜")
-        return {"state": str(State.GATE_A), "waiting": True}
 
-    if state == State.GATE_A:
-        # 门禁 A 是最后一道人工确认。机器查得了的错(套话开场、空洞评价、
-        # 没出处的数字、对比章节拿厂商口径当论据)不该靠眼睛一条条找 ——
-        # 这里再跑一遍 lint,有 error 就不放行,免得带着已知缺陷去烧
-        # TTS 和逐拍渲染的钱。force=True 表示明知有问题仍然继续。
-        blockers = _gate_a_blockers(project_id, profile, theme)
-        if blockers and not force:
-            detail = " | ".join(b["message"] for b in blockers[:5])
-            more = f"(共 {len(blockers)} 处)" if len(blockers) > 5 else ""
-            raise PipelineError(
-                f"门禁 A 未放行:脚本还有 {len(blockers)} 处必须修的问题{more}。{detail}"
-                " —— 改完再确认,或显式选择「仍然继续」。"
-            )
-        specs = _sync_storyboard(project_id, _script(project_id))
-        # 配额:合成旁白(TTS)是本项目最贵的一步,调用之前先按字数预留额度。
-        # 额度不够就**不调用**,直接抛 BudgetExceeded → 进 PAUSED_BUDGET。
-        chars = sum(len(s.narration_zh or "") for s in specs)
-        with costs.project_spend(project_id,
-                                  costs.stage_reserve("tts", chars=chars)) as spend:
-            try:
-                specs, nar = explainer.time_beats(project_id, specs, profile)
-            except RuntimeError as exc:
-                raise PipelineError(str(exc)) from exc
-            # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
-            spend.actual(costs.explainer_spent(nar.to_dict()))
-        _save_specs(project_id, specs)
-        # 节奏体检:画面变化间隔 + broll 占比。写进 rhythm.json,门禁和前端都能看
-        report = rhythm.report(specs)
-        db.write_json(project_id, "rhythm.json", report)
-        # 时长出来后再查一遍完整拦截线(秒数占比、几秒没变化)。TTS 逐句缓存,
-        # 回去改稿重新确认不会重复花钱;明知如此仍要渲染就选"仍然继续"
-        hard = rhythm.blockers(specs)
-        if hard and not force:
-            raise PipelineError(
-                "画面节奏超过拦截线:" + ";".join(hard)
-                + " —— 回去改稿或分镜,或显式选择「仍然继续」。")
-        total = sum(s.duration for s in specs)
-        explainer.init_beats(project_id, specs)
-        qa = getattr(nar, "qa_report", None) or {}
-        qa_note = (f",语音质检 {qa['sentences']} 句"
-                   + (f"重做 {len(qa['redone'])} 句" if qa.get("redone") else "全部通过")
-                   ) if qa.get("sentences") else ""
-        cache_note = (",BGM 复用曲库" if nar.bgm_reused else "") + qa_note
-        _set_state(project_id, state, State.ASSETS_READY,
-                   reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
-                          + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))
-        _set_state(project_id, State.ASSETS_READY, State.DRAFT_RENDERING,
-                   reason=f"开始逐拍渲染({len(specs)} 拍)")
-        return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
-                "warnings": list(nar.warnings or []) + list(report["problems"]),
-                "rhythm": report, "voice_qa": getattr(nar, "qa_report", None)}
+def _stage_facts_resolved(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    project = c.project
+    state = State.FACTS_RESOLVED
+    profile = c.profile
+    theme = c.theme
+    subject = c.subject
+    angle = c.angle
+    subjects = c.subjects
+    names = c.names
+    llm = c.llm
+    if llm is None:
+        raise PipelineError(LLM_REQUIRED_HINT)
+    portrait = aspect.is_portrait(project)
+    intake.sync_owner_facts(project_id, project.get("owner_notes") or "")
+    facts = _facts(project_id)
+    slots = profile.drop_unbacked_slots(
+        profile.slots_for(project["duration"], theme.name, names or None, portrait=portrait,
+                          variant=_variant(project)),
+        (f.topic for f in facts if f.enabled))
+    plan = [s.section for s in slots]
+    topic = db.read_json(project_id, "topic.json", {}) or {}
+    hook = str(topic.get("hook") or "")
+    script_llm = _script_llm(llm)
+    # 配额:脚本生成是一次长输入长输出的 LLM 调用,调用前先预留额度
+    with costs.project_spend(project_id, costs.stage_reserve("script")):
+        # 车评片型:写稿前先做分析,论点和章名都从这台车自己的矛盾里来
+        brief = None
+        if theme.reviewer:
+            brief = script_gen.write_brief(
+                subject=subject, profile=profile, facts=facts, llm=script_llm,
+                n_args=len(script_gen.argument_slots(plan, profile)),
+                lens=str(_variant(project).get("lens") or ""), angle=angle,
+                why=str(topic.get("why") or ""), history=_review_history(project),
+                rule=theme.brief_rule, sections=script_gen.argument_slots(plan, profile))
+            if brief:
+                db.write_json(project_id, "review_brief.json", brief)
+                slots = script_gen.align_slots(slots, brief, profile)
+                plan = [s.section for s in slots]
+        # 服务里先写几版第一句、评审挑一句(`script_gen.hook_candidates`,默认不挑);
+        # 落选的连分数存下来,复盘时对照
+        picked = None
+        if script_gen.hook_candidates >= 2:
+            picked = script_gen.choose_hook(subject=subject, profile=profile, facts=facts,
+                                            llm=script_llm, n=script_gen.hook_candidates,
+                                            angle=angle, hook=hook,
+                                            tension=str((brief or {}).get("tension") or ""))
+            if picked:
+                db.write_json(project_id, "hook_candidates.json", picked)
+                hook = picked["chosen"]
+        segments, title, thesis = script_gen.generate(
+            subject=subject, profile=profile, facts=facts, plan=plan,
+            duration=project["duration"], llm=script_llm, theme=theme, angle=angle,
+            portrait=portrait, hook=hook, variant=_variant(project),
+            hook_locked=bool(picked), brief=brief,
+            **({"slots": slots, "subjects": subjects} if theme.multi else {}),
+        )
+    segments = script_gen.normalize_segments(segments, slots)
+    # 段落太长 = 一拍太长 = 这一拍里没有画面变化(复盘:每 5–6 秒要变一次;竖屏 4–5 秒)。
+    # 在对齐计划之后拆,免得被 normalize_segments 又并回去。
+    segments = script_gen.split_segments(
+        segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX,
+        keep_chars=0 if portrait else theme.sentence_keep_chars)
+    # 口播清洗:去"我没有数字"类自曝句,把碎句和半句并进相邻的拍(拆完再清,否则拆分又造出碎句)
+    segments = script_gen.clean_spoken(
+        segments, script_gen.PORTRAIT_SHOOT_CHARS_MAX if portrait else script_gen.SHOOT_CHARS_MAX)
+    # 自修:换说法的重复删掉,没出处的数字补引用 / 改写 / 删句。原来这两类只报不修,
+    # 项目停在门禁 A 等人,人不在就断更。
+    segments, fixes = script_gen.repair(segments, facts, profile, llm=script_llm, angle=angle)
+    # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
+    # 发布简介由 publish.metadata 带上品类免责声明。
+    issues =script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
+                                        variant=_variant(project), angle=angle)
+    blocking = [i for i in issues if i.is_error]
+    files: dict[str, Any] = {"lint.json": [i.to_dict() for i in issues],
+                             "script.json": [s.model_dump() for s in segments]}
+    if fixes:
+        files["repair.json"] = fixes
+    _commit_stage(project_id, state, State.SCRIPT_READY,
+                  reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条",
+                  files=files,
+                  before=[("script", f"写稿自修 {len(fixes)} 处:" + ";".join(fixes)[:240])]
+                  if fixes else ())
+    # 标题 / 论点在抢到状态之后才写:抢输的那一路不该改掉赢家的标题
+    db.update_project(project_id, title=title, thesis=thesis)
+    return {"state": str(State.SCRIPT_READY), "segments": len(segments),
+            "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
 
-    if state == State.ASSETS_READY:
-        _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")
-        return {"state": str(State.DRAFT_RENDERING)}
 
-    if state == State.DRAFT_RENDERING:
-        specs = _specs(project_id)
-        _resume_orphan_pools(project_id, names or [subject], profile)
-        result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
-                                          limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
-                                          should_stop=(stop_event.is_set if stop_event else None))
-        if result["stage_complete"]:
-            still_note = explainer.still_warning(explainer.footage_mix(project_id, specs))
-            if still_note:
-                db.add_event(project_id, "footage:still_heavy", reason=still_note)
-            _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
-            return {"state": str(State.GATE_B), "waiting": True, **result}
-        failed = [r for r in db.get_shots(project_id, "draft") if r["status"] == "failed"]
-        if failed and len(failed) == len(result["remaining"]) and not result["rendered"]:
-            raise PipelineError("这几拍渲染失败:" + "; ".join(result["errors"][:3]))
-        return {"state": str(state), **result}
+def _stage_script_ready(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    project = c.project
+    state = State.SCRIPT_READY
+    profile = c.profile
+    subject = c.subject
+    subjects = c.subjects
+    names = c.names
+    llm = c.llm
+    if names:
+        _start_library_many(project_id, names, profile, llm)
+    else:
+        _start_library(project_id, subject, profile, llm)
+    segments = _script(project_id)
+    facts = _facts(project_id)
+    log: list[dict] = []
+    if llm is None:
+        specs = explainer.fallback_beats(subject=subject, profile=profile, segments=segments,
+                                         subjects=names)
+    else:
+        # 配额:逐拍版式是一次 LLM 调用
+        with costs.project_spend(project_id, costs.stage_reserve("beats")):
+            specs = explainer.build_beats(subject=subject, profile=profile, segments=segments,
+                                          facts=facts, llm=llm, card_log=log, subjects=subjects)
+            # 没数据可上屏的观点拍连成一串时,配不重复旁白的关键词大字,压低静默时长
+            specs = explainer.add_keyword_beats(specs, segments, facts, profile, llm,
+                                                portrait=aspect.is_portrait(project))
+    problems = explainer.validate_beats(specs)
+    if problems:
+        raise PipelineError("分镜自检未通过:" + "; ".join(problems))
+    counts: dict[str, int] = {}
+    for s in specs:
+        counts[s.layout] = counts.get(s.layout, 0) + 1
+    _commit_stage(project_id, state, State.STORYBOARD_READY,
+                  reason=f"分镜 {len(specs)} 拍(" + ",".join(
+                      f"{k} {v}" for k, v in sorted(counts.items())) + ")"
+                         + (f",{len(log)} 拍的叠加数据核对后降级" if log else ""),
+                  files={"storyboard.json": [s.model_dump() for s in specs],
+                         "cards.json": log})
+    db.update_project(project_id, shot_count=len(specs))
+    return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "layouts": counts}
 
-    if state == State.GATE_B:
-        specs = _specs(project_id)
-        # 门禁 B 审的就是成片画面:草稿直接转成片,没有第二遍生成
-        # 每台车都得在片子里露过脸 —— 素材池没建好就渲出来的拍只有卡片,
-        # 观众看到的是「这台车一个镜头都没有」。这种片子不能放行。
-        coverage = explainer.asset_coverage(project_id, specs, names, subject)
-        missing = list(coverage.get("missing") or [])
-        if missing and not force:
-            raise PipelineError(
-                "门禁 B 未放行:这些车在片子里没有任何素材画面:"
-                + "、".join(missing)
-                + " —— 素材池可能还没建好,回「先补素材」等它建完再重渲这几拍,"
-                  "或显式选择「仍然继续」。")
-        n = explainer.promote_all(project_id, specs)
-        _set_state(project_id, state, State.COMPOSING, reason=f"{n} 拍转为成片,进入拼接混音")
-        return {"state": str(State.COMPOSING), "promoted": n, "coverage": coverage}
 
-    if state == State.COMPOSING:
+def _stage_storyboard_ready(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    state = State.STORYBOARD_READY
+    _set_state(project_id, state, State.GATE_A, reason="等待确认脚本与分镜")
+    return {"state": str(State.GATE_A), "waiting": True}
+
+
+def _stage_gate_a(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    state = State.GATE_A
+    profile = c.profile
+    theme = c.theme
+    force = c.force
+    # 门禁 A 是最后一道人工确认。机器查得了的错(套话开场、空洞评价、
+    # 没出处的数字、对比章节拿厂商口径当论据)不该靠眼睛一条条找 ——
+    # 这里再跑一遍 lint,有 error 就不放行,免得带着已知缺陷去烧
+    # TTS 和逐拍渲染的钱。force=True 表示明知有问题仍然继续。
+    blockers = _gate_a_blockers(project_id, profile, theme)
+    if blockers and not force:
+        detail = " | ".join(b["message"] for b in blockers[:5])
+        more = f"(共 {len(blockers)} 处)" if len(blockers) > 5 else ""
+        raise PipelineError(
+            f"门禁 A 未放行:脚本还有 {len(blockers)} 处必须修的问题{more}。{detail}"
+            " —— 改完再确认,或显式选择「仍然继续」。"
+        )
+    specs = _sync_storyboard(project_id, _script(project_id))
+    # 配额:合成旁白(TTS)是本项目最贵的一步,调用之前先按字数预留额度。
+    # 额度不够就**不调用**,直接抛 BudgetExceeded → 进 PAUSED_BUDGET。
+    chars = sum(len(s.narration_zh or "") for s in specs)
+    with costs.project_spend(project_id,
+                              costs.stage_reserve("tts", chars=chars)) as spend:
         try:
-            payload = explainer.compose(project_id, _specs(project_id), profile,
-                                        project["title"], llm=llm)
+            specs, nar = explainer.time_beats(project_id, specs, profile)
         except RuntimeError as exc:
             raise PipelineError(str(exc)) from exc
-        _set_state(project_id, State.COMPOSING, State.DONE,
-                   reason=f"成片完成:{Path(payload['output_path']).name}")
-        return {"state": str(State.DONE), "output": payload["output_path"],
-                "cover": payload.get("cover"), "duration": payload.get("duration")}
+        # 记账:只算这次真正送去合成的句子和新生成的 BGM(缓存命中的不花钱)
+        spend.actual(costs.explainer_spent(nar.to_dict()))
+    _save_specs(project_id, specs)
+    # 节奏体检:画面变化间隔 + broll 占比。写进 rhythm.json,门禁和前端都能看
+    report = rhythm.report(specs)
+    db.write_json(project_id, "rhythm.json", report)
+    # 时长出来后再查一遍完整拦截线(秒数占比、几秒没变化)。TTS 逐句缓存,
+    # 回去改稿重新确认不会重复花钱;明知如此仍要渲染就选"仍然继续"
+    hard = rhythm.blockers(specs)
+    if hard and not force:
+        raise PipelineError(
+            "画面节奏超过拦截线:" + ";".join(hard)
+            + " —— 回去改稿或分镜,或显式选择「仍然继续」。")
+    total = sum(s.duration for s in specs)
+    explainer.init_beats(project_id, specs)
+    qa = getattr(nar, "qa_report", None) or {}
+    qa_note = (f",语音质检 {qa['sentences']} 句"
+               + (f"重做 {len(qa['redone'])} 句" if qa.get("redone") else "全部通过")
+               ) if qa.get("sentences") else ""
+    cache_note = (",BGM 复用曲库" if nar.bgm_reused else "") + qa_note
+    _set_state(project_id, state, State.ASSETS_READY,
+               reason=f"旁白 {len(nar.sentences)} 句{cache_note},成片约 {total:.0f} 秒"
+                      + (f";节奏:{';'.join(report['problems'])}" if report["problems"] else ""))
+    _set_state(project_id, State.ASSETS_READY, State.DRAFT_RENDERING,
+               reason=f"开始逐拍渲染({len(specs)} 拍)")
+    return {"state": str(State.DRAFT_RENDERING), "duration": round(total, 1),
+            "warnings": list(nar.warnings or []) + list(report["problems"]),
+            "rhythm": report, "voice_qa": getattr(nar, "qa_report", None)}
 
-    return {"state": str(state), "action": "无可执行步骤"}
+
+def _stage_assets_ready(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    state = State.ASSETS_READY
+    _set_state(project_id, state, State.DRAFT_RENDERING, reason="开始逐拍渲染")
+    return {"state": str(State.DRAFT_RENDERING)}
+
+
+def _stage_draft_rendering(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    state = State.DRAFT_RENDERING
+    profile = c.profile
+    subject = c.subject
+    names = c.names
+    stop_event = c.stop_event
+    specs = _specs(project_id)
+    _resume_orphan_pools(project_id, names or [subject], profile)
+    result = explainer.render_pending(project_id, specs, subject=subject, profile=profile,
+                                      limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
+                                      should_stop=(stop_event.is_set if stop_event else None))
+    if result["stage_complete"]:
+        still_note = explainer.still_warning(explainer.footage_mix(project_id, specs))
+        if still_note:
+            db.add_event(project_id, "footage:still_heavy", reason=still_note)
+        _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
+        return {"state": str(State.GATE_B), "waiting": True, **result}
+    failed = [r for r in db.get_shots(project_id, "draft") if r["status"] == "failed"]
+    if failed and len(failed) == len(result["remaining"]) and not result["rendered"]:
+        raise PipelineError("这几拍渲染失败:" + "; ".join(result["errors"][:3]))
+    return {"state": str(state), **result}
+
+
+def _stage_gate_b(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    state = State.GATE_B
+    subject = c.subject
+    names = c.names
+    force = c.force
+    specs = _specs(project_id)
+    # 门禁 B 审的就是成片画面:草稿直接转成片,没有第二遍生成
+    # 每台车都得在片子里露过脸 —— 素材池没建好就渲出来的拍只有卡片,
+    # 观众看到的是「这台车一个镜头都没有」。这种片子不能放行。
+    coverage = explainer.asset_coverage(project_id, specs, names, subject)
+    missing = list(coverage.get("missing") or [])
+    if missing and not force:
+        raise PipelineError(
+            "门禁 B 未放行:这些车在片子里没有任何素材画面:"
+            + "、".join(missing)
+            + " —— 素材池可能还没建好,回「先补素材」等它建完再重渲这几拍,"
+              "或显式选择「仍然继续」。")
+    n = explainer.promote_all(project_id, specs)
+    _set_state(project_id, state, State.COMPOSING, reason=f"{n} 拍转为成片,进入拼接混音")
+    return {"state": str(State.COMPOSING), "promoted": n, "coverage": coverage}
+
+
+def _stage_composing(c: _Ctx) -> dict[str, Any]:
+    project_id = c.project_id
+    project = c.project
+    profile = c.profile
+    llm = c.llm
+    try:
+        payload = explainer.compose(project_id, _specs(project_id), profile,
+                                    project["title"], llm=llm)
+    except RuntimeError as exc:
+        raise PipelineError(str(exc)) from exc
+    _set_state(project_id, State.COMPOSING, State.DONE,
+               reason=f"成片完成:{Path(payload['output_path']).name}")
+    return {"state": str(State.DONE), "output": payload["output_path"],
+            "cover": payload.get("cover"), "duration": payload.get("duration")}
+
+
+#: 状态 → 处理器
+STAGES: dict[State, Any] = {
+    State.DRAFT_INTENT: _stage_draft_intent,
+    State.FACTS_RESOLVED: _stage_facts_resolved,
+    State.SCRIPT_READY: _stage_script_ready,
+    State.STORYBOARD_READY: _stage_storyboard_ready,
+    State.GATE_A: _stage_gate_a,
+    State.ASSETS_READY: _stage_assets_ready,
+    State.DRAFT_RENDERING: _stage_draft_rendering,
+    State.GATE_B: _stage_gate_b,
+    State.COMPOSING: _stage_composing,
+}
 
 
 def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -> None:
@@ -714,12 +823,10 @@ def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
         return
 
-    def _done(stats: dict) -> None:
-        delta = max(0, int(stats.get("vlm_calls") or 0) - before)
-        costs.commit_project(project_id, reserved, costs.estimate_library(delta))
-
     try:
-        if library.build_async(subject, profile=profile, llm=llm, on_done=_done, **kwargs):
+        # 预留额度随任务落库,建完(哪怕中途服务重启、重启后接着建完)按实际调用数结算
+        if library.build_async(subject, profile=profile, project_id=project_id,
+                               reserved=reserved, vlm_before=before, **kwargs):
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
         else:
             costs.release_project(project_id, reserved)
@@ -729,11 +836,11 @@ def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -
 
 
 def _start_library_many(project_id: str, names: list[str], profile, llm=None, **kwargs) -> None:
-    """横评:车单上每台车一个轻量素材池,一个后台线程按车依次建(见 `library.build_many_async`)。"""
+    """横评:车单上每台车一个轻量素材池,每台车一个后台任务(见 `library.build_many_async`)。"""
     if not config.USE_LIBRARY:
         return
     try:
-        started = library.build_many_async(names, profile=profile, llm=llm,
+        started = library.build_many_async(names, profile=profile,
                                            enough_seconds=library.ROUNDUP_ENOUGH_SECONDS,
                                            max_sources=library.ROUNDUP_MAX_SOURCES, **kwargs)
         if started:
