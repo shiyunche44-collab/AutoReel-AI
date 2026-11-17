@@ -60,6 +60,20 @@ def list_projects(limit: int = 100) -> list[dict[str, Any]]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def list_projects_in_states(states: list[str]) -> list[dict[str, Any]]:
+    """处于这些状态的全部项目(调度器扫描用,不截断:截断会让老项目永远扫不到)。"""
+    if not states:
+        return []
+    init_db()
+    marks = ",".join("?" * len(states))
+    with connect() as conn:
+        cur = conn.execute(
+            f"SELECT * FROM projects WHERE state IN ({marks}) ORDER BY updated_at ASC",
+            list(states),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def subject_theses(subject: str, category: str, exclude_id: str = "",
                    limit: int = 5) -> list[dict[str, str]]:
     """同一台车已经做过的片子(新的在前):写新一条时要换论点。"""

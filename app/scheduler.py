@@ -13,51 +13,27 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import config, db
 from .pipeline import orchestrator
-from .state import State
+from .state import AUTO_STATES, PREP_LANE, RENDER_LANE, State, lane_of
 
 log = logging.getLogger(__name__)
 
 #: 后台循环间隔(秒):多久扫一次项目表,推进处于渲染 / 合成态的项目。
 SCHEDULER_INTERVAL = 20
 
-#: 后台循环会自动推进的状态。缺任何一个都表现为"流水线静静卡住"——
-#: 不会报错、不会告警,镜头只是永远停在 pending。DRAFT_RENDERING 曾被漏掉,
-#: 导致草稿档从来不会自己跑起来。
+#: 后台循环会自动推进的状态,和各自的通道。**都从 `state.SPECS` 推导**:新增状态只改
+#: 那张声明表。以前这里手写一份集合,漏了就"静静卡住"(DRAFT_RENDERING 曾被漏掉,
+#: 草稿档从来不会自己跑起来)。
 #:
-#: 分两条通道,各有各的队列、线程池和并发上限:
-#:
-#: - **渲染通道**(`RENDER_STATES`,`PIPELINE_CONCURRENCY` 路):ffmpeg + 概念动画的 Chrome,
-#:   内存是硬约束。
-#: - **备料通道**(`PREP_STATES`,`PREP_CONCURRENCY` 路):事实采集、写稿、分镜 —— 等 LLM 和
-#:   网络为主,不吃本机资源。单独一条通道,新项目写稿不用排在别人的渲染后面,反过来也一样。
+#: - **渲染通道**(`PIPELINE_CONCURRENCY` 路):ffmpeg + 概念动画的 Chrome,内存是硬约束。
+#: - **备料通道**(`PREP_CONCURRENCY` 路):事实采集、写稿、分镜 —— 等 LLM 和网络为主,
+#:   不吃本机资源。新项目写稿不用排在别人的渲染后面,反过来也一样。
 #:
 #: 备料这几个状态原来靠建项目时起的一次性后台线程推进(`_bootstrap`):服务在中途重启,
-#: 项目就永远停在 DRAFT_INTENT / FACTS_RESOLVED,没人接手;而且任何异常都直接判 FAILED。
-#: 现在归调度器:重启后扫描会接着推,瞬时失败走退避重试。
-RENDER_STATES = frozenset({
-    str(State.DRAFT_RENDERING),
-    str(State.COMPOSING),
-})
-PREP_STATES = frozenset({
-    str(State.DRAFT_INTENT),
-    str(State.FACTS_RESOLVED),
-    str(State.SCRIPT_READY),
-    str(State.STORYBOARD_READY),
-    str(State.ASSETS_READY),
-})
+#: 项目就永远停在 DRAFT_INTENT / FACTS_RESOLVED,没人接手。现在归调度器。
+RENDER, PREP = RENDER_LANE, PREP_LANE
+RENDER_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == RENDER)
+PREP_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == PREP)
 AUTO_ADVANCE_STATES = RENDER_STATES | PREP_STATES
-
-#: 通道名
-RENDER, PREP = "render", "prep"
-
-
-def lane_of(state: str) -> str | None:
-    """这个状态归哪条通道;不自动推进的状态(门禁、终态、配额暂停)返回 None。"""
-    if state in RENDER_STATES:
-        return RENDER
-    if state in PREP_STATES:
-        return PREP
-    return None
 
 
 # --------------------------------------------------------------------------
@@ -166,10 +142,10 @@ class Scheduler:
         """把处于自动推进态、且不在退避窗口里的项目入队。"""
         if self._queue is None and self._prep_queue is None:
             return
-        for row in db.list_projects(limit=100):
+        # 按状态查,不按"最近 100 个":项目多了以后,久未更新的自动态项目(比如退避中的)
+        # 会被挤出最近 100 个,从此再没人扫到它。
+        for row in db.list_projects_in_states(sorted(AUTO_ADVANCE_STATES)):
             pid = row["id"]
-            if row["state"] not in AUTO_ADVANCE_STATES:
-                continue
             if pid in self._queued or pid in self._running:
                 continue
             if time.monotonic() < self._retry_after.get(pid, 0.0):
@@ -285,10 +261,12 @@ class Scheduler:
                          reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
                                 f"{type(exc).__name__}: {exc}")
             if n >= MAX_CONSECUTIVE_FAILURES:
-                db.update_project(pid, state=str(State.FAILED),
-                                  state_reason=f"连续 {n} 次推进失败:{exc}")
-                db.add_event(pid, str(State.FAILED), src=state,
-                             reason=f"连续 {n} 次推进失败")
+                # CAS:失败这一轮里状态可能已被推进(甚至已完成),不能无条件写 FAILED
+                cur = str((db.get_project(pid) or {}).get("state") or "")
+                if cur in AUTO_ADVANCE_STATES and db.cas_state(
+                        pid, cur, str(State.FAILED), reason=f"连续 {n} 次推进失败:{exc}"):
+                    db.add_event(pid, str(State.FAILED), src=cur,
+                                 reason=f"连续 {n} 次推进失败")
             return False
         # 成功 → 清掉失败计数
         self._failures.pop(pid, None)

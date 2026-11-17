@@ -15,7 +15,7 @@ from .. import config, db, maintenance
 from ..models import GateRequest, ProjectCreate, RetryRequest, ScriptPatch, ScriptSegment, ShotPatch
 from ..pipeline import aspect, concept_styles, orchestrator
 from ..scheduler import scheduler
-from ..state import State
+from ..state import State, is_auto
 from ..views import ProjectNotFound, build_detail, build_summary
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,16 @@ class AdvanceRequest(BaseModel):
 
 @router.post("/api/projects/{project_id}/advance")
 def advance_project(project_id: str):
+    row = db.get_project(project_id)
+    if not row:
+        raise HTTPException(404, "项目不存在")
+    if is_auto(row["state"]):
+        # 自动态归后台调度器,这里不再同步推进:两路抢写同一批文件会写坏 mp4、把项目判 FAILED。
+        # 「推进」的意思改成「催调度器马上排它」。本进程只读(没拿到实例锁)时
+        # kick 什么都不做,占锁的那个服务下一轮扫描会接手。
+        scheduler.kick(project_id)
+        return {"state": row["state"], "action": "已交给后台调度器", "queued": True,
+                "waiting": False}
     try:
         out = orchestrator.advance(project_id)
     except orchestrator.PipelineError as exc:
