@@ -8,7 +8,7 @@ AutoReel-AI:本地运行的产品解说视频工厂 + AI 团队。项目介绍�
 pytest                          # 全量测试;默认不跑 probe_*/verify_*(会联网或花额度)
 pytest -m "not network and not quota"
 ruff check app tests            # line-length 100
-mypy                            # 只覆盖 models.py / state.py / db.py
+python -m mypy                  # 只报 pyproject 里 files 列的模块(db 包、state、models、jobs、locks 等)
 npm run check                   # 前端 lint + typecheck + vitest(app/web/static/js)
 python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / e2e 配置)
 ```

@@ -37,7 +37,8 @@ def list_industry_events(category: str, *, day_from: str = "", day_to: str = "",
                          limit: int = 200) -> list[dict[str, Any]]:
     """按日期排。day_from / day_to 是闭区间的 YYYY-MM-DD。"""
     init_db()
-    where, args = ["category = ?"], [category]
+    where: list[str] = ["category = ?"]
+    args: list[Any] = [category]
     if day_from:
         where.append("day >= ?")
         args.append(day_from)

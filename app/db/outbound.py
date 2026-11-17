@@ -54,7 +54,8 @@ def list_outbound_actions(*, day: str | None = None, actions: tuple[str, ...] = 
                           since: float | None = None, limit: int = 200) -> list[dict[str, Any]]:
     """新的在前。"""
     init_db()
-    where, args = [], []
+    where: list[str] = []
+    args: list[Any] = []
     if day:
         where.append("day = ?")
         args.append(day)

@@ -105,7 +105,8 @@ def list_plan_items(category: str | None = None, *, statuses: tuple[str, ...] = 
                     limit: int = 200) -> list[dict[str, Any]]:
     """按目标发布时刻排序的选题。"""
     init_db()
-    where, args = [], []
+    where: list[str] = []
+    args: list[Any] = []
     if category:
         where.append("category = ?")
         args.append(category)
@@ -124,7 +125,9 @@ def list_plan_items(category: str | None = None, *, statuses: tuple[str, ...] = 
     sql += " ORDER BY slot_at, created_at LIMIT ?"
     args.append(limit)
     with connect() as conn:
-        return [_plan_row(r) for r in conn.execute(sql, args).fetchall()]
+        # fetchall 的行不会是 None;过滤只是让类型对上
+        return [d for r in conn.execute(sql, args).fetchall()
+                if (d := _plan_row(r)) is not None]
 
 
 def update_plan_item(item_id: str, **fields: Any) -> None:

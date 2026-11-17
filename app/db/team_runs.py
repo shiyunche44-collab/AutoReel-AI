@@ -28,7 +28,7 @@ def start_team_run(role: str, trigger: str = "schedule", stale_after: float = 36
             return None
         cur = conn.execute("INSERT INTO team_runs (role, started_at, status, trigger)"
                            " VALUES (?, ?, 'running', ?)", (role, now, trigger))
-        return int(cur.lastrowid)
+        return int(cur.lastrowid or 0)
 
 
 def finish_team_run(run_id: int, status: str, summary: str = "") -> None:

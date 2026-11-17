@@ -49,7 +49,8 @@ def get_publication(pub_id: str) -> dict[str, Any] | None:
 def list_publications(*, state: str | None = None, project_id: str | None = None,
                       limit: int = 200) -> list[dict[str, Any]]:
     init_db()
-    clauses, params = [], []
+    clauses: list[str] = []
+    params: list[Any] = []
     if state:
         clauses.append("state = ?")
         params.append(state)

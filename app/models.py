@@ -268,7 +268,8 @@ class ProjectSummary(BaseModel):
 class ProjectDetail(ProjectSummary):
     narration_mode: str
     quota_budget: float
-    state_reason: str | None = None
+    # 详情页要区分"没有原因"(None)和空串;摘要里统一成空串。pydantic 允许子类放宽类型
+    state_reason: str | None = None  # type: ignore[assignment]
     facts: list[Fact] = Field(default_factory=list)
     script: list[ScriptSegment] = Field(default_factory=list)
     shots: list[Shot] = Field(default_factory=list)

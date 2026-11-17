@@ -18,6 +18,7 @@ import logging
 import sys
 import time
 from collections.abc import Iterator
+from types import FrameType
 from contextlib import contextmanager
 from typing import Any
 
@@ -47,7 +48,7 @@ def current_tags() -> dict[str, str]:
 
 def caller(depth_limit: int = 30) -> str:
     """调用方:调用栈上第一个不属于模型通道的帧,`模块.函数`(去掉 `app.` 前缀)。"""
-    frame = sys._getframe(1)
+    frame: FrameType | None = sys._getframe(1)
     for _ in range(depth_limit):
         if frame is None:
             break

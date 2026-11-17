@@ -89,9 +89,11 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
-files = ["app/models.py", "app/state.py", "app/db.py"]
+# 只报 files 里列的模块;它们 import 进来的其它模块只用来推断类型,不报错
+follow_imports = "silent"
+files = ["app/models.py", "app/state.py", "app/db", "app/jobs.py", "app/degrade.py", "app/background.py", "app/llm/ledger.py", "app/providers/cooldown.py", "app/pipeline/locks.py"]
 
 [[tool.mypy.overrides]]
-module = "app.db"
+module = "app.db.*"
 # db 里有一批"列名 → kwargs"的动态写法,类型检查器看不出来
 disallow_untyped_calls = false

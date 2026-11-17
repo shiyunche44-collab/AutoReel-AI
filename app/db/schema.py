@@ -585,4 +585,4 @@ def init_db() -> None:
             conn.commit()
         finally:
             conn.close()
-        pkg._INITIALISED = True
+        setattr(pkg, "_INITIALISED", True)  # 标志挂在包上(见模块说明),mypy 看不到动态属性

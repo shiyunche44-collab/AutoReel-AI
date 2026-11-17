@@ -34,7 +34,7 @@ def enqueue_job(kind: str, key: str = "", payload: dict[str, Any] | None = None,
             " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (kind, key, json.dumps(payload or {}, ensure_ascii=False), max(1, max_attempts),
              run_at, now, now))
-        return int(cur.lastrowid) if cur.rowcount else None
+        return int(cur.lastrowid or 0) if cur.rowcount else None
 
 
 def claim_job(owner: str, kinds: list[str], lease: float) -> dict[str, Any] | None:
