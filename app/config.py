@@ -168,40 +168,63 @@ TARGET_LUFS = -14
 # --------------------------------------------------------------------------
 # ffmpeg 解析
 # --------------------------------------------------------------------------
-def _resolve_binary(env_key: str, default_dir: str | None, exe: str) -> Path | None:
-    """按 环境变量 → 默认目录 → 系统 PATH 的顺序解析二进制路径。"""
+def _resolve_binary(env_key: str, default_dir: str | None, name: str) -> Path | None:
+    """按 环境变量 → 默认目录 → 系统 PATH 的顺序解析二进制路径。
+
+    `name` 不带扩展名(`ffmpeg` / `ffprobe`),Windows 上找 `.exe`,别处找无扩展名的。
+    环境变量可以给目录,也可以给**任意一个**可执行文件的全路径(比如 `FFMPEG_BIN` 指向
+    ffmpeg.exe):这时到它所在目录里找 `name`。原来给全路径时 ffprobe 也被解析成
+    ffmpeg.exe,所有用 ffprobe 量时长的地方都拿到 0。
+    """
+    names = [f"{name}.exe", name] if os.name == "nt" else [name, f"{name}.exe"]
+
+    def _in(directory: Path) -> Path | None:
+        for n in names:
+            if (directory / n).is_file():
+                return directory / n
+        return None
+
     configured = os.getenv(env_key)
     if configured:
         candidate = Path(configured).expanduser()
-        # 允许直接给目录,也可直接给 exe 全路径
         if candidate.is_dir():
-            candidate = candidate / exe
+            return _in(candidate)
         if candidate.is_file():
-            return candidate
+            if candidate.stem.lower() == name:
+                return candidate
+            return _in(candidate.parent)
         found = shutil.which(configured)
-        return Path(found) if found else None
+        if found:
+            found_path = Path(found)
+            return found_path if found_path.stem.lower() == name else _in(found_path.parent)
+        return None
 
     if default_dir:
-        candidate = Path(default_dir) / exe
-        if candidate.is_file():
-            return candidate
+        hit = _in(Path(default_dir))
+        if hit:
+            return hit
 
-    found = shutil.which(exe)
-    return Path(found) if found else None
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return Path(found)
+    return None
 
 
 #: 本机 ffmpeg 安装位置(不在系统 PATH)。
 _DEFAULT_FFMPEG_DIR = r"C:\ffmpeg\bin"
 
-FFMPEG_PATH = _resolve_binary("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR, "ffmpeg.exe")
-FFPROBE_PATH = _resolve_binary("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR, "ffprobe.exe")
+FFMPEG_PATH = _resolve_binary("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR, "ffmpeg")
+FFPROBE_PATH = _resolve_binary("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR, "ffprobe")
 FONTS_DIR = os.getenv("FFMPEG_FONTS_DIR", r"C:\Windows\Fonts")
 
 
 def ffmpeg_status() -> tuple[bool, str]:
     """返回 (是否可用, 人类可读说明)。用于启动自检与 Web 横幅。"""
     if FFMPEG_PATH and FFMPEG_PATH.is_file():
-        probe = "ffprobe 可用" if (FFPROBE_PATH and FFPROBE_PATH.is_file()) else "ffprobe 缺失(时长探测将退化)"
+        probe_ok = bool(FFPROBE_PATH and FFPROBE_PATH.is_file()
+                        and FFPROBE_PATH.stem.lower() == "ffprobe")
+        probe = "ffprobe 可用" if probe_ok else "ffprobe 缺失(时长探测将退化)"
         return True, f"ffmpeg: {FFMPEG_PATH}({probe})"
     checked = [env for env in ("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR) if env]
     return False, (
