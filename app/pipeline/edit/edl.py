@@ -64,6 +64,12 @@ class Clip:
     beat: int = -1
     text: str = ""
     item_id: str = ""
+    #: 这半句点到了可看的东西(视角 / 部件),应当对题
+    need: bool = False
+    #: 对上题的依据:view / detail;空 = 没对上(或不需要)
+    match: str = ""
+    #: 怎么挑出来的:rank(排序第一)/ llm(文字模型复选)/ fallback(逐拍成品兜底)
+    via: str = ""
 
 
 @dataclass
@@ -88,10 +94,34 @@ class Timeline:
     chapters: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_props(cls, d: Mapping[str, Any]) -> Timeline:
+        """`to_props()` 的逆(edit_timeline.json 读回来重合成用;多余的键忽略)。"""
+        clip_keys = set(Clip.__dataclass_fields__)
+        return cls(
+            width=int(d["width"]), height=int(d["height"]), fps=int(d["fps"]),
+            duration=float(d["duration"]), title=str(d.get("title") or ""),
+            accent=str(d.get("accent") or "#FF5A1F"),
+            clips=[Clip(**{k: v for k, v in c.items() if k in clip_keys}) for c in d.get("clips") or []],
+            overlays=[Overlay(float(o["start"]), float(o["dur"]), str(o["type"]), dict(o.get("props") or {}))
+                      for o in d.get("overlays") or []],
+            captions=list(d.get("captions") or []), chapters=list(d.get("chapters") or []),
+            notes=list(d.get("notes") or []))
+
     def to_props(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("notes", None)
         return d
+
+    def match_stats(self) -> dict[str, Any]:
+        """对题率:半句点到了可看东西的那些刀里,有几刀画面对上了。
+        取不到素材、退回逐拍成品的刀(fallback)不计入,单独计数。"""
+        need = [c for c in self.clips if c.need]
+        hit = [c for c in need if c.match]
+        return {"need": len(need), "hit": len(hit),
+                "rate": round(len(hit) / len(need), 3) if need else None,
+                "llm": sum(1 for c in self.clips if c.via == "llm"),
+                "fallback": sum(1 for c in self.clips if c.via == "fallback")}
 
     def cut_times(self) -> list[float]:
         return [c.start for c in self.clips[1:]]
@@ -331,7 +361,8 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                 if kind == "beat_slice":
                     clip = Clip(round(cursor, 3), round(d, 3), "video", str(p["path"]),
                                 src_in=round(float(p.get("start") or 0.0), 3), motion="none",
-                                transition=trans, beat=s.idx, text=text)
+                                transition=trans, beat=s.idx, text=text,
+                                need=bool(p.get("need")), via="fallback")
                 else:
                     motions = MOTIONS_STILL if kind == "still" else MOTIONS_VIDEO
                     clip = Clip(round(cursor, 3), round(d, 3), "still" if kind == "still" else "video",
@@ -339,7 +370,9 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                                 motion=motions[n_clip % len(motions)], transition=trans,
                                 crop_edge=float(p.get("crop_edge") or 0.0),
                                 crop_bottom=float(p.get("crop_bottom") or 0.0),
-                                beat=s.idx, text=text, item_id=str(p.get("item_id") or ""))
+                                beat=s.idx, text=text, item_id=str(p.get("item_id") or ""),
+                                need=bool(p.get("need")), match=str(p.get("match") or ""),
+                                via=str(p.get("via") or ""))
                 tl.clips.append(clip)
                 n_clip += 1
                 cursor += d

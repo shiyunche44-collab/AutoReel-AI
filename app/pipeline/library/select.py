@@ -9,7 +9,7 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Iterable, Sequence
 from ... import config
 from ...categories import Vocab
 from .. import knobs, looks, media_check
@@ -284,6 +284,8 @@ def _branded_still(item: Item) -> bool:
 #: 一拍在片子里的位置:开场 / 正文 / 结论。开场和结论只用确认是这台车的一方素材,
 #: 第三方视频只在正文里、一方素材铺不满时兜底
 ROLES = ("hook", "body", "ending")
+#: `fill(choose=...)` 时交给挑选的候选数
+CHOOSE_TOP = 6
 
 
 def _croppable(item: Item) -> bool:
@@ -488,7 +490,9 @@ def _chunk_videos(pool: list[Item], group: dict[str, str], members: dict[str, li
 
 
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
-         recent: list[str] | None = None, detail: str = "", role: str = "body") -> list[Piece]:
+         recent: list[str] | None = None, detail: str = "", role: str = "body",
+         views: Iterable[str] | None = None,
+         choose: Callable[[str, list[Item]], int | None] | None = None) -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -506,6 +510,10 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
       —— 开头观众只确认"是不是我要看的那台车",结尾是片子的落点,都不能挂别人的画面;
     - body:第三方视频只在**没用过的**一方素材铺不满这一拍时才进候选,且源必须已测过台标、
       能裁掉(`_third_party_ok`);进了也排在没用过的一方素材后面、用过的前面。
+    `views`(剪辑 v2):这一刀念到的半句点到的视角(`vocab.views_in`)。给了就代替 `hint` 的视角组,
+    且视角命中的素材和"讲到的部件"一样算对题、排在前面。
+    `choose`(剪辑 v2):第一刀从排序前 `CHOOSE_TOP` 名里再挑一次(`choose(detail, 候选)` 返回下标,
+    None 或越界就用排第一的)。用来让文字模型按素材描述挑最贴这半句的画面。
     返回空列表表示池子里什么都没有。
     """
     if role not in ROLES:
@@ -516,7 +524,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     lib = Library.load(subject)
     vocab = vocab_of(lib)
     book = LicenseBook(lib)
-    want = vocab.hint_views(hint)
+    text_views = set(views or ())
+    want = text_views or vocab.hint_views(hint)
     want_detail = vocab.detail_types_in(detail) if detail else set()
     pool = [i for i in lib.items if i.usable and Path(i.path).is_file() and (
         (i.kind == "video" and i.length >= FILL_MIN_PIECE)
@@ -578,7 +587,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             # 视频同档。否则永远选不到它:静图本来比视频低一档。
             tier = _reuse_penalty(n)
         # 这一拍讲到的部件排到使用次数前面:画面和口播对得上,比少用一次更要紧
-        on_topic = ((fit == 0 or _desc_overlap(i, detail) >= FIT_OVERLAP_MIN)
+        on_topic = ((fit == 0 or _desc_overlap(i, detail) >= FIT_OVERLAP_MIN
+                     or i.view in text_views)
                     and n < FIT_REUSE_MAX and _confirmed(i) and i.view != "people"
                     and not _audience(i) and group[i.id] not in recent_groups)
         # 码率不够的视频同档里往后排(不降档:AV1 官方片普遍码率低,降档就全让给静图了)
@@ -596,7 +606,17 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}
         last = by_id.get(window[-1]) if window else None
-        i = min(left, key=lambda x: rank(x, recent_groups, last.view if last else ""))
+        key = lambda x: rank(x, recent_groups, last.view if last else "")  # noqa: E731
+        if choose is not None and not out and len(left) > 1:
+            top = sorted(left, key=key)[:CHOOSE_TOP]
+            try:
+                k = choose(detail, top)
+            except Exception:  # noqa: BLE001 —— 挑不出来就按排序,不拦取材
+                log.warning("取材二次挑选失败,按排序取", exc_info=True)
+                k = None
+            i = top[k] if isinstance(k, int) and 0 <= k < len(top) else top[0]
+        else:
+            i = min(left, key=key)
         left.remove(i)
         remaining = seconds - covered
         slot_cap = clause_plan[len(out)] if len(out) < len(clause_plan) else max_piece

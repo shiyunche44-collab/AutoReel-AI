@@ -23,7 +23,7 @@ from .edl import Timeline
 log = logging.getLogger(__name__)
 
 #: 版本进缓存键:组件 / 规则改了升这个数
-EDIT_VERSION = 1
+EDIT_VERSION = 2
 RENDER_TIMEOUT = int(os.getenv("EDIT_V2_TIMEOUT", "3600"))
 
 
@@ -37,9 +37,11 @@ def _public_name(path: str) -> str:
 
 
 def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
-    """把时间线里用到的本地文件链进 Remotion 的 public 目录,返回改好 src 的 props。"""
+    """把时间线里用到的本地文件链进 Remotion 的 public 目录,返回改好 src 的 props。
+    竖屏顺带给每刀做一张模糊底图(`backdrop`)。"""
     public.mkdir(parents=True, exist_ok=True)
     props = tl.to_props()
+    portrait = tl.height > tl.width
     for clip in props["clips"]:
         src = clip["src"]
         if not src or src.startswith(("http:", "https:", "data:")):
@@ -54,7 +56,23 @@ def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
             except OSError:
                 shutil.copy2(src, dest)
         clip["src"] = name
+        if clip["kind"] != "beat" and portrait:
+            bd = public / f"bd_{Path(name).stem}_{int(float(clip.get('src_in') or 0) * 10)}.jpg"
+            if bd.is_file() or _backdrop(Path(src), float(clip.get("src_in") or 0.0), bd):
+                clip["backdrop"] = bd.name
     return props
+
+
+def _backdrop(src: Path, at: float, dest: Path) -> bool:
+    """竖屏底图:抽一帧,缩小、高斯模糊、压暗。失败就不要底图(纯色底),不拦出片。"""
+    args = ["-y", "-v", "error"]
+    if src.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
+        args += ["-ss", f"{max(0.0, at):.3f}"]
+    args += ["-i", str(src), "-frames:v", "1",
+             "-vf", "scale=360:-2,gblur=sigma=14,eq=brightness=-0.22:saturation=1.1", "-q:v", "4",
+             str(dest)]
+    proc = render_mod._run(args, timeout=60)
+    return proc.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
 
 
 def render_video(tl: Timeline, work: Path) -> Path:

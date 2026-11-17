@@ -266,11 +266,13 @@ export const Edit = (props) => {
 
   return (
     <AbsoluteFill style={{ background: "#0b0d10" }}>
-      {/* 竖屏底:当前素材的模糊放大版,避免大片纯黑 */}
-      {g.title && clips.filter((c) => c.kind !== "beat").map((c, i) => (
+      {/* 竖屏底:当前素材的模糊版,避免大片纯黑。用 Python 预先抽帧模糊好的小图(clip.backdrop),
+          实时 CSS 模糊整屏视频会让渲染慢 2–3 倍 */}
+      {g.title && clips.filter((c) => c.kind !== "beat" && c.backdrop).map((c, i) => (
         <Sequence key={`bg${i}`} {...seq(c.start, c.dur)}>
-          <AbsoluteFill style={{ filter: "blur(40px) brightness(.45)", transform: "scale(1.2)" }}>
-            <Media clip={{ ...c, motion: "none" }} fps={fps} />
+          <AbsoluteFill>
+            <Img src={src(c.backdrop)} style={{ width: "100%", height: "100%", objectFit: "cover",
+              transform: "scale(1.1)" }} />
           </AbsoluteFill>
         </Sequence>
       ))}
@@ -300,7 +302,7 @@ export const Edit = (props) => {
       ))}
       <AbsoluteFill>
         {(props.captions || []).filter((c) => now >= c.start && now < c.end).map((c, i) => (
-          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: 0.06 }} />
+          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.072 : 0.06 }} />
         ))}
       </AbsoluteFill>
     </AbsoluteFill>

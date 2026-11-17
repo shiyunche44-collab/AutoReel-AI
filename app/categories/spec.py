@@ -311,6 +311,9 @@ class Vocab:
     detail_types: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: 算"特写"的视角。特写是局部近景,讲某个部件时最容易配错。
     closeup_views: tuple[str, ...] = ("detail",)
+    #: 素材视角 → 旁白里点到它的说法。剪辑 v2 按每一刀念到的半句推出想要的视角
+    #: (讲尾灯 → rear,讲中控屏 → screen),命中的素材算"对题"。空 = 不按半句推视角
+    view_words: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     # ---- 素材检索 ----
     discovery_zh: tuple[str, ...] = ("{subject} 宣传片", "{subject} 官方", "{subject} 产品展示",
@@ -373,6 +376,11 @@ class Vocab:
             if any(w.lower() in low for w in words):
                 out.add(name)
         return out
+
+    def views_in(self, text: str) -> set[str]:
+        """文本点到了哪些视角(按 view_words 匹配)。"""
+        low = (text or "").lower()
+        return {v for v, words in self.view_words.items() if any(w.lower() in low for w in words)}
 
     def detail_words(self, names: Iterable[str]) -> set[str]:
         """这些细节类型在描述里会出现的各种说法(小写)。"""
@@ -440,7 +448,7 @@ def _build_vocab(raw: dict[str, Any]) -> Vocab:
             kwargs[key] = tuple(str(x) for x in (value or ()))
         elif isinstance(default, dict) and key in ("hint_groups", "coverage_views", "segments"):
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
-        elif isinstance(default, dict) and key == "detail_types":
+        elif isinstance(default, dict) and key in ("detail_types", "view_words"):
             # 细节类型 → 各种说法(说法本身是词表,所以是元组)
             kwargs[key] = {str(k): tuple(str(x) for x in (v or ())) for k, v in value.items()}
         elif isinstance(default, dict) and key == "concept_scene_keys":

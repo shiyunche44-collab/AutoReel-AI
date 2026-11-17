@@ -1,6 +1,6 @@
 # 剪辑 v2:统一时间线 + Remotion 主合成
 
-状态:**第 1 阶段已落地(试点,默认关闭)**。`EDIT_V2=1` 只对竖屏生效,`EDIT_V2=all` 横竖都走;
+状态:**第 1、2 阶段已落地(试点,默认关闭)**。`EDIT_V2=1` 只对竖屏生效,`EDIT_V2=all` 横竖都走;
 任何失败自动退回旧合成,并记一条 `edit_v2:fallback` 事件。
 
 ## 为什么重构
@@ -53,9 +53,17 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
 ## 分阶段
 
 1. **(已完成)时间线 + Remotion 合成 + 按半句取材 + 钩子 + 转场**。`tests/test_edit_edl.py`。
-2. **语义配画面**:分镜阶段给每句写"画面需求"(视角 + 部件 + 动作);素材打标时存向量
-   (方舟多模态 embedding 或 Chinese-CLIP),`pick` 改为向量召回 + 车型核对 + 去重;
-   cut_review 的"画面与旁白不符"作为回归指标。
+2. **(已完成)语义配画面**(`pipeline/edit/match.py`,`tests/test_edit_match.py`):
+   - 视角意图:词表 `vocab.view_words`(说法 → 素材视角),每刀按半句推出想要的视角,
+     `library.fill(views=...)` 把命中视角的素材当"对题"排前;
+   - 文字模型复选(`EDIT_V2_RERANK`,默认开):`fill` 排序前 6 名的素材描述 + 这半句交给文字模型挑一条
+     (`fill(choose=...)`);模型出错 / 编号不合法就按排序取;
+   - 对题率:半句点到了视角 / 部件的刀里,素材视角或描述对上的比例,写进 `edit_timeline.json` 的
+     `match`,也作为 render.json 的第一条提示(「画面对题 x/y 刀」)。拿它和 cut_review 的
+     "画面与旁白不符"一起看趋势;
+   - 只改字幕重出成片(`explainer.recompose`)时沿用上次的时间线,同样的取材和刀口,只换字幕。
+   - 向量召回(方舟多模态 embedding / Chinese-CLIP)暂缓:Agent Plan 的 Key 是否含向量接口未验证,
+     且现有视觉标签 + 文字模型复选已覆盖主要场景。对题率长期上不去再加。
 3. **包装与节奏打磨**:按 look 出多套 Remotion 主题;关键词处 punch-in;
    概念动画 / 数据卡逐步迁成 Remotion 组件(去掉 PIL 叠加层);B 版钩子 A/B。
 4. **人工精修出口(可选)**:由 timeline.json 导出剪映草稿。
@@ -66,10 +74,11 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
 1. 本机 `remotion/` 下 `npm ci`;`.env` 加 `EDIT_V2=1`;用 `scripts/restart_server.ps1 -Reason "开剪辑v2试点"` 重启。
 2. 找一个竖屏项目在门禁 B 通过,等 COMPOSING 自动出片;`render.json` 的 warnings 第一条是「剪辑 v2 合成」。
 3. 失败时看项目事件 `edit_v2:fallback`(已退回旧成片)。`edit_timeline.json` 里每刀的 `text` 就是它取材用的半句。
-4. 渲染时长:Remotion 比 ffmpeg 慢,`EDIT_V2_CONCURRENCY`(默认 `50%`)控制并发,`EDIT_V2_TIMEOUT` 默认 3600 秒。
+4. 渲染时长:Remotion 比 ffmpeg 慢。4 核云容器实测 20 秒成片约 70 秒(竖屏模糊底图改成预先抽帧
+   模糊的小图后,比实时 CSS 模糊快约 2.4 倍),本机核数多会更快。`EDIT_V2_CONCURRENCY`(默认 `50%`)控制并发,`EDIT_V2_TIMEOUT` 默认 3600 秒。
 
 ## 已知限制(第 1 阶段)
 
 - 主持人层、片头角标(intro)v2 里暂不叠。
-- 取材仍是标签 + 文本重合度,不是向量语义;画面不对题会减少,但不会根除(第 2 阶段)。
+- 对题依赖入库时视觉模型写的描述和视角标签;标错了的素材照样会配错。
 - 竖屏的整屏卡片 / 概念动画是逐拍成品,自带旧样式标题带,与 v2 标题带略有差异。

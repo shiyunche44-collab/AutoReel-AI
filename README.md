@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 ### 剪辑 v2(试点,默认关)
 
-`EDIT_V2=1` 后竖屏成片改由 Remotion 按统一时间线合成:实拍在分句处切成 1–3 秒的子镜头、每刀按它那半句取材,开头 3 秒快切钩子,换章 whip 转场,叠加层和花字字幕都是 Remotion 动效。失败自动退回旧合成。需要先在 `remotion/` 下 `npm ci`。设计和后续阶段见 [docs/edit-v2.md](docs/edit-v2.md)。
+`EDIT_V2=1` 后竖屏成片改由 Remotion 按统一时间线合成:实拍在分句处切成 1–3 秒的子镜头、每刀按它那半句取材(按半句推视角,再让文字模型从候选素材描述里挑最贴的,`EDIT_V2_RERANK=0` 关掉),开头 3 秒快切钩子,换章 whip 转场,叠加层和花字字幕都是 Remotion 动效。失败自动退回旧合成。需要先在 `remotion/` 下 `npm ci`。设计和后续阶段见 [docs/edit-v2.md](docs/edit-v2.md)。
 
 ### 门禁 B 和收尾
 
