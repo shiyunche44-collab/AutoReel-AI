@@ -67,7 +67,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 平台抓取与发布
 
-- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。被风控后 `providers/cooldown.py` 记冷却(`cooldowns` 表,连续被拦翻倍,跨进程 / 重启有效),冷却期内不发请求;抖音搜索页撞验证码同理(`douyin.search`,6 小时)。新接一个会被风控的接口也用 `cooldown.check / trip`,别在内存里自己记。冷却中的在 `/api/health` 的 `cooldowns`,确认恢复后 `DELETE /api/cooldowns/<key>`。
+- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。被风控后 `providers/cooldown.py` 记冷却(`cooldowns` 表,连续被拦翻倍,跨进程 / 重启有效),冷却期内不发请求;抖音搜索页撞验证码同理(`douyin.search`,6 小时)。新接一个会被风控的接口也用 `cooldown.check / trip`,别在内存里自己记。冷却中的在 `/api/health` 的 `cooldowns`,确认恢复后 `DELETE /api/cooldowns/<key>`。浏览器兜底(`browser_fetch`)同一站点连续失败 2 次也登记冷却(`browser.<host>`,1 小时);撞验证码的站在 `blocked_sites`,人工 `browser_unblock` 后拦截和冷却一起清。
 - 不要抓懂车帝的参数配置页(`auto/params-carIds-*`),返回空 200,疑似反爬。图库需要登录,状态在 `data/_browser/dongchedi.json`。
 - 浏览器会话共用 profile,同一 profile 在进程内有锁(`BrowserSession`);`BROWSER_PATH` 默认是 chrome-headless-shell,需要有界面登录时用 `publish/browser.headed_browser` 换真 Chrome。
 - 抖音评论回复的真实发送路径、小红书图文上传(`_publish_note`)、对标账号抓取,都**没在真实账号上完整跑过**。首次启用要盯着。

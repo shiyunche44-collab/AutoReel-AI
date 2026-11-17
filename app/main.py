@@ -329,6 +329,13 @@ def health():
         out["cooldowns"] = cooldown.active()
     except Exception:  # noqa: BLE001
         out["cooldowns"] = []
+    # 撞了验证码 / 登录墙、等人工过一次的站点(python scripts/browser_unblock.py <url>)
+    try:
+        from .providers import browser_fetch
+
+        out["blocked_sites"] = browser_fetch.blocked_list()
+    except Exception:  # noqa: BLE001
+        out["blocked_sites"] = []
     # 降级路径:最近 24 小时哪些"质量打折但照样出片"的路走了几次(细节见 /api/degradations)
     try:
         out["degradations_24h"] = degrade.summary(time.time() - 86400)
