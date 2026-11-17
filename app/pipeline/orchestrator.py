@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 from .. import config, costs, db
 from ..categories import ProfileError, load_profile
+from ..llm import ledger
 from ..llm.ark import ArkProvider
 from ..llm.deepseek import DeepSeekProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
@@ -370,7 +371,8 @@ def advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         try:
             # 这一步里画的面板、数据卡、章节条、字幕、封面都用项目的视觉包
             # 剪辑节奏、开场画面、语速这些旋钮也按项目变体走
-            with looks.use(looks.of_project(project_id)), knobs.use(_variant_of(project_id)):
+            with looks.use(looks.of_project(project_id)), knobs.use(_variant_of(project_id)), \
+                    ledger.tag(project_id=project_id):
                 return _advance(project_id, confirmed=confirmed, force=force,
                                 stop_event=stop_event)
         except costs.BudgetExceeded as exc:

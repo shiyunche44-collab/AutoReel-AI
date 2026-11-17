@@ -28,6 +28,7 @@ from typing import Any, Callable
 import httpx
 
 from .. import config
+from ..llm import ledger
 from .cli import ConnectorError
 
 #: 网络搜索替代了哪个来源 —— 事实的 source_tool 要如实写成它,而不是同花顺
@@ -161,19 +162,32 @@ def _ark_vlm(image_url: str, prompt: str, timeout: float) -> str:
                 {"type": "text", "text": prompt}]}]}
     last: ConnectorError | None = None
     for attempt in range(3):
+        started = time.monotonic()
         try:
             resp = httpx.post(f"{config.ARK_BASE_URL}/chat/completions", json=body, timeout=timeout,
                               headers={"Authorization": f"Bearer {config.ARK_API_KEY}"})
         except httpx.HTTPError as exc:
             last = ConnectorError("describe_images", f"网络错误:{type(exc).__name__}: {exc}")
+            ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
+                          started=started, ok=False, prompt_chars=len(prompt), error=str(last))
         else:
             if resp.status_code == 200:
                 try:
-                    return str(resp.json()["choices"][0]["message"]["content"] or "")
+                    data = resp.json()
+                    text = str(data["choices"][0]["message"]["content"] or "")
                 except (ValueError, KeyError, IndexError, TypeError):
+                    ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
+                                  started=started, ok=False, prompt_chars=len(prompt),
+                                  error="返回格式不对")
                     raise ConnectorError("describe_images", f"方舟返回格式不对:{resp.text[:200]}")
+                ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
+                              started=started, ok=True, usage=data.get("usage"),
+                              prompt_chars=len(prompt))
+                return text
             last = ConnectorError("describe_images", f"HTTP {resp.status_code}:{resp.text[:200]}",
                                   code=resp.status_code)
+            ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
+                          started=started, ok=False, prompt_chars=len(prompt), error=str(last))
             if resp.status_code not in (429, 500, 502, 503, 504):
                 raise last
         time.sleep(3 * (attempt + 1))

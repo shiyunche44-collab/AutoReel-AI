@@ -422,6 +422,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active ON jobs(kind, key)
 -- 项目租约:同一时刻一个项目只有一个写入者,**跨进程**也成立(见 pipeline/locks.py)。
 -- 进程内锁管不到另一个进程:只读服务上的「保存脚本」「重拍」会和主服务的调度器撞车。
 -- 持有者每 TTL/3 续一次;进程死了,过期后别人可以接手。
+-- 模型调用账本(见 app/llm/ledger.py):每次文字 / 看图 / 生图调用一行。
+-- 原来额度烧在哪、哪个提示词最慢最容易失败,只能估。
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    at                REAL NOT NULL,
+    kind              TEXT NOT NULL,              -- text / vision / image
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    purpose           TEXT NOT NULL DEFAULT '',   -- 调用方(模块.函数),自动从调用栈取
+    project_id        TEXT NOT NULL DEFAULT '',
+    role              TEXT NOT NULL DEFAULT '',   -- 团队角色
+    system_hash       TEXT NOT NULL DEFAULT '',   -- 系统提示词的指纹:提示词改版前后对比用
+    prompt_chars      INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    reasoning_tokens  INTEGER,
+    latency_ms        INTEGER NOT NULL,
+    ok                INTEGER NOT NULL,
+    finish_reason     TEXT NOT NULL DEFAULT '',
+    error             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(at);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls(project_id);
+
 -- 跨进程"催一下调度器":Web 进程建了项目 / 点了推进,调度器在 worker 进程里,
 -- 内存队列够不着,就记一行;调度器每秒取走入队。
 CREATE TABLE IF NOT EXISTS scheduler_kicks (

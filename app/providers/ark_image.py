@@ -12,6 +12,7 @@ import time
 import httpx
 
 from .. import config
+from ..llm import ledger
 from .cli import ConnectorError
 
 log = logging.getLogger(__name__)
@@ -51,19 +52,30 @@ def generate_one(prompt: str, *, aspect_ratio: str | None = None,
     headers = {"Authorization": f"Bearer {config.ARK_API_KEY}"}
     last: ConnectorError | None = None
     for attempt in range(retries + 1):
+        started = time.monotonic()
+
+        def _log(ok: bool, error: str = "", started: float = started) -> None:
+            ledger.record(kind="image", provider="ark", model=config.IMAGE_MODEL, started=started,
+                          ok=ok, prompt_chars=len(body["prompt"]), error=error)
+
         try:
             resp = httpx.post(f"{config.ARK_BASE_URL}/images/generations", json=body,
                               headers=headers, timeout=timeout)
         except httpx.HTTPError as exc:
             last = ConnectorError(TOOL, f"网络错误:{type(exc).__name__}: {exc}")
+            _log(False, str(last))
         else:
             if resp.status_code == 200:
                 try:
-                    return str(resp.json()["data"][0]["url"])
+                    url = str(resp.json()["data"][0]["url"])
                 except (ValueError, KeyError, IndexError, TypeError):
+                    _log(False, "返回格式不对")
                     raise ConnectorError(TOOL, f"方舟返回格式不对:{resp.text[:200]}")
+                _log(True)
+                return url
             last = ConnectorError(TOOL, f"HTTP {resp.status_code}:{resp.text[:300]}",
                                   code=resp.status_code)
+            _log(False, str(last))
             if resp.status_code not in _RETRY_HTTP:
                 raise last
         if attempt < retries:

@@ -165,9 +165,12 @@ def _build_job(payload: dict[str, Any]) -> dict[str, Any]:
     reserved = float(payload.get("reserved") or 0.0)
     stats: dict[str, Any] = {}
     try:
+        from ...llm import ledger
+
         profile = load_profile(category) if category else None
-        stats = build(subject, profile=profile, llm=orchestrator._llm(),
-                      **dict(payload.get("opts") or {}))
+        with ledger.tag(project_id=project_id):  # 打标签的看图调用记到项目名下
+            stats = build(subject, profile=profile, llm=orchestrator._llm(),
+                          **dict(payload.get("opts") or {}))
         return stats
     finally:
         if project_id:

@@ -260,6 +260,22 @@ async def _refresh_background(request: Request, call_next):
     return await call_next(request)
 
 
+@app.get("/api/llm/usage")
+def llm_usage(days: float = 7, by: str = "purpose"):
+    """模型调用账本汇总:最近 `days` 天,按 purpose / model / kind / project_id / role / day 分组。"""
+    try:
+        rows = db.llm_usage(time.time() - max(0.0, days) * 86400, by)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"days": days, "by": by, "rows": rows}
+
+
+@app.get("/api/llm/calls")
+def llm_calls(limit: int = 50, project_id: str = "", errors: bool = False):
+    """最近的模型调用明细(排查用:哪次失败了、慢在哪)。"""
+    return db.recent_llm_calls(min(500, max(1, limit)), project_id=project_id, errors_only=errors)
+
+
 @app.get("/api/health")
 def health():
     out = dict(HEALTH)
@@ -284,6 +300,11 @@ def health():
                     "attempts": j["attempts"], "error": j["error"][:200]}
                    for j in db.list_jobs(limit=50)],
     }
+    # 模型调用账本:最近 24 小时按类型汇总(细节见 /api/llm/usage)
+    try:
+        out["llm_calls_24h"] = db.llm_usage(time.time() - 86400, "kind")
+    except Exception:  # noqa: BLE001 - 账本读不了不该让健康检查挂掉
+        out["llm_calls_24h"] = []
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size_cached()
     out["disk"] = {

@@ -167,7 +167,10 @@ def run_role(name: str, trigger: str = "schedule") -> dict[str, str]:
     if run_id is None:
         return {"status": "busy", "summary": f"{r.label}正在跑"}
     try:
-        summary = r.run() or ""
+        from ..llm import ledger
+
+        with ledger.tag(role=name):  # 这次运行里的模型调用都记到这个角色名下
+            summary = r.run() or ""
         status = "ok"
     except Skip as exc:
         # 轮询型角色的「这次没事」不值得占一行动态
