@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
-from .. import config
+from .. import config, degrade
 from ..providers import ark_tts, audio
 from . import voice_qa, word_timing
 from .timeline import is_strong_end
@@ -241,9 +241,11 @@ def synthesize(positions: Sequence[int], texts: Sequence[str], pauses: Sequence[
                 break
     except Exception as exc:  # noqa: BLE001 - 退回逐句,不拦出片
         log.warning("整段合成失败,退回逐句(第 %d 句起):%s", positions[0] + 1, exc)
+        degrade.note("tts.take_to_sentences", f"第 {positions[0] + 1} 句起整段合成失败:{exc}")
         return None
     if pieces is None:
         log.warning("整段合成切不开,退回逐句(第 %d 句起)", positions[0] + 1)
+        degrade.note("tts.take_to_sentences", f"第 {positions[0] + 1} 句起整段切不开")
         return None
     out = TakeResult()
     for k, pos in enumerate(positions):

@@ -29,6 +29,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .. import config
+from . import cooldown
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +43,14 @@ _MIN_INTERVAL = 2.0
 _HOST_INTERVAL = {"yiche.com": 8.0}
 #: 浏览器抓到的结果缓存多久
 _CACHE_TTL = 24 * 3600
-#: 同一 host 浏览器连续失败(非验证码)几次后,本进程内不再试
+#: 同一 host 浏览器连续失败(非验证码)几次后,登记冷却(`providers/cooldown.py`)
 _MAX_FAILS = 2
+#: 冷却多久(秒)。原来是"本进程内不再试":重启就忘,不重启又永远不再试
+FAIL_COOLDOWN = 3600.0
+
+
+def _cooldown_key(host: str) -> str:
+    return f"browser.{host}"
 
 #: 验证码 / 风控页的特征。只收「出现了就基本肯定是拦截页」的标记 ——
 #: 单独一个「验证码」三个字不算,很多正常页面的登录框里都有。
@@ -149,6 +156,7 @@ def clear_blocked(host: str) -> None:
     host = host.lower()
     _write_blocked([b for b in blocked_list() if b.get("host") != host])
     _fails.pop(host, None)
+    cooldown.clear(_cooldown_key(host))
 
 
 def is_blocked(host: str) -> bool:
@@ -244,8 +252,10 @@ def fetch(url: str, *, referer: str | None = None, as_text: bool = False,
     host = host_of(url)
     if is_blocked(host):
         raise BrowserBlocked(f"{host} 在等人工过验证:python scripts/browser_unblock.py")
-    if _fails.get(host, 0) >= _MAX_FAILS:
-        raise BrowserFetchError(f"{host} 浏览器兜底已连续失败 {_MAX_FAILS} 次,本次运行不再试")
+    try:
+        cooldown.check(_cooldown_key(host))
+    except cooldown.Cooling as exc:
+        raise BrowserFetchError(f"{host} 浏览器兜底连续失败,{exc}") from exc
 
     body = _cache_read(url)
     if body is None:
@@ -258,10 +268,15 @@ def fetch(url: str, *, referer: str | None = None, as_text: bool = False,
                 raise
             except BrowserUnavailable:
                 raise
-            except BrowserFetchError:
+            except BrowserFetchError as exc:
                 _fails[host] = _fails.get(host, 0) + 1
+                if _fails[host] >= _MAX_FAILS:
+                    cooldown.trip(_cooldown_key(host), FAIL_COOLDOWN,
+                                  f"浏览器兜底连续失败 {_fails[host]} 次:{exc}")
+                    _fails.pop(host, None)
                 raise
         _fails.pop(host, None)
+        cooldown.clear(_cooldown_key(host))
         _cache_write(url, body)
     if as_text:
         return body.decode("utf-8", errors="replace")

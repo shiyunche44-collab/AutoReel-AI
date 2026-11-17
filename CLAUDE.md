@@ -8,7 +8,7 @@ AutoReel-AI:本地运行的产品解说视频工厂 + AI 团队。项目介绍�
 pytest                          # 全量测试;默认不跑 probe_*/verify_*(会联网或花额度)
 pytest -m "not network and not quota"
 ruff check app tests            # line-length 100
-mypy                            # 只覆盖 models.py / state.py / db.py
+python -m mypy                  # 只报 pyproject 里 files 列的模块(db 包、state、models、jobs、locks 等)
 npm run check                   # 前端 lint + typecheck + vitest(app/web/static/js)
 python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / e2e 配置)
 ```
@@ -17,15 +17,26 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 - **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/AutoReel-AI.db`(`data/aimovice.db` 是 0 字节的旧空文件,别用)。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。现在有文件锁兜底(`app/instance_lock.py`,锁文件 `data/<库名>.scheduler.lock`):后启动的服务抢不到锁就只开 Web,不推进、不发布、不跑团队,首页有「只读服务」横幅,`/api/health` 的 `background.ok` 为 false。所以想在 8849 上验证流水线改动,得先停掉占着锁的那个服务。锁只管带这段代码的进程:还在跑旧代码的服务不认锁,启动前仍要先确认端口。
 - `scripts/serve.ps1` 会**杀掉已在监听该端口的进程**。曾因此中断用户正在渲染的项目。先用 `curl --noproxy '*' http://127.0.0.1:<port>/` 探测(不加 `--noproxy` 会走代理返回 000)。
-- **重启 8848(比如让新代码生效)只用 `scripts/restart_server.ps1 -Reason "<为什么>"`**,不要 `Stop-Process` 端口进程。它在调度器有项目、有发布在上传、有团队角色在跑时拒绝重启(`-WaitMinutes N` 等它空下来),重启和拒绝都记进 `data/logs/watchdog.log`。2026-11-13 至 11-16 的 14 次"服务重启"里有 9 次是会话手动杀的,日志里看着像服务不稳,还可能打断渲染。服务不应答时它也不动手:卡死归看门狗管。
+- **8848 默认是两个进程**:`run.py --port 8848 --role web`(只开 Web)+ `run.py --role worker`(调度器、jobs、发布、指标、团队,无 HTTP),由 `ensure_server.ps1` 一起看着(`-Mode single` 退回单进程)。两边只经库交流:跨进程催调度器走 `scheduler_kicks` 表(`scheduler.kick` 在没跑调度器的进程里自动改写库),worker 心跳在 `data/<库名>.worker.heartbeat`,停机请求文件 `data/<库名>.worker.stop`。Web 进程里别再起后台线程跑角色 / 渲染,用 `jobs.submit`;临时物 / 缓存清理只在跑后台循环的进程里做(Web 单独重启时清 `data/_tmp` 会删掉 worker 正在用的文件)。
+- **重启 8848(比如让新代码生效)只用 `scripts/restart_server.ps1 -Reason "<为什么>"`**(`-Target web|worker|all`,只重启 Web 从不被拒绝),不要 `Stop-Process` 端口进程。它在调度器有项目、有发布在上传、有团队角色在跑时拒绝重启(`-WaitMinutes N` 等它空下来),重启和拒绝都记进 `data/logs/watchdog.log`。2026-11-13 至 11-16 的 14 次"服务重启"里有 9 次是会话手动杀的,日志里看着像服务不稳,还可能打断渲染。服务不应答时它也不动手:卡死归看门狗管。
 - **长期跑的 8848 只用 `scripts/ensure_server.ps1` 启动**(stdout/stderr 落到 `data/logs/server-*.log`)。别在会话里 `python run.py` 后台挂着:会话结束后管道没人读,写满就卡死整个进程(2026-11-13 闭环因此停了一天)。控制台日志现已改成队列 + 满了就丢,事件循环卡 60 秒会把全部线程栈写到 `data/logs/hang-*.txt`;ensure_server 对连续约 90 秒不应答的 run.py 会杀掉重启。
-- `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`:除门禁、终态、PAUSED_BUDGET 以外的全部状态。分两条通道 —— 渲染(DRAFT_RENDERING / COMPOSING,`PIPELINE_CONCURRENCY` 路)和备料(门禁 A 之前的事实 / 脚本 / 分镜与 ASSETS_READY,`PREP_CONCURRENCY` 路)。建项目后用 `scheduler.kick(pid)` 催它马上开始,别再起一次性线程去跑 `run_until_waiting`(服务重启后没人接手)。**这些状态下不要手动调 `/advance`**:会和调度器抢着写同一个文件,产出损坏的 mp4,项目翻成 FAILED。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
-- 新增会自动推进的状态,必须加进 `AUTO_ADVANCE_STATES`,漏了就是"静静卡住",没有报错。
+- `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`:除门禁、终态、PAUSED_BUDGET 以外的全部状态。分两条通道 —— 渲染(DRAFT_RENDERING / COMPOSING,`PIPELINE_CONCURRENCY` 路)和备料(门禁 A 之前的事实 / 脚本 / 分镜与 ASSETS_READY,`PREP_CONCURRENCY` 路)。建项目后用 `scheduler.kick(pid)` 催它马上开始,别再起一次性线程去跑 `run_until_waiting`(服务重启后没人接手)。这些状态下 `/advance` 只会催调度器(见下),不会再和它抢写文件。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
+- 状态的调度属性(自动 / 门禁 / 终态、归哪条通道、下一步)只在 `app/state.py` 的 `SPECS` 声明,调度器的 `AUTO_ADVANCE_STATES` 等集合由它推导,别再手写。新增自动态或门禁态还要在 `orchestrator.STAGES` 登记处理器;声明不自洽模块加载就失败,漏登记 `tests/test_state_specs.py` 会挂。
+- 自动态下 `/advance` 不再同步推进,只 `scheduler.kick()` 催调度器,返回 `queued: true`。
+- **后台活别再起一次性线程**,用 `app/jobs.py`:`jobs.register(kind, resource=..., max_attempts=...)` 登记 handler(模块加进 `HANDLER_MODULES`),`jobs.submit(kind, key, payload)` 排队。任务落 `jobs` 表,同 kind+key 只有一个在排 / 在跑,服务重启后接着跑(中断不算尝试),所以 handler 必须幂等、payload 只放能 JSON 化的东西。素材池构建(`library.build`)和精修(`refine.apply`)已迁过去;在跑的任务不挡 `restart_server.ps1`。
+- 项目写锁(`pipeline/locks.py`)是两层:进程内锁 + 库里的项目租约(`project_leases`,TTL 120 秒,后台续租),所以只读服务上的写接口和主服务的调度器也互斥。进程被强杀后该项目最多 2 分钟内推进不了(等租约过期),正常停机会立刻放掉。调度器的连续失败次数 / 退避窗口在 `projects.advance_failures` / `advance_retry_at`,状态一变就清零。
 - `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
+
+## 观测与分层
+
+- 模型调用账本 `llm_calls`(`app/llm/ledger.py`):文字 / 看图 / 生图每次调用一行,带调用方、项目 / 角色、token、耗时。新增模型通道要在出口调 `ledger.record`;要按项目归账就用 `ledger.tag(project_id=...)` 包住。查看:`/api/llm/usage?by=purpose|model|project_id|role|day`、`/api/llm/calls`。
+- 降级路径(概念动画退回数据卡、封面退回老封面、事实源跳过、整段 TTS 退回逐句……)每走一次调 `degrade.note(kind, detail)` 记进 `degradations`,项目自动从账本上下文取。新加降级分支也要记,只写日志等于看不见。查看:`/api/degradations`,`/api/health` 的 `degradations_24h`。
+- `tests/test_layers.py` 守模块分层(下层不许 import 上层,含函数内的延迟 import)。新模块要在 `RANK` 里定层;`KNOWN` 里的旧例外只许减不许增。
+- 启动时检查 `.env` 的重复键 / 空值覆盖(`config.env_file_problems`),结果进日志、首页横幅和 `/api/health` 的 `env`。
 
 ## 测试
 
-- 测试里调用 `orchestrator.create_project` 等会写库的函数,**必须用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的库(现在是 `data/AutoReel-AI.db`)。
+- `tests/conftest.py` 的 autouse fixture 已把 `DATA_DIR` 指到临时目录;别用 `monkeypatch.undo()`(会连它一起撤掉,改用 `monkeypatch.context()`)。测试里调用 `orchestrator.create_project` 等会写库的函数,仍**建议用临时库 fixture**(参考 `tests/test_activator.py` 的 `fresh_db`)。曾有测试把行漏进真实的库(现在是 `data/AutoReel-AI.db`)。
 - `tests/conftest.py` 已把 BGM 曲库重定向到 tmp,别绕开。
 - 提示词有黄金快照 `tests/golden/auto_long_prompts.json`。改 prompt 后用 `tests/test_profile_vocab.py` 里的 `regen_golden` 重生成,并在 diff 里确认只有预期变化。
 - `playbook.install()` 只在 `team.scheduler.start()` 里调用,所以测试和黄金快照不受学习权重影响。别在别处调用它。
@@ -56,7 +67,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 ## 平台抓取与发布
 
-- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。
+- **B站空间 API 限流很严**:几次探测就会 412 / -352 持续 30 分钟以上。测试时别连续调用;失败时素材发现会降级为关键词搜索。被风控后 `providers/cooldown.py` 记冷却(`cooldowns` 表,连续被拦翻倍,跨进程 / 重启有效),冷却期内不发请求;抖音搜索页撞验证码同理(`douyin.search`,6 小时)。新接一个会被风控的接口也用 `cooldown.check / trip`,别在内存里自己记。冷却中的在 `/api/health` 的 `cooldowns`,确认恢复后 `DELETE /api/cooldowns/<key>`。浏览器兜底(`browser_fetch`)同一站点连续失败 2 次也登记冷却(`browser.<host>`,1 小时);撞验证码的站在 `blocked_sites`,人工 `browser_unblock` 后拦截和冷却一起清。
 - 不要抓懂车帝的参数配置页(`auto/params-carIds-*`),返回空 200,疑似反爬。图库需要登录,状态在 `data/_browser/dongchedi.json`。
 - 浏览器会话共用 profile,同一 profile 在进程内有锁(`BrowserSession`);`BROWSER_PATH` 默认是 chrome-headless-shell,需要有界面登录时用 `publish/browser.headed_browser` 换真 Chrome。
 - 抖音评论回复的真实发送路径、小红书图文上传(`_publish_note`)、对标账号抓取,都**没在真实账号上完整跑过**。首次启用要盯着。
@@ -67,7 +78,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 
 - `python -c` 里的中文参数会乱码:写成 UTF-8 脚本文件再运行。
 - `.ps1` 文件保持纯 ASCII(PowerShell 5.1 会按 ANSI 读),说明写进 README。
-- `.env` 里重复的空行 `KEY=` 会覆盖真实值,改 `.env` 后检查是否有重复键。
+- `.env` 里重复的空行 `KEY=` 会覆盖真实值。启动自检会报出来(首页横幅),改完 `.env` 看一眼。
 - ffmpeg 不在 PATH,在 `.env` 的 `FFMPEG_BIN` 指定。
 
 ## 外部服务依赖

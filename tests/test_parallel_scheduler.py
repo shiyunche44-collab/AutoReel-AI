@@ -23,8 +23,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
     db._INITIALISED = False
     db.init_db()
-    main.scheduler._failures.clear()
-    main.scheduler._retry_after.clear()
     main.scheduler._queued.clear()
     main.scheduler._running.clear()
     yield db

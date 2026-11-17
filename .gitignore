@@ -46,3 +46,6 @@ analysis/teardown_*/
 
 # Remotion 包装层子工程的依赖(remotion/ 下 npm install 生成)
 remotion/node_modules/
+
+# pip install -e 生成的打包元数据
+*.egg-info/

@@ -53,7 +53,8 @@ def list_comments(*, states: tuple[str, ...] = (), kinds: tuple[str, ...] = (),
                   limit: int = 200) -> list[dict[str, Any]]:
     """新评论在前。"""
     init_db()
-    where, args = [], []
+    where: list[str] = []
+    args: list[Any] = []
     for col, vals in (("reply_state", states), ("kind", kinds), ("topic_state", topic_states)):
         if vals:
             where.append(f"{col} IN ({','.join('?' * len(vals))})")

@@ -14,6 +14,10 @@
 服务不应答时返回 unknown:可能正卡在渲染里,也可能真卡死了。
 真卡死交给看门狗(`ensure_server.ps1`),这里不替它判断。
 
+`--worker`:看拆出来的后台进程(`run.py --role worker`)忙不忙。它没有 HTTP,
+只看库:没过期的项目租约(`project_leases`,渲染 / 合成 / 备料时持有)、上传中的发布、
+在跑的团队角色。持久化任务(`jobs` 表)不算忙:重启后会被放回排队接着跑。
+
 输出一行 JSON,退出码 0 = 空闲,1 = 忙,2 = 判断不了。
 只读数据库,不导入 `app`(`python -I` 跑,不受当前目录影响)。
 """
@@ -55,6 +59,28 @@ def db_busy(since: float) -> dict[str, list[str]]:
     return {"uploading": uploading, "team_running": team}
 
 
+def worker_busy(since: float) -> tuple[int, dict]:
+    """后台进程忙不忙(只读库)。"""
+    out: dict = {"since": since, "target": "worker"}
+    if not DB.exists():
+        out.update(projects=[], uploading=[], team_running=[], verdict="idle")
+        return 0, out
+    conn = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True, timeout=10)
+    try:
+        try:
+            projects = sorted(str(r[0]) for r in conn.execute(
+                "SELECT project_id FROM project_leases WHERE expires_at >= ?", (time.time(),)))
+        except sqlite3.OperationalError:  # 老库还没有这张表
+            projects = []
+    finally:
+        conn.close()
+    out["projects"] = projects
+    out.update(db_busy(since))
+    busy = bool(projects or out["uploading"] or out["team_running"])
+    out["verdict"] = "busy" if busy else "idle"
+    return (1 if busy else 0), out
+
+
 def check(port: int, since: float, timeout: float) -> tuple[int, dict]:
     out: dict = {"port": port, "since": since}
     h = health(port, timeout)
@@ -80,9 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--since", type=float, default=0.0,
                     help="服务进程启动时刻(epoch 秒);0 = 最近 1 小时")
     ap.add_argument("--timeout", type=float, default=60.0)
+    ap.add_argument("--worker", action="store_true",
+                    help="看拆出来的后台进程(--role worker),只读库,不问 HTTP")
     args = ap.parse_args(argv)
     since = args.since or time.time() - 3600
-    code, out = check(args.port, since, args.timeout)
+    if args.worker:
+        code, out = worker_busy(since)
+    else:
+        code, out = check(args.port, since, args.timeout)
     sys.stdout.write(json.dumps(out, ensure_ascii=True) + "\n")
     return code
 

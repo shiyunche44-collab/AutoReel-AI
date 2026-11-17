@@ -615,3 +615,49 @@ def project_dir(project_id: str) -> Path:
     (path / "audio").mkdir(exist_ok=True)
     (path / "facts_raw").mkdir(exist_ok=True)
     return path
+
+
+# --------------------------------------------------------------------------
+# .env 自检
+# --------------------------------------------------------------------------
+def env_file_problems(path: Path | None = None) -> list[str]:
+    """检查 .env 的常见坑,返回问题描述(空列表 = 没问题)。启动时记日志、进健康检查。
+
+    - 同一个键写了多次:python-dotenv 取**最后一个**。曾出过事:后面一行空的 `KEY=`
+      把前面填好的 Key 覆盖成空,服务看上去"没配 Key"。
+    - 键名里有空格 / 等号前后有空格之类,dotenv 会当成另一个键,配置静默不生效。
+    只看文件本身,不读值以外的东西;值不落进返回结果(可能是密钥)。
+    """
+    path = path or (BASE_DIR / ".env")
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return []
+    seen: dict[str, list[tuple[int, bool]]] = {}
+    problems: list[str] = []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if "=" not in line:
+            problems.append(f".env 第 {n} 行不是 KEY=VALUE 格式,会被忽略")
+            continue
+        key, _, value = line.partition("=")
+        if key != key.strip() or " " in key.strip():
+            problems.append(f".env 第 {n} 行的键名「{key}」带空格,不会生效")
+            key = key.strip()
+        value = value.split(" #", 1)[0].strip().strip("'\"")
+        seen.setdefault(key, []).append((n, bool(value)))
+    for key, hits in seen.items():
+        if len(hits) < 2:
+            continue
+        lines = "、".join(str(n) for n, _ in hits)
+        last_n, last_has = hits[-1]
+        if not last_has and any(has for _, has in hits[:-1]):
+            problems.append(f"{key} 写了 {len(hits)} 次(第 {lines} 行),最后一行(第 {last_n} 行)"
+                            "是空值,会把前面填好的值覆盖成空")
+        else:
+            problems.append(f"{key} 写了 {len(hits)} 次(第 {lines} 行),生效的是第 {last_n} 行")
+    return problems

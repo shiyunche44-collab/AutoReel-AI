@@ -381,23 +381,25 @@ def test_gate_refine_apply_records_preference(fresh_db, monkeypatch):
     assert seen[0][:2] == ("cut", "refine") and "闭眼挑" in seen[0][2]["note"] and "闭眼选" in seen[0][2]["note"]
 
 
-def test_gate_refine_apply_runs_in_background(fresh_db, monkeypatch):
-    import time
+def test_gate_refine_apply_runs_in_background(job_runner, monkeypatch):
+    import threading
 
     from app.team import publisher
     from app.team.plan import PlanError
+    from tests.conftest import wait_until
 
+    db.init_db()
     pid = _project()
     item = {"id": "it1", "project_id": pid, "status": "review"}
     monkeypatch.setattr(db, "get_plan_item", lambda i: item)
     monkeypatch.setattr(config, "OPENFILM_ENABLED", True)
-    publisher._refine_jobs.clear()
     assert publisher.refine_status("it1") == {"state": "idle"}
 
-    import threading
     release = threading.Event()
+    calls: list[str] = []
 
     def slow(item_id):
+        calls.append(item_id)
         release.wait(5)
         return {"changed": 1, "edits": [], "warnings": []}
 
@@ -405,23 +407,18 @@ def test_gate_refine_apply_runs_in_background(fresh_db, monkeypatch):
     assert publisher.refine_apply_start("it1")["state"] == "running"
     assert publisher.refine_apply_start("it1")["state"] == "running"  # 重复点:不再起第二个
     release.set()
-    for _ in range(50):
-        if publisher.refine_status("it1")["state"] != "running":
-            break
-        time.sleep(0.05)
+    assert wait_until(lambda: publisher.refine_status("it1")["state"] != "running")
     assert publisher.refine_status("it1")["state"] == "done"
     assert publisher.refine_status("it1")["result"]["changed"] == 1
+    assert calls == ["it1"]
 
     def boom(item_id):
         raise PlanError("字幕改动没通过检查")
 
     monkeypatch.setattr(publisher, "refine_apply", boom)
     publisher.refine_apply_start("it1")
-    for _ in range(50):
-        if publisher.refine_status("it1")["state"] != "running":
-            break
-        time.sleep(0.05)
-    assert publisher.refine_status("it1")["state"] == "failed"
+    assert wait_until(lambda: publisher.refine_status("it1")["state"] != "running")
+    assert publisher.refine_status("it1")["state"] == "failed"  # 业务校验不过:不重试
     assert "没通过检查" in publisher.refine_status("it1")["error"]
     item["status"] = "scheduled"
     with pytest.raises(PlanError, match="不在成片待审"):

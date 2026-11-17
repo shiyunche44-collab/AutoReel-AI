@@ -21,18 +21,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, costs, db, hang_watch, instance_lock, logging_setup, maintenance
+from . import background, config, costs, db, degrade, hang_watch, jobs, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
-from .metrics import worker as metrics_worker
 from .pipeline import aspect, explainer, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
 from .providers import cli
-from .publish import accounts as publish_accounts
-from .publish import service as publish_service
-from .team import scheduler as team_scheduler
 from .views import ProjectNotFound, build_detail, build_summary, needs_attention
 
 log = logging.getLogger(__name__)
@@ -70,20 +66,6 @@ async def lifespan(app: FastAPI):
     # 一次也没用过 logging,排障只能看 serve.ps1 重定向的 stdout 文本。
     logging_setup.setup()
     hang_watch.start(logging_setup.log_dir())  # 事件循环卡住 60 秒就把全部线程栈落盘
-    # 清掉上次的临时物(data/_probe、data/_tmp 与散落的 _tmp_*.mp4)。
-    # 它们是纯中间产物,却一直没有清理入口,已经积了 40 多 MB。
-    try:
-        maintenance.prune_temp()
-    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
-        log.warning("清理临时目录失败", exc_info=True)
-    try:
-        # 缓存按龄 + 体积上限(motion 的文件都很新,光按龄清不动它)
-        pruned = maintenance.prune_caches()
-        if pruned["removed"]:
-            log.info("缓存清理:删 %d 项,腾出 %s", pruned["removed"], pruned["freed_human"])
-    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
-        log.warning("清理缓存失败", exc_info=True)
-
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()
     cli_ok, cli_msg = cli.health_check()
@@ -101,36 +83,27 @@ async def lifespan(app: FastAPI):
                 "model": deepseek.model,
             },
             "plan_expires_on": config.PLAN_EXPIRES_ON,
+            # .env 的重复键 / 空值覆盖之类(只报行号和键名,不含值)
+            "env": {"problems": config.env_file_problems()},
             "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
+    for problem in HEALTH["env"]["problems"]:
+        log.warning(".env:%s", problem)
     # 磁盘水位先在后台算好,第一次 /api/health 不用现等遍历 data/
     threading.Thread(target=maintenance.data_size_cached, name="data-size-warm",
                      daemon=True).start()
 
-    # 一个库只让一个进程跑后台循环:抢不到锁说明别的端口上已经有服务在推进这个库,
-    # 本进程只开 Web(见 app/instance_lock.py)。两个调度器推进同一个项目会写坏成片。
-    primary = instance_lock.acquire()
-    HEALTH["background"] = {"ok": primary, "owner": {} if primary else instance_lock.owner()}
-    if primary:
-        scheduler.start()
-        # 分发侧的后台循环:发布任务、指标抓取。
-        # 都是守护线程,进程退出即结束,不挡 Web。
-        publish_accounts.import_from_file()
-        publish_service.start()
-        metrics_worker.start()
-        team_scheduler.start()
-    else:
-        log.warning("这个库已有别的服务在跑后台循环(pid %s),本进程只开 Web:"
-                    "不推进项目、不发布、不跑团队",
+    # 后台循环(调度器、任务、发布、指标、团队)。`--role web` 时不跑,交给单独的 worker 进程
+    # (见 app/background.py);all 模式下抢实例锁,抢不到说明别的进程在推进这个库,本进程只开 Web。
+    if background.runs_background():
+        background.start()
+    HEALTH["background"] = background.status()
+    if not HEALTH["background"]["ok"]:
+        log.warning("本进程不跑后台循环(角色 %s,持锁进程 %s)", background.role(),
                     HEALTH["background"]["owner"].get("pid", "?"))
     yield
-    if primary:
-        await scheduler.stop()
-        publish_service.stop()
-        metrics_worker.stop()
-        team_scheduler.stop()
-        instance_lock.release()
+    await background.stop()
     hang_watch.stop()
 
 
@@ -282,9 +255,53 @@ def project_logs(request: Request, project_id: str):
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
+@app.middleware("http")
+async def _refresh_background(request: Request, call_next):
+    """后台循环在别的进程(worker)时,它的死活随时会变:每个请求前刷新一下横幅用的状态
+    (读一个小文件)。本进程自己在跑就不用刷。"""
+    if not (HEALTH.get("background") or {}).get("here"):
+        HEALTH["background"] = background.status()
+    return await call_next(request)
+
+
+@app.delete("/api/cooldowns/{key}")
+def clear_cooldown(key: str):
+    """人确认接口已恢复(比如手动过了验证码):解除冷却。"""
+    from .providers import cooldown
+
+    cooldown.clear(key)
+    return {"ok": True}
+
+
+@app.get("/api/degradations")
+def degradations(days: float = 7, kind: str = "", project_id: str = "", limit: int = 0):
+    """降级路径汇总(按 kind);给 `kind` / `project_id` 或 `limit` 时返回明细。"""
+    if kind or project_id or limit:
+        return {"items": degrade.recent(min(500, max(1, limit or 50)), kind=kind,
+                                        project_id=project_id)}
+    return {"days": days, "rows": degrade.summary(time.time() - max(0.0, days) * 86400)}
+
+
+@app.get("/api/llm/usage")
+def llm_usage(days: float = 7, by: str = "purpose"):
+    """模型调用账本汇总:最近 `days` 天,按 purpose / model / kind / project_id / role / day 分组。"""
+    try:
+        rows = db.llm_usage(time.time() - max(0.0, days) * 86400, by)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"days": days, "by": by, "rows": rows}
+
+
+@app.get("/api/llm/calls")
+def llm_calls(limit: int = 50, project_id: str = "", errors: bool = False):
+    """最近的模型调用明细(排查用:哪次失败了、慢在哪)。"""
+    return db.recent_llm_calls(min(500, max(1, limit)), project_id=project_id, errors_only=errors)
+
+
 @app.get("/api/health")
 def health():
     out = dict(HEALTH)
+    out["role"] = background.role()
     # 外部能力调用统计:之前完全不可见,只能靠猜额度烧在哪
     out["provider_calls"] = cli.call_stats()
     # 调度器当前盯着的项目与失败次数
@@ -292,11 +309,43 @@ def health():
         "concurrency": config.PIPELINE_CONCURRENCY,
         "prep_concurrency": config.PREP_CONCURRENCY,
         "interval": SCHEDULER_INTERVAL,
-        "failures": dict(scheduler._failures),
+        "failures": db.advance_failures(),
         "busy_projects": locks_busy_ids(),
         "queued": sorted(scheduler._queued - scheduler._running),
         "running": sorted(scheduler._running),
     }
+    # 持久化后台任务:在跑的不用等它做完再重启 —— 重启后会被放回排队重跑
+    out["jobs"] = {
+        "runner": jobs.runner.started,
+        "running": sorted(jobs.runner.running.values()),
+        "active": [{"id": j["id"], "kind": j["kind"], "key": j["key"], "state": j["state"],
+                    "attempts": j["attempts"], "error": j["error"][:200]}
+                   for j in db.list_jobs(limit=50)],
+    }
+    # 冷却中的外部接口(被风控 / 验证码拦了,到点前不再碰)
+    try:
+        from .providers import cooldown
+
+        out["cooldowns"] = cooldown.active()
+    except Exception:  # noqa: BLE001
+        out["cooldowns"] = []
+    # 撞了验证码 / 登录墙、等人工过一次的站点(python scripts/browser_unblock.py <url>)
+    try:
+        from .providers import browser_fetch
+
+        out["blocked_sites"] = browser_fetch.blocked_list()
+    except Exception:  # noqa: BLE001
+        out["blocked_sites"] = []
+    # 降级路径:最近 24 小时哪些"质量打折但照样出片"的路走了几次(细节见 /api/degradations)
+    try:
+        out["degradations_24h"] = degrade.summary(time.time() - 86400)
+    except Exception:  # noqa: BLE001
+        out["degradations_24h"] = []
+    # 模型调用账本:最近 24 小时按类型汇总(细节见 /api/llm/usage)
+    try:
+        out["llm_calls_24h"] = db.llm_usage(time.time() - 86400, "kind")
+    except Exception:  # noqa: BLE001 - 账本读不了不该让健康检查挂掉
+        out["llm_calls_24h"] = []
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size_cached()
     out["disk"] = {

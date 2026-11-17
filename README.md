@@ -76,15 +76,21 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 - 要长期运行就用 `serve.ps1`：它会起一个独立进程，日志写到 `data/logs/server-*.log`。直接运行 `python run.py` 的话，进程会被托管任务的 1 小时上限一起收走。
 - `serve.ps1` 会先**杀掉已经占用该端口的进程**，启动前先确认端口上没有正在渲染的服务。
-- **日常的 8848 交给看门狗。** `scripts\install_autostart.ps1` 注册计划任务 `AutoReel-AI-Server`,登录时和之后每 5 分钟跑一次 `ensure_server.ps1`:没有服务就拉起,连续约 90 秒不应答就杀掉重启,应答的服务不碰。日志在 `data/logs/watchdog.log`。
+- **日常的 8848 交给看门狗,默认拆成两个进程。** `scripts\install_autostart.ps1` 注册计划任务 `AutoReel-AI-Server`,登录时和之后每 5 分钟跑一次 `ensure_server.ps1`。它管两个进程:
+  - **Web**(`run.py --port 8848 --role web`):只开网页。随便重启,不会打断渲染、上传、团队角色。没有就拉起,连续约 90 秒不应答就杀掉重启。
+  - **后台进程 worker**(`run.py --role worker`):调度器、后台任务、发布、指标、AI 团队都在这里,没有网页。没有就拉起;它每 10 秒写一次心跳文件 `data\AutoReel-AI.db.worker.heartbeat`,超过 3 分钟没更新判卡死,杀掉重启。
+
+  两个进程只通过数据库交流。worker 不在时首页会显示「后台进程没在跑」,在网页上建的项目、点的门禁不会丢,worker 起来后接着推。日志:`data/logs/server-*.log`(Web)、`data/logs/worker-*.log`、`data/logs/watchdog.log`。想要原来的单进程就给两个脚本都加 `-Mode single`;已经在跑的老式单进程服务看门狗不动它,用 `restart_server.ps1` 重启一次就换成两个进程。
 - **要重启(比如让新代码生效)用 `restart_server.ps1`:**
 
   ```bash
-  powershell -ExecutionPolicy Bypass -File scripts\restart_server.ps1 -Reason "加载新提交"
+  powershell -ExecutionPolicy Bypass -File scripts\restart_server.ps1 -Reason "加载新提交"               # 两个都重启
+  powershell -ExecutionPolicy Bypass -File scripts\restart_server.ps1 -Reason "改了页面" -Target web     # 只重启 Web,从不拒绝
+  powershell -ExecutionPolicy Bypass -File scripts\restart_server.ps1 -Reason "改了流水线" -Target worker
   ```
 
-  服务忙时它不重启,退出码 1。忙指三种情况:调度器手里有项目(渲染 / 合成 / 备料)、有发布正在上传、有团队角色在跑。加 `-WaitMinutes 30` 会等它空下来再重启,`-DryRun` 只说要做什么。服务不应答时它也拒绝,退出码 2:卡死归看门狗处理,确实要强制就加 `-Force`。每次重启和拒绝都会带上 `-Reason` 写进 `watchdog.log`,事后能分清是人为重启还是服务挂了。单独看忙不忙用 `python -I scripts\server_busy.py`。
-- **只能跑一个服务。** 两个服务连同一个库时，两边的调度器会同时推进同一个项目，结果是重复渲染、成片损坏。开发调试用 `.claude/launch.json` 里的 `AutoReel-AI-dev`（端口 8849），并且要另配 `DATA_DIR`。
+  只有重启 worker 时才看忙不忙:有项目在渲染 / 合成 / 备料(库里有没过期的项目租约)、有发布正在上传、有团队角色在跑,就不重启,退出码 1。后台任务(素材池构建、精修)不算忙,重启后会接着跑。加 `-WaitMinutes 30` 会等它空下来,`-Force` 跳过检查,`-DryRun` 只说要做什么。worker 是**优雅停机**的:脚本写停机文件 `data\AutoReel-AI.db.worker.stop`,worker 在拍与拍之间收手、放掉租约后退出,`-StopTimeoutSec`(默认 120)内没退才硬杀。每次重启和拒绝都会带上 `-Reason` 写进 `watchdog.log`。单独看忙不忙:`python -I scripts\server_busy.py --worker`(老式单进程用 `--port 8848`)。
+- **一个库只能有一个后台循环。** 两个调度器推进同一个项目会重复渲染、写坏成片;实例锁兜底,抢不到锁的 worker 直接退出(退出码 3),抢不到锁的单进程服务只开 Web。`serve.ps1` 仍是老式单进程,只适合临时调试。开发调试用 `.claude/launch.json` 里的 `AutoReel-AI-dev`（端口 8849），并且要另配 `DATA_DIR`。
 - 给 AI 助手和协作者的避坑规则（服务器与调度器、测试隔离、Git 习惯、平台抓取限制）集中在 [CLAUDE.md](CLAUDE.md)。
 
 ### 4. 出第一条片
@@ -136,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 - **画幅在建项目时就定死**（`projects.aspect`，由 `pipeline/aspect.py` 统一管理）。横屏时长可选 120/240/360/480 秒，竖屏可选 60/90/120/180 秒。竖屏是三段式布局：顶部标题带，中间是 16:9 的素材带，底部放数据和字幕，并避开平台安全区。概念动画有真正的竖版模版。
 - **成片长度跟着旁白走**：横屏按实测语速 5.5 字/秒估算，竖屏按 4.7 字/秒；稿子超长时，竖屏会再让 LLM 缩一轮。
-- **后台调度器每 20 秒推进一次**处于自动态的项目（渲染、合成、QA 通过后）。**不要手动调 `/advance`**，否则会和调度器抢着写同一批文件，把成片写坏。人工只在 GATE_A 和 GATE_B 调 `/gate`，然后轮询 `/status`。
+- **后台调度器每 20 秒推进一次**处于自动态的项目（渲染、合成、QA 通过后）。自动态下调 `/advance` 只会催调度器马上排它（返回 `queued: true`），不会同步推进，避免两路抢写同一批文件把成片写坏。人工只在 GATE_A 和 GATE_B 调 `/gate`，然后轮询 `/status`。
 - 同一个项目同一时刻只有一个写入者。人工操作和后台推进撞上时，人工操作会收到 409。不同项目之间可以并行。
 - 服务被收走时，渲染在拍与拍之间收手，重启后从断点接着跑。
 

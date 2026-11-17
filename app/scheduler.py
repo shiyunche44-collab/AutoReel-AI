@@ -12,57 +12,36 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import config, db
-from .pipeline import orchestrator
-from .state import State
+from .pipeline import locks, orchestrator
+from .state import AUTO_STATES, PREP_LANE, RENDER_LANE, State, lane_of
 
 log = logging.getLogger(__name__)
 
 #: 后台循环间隔(秒):多久扫一次项目表,推进处于渲染 / 合成态的项目。
 SCHEDULER_INTERVAL = 20
 
-#: 后台循环会自动推进的状态。缺任何一个都表现为"流水线静静卡住"——
-#: 不会报错、不会告警,镜头只是永远停在 pending。DRAFT_RENDERING 曾被漏掉,
-#: 导致草稿档从来不会自己跑起来。
+#: 后台循环会自动推进的状态,和各自的通道。**都从 `state.SPECS` 推导**:新增状态只改
+#: 那张声明表。以前这里手写一份集合,漏了就"静静卡住"(DRAFT_RENDERING 曾被漏掉,
+#: 草稿档从来不会自己跑起来)。
 #:
-#: 分两条通道,各有各的队列、线程池和并发上限:
-#:
-#: - **渲染通道**(`RENDER_STATES`,`PIPELINE_CONCURRENCY` 路):ffmpeg + 概念动画的 Chrome,
-#:   内存是硬约束。
-#: - **备料通道**(`PREP_STATES`,`PREP_CONCURRENCY` 路):事实采集、写稿、分镜 —— 等 LLM 和
-#:   网络为主,不吃本机资源。单独一条通道,新项目写稿不用排在别人的渲染后面,反过来也一样。
+#: - **渲染通道**(`PIPELINE_CONCURRENCY` 路):ffmpeg + 概念动画的 Chrome,内存是硬约束。
+#: - **备料通道**(`PREP_CONCURRENCY` 路):事实采集、写稿、分镜 —— 等 LLM 和网络为主,
+#:   不吃本机资源。新项目写稿不用排在别人的渲染后面,反过来也一样。
 #:
 #: 备料这几个状态原来靠建项目时起的一次性后台线程推进(`_bootstrap`):服务在中途重启,
-#: 项目就永远停在 DRAFT_INTENT / FACTS_RESOLVED,没人接手;而且任何异常都直接判 FAILED。
-#: 现在归调度器:重启后扫描会接着推,瞬时失败走退避重试。
-RENDER_STATES = frozenset({
-    str(State.DRAFT_RENDERING),
-    str(State.COMPOSING),
-})
-PREP_STATES = frozenset({
-    str(State.DRAFT_INTENT),
-    str(State.FACTS_RESOLVED),
-    str(State.SCRIPT_READY),
-    str(State.STORYBOARD_READY),
-    str(State.ASSETS_READY),
-})
+#: 项目就永远停在 DRAFT_INTENT / FACTS_RESOLVED,没人接手。现在归调度器。
+RENDER, PREP = RENDER_LANE, PREP_LANE
+RENDER_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == RENDER)
+PREP_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == PREP)
 AUTO_ADVANCE_STATES = RENDER_STATES | PREP_STATES
-
-#: 通道名
-RENDER, PREP = "render", "prep"
-
-
-def lane_of(state: str) -> str | None:
-    """这个状态归哪条通道;不自动推进的状态(门禁、终态、配额暂停)返回 None。"""
-    if state in RENDER_STATES:
-        return RENDER
-    if state in PREP_STATES:
-        return PREP
-    return None
 
 
 # --------------------------------------------------------------------------
 # 后台调度
 # --------------------------------------------------------------------------
+#: 多久取一次别的进程留下的"催一下"(秒)
+KICK_POLL_SECONDS = 1.0
+
 #: 同一个项目连续失败多少次才判定为"彻底失败"。
 #:
 #: 之前是"一失败就 FAILED",但网络抖动、ffmpeg 偶发退出都是**瞬时**的,
@@ -112,10 +91,8 @@ class Scheduler:
         self._pool: ThreadPoolExecutor | None = None
         #: 备料通道的线程池(同样惰性创建)
         self._prep_pool: ThreadPoolExecutor | None = None
-        #: project_id -> 连续失败次数
-        self._failures: dict[str, int] = {}
-        #: project_id -> 下次可重试的时刻(monotonic)
-        self._retry_after: dict[str, float] = {}
+        # 连续失败次数与退避到期时刻落在 projects.advance_failures / advance_retry_at:
+        # 原来存在这里的两个 dict 里,服务一重启就清零。
         #: 待推进的项目队列(渲染通道)
         self._queue: asyncio.Queue[str] | None = None
         #: 待推进的项目队列(备料通道)
@@ -152,27 +129,36 @@ class Scheduler:
 
     # ---- 扫描 ----
     async def _run(self) -> None:
+        next_scan = 0.0
         while not self._stop.is_set():
+            if time.monotonic() >= next_scan:
+                next_scan = time.monotonic() + SCHEDULER_INTERVAL
+                try:
+                    self._scan()
+                except Exception:  # noqa: BLE001 - 扫描不能因单个项目出错而停
+                    log.exception("扫描项目状态失败")
             try:
-                self._scan()
-            except Exception:  # noqa: BLE001 - 扫描不能因单个项目出错而停
-                log.exception("扫描项目状态失败")
+                # 别的进程(--role web)催过的项目:每秒取一次,不用等满一轮扫描
+                for pid in db.pop_kicks():
+                    self._kick(pid)
+            except Exception:  # noqa: BLE001 - 取不到就等下一秒 / 下一轮扫描
+                log.debug("读取跨进程催办失败", exc_info=True)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=SCHEDULER_INTERVAL)
-            except asyncio.TimeoutError:
+                await asyncio.wait_for(self._stop.wait(), timeout=KICK_POLL_SECONDS)
+            except TimeoutError:
                 continue
 
     def _scan(self) -> None:
         """把处于自动推进态、且不在退避窗口里的项目入队。"""
         if self._queue is None and self._prep_queue is None:
             return
-        for row in db.list_projects(limit=100):
+        # 按状态查,不按"最近 100 个":项目多了以后,久未更新的自动态项目(比如退避中的)
+        # 会被挤出最近 100 个,从此再没人扫到它。
+        for row in db.list_projects_in_states(sorted(AUTO_ADVANCE_STATES)):
             pid = row["id"]
-            if row["state"] not in AUTO_ADVANCE_STATES:
-                continue
             if pid in self._queued or pid in self._running:
                 continue
-            if time.monotonic() < self._retry_after.get(pid, 0.0):
+            if time.time() < float(row.get("advance_retry_at") or 0.0):
                 continue  # 还在退避窗口里,这一轮跳过
             self._enqueue(pid, row["state"])
 
@@ -192,11 +178,17 @@ class Scheduler:
         """马上把这个项目入队,不等下一轮扫描(建项目后调用,省掉最多 20 秒的空等)。
 
         **线程安全**:路由和团队角色都跑在别的线程里,而 `asyncio.Queue` 只能在事件循环
-        线程上碰,所以经 `call_soon_threadsafe` 转一道。调度器没在跑(测试、离线脚本)时
-        什么都不做 —— 项目留在原状态,服务起来后扫描会接手。
+        线程上碰,所以经 `call_soon_threadsafe` 转一道。调度器不在本进程时记进库里
+        (`scheduler_kicks`),跑调度器的进程每秒取走。
         """
         loop = self._loop
         if loop is None or self._stop.is_set():
+            # 调度器不在本进程(Web 进程 / 只读服务 / 离线脚本):记进库里,
+            # 跑调度器的那个进程每秒取一次。没人跑的话,下次启动的扫描也会接手。
+            try:
+                db.request_kick(pid)
+            except Exception:  # noqa: BLE001 - 催不到不要紧,扫描会接手
+                log.debug("记录跨进程催办失败", exc_info=True)
             return
         try:
             loop.call_soon_threadsafe(self._kick, pid)
@@ -266,7 +258,6 @@ class Scheduler:
             return str(now.get("state") or "") in AUTO_ADVANCE_STATES
         except orchestrator.PipelineError as exc:
             # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
-            self._failures[pid] = MAX_CONSECUTIVE_FAILURES
             log.error("推进 %s 失败(不可恢复):%s", pid, exc)
             # 按**现在**的状态判死(这一轮可能已推进了几步);已完成 / 已结束的不覆盖
             cur = str((db.get_project(pid) or {}).get("state") or "")
@@ -276,23 +267,24 @@ class Scheduler:
                              reason=f"后台推进失败:{exc}")
             return False
         except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
-            n = self._failures.get(pid, 0) + 1
-            self._failures[pid] = n
+            n = int(row.get("advance_failures") or 0) + 1
             wait = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** (n - 1)))
-            self._retry_after[pid] = time.monotonic() + wait
+            db.set_advance_failures(pid, n, time.time() + wait)
             log.exception("推进 %s 失败(第 %d 次,%.0fs 后重试)", pid, n, wait)
             db.add_event(pid, state, src=state,
                          reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
                                 f"{type(exc).__name__}: {exc}")
             if n >= MAX_CONSECUTIVE_FAILURES:
-                db.update_project(pid, state=str(State.FAILED),
-                                  state_reason=f"连续 {n} 次推进失败:{exc}")
-                db.add_event(pid, str(State.FAILED), src=state,
-                             reason=f"连续 {n} 次推进失败")
+                # CAS:失败这一轮里状态可能已被推进(甚至已完成),不能无条件写 FAILED
+                cur = str((db.get_project(pid) or {}).get("state") or "")
+                if cur in AUTO_ADVANCE_STATES and db.cas_state(
+                        pid, cur, str(State.FAILED), reason=f"连续 {n} 次推进失败:{exc}"):
+                    db.add_event(pid, str(State.FAILED), src=cur,
+                                 reason=f"连续 {n} 次推进失败")
             return False
         # 成功 → 清掉失败计数
-        self._failures.pop(pid, None)
-        self._retry_after.pop(pid, None)
+        if row.get("advance_failures") or row.get("advance_retry_at"):
+            db.clear_advance_failures(pid)
         if isinstance(out, dict) and out.get("busy"):
             log.debug("项目 %s 正被别的执行流推进,本轮让出", pid)
             return False
@@ -309,6 +301,12 @@ class Scheduler:
         if self._task is None or self._task.done():
             self._stop.clear()
             self._drain.clear()
+            # 启动前单独推进过(`_advance_one` 会惰性建池)留下的旧池按当时的并发配置建的,
+            # 不能复用:换掉,按现在的 PIPELINE_CONCURRENCY / PREP_CONCURRENCY 重建
+            for old in (self._pool, self._prep_pool):
+                if old is not None:
+                    old.shutdown(wait=False)
+            self._pool = self._prep_pool = None
             self._executor()  # 池在启动时就建好
             self._executor(PREP)
             self._loop = asyncio.get_running_loop()
@@ -342,6 +340,8 @@ class Scheduler:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 log.debug("停机时扫描任务被取消", exc_info=True)
         # 不 wait:在途的那一拍让它跑完(它写的是自己那一拍的文件)
+        # 在途的那一拍做完会自己放租约;这里把本进程还挂着的都放掉,重启后不用等 TTL
+        locks.release_all()
         pools = (self._pool, self._prep_pool)
         self._pool = self._prep_pool = None
         for pool in pools:

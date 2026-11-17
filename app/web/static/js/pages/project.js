@@ -111,7 +111,9 @@ async function act(btn, url, body, label) {
         lastState = data.state;
         setTimeout(reloadPreserving, 700);
       } else {
-        toast(data.reason || (data.waiting ? '正在等待确认' : `${label}完成`), { type: 'brand' });
+        const msg = data.queued ? '已交给后台调度器,稍后自动推进'
+          : (data.waiting ? '正在等待确认' : `${label}完成`);
+        toast(data.reason || msg, { type: 'brand' });
         refreshStatus();
       }
       return null;

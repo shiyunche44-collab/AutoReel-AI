@@ -167,7 +167,10 @@ def run_role(name: str, trigger: str = "schedule") -> dict[str, str]:
     if run_id is None:
         return {"status": "busy", "summary": f"{r.label}正在跑"}
     try:
-        summary = r.run() or ""
+        from ..llm import ledger
+
+        with ledger.tag(role=name):  # 这次运行里的模型调用都记到这个角色名下
+            summary = r.run() or ""
         status = "ok"
     except Skip as exc:
         # 轮询型角色的「这次没事」不值得占一行动态
@@ -182,6 +185,33 @@ def run_role(name: str, trigger: str = "schedule") -> dict[str, str]:
     if status == "idle":
         db.prune_idle_runs(name)
     return {"status": status, "summary": summary}
+
+
+#: 手动 / 事件触发的角色运行走持久化任务(见 `app/jobs.py`),在跑后台循环的进程里执行。
+#: 原来是在 Web 请求里起线程:`--role web` 时角色就跑在 Web 进程里了,重启 Web 也会打断它。
+ROLE_JOB = "team.role"
+
+
+def run_role_later(name: str, trigger: str = "manual") -> bool:
+    """排一次角色运行(同角色已在排 / 在跑就不重复排)。返回是否排上了。"""
+    from .. import jobs
+
+    role(name)  # 没有这个角色就在这里抛 KeyError,别排一个永远跑不了的任务
+    return jobs.submit(ROLE_JOB, key=name, payload={"name": name, "trigger": trigger}) is not None
+
+
+def _role_job(payload: dict) -> dict[str, str]:
+    return run_role(str(payload["name"]), str(payload.get("trigger") or "manual"))
+
+
+def _register_jobs() -> None:
+    from .. import jobs
+
+    # run_role 自己吞掉角色异常、记进 team_runs,不重试
+    jobs.register(ROLE_JOB, resource="team", max_attempts=1, lease=300.0)(_role_job)
+
+
+_register_jobs()
 
 
 def paused() -> bool:

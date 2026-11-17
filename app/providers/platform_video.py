@@ -362,18 +362,39 @@ BILI_SPACE_RETRIES = 2
 BILI_SPACE_RETRY_WAIT = 3.0
 
 
+#: 空间接口被风控后冷却多久(秒)。实测 412 / -352 会持续 30 分钟以上;连着被拦会翻倍
+BILI_SPACE_COOLDOWN = 1800.0
+BILI_SPACE_COOLDOWN_KEY = "bilibili.space"
+#: 算"被风控"的信号:HTTP 412,或业务码 -352 / -412 / -799(请求过于频繁)
+_BILI_RISK = ("HTTP 412", "code=-352", "code=-412", "code=-799")
+
+
 def bilibili_uploads(mid: int, keyword: str, *, uploader: str = "", pages: int = 2,
                      page_size: int = 50) -> list[PlatformHit]:
-    """一个 UP 主标题含 `keyword` 的投稿(新的在前)。失败抛 PlatformError。"""
+    """一个 UP 主标题含 `keyword` 的投稿(新的在前)。失败抛 PlatformError。
+
+    被风控过的话,冷却期内直接抛错不发请求(`providers/cooldown.py`):接着撞只会让
+    风控更久。调用方本来就会降级为关键词搜索。"""
+    from . import cooldown
+
+    try:
+        cooldown.check(BILI_SPACE_COOLDOWN_KEY)
+    except cooldown.Cooling as exc:
+        raise PlatformError(str(exc)) from exc
     last: Exception | None = None
     for attempt in range(BILI_SPACE_RETRIES):
         if attempt:
             time.sleep(BILI_SPACE_RETRY_WAIT)
         try:
-            return _bilibili_uploads_once(mid, keyword, uploader=uploader, pages=pages,
+            hits = _bilibili_uploads_once(mid, keyword, uploader=uploader, pages=pages,
                                           page_size=page_size)
         except PlatformError as exc:
             last = exc
+            continue
+        cooldown.clear(BILI_SPACE_COOLDOWN_KEY)
+        return hits
+    if last is not None and any(sig in str(last) for sig in _BILI_RISK):
+        cooldown.trip(BILI_SPACE_COOLDOWN_KEY, BILI_SPACE_COOLDOWN, str(last))
     raise last or PlatformError("B 站空间接口不可用")
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any, Sequence
-from ... import config
+from ... import config, degrade
 
 from .tone import Tone, log, tone_of
 from .studio import background
@@ -64,6 +64,7 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         visual = pick_visual(subject, exclude)
         if visual is None:
             log.info("封面:%s 没有能抠的白底官图,退回老封面", subject)
+            degrade.note("cover.to_old", f"{subject} 没有能抠的白底官图")
             return None
         cut, still = visual.cut, visual.still
         hook = usable_hook(hook) if variant == "b" else ""
@@ -97,6 +98,7 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
                 "still": str(still), "main": main, "sub": sub, **visual.trace}
     except Exception as exc:  # noqa: BLE001
         log.warning("统一风格封面失败,退回老封面:%s", exc)
+        degrade.note("cover.to_old", f"统一风格封面失败:{exc}")
         return None
 
 

@@ -6,7 +6,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
-from ... import db
+from ... import db, degrade
 from ...models import ShotSpec
 from .. import aspect, cards, library, looks, mechanism_art, motion, motion_assets, overlays
 from .. import render as render_mod
@@ -421,6 +421,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败 —— 但要留痕,
             # 否则"概念动画全变成数据卡"看起来像正常产出
             _log.warning("第 %s 拍概念动画 %s 退回数据卡:%s", spec.idx, scene, exc)
+            degrade.note("concept.to_card", f"第 {spec.idx} 拍 {scene}:{exc}")
             base = cards.render(concept_card(spec.overlay), subject, work / "card.mp4",
                                 seconds=seconds, background=card_bg, size=size)
     elif spec.layout == "mech" and spec.overlay:
@@ -430,6 +431,7 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
             # 机构画面做不出来(生图失败 / 模版没有竖屏版 / 渲染失败):退回实拍底,
             # 有核对过的行就照面板画。要留痕 —— 这个片型的看点就是机构画面
             _log.warning("第 %s 拍机构画面 %s 退回实拍:%s", spec.idx, spec.overlay.get("part"), exc)
+            degrade.note("mech.to_footage", f"第 {spec.idx} 拍 {spec.overlay.get('part')}:{exc}")
             if notes is not None:
                 notes.append(f"第 {spec.idx} 拍机构画面({spec.overlay.get('part')})没做出来,退回实拍:{exc}")
             rows = spec.overlay.get("rows") or []
