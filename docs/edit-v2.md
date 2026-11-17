@@ -88,7 +88,12 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
 python -I scripts/edit_v2_trial.py --list          # 已完成的竖屏项目
 python -I scripts/edit_v2_trial.py                 # 自动挑最近一条
 python -I scripts/edit_v2_trial.py p_xxx --no-rerank
+python -I scripts/edit_v2_trial.py --landscape     # 横屏(流水线里要 EDIT_V2=all 才走 v2)
 ```
+
+横屏版面:素材带即全屏;数据卡靠上、参数面板左侧居中,底部约 20% 留给字幕;
+底边一条章节进度条(整屏的逐拍成品期间不画,它们自己烧了章节条)。
+所有大字(钩子 / 关键词 / 大数字)按估算宽度自动缩字号,长句不出屏;两行时第二行永远比第一行小。
 
 产物在项目目录:`output_v2_trial.mp4`(新片)、`_edit/compare.jpg`(上排旧片、下排新片)、
 `edit_timeline.json`(每一刀念到的半句、取的素材、对没对上题)。

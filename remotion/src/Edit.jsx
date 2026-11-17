@@ -22,6 +22,12 @@ const strokeText = (size, w = 0.1) => ({
   WebkitTextStroke: `${Math.max(3, Math.round(size * w))}px #000`, paintOrder: "stroke fill",
   textShadow: `0 ${Math.round(size * 0.06)}px ${Math.round(size * 0.12)}px rgba(0,0,0,.55)`,
 });
+// 估算一行字的宽度(em):汉字 1,英文数字约 0.58;花字色块左右各 0.32em
+export const textEm = (text) => [...String(text || "")].reduce(
+  (n, c) => n + (/[\u0000-\u024f]/.test(c) ? 0.58 : 1), 0);
+// 字号上限:这一行在 maxW 像素内放得下(长关键词 / 长标题不出屏)
+export const fitSize = (text, size, maxW, extraEm = 0) =>
+  Math.max(12, Math.min(size, maxW / Math.max(1, textEm(text) + extraEm)));
 // 色块底花字
 const plate = (bg, color, size) => ({
   background: bg, color, padding: "0.06em 0.32em",
@@ -182,7 +188,8 @@ const Hook = ({ o, accent, fps, band }) => {
       {o.props.lines.map((line, i) => {
         const p = popIn(frame, fps, i * 0.18, { damping: 9, stiffness: 240 });
         const shake = i === 0 ? Math.sin(frame * 1.7) * Math.max(0, 1 - frame / (fps * 0.4)) * 6 : 0;
-        const fs = i === 0 ? size : size * 0.6;
+        const first = fitSize(o.props.lines[0], size, band.w * 0.9, 0.2);
+        const fs = i === 0 ? first : Math.min(fitSize(line, size * 0.6, band.w * 0.9, 0.7), first * 0.8);
         return (
           <div key={i} style={{
             fontFamily: FONT, fontWeight: 900, fontSize: fs, lineHeight: 1.25, textAlign: "center",
@@ -209,7 +216,9 @@ const Keyword = ({ o, accent, fps, band }) => {
       background: "linear-gradient(90deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 70%)" }}>
       {o.props.lines.map((line, i) => {
         const p = popIn(frame, fps, i * 0.22);
-        const fs = i === 0 ? size : size * 0.66;
+        // 第二行永远比第一行小:第一行太长被缩小时,第二行跟着缩,主次不倒
+        const first = fitSize(o.props.lines[0], size, band.w * 0.86, 0.7);
+        const fs = i === 0 ? first : Math.min(fitSize(line, size * 0.66, band.w * 0.86, 0.7), first * 0.8);
         return (
           <div key={i} style={{
             fontFamily: FONT, fontWeight: 900, fontSize: fs, lineHeight: 1.3, marginTop: i ? size * 0.18 : 0,
@@ -246,8 +255,8 @@ const Stat = ({ o, accent, fps, band }) => {
       background: "radial-gradient(ellipse at center,rgba(0,0,0,.35) 0%,rgba(0,0,0,.7) 100%)", opacity: enter }}>
       <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size * 0.3, letterSpacing: 2 }}>
         <span style={plate(accent, "#fff", size * 0.3)}>{o.props.label}</span></div>
-      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size * 1.15, color: YELLOW, lineHeight: 1.15,
-        ...strokeText(size * 1.15, 0.05),
+      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: fitSize(o.props.value, size * 1.15, band.w * 0.9, 0.2),
+        color: YELLOW, lineHeight: 1.15, ...strokeText(size * 1.15, 0.05),
         transform: `scale(${t > 0.8 ? 1 + 0.06 * Math.max(0, 1 - (t - 0.8) * 5) : 1})` }}>{shown}</div>
       {o.props.note && <div style={{ fontFamily: FONT, fontWeight: 700, fontSize: size * 0.2, color: "#eee",
         ...strokeText(size * 0.2, 0.06) }}>{o.props.note}</div>}
@@ -257,12 +266,14 @@ const Stat = ({ o, accent, fps, band }) => {
 
 const Panel = ({ o, accent, fps, band }) => {
   const frame = useCurrentFrame();
-  const size = Math.round(band.height * 0.062);
+  const size = Math.round(band.height * (band.land ? 0.045 : 0.062));
   const enter = popIn(frame, fps, 0, { damping: 16, stiffness: 160 });
   return (
-    <AbsoluteFill style={{ justifyContent: "flex-end", padding: "0 0 4% 5%" }}>
+    // 横屏:面板放左侧居中,避开底部字幕
+    <AbsoluteFill style={{ justifyContent: band.land ? "center" : "flex-end",
+      padding: band.land ? "0 0 0 4%" : "0 0 4% 5%" }}>
       <div style={{
-        width: "62%", background: "rgba(10,12,16,.82)", borderLeft: `${size * 0.22}px solid ${accent}`,
+        width: band.land ? "40%" : "62%", background: "rgba(10,12,16,.82)", borderLeft: `${size * 0.22}px solid ${accent}`,
         padding: `${size * 0.6}px ${size * 0.8}px`, fontFamily: FONT, color: "#fff",
         transform: `translateX(${interpolate(enter, [0, 1], [-110, 0])}%)`,
       }}>
@@ -293,7 +304,7 @@ const ChapterChip = ({ o, accent, fps, band }) => {
   const total = Math.round(o.dur * fps);
   const p = popIn(frame, fps, 0, { damping: 14, stiffness: 220 });
   const out = interpolate(frame, [total - 8, total], [1, 0], { extrapolateLeft: "clamp" });
-  const size = Math.round(band.height * 0.07);
+  const size = Math.round(band.height * (band.land ? 0.05 : 0.07));
   return (
     <AbsoluteFill style={{ padding: "4% 5%", opacity: out }}>
       <div style={{ display: "inline-flex", alignItems: "center", fontFamily: FONT, fontWeight: 900,
@@ -316,7 +327,8 @@ const Card = ({ o, accent, fps, band, theme }) => {
   const p = o.props;
   const a2 = theme.accent2 || "#FFB547";
   // 行少时字放大:一两行的对比卡数字才是主角
-  const size = Math.round(band.height * (p.rows.length <= 2 ? 0.088 : p.rows.length <= 3 ? 0.074 : 0.064));
+  const size = Math.round(band.height * (band.land ? 0.72 : 1)
+    * (p.rows.length <= 2 ? 0.088 : p.rows.length <= 3 ? 0.074 : 0.064));
   const enter = popIn(frame, fps, 0, { damping: 16, stiffness: 170 });
   const total = Math.round(o.dur * fps);
   const out = interpolate(frame, [total - 6, total], [1, 0], { extrapolateLeft: "clamp" });
@@ -378,15 +390,19 @@ const Card = ({ o, accent, fps, band, theme }) => {
     );
   };
   return (
-    <AbsoluteFill style={{ background: "rgba(5,7,10,.45)", justifyContent: "center", alignItems: "center", opacity: out }}>
+    // 横屏:卡片靠上,底部 ~20% 留给字幕
+    <AbsoluteFill style={{ background: "rgba(5,7,10,.45)", alignItems: "center", opacity: out,
+      justifyContent: band.land ? "flex-start" : "center", paddingTop: band.land ? "6%" : 0 }}>
       <div style={{
-        width: "86%", maxHeight: "92%", overflow: "hidden", fontFamily: FONT, color: "#fff",
+        width: band.land ? "62%" : "86%", maxHeight: band.land ? "72%" : "92%", overflow: "hidden",
+        fontFamily: FONT, color: "#fff",
         background: "rgba(14,17,23,.88)", borderTop: `${size * 0.16}px solid ${accent}`,
         borderRadius: Math.round(size * 0.18), boxShadow: "0 18px 50px rgba(0,0,0,.45)",
         padding: `${size * 0.6}px ${size * 0.9}px ${size * 0.5}px`,
         transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`, opacity: enter,
       }}>
-        {p.title && <div style={{ fontWeight: 900, fontSize: size * 1.15, marginBottom: size * 0.35 }}>{p.title}</div>}
+        {p.title && <div style={{ fontWeight: 900, fontSize: size * 1.15, marginBottom: size * 0.35,
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</div>}
         {p.kind === "compare" && p.columns.length === 2 && (
           <div style={{ display: "flex", fontSize: size * 0.75, fontWeight: 900, marginBottom: size * 0.2 }}>
             <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.95, color: accent }}>{p.columns[0]}</div>
@@ -436,6 +452,20 @@ const TitleBar = ({ title, chapters, duration, accent, box, width }) => {
     </div>
   );
 };
+
+// 横屏底部章节进度条(竖屏的进度在标题下面)
+const ProgressBar = ({ chapters, duration, accent, now }) => (
+  <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 8, display: "flex", gap: 4 }}>
+    {chapters.map((c, i) => {
+      const p = Math.max(0, Math.min(1, (now - c.start) / Math.max(0.01, c.end - c.start)));
+      return (
+        <div key={i} style={{ flex: (c.end - c.start) / Math.max(0.01, duration), background: "rgba(255,255,255,.3)" }}>
+          <div style={{ width: `${p * 100}%`, height: "100%", background: accent }} />
+        </div>
+      );
+    })}
+  </div>
+);
 
 // 关键词冲击推:念到数字 / 车型代号时素材带快速放大 7% 再回落(0.35 秒)
 export const punchScale = (punches, now) => {
@@ -494,7 +524,7 @@ export const Edit = (props) => {
           const C = OVERLAYS[o.type];
           return C ? (
             <Sequence key={`o${i}`} {...seq(o.start, o.dur)}>
-              <C o={o} accent={accent} fps={fps} band={g.band} theme={theme} />
+              <C o={o} accent={accent} fps={fps} band={{ ...g.band, w: width, land: !g.title }} theme={theme} />
             </Sequence>
           ) : null;
         })}
@@ -504,6 +534,8 @@ export const Edit = (props) => {
           <BandClip clip={{ ...c, motion: "none" }} fps={fps} />
         </Sequence>
       ))}
+      {!g.title && !fullScreen && <ProgressBar chapters={props.chapters || []} duration={props.duration}
+        accent={accent} now={now} />}
       <AbsoluteFill>
         {(props.captions || []).filter((c) => now >= c.start && now < c.end).map((c, i) => (
           <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.073 : 0.06,

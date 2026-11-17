@@ -4,6 +4,7 @@
     python -I scripts/edit_v2_trial.py                   # 自动挑最近一条
     python -I scripts/edit_v2_trial.py p_xxxxxxxxxxxx    # 指定项目
     python -I scripts/edit_v2_trial.py p_xxx --no-rerank # 不让文字模型复选素材(不花 LLM 额度)
+    python -I scripts/edit_v2_trial.py --landscape       # 试横屏(自动挑 / --list 都换成横屏项目)
 
 不改项目状态、不覆盖原成片:新片写成项目目录下的 `output_v2_trial.mp4`,
 对比图写成 `_edit/compare.jpg`(上排旧成片、下排新成片,同一时刻各取一帧)。
@@ -33,10 +34,10 @@ OUTPUT = "output_v2_trial.mp4"
 SHEET_TIMES = 8
 
 
-def candidates(limit: int = 200) -> list[dict]:
+def candidates(limit: int = 200, *, landscape: bool = False) -> list[dict]:
     out = []
     for p in db.list_projects(limit):
-        if p.get("state") != "DONE" or not aspect.is_portrait(p):
+        if p.get("state") != "DONE" or aspect.is_portrait(p) == landscape:
             continue
         if not aspect.output_path(p["id"]).is_file():
             continue
@@ -46,7 +47,7 @@ def candidates(limit: int = 200) -> list[dict]:
     return out
 
 
-def compare_sheet(old: Path, new: Path, dest: Path, seconds: float) -> bool:
+def compare_sheet(old: Path, new: Path, dest: Path, seconds: float, *, portrait: bool = True) -> bool:
     """上排旧片、下排新片,同一时刻各一帧(跳过开头 0.5 秒和片尾卡)。"""
     span = max(1.0, seconds - 3.0)
     times = [0.5 + span * k / (SHEET_TIMES - 1) for k in range(SHEET_TIMES)]
@@ -58,7 +59,8 @@ def compare_sheet(old: Path, new: Path, dest: Path, seconds: float) -> bool:
         for k, t in enumerate(times):
             f = work / f"{tag}_{k:02d}.jpg"
             render_mod._run(["-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(video),
-                             "-frames:v", "1", "-vf", "scale=270:480", str(f)], timeout=120)
+                             "-frames:v", "1", "-vf", "scale=270:480" if portrait else "scale=480:270",
+                             str(f)], timeout=120)
             if f.is_file():
                 frames.append(f)
         rows.append(frames)
@@ -79,13 +81,14 @@ def main() -> int:
     ap.add_argument("project_id", nargs="?")
     ap.add_argument("--list", action="store_true", help="列出能试的项目")
     ap.add_argument("--no-rerank", action="store_true", help="不让文字模型复选素材")
+    ap.add_argument("--landscape", action="store_true", help="试横屏项目")
     args = ap.parse_args()
 
-    found = candidates()
+    found = candidates(landscape=args.landscape)
     if args.list:
         for p in found[:30]:
             print(f"{p['id']}  {p.get('subject', '')}  {p.get('title', '')}")
-        print(f"共 {len(found)} 条已完成的竖屏项目")
+        print(f"共 {len(found)} 条已完成的{'横屏' if args.landscape else '竖屏'}项目")
         return 0
     if args.project_id:
         project = db.get_project(args.project_id)
@@ -95,12 +98,12 @@ def main() -> int:
         if project.get("state") != "DONE":
             print(f"{args.project_id} 状态是 {project.get('state')},只试 DONE 的项目(别的状态调度器会动它)")
             return 2
-        if not aspect.is_portrait(project):
-            print("这是横屏项目;试点只做竖屏")
+        if not aspect.is_portrait(project) and not args.landscape:
+            print("这是横屏项目:要试横屏请加 --landscape")
             return 2
     else:
         if not found:
-            print("没有已完成、带旁白的竖屏项目可试")
+            print(f"没有已完成、带旁白的{'横屏' if args.landscape else '竖屏'}项目可试")
             return 2
         project = found[0]
     pid = project["id"]
@@ -138,7 +141,7 @@ def main() -> int:
     old = aspect.output_path(pid)
     saved = db.read_json(pid, "edit_timeline.json", {}) or {}
     sheet = project_dir / "_edit" / "compare.jpg"
-    has_sheet = compare_sheet(old, new, sheet, result.duration)
+    has_sheet = compare_sheet(old, new, sheet, result.duration, portrait=aspect.is_portrait(project))
     report = {
         "project": pid, "ok": result.ok, "seconds": round(result.duration, 1),
         "render_seconds": round(spent, 1), "clips": len(saved.get("clips") or []),
