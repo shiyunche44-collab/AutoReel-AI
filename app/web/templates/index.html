@@ -30,7 +30,12 @@
 
 {# 这个库已有别的服务在跑后台循环:本服务只开 Web。不说清楚的话,在这里建的项目
    "不动"看上去就像卡死了。 #}
-{% if health.background is defined and not health.background.ok %}
+{% if health.background is defined and not health.background.ok and health.background.mode == 'web' %}
+<div class="callout tone-warning">
+  <span class="row">{{ m.icon("alert-triangle") }}<strong>后台进程没在跑:项目不会推进,也不发布、不跑 AI 团队</strong></span>
+  <p class="subtle small">本服务只开 Web,推进项目的是单独的后台进程(worker){% if health.background.worker.age is defined %},它的心跳已停 {{ health.background.worker.age|round|int }} 秒{% endif %}。看门狗(ensure_server.ps1)每 5 分钟检查一次会把它拉起;也可以手动运行 <code>python run.py --role worker</code>。在这里建的项目和确认的门禁不会丢,后台进程起来后接着推。</p>
+</div>
+{% elif health.background is defined and not health.background.ok %}
 <div class="callout tone-warning">
   <span class="row">{{ m.icon("alert-triangle") }}<strong>只读服务:这个库已有另一个服务在推进项目{% if health.background.owner.pid %}(进程 {{ health.background.owner.pid }}){% endif %}</strong></span>
   <p class="subtle small">本服务不推进项目、不发布、不跑 AI 团队;在这里建的项目和确认的门禁由那个服务接手。要让本服务接管,先停掉那个服务再重启本服务。</p>

@@ -39,6 +39,9 @@ AUTO_ADVANCE_STATES = RENDER_STATES | PREP_STATES
 # --------------------------------------------------------------------------
 # 后台调度
 # --------------------------------------------------------------------------
+#: 多久取一次别的进程留下的"催一下"(秒)
+KICK_POLL_SECONDS = 1.0
+
 #: 同一个项目连续失败多少次才判定为"彻底失败"。
 #:
 #: 之前是"一失败就 FAILED",但网络抖动、ffmpeg 偶发退出都是**瞬时**的,
@@ -126,14 +129,23 @@ class Scheduler:
 
     # ---- 扫描 ----
     async def _run(self) -> None:
+        next_scan = 0.0
         while not self._stop.is_set():
+            if time.monotonic() >= next_scan:
+                next_scan = time.monotonic() + SCHEDULER_INTERVAL
+                try:
+                    self._scan()
+                except Exception:  # noqa: BLE001 - 扫描不能因单个项目出错而停
+                    log.exception("扫描项目状态失败")
             try:
-                self._scan()
-            except Exception:  # noqa: BLE001 - 扫描不能因单个项目出错而停
-                log.exception("扫描项目状态失败")
+                # 别的进程(--role web)催过的项目:每秒取一次,不用等满一轮扫描
+                for pid in db.pop_kicks():
+                    self._kick(pid)
+            except Exception:  # noqa: BLE001 - 取不到就等下一秒 / 下一轮扫描
+                log.debug("读取跨进程催办失败", exc_info=True)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=SCHEDULER_INTERVAL)
-            except asyncio.TimeoutError:
+                await asyncio.wait_for(self._stop.wait(), timeout=KICK_POLL_SECONDS)
+            except TimeoutError:
                 continue
 
     def _scan(self) -> None:
@@ -166,11 +178,17 @@ class Scheduler:
         """马上把这个项目入队,不等下一轮扫描(建项目后调用,省掉最多 20 秒的空等)。
 
         **线程安全**:路由和团队角色都跑在别的线程里,而 `asyncio.Queue` 只能在事件循环
-        线程上碰,所以经 `call_soon_threadsafe` 转一道。调度器没在跑(测试、离线脚本)时
-        什么都不做 —— 项目留在原状态,服务起来后扫描会接手。
+        线程上碰,所以经 `call_soon_threadsafe` 转一道。调度器不在本进程时记进库里
+        (`scheduler_kicks`),跑调度器的进程每秒取走。
         """
         loop = self._loop
         if loop is None or self._stop.is_set():
+            # 调度器不在本进程(Web 进程 / 只读服务 / 离线脚本):记进库里,
+            # 跑调度器的那个进程每秒取一次。没人跑的话,下次启动的扫描也会接手。
+            try:
+                db.request_kick(pid)
+            except Exception:  # noqa: BLE001 - 催不到不要紧,扫描会接手
+                log.debug("记录跨进程催办失败", exc_info=True)
             return
         try:
             loop.call_soon_threadsafe(self._kick, pid)

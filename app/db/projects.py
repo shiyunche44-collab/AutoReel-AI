@@ -7,7 +7,7 @@ import sqlite3
 import time
 from typing import Any
 
-from .core import connect
+from .core import connect, transaction
 from .schema import init_db
 
 log = logging.getLogger(__name__)
@@ -334,3 +334,24 @@ def active_leases() -> list[dict[str, Any]]:
         cur = conn.execute("SELECT * FROM project_leases WHERE expires_at >= ? ORDER BY project_id",
                            (time.time(),))
         return [dict(r) for r in cur.fetchall()]
+
+
+# --------------------------------------------------------------------------
+# 跨进程催调度器(见 scheduler.Scheduler.kick)
+# --------------------------------------------------------------------------
+def request_kick(project_id: str) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO scheduler_kicks (project_id, at) VALUES (?, ?)",
+                     (project_id, time.time()))
+
+
+def pop_kicks() -> list[str]:
+    """取走全部待催的项目(取完即删)。"""
+    init_db()
+    with transaction() as conn:
+        rows = [r["project_id"] for r in
+                conn.execute("SELECT project_id FROM scheduler_kicks ORDER BY at")]
+        if rows:
+            conn.execute("DELETE FROM scheduler_kicks")
+        return rows

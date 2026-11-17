@@ -75,3 +75,34 @@ def test_no_answer_is_unknown(tmp_db, monkeypatch):
     monkeypatch.setattr(server_busy, "health", lambda port, timeout: None)
     code, out = server_busy.check(8848, since=100.0, timeout=1)
     assert code == 2 and out["verdict"] == "unknown"
+
+
+# --------------------------------------------------------------------------
+# --worker:拆出来的后台进程没有 HTTP,只看库
+# --------------------------------------------------------------------------
+def test_worker_idle_without_lease_table(tmp_db):
+    """老库还没有 project_leases 表:不报错,按空闲算。"""
+    code, out = server_busy.worker_busy(since=100.0)
+    assert code == 0 and out["projects"] == []
+
+
+def test_worker_busy_on_live_lease_only(tmp_db):
+    import time
+
+    _insert(tmp_db, "CREATE TABLE project_leases (project_id TEXT, owner TEXT,"
+                    " acquired_at REAL, expires_at REAL)", ())
+    _insert(tmp_db, "INSERT INTO project_leases VALUES (?, ?, ?, ?)",
+            ("p_dead", "x", 1.0, time.time() - 10))       # 过期的租约:持有者早死了
+    code, out = server_busy.worker_busy(since=100.0)
+    assert code == 0
+    _insert(tmp_db, "INSERT INTO project_leases VALUES (?, ?, ?, ?)",
+            ("p_live", "x", 1.0, time.time() + 60))
+    code, out = server_busy.worker_busy(since=100.0)
+    assert code == 1 and out["projects"] == ["p_live"]
+
+
+def test_worker_busy_on_upload(tmp_db):
+    _insert(tmp_db, "INSERT INTO publications VALUES (?, ?, ?, ?)",
+            ("pub1", "douyin", "uploading", 200.0))
+    code, out = server_busy.worker_busy(since=100.0)
+    assert code == 1 and out["uploading"]

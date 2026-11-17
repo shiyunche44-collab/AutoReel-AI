@@ -46,12 +46,15 @@ RESOURCES: dict[str, int] = {
     "library": 2,
     # 精修:一次完整合成,吃 ffmpeg 和内存
     "refine": 1,
+    # 手动 / 事件触发的团队角色(定时的那些仍由 team.scheduler 串行跑)
+    "team": 2,
     "default": 2,
 }
 
 #: 注册 handler 的模块。执行器启动时导入,保证 handler 都登记上了。
 HANDLER_MODULES = (
     "app.pipeline.library.builder",
+    "app.team",
     "app.team.publisher",
 )
 

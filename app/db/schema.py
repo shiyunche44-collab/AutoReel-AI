@@ -422,6 +422,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active ON jobs(kind, key)
 -- 项目租约:同一时刻一个项目只有一个写入者,**跨进程**也成立(见 pipeline/locks.py)。
 -- 进程内锁管不到另一个进程:只读服务上的「保存脚本」「重拍」会和主服务的调度器撞车。
 -- 持有者每 TTL/3 续一次;进程死了,过期后别人可以接手。
+-- 跨进程"催一下调度器":Web 进程建了项目 / 点了推进,调度器在 worker 进程里,
+-- 内存队列够不着,就记一行;调度器每秒取走入队。
+CREATE TABLE IF NOT EXISTS scheduler_kicks (
+    project_id TEXT PRIMARY KEY,
+    at         REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS project_leases (
     project_id  TEXT PRIMARY KEY,
     owner       TEXT NOT NULL,

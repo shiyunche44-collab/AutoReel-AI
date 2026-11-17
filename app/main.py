@@ -21,18 +21,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, costs, db, hang_watch, instance_lock, jobs, logging_setup, maintenance
+from . import background, config, costs, db, hang_watch, jobs, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
-from .metrics import worker as metrics_worker
 from .pipeline import aspect, explainer, library, orchestrator
 from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
 from .providers import cli
-from .publish import accounts as publish_accounts
-from .publish import service as publish_service
-from .team import scheduler as team_scheduler
 from .views import ProjectNotFound, build_detail, build_summary, needs_attention
 
 log = logging.getLogger(__name__)
@@ -70,20 +66,6 @@ async def lifespan(app: FastAPI):
     # 一次也没用过 logging,排障只能看 serve.ps1 重定向的 stdout 文本。
     logging_setup.setup()
     hang_watch.start(logging_setup.log_dir())  # 事件循环卡住 60 秒就把全部线程栈落盘
-    # 清掉上次的临时物(data/_probe、data/_tmp 与散落的 _tmp_*.mp4)。
-    # 它们是纯中间产物,却一直没有清理入口,已经积了 40 多 MB。
-    try:
-        maintenance.prune_temp()
-    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
-        log.warning("清理临时目录失败", exc_info=True)
-    try:
-        # 缓存按龄 + 体积上限(motion 的文件都很新,光按龄清不动它)
-        pruned = maintenance.prune_caches()
-        if pruned["removed"]:
-            log.info("缓存清理:删 %d 项,腾出 %s", pruned["removed"], pruned["freed_human"])
-    except Exception:  # noqa: BLE001 - 清理失败不该挡住服务启动
-        log.warning("清理缓存失败", exc_info=True)
-
     # ---- 启动自检 ----
     ffmpeg_ok, ffmpeg_msg = config.ffmpeg_status()
     cli_ok, cli_msg = cli.health_check()
@@ -108,32 +90,16 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=maintenance.data_size_cached, name="data-size-warm",
                      daemon=True).start()
 
-    # 一个库只让一个进程跑后台循环:抢不到锁说明别的端口上已经有服务在推进这个库,
-    # 本进程只开 Web(见 app/instance_lock.py)。两个调度器推进同一个项目会写坏成片。
-    primary = instance_lock.acquire()
-    HEALTH["background"] = {"ok": primary, "owner": {} if primary else instance_lock.owner()}
-    if primary:
-        scheduler.start()
-        # 持久化后台任务(素材池构建、精修):上次没跑完的接着跑
-        jobs.runner.start()
-        # 分发侧的后台循环:发布任务、指标抓取。
-        # 都是守护线程,进程退出即结束,不挡 Web。
-        publish_accounts.import_from_file()
-        publish_service.start()
-        metrics_worker.start()
-        team_scheduler.start()
-    else:
-        log.warning("这个库已有别的服务在跑后台循环(pid %s),本进程只开 Web:"
-                    "不推进项目、不发布、不跑团队",
+    # 后台循环(调度器、任务、发布、指标、团队)。`--role web` 时不跑,交给单独的 worker 进程
+    # (见 app/background.py);all 模式下抢实例锁,抢不到说明别的进程在推进这个库,本进程只开 Web。
+    if background.runs_background():
+        background.start()
+    HEALTH["background"] = background.status()
+    if not HEALTH["background"]["ok"]:
+        log.warning("本进程不跑后台循环(角色 %s,持锁进程 %s)", background.role(),
                     HEALTH["background"]["owner"].get("pid", "?"))
     yield
-    if primary:
-        await scheduler.stop()
-        jobs.runner.stop()
-        publish_service.stop()
-        metrics_worker.stop()
-        team_scheduler.stop()
-        instance_lock.release()
+    await background.stop()
     hang_watch.stop()
 
 
@@ -285,9 +251,19 @@ def project_logs(request: Request, project_id: str):
 # --------------------------------------------------------------------------
 # API
 # --------------------------------------------------------------------------
+@app.middleware("http")
+async def _refresh_background(request: Request, call_next):
+    """后台循环在别的进程(worker)时,它的死活随时会变:每个请求前刷新一下横幅用的状态
+    (读一个小文件)。本进程自己在跑就不用刷。"""
+    if not (HEALTH.get("background") or {}).get("here"):
+        HEALTH["background"] = background.status()
+    return await call_next(request)
+
+
 @app.get("/api/health")
 def health():
     out = dict(HEALTH)
+    out["role"] = background.role()
     # 外部能力调用统计:之前完全不可见,只能靠猜额度烧在哪
     out["provider_calls"] = cli.call_stats()
     # 调度器当前盯着的项目与失败次数
