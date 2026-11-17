@@ -140,6 +140,15 @@ def test_b_title_switches_when_no_usable_hook():
     assert cover_art.b_title(None, a, "") == a
 
 
+def _has_cjk_bold_font() -> bool:
+    from app.pipeline.narration import _font_file
+
+    return _font_file(bold=True) is not None
+
+
+# 断行位置取决于微软雅黑的字形宽度:没有这个字体(Linux 容器)时排版退回 PIL 默认位图字体,
+# 整行只量出几十像素,断行测试没有意义
+@pytest.mark.skipif(not _has_cjk_bold_font(), reason="需要本机微软雅黑字体(FFMPEG_FONTS_DIR)")
 def test_title_break_without_punctuation():
     from app.pipeline.narration import _font_file
 
