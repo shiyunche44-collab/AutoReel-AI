@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import config, db
-from .pipeline import orchestrator
+from .pipeline import locks, orchestrator
 from .state import AUTO_STATES, PREP_LANE, RENDER_LANE, State, lane_of
 
 log = logging.getLogger(__name__)
@@ -88,10 +88,8 @@ class Scheduler:
         self._pool: ThreadPoolExecutor | None = None
         #: 备料通道的线程池(同样惰性创建)
         self._prep_pool: ThreadPoolExecutor | None = None
-        #: project_id -> 连续失败次数
-        self._failures: dict[str, int] = {}
-        #: project_id -> 下次可重试的时刻(monotonic)
-        self._retry_after: dict[str, float] = {}
+        # 连续失败次数与退避到期时刻落在 projects.advance_failures / advance_retry_at:
+        # 原来存在这里的两个 dict 里,服务一重启就清零。
         #: 待推进的项目队列(渲染通道)
         self._queue: asyncio.Queue[str] | None = None
         #: 待推进的项目队列(备料通道)
@@ -148,7 +146,7 @@ class Scheduler:
             pid = row["id"]
             if pid in self._queued or pid in self._running:
                 continue
-            if time.monotonic() < self._retry_after.get(pid, 0.0):
+            if time.time() < float(row.get("advance_retry_at") or 0.0):
                 continue  # 还在退避窗口里,这一轮跳过
             self._enqueue(pid, row["state"])
 
@@ -242,7 +240,6 @@ class Scheduler:
             return str(now.get("state") or "") in AUTO_ADVANCE_STATES
         except orchestrator.PipelineError as exc:
             # 配置错、lint 没过 —— 再跑一百遍也是这个结果,判死
-            self._failures[pid] = MAX_CONSECUTIVE_FAILURES
             log.error("推进 %s 失败(不可恢复):%s", pid, exc)
             # 按**现在**的状态判死(这一轮可能已推进了几步);已完成 / 已结束的不覆盖
             cur = str((db.get_project(pid) or {}).get("state") or "")
@@ -252,10 +249,9 @@ class Scheduler:
                              reason=f"后台推进失败:{exc}")
             return False
         except Exception as exc:  # noqa: BLE001 - 瞬时失败,留原状态退避重试
-            n = self._failures.get(pid, 0) + 1
-            self._failures[pid] = n
+            n = int(row.get("advance_failures") or 0) + 1
             wait = min(BACKOFF_MAX, BACKOFF_BASE * (2 ** (n - 1)))
-            self._retry_after[pid] = time.monotonic() + wait
+            db.set_advance_failures(pid, n, time.time() + wait)
             log.exception("推进 %s 失败(第 %d 次,%.0fs 后重试)", pid, n, wait)
             db.add_event(pid, state, src=state,
                          reason=f"推进失败(第 {n} 次,{wait:.0f}s 后重试):"
@@ -269,8 +265,8 @@ class Scheduler:
                                  reason=f"连续 {n} 次推进失败")
             return False
         # 成功 → 清掉失败计数
-        self._failures.pop(pid, None)
-        self._retry_after.pop(pid, None)
+        if row.get("advance_failures") or row.get("advance_retry_at"):
+            db.clear_advance_failures(pid)
         if isinstance(out, dict) and out.get("busy"):
             log.debug("项目 %s 正被别的执行流推进,本轮让出", pid)
             return False
@@ -287,6 +283,12 @@ class Scheduler:
         if self._task is None or self._task.done():
             self._stop.clear()
             self._drain.clear()
+            # 启动前单独推进过(`_advance_one` 会惰性建池)留下的旧池按当时的并发配置建的,
+            # 不能复用:换掉,按现在的 PIPELINE_CONCURRENCY / PREP_CONCURRENCY 重建
+            for old in (self._pool, self._prep_pool):
+                if old is not None:
+                    old.shutdown(wait=False)
+            self._pool = self._prep_pool = None
             self._executor()  # 池在启动时就建好
             self._executor(PREP)
             self._loop = asyncio.get_running_loop()
@@ -320,6 +322,8 @@ class Scheduler:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 log.debug("停机时扫描任务被取消", exc_info=True)
         # 不 wait:在途的那一拍让它跑完(它写的是自己那一拍的文件)
+        # 在途的那一拍做完会自己放租约;这里把本进程还挂着的都放掉,重启后不用等 TTL
+        locks.release_all()
         pools = (self._pool, self._prep_pool)
         self._pool = self._prep_pool = None
         for pool in pools:

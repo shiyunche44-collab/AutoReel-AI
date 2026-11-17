@@ -29,12 +29,38 @@
 `advance()` 自己在里面加锁,`confirm_gate()` 因此**不能**再加一次 ——
 这是非重入锁,再拿一次会自己把自己锁死。调用链上凡是已经持锁的地方,
 内层一律不要再拿。
+
+**两层**
+
+1. 进程内的 `threading.Lock`(便宜,管同一进程里的线程);
+2. 数据库里的项目租约(`project_leases`),管**不同进程**:主服务的调度器和只读服务
+   上的 HTTP 写接口原来彼此看不见对方的锁。持有期间后台线程每 `LEASE_TTL/3` 续租,
+   进程被杀后租约最多 `LEASE_TTL` 秒过期,别人就能接手;正常停机时 `release_all()` 立刻放。
 """
 from __future__ import annotations
 
+import itertools
+import logging
+import os
+import socket
 import threading
+import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
+
+from .. import db
+
+log = logging.getLogger(__name__)
+
+#: 租约有效期(秒)。持有者每 TTL/3 续一次
+LEASE_TTL = 120.0
+#: 本进程的身份;每次拿锁再拼上线程号和序号,保证两次持有不会被当成同一个主人
+_PROCESS = f"{socket.gethostname()}:{os.getpid()}:{int(time.time())}"
+_seq = itertools.count(1)
+#: 本进程持有的租约:project_id -> owner
+_held: dict[str, str] = {}
+_keeper: threading.Thread | None = None
+_keeper_stop = threading.Event()
 
 
 class ProjectBusy(RuntimeError):
@@ -89,10 +115,17 @@ def project_lock(project_id: str) -> Iterator[bool]:
     """
     lock = _acquire(project_id)
     got = lock.acquire(blocking=False)
+    owner = ""
+    if got:
+        owner = _take_lease(project_id)
+        if not owner:  # 别的进程正持有这个项目
+            lock.release()
+            got = False
     try:
         yield got
     finally:
         if got:
+            _drop_lease(project_id, owner)
             lock.release()
         _release_ref(project_id)
 
@@ -110,6 +143,79 @@ def require_project_lock(project_id: str) -> Iterator[None]:
 
 
 def busy_project_ids() -> list[str]:
-    """当前被持有的项目 id(给健康检查/调试用)。"""
+    """当前被持有的项目 id(健康检查 / 重启前看忙不忙用)。跨进程:读库里没过期的租约。"""
+    try:
+        return sorted({r["project_id"] for r in db.active_leases()})
+    except Exception:  # noqa: BLE001 - 库读不了就退回本进程的视图
+        log.warning("读项目租约失败,只报本进程持有的", exc_info=True)
+        with _guard:
+            return sorted(pid for pid, n in _refs.items() if n > 0)
+
+
+# --------------------------------------------------------------------------
+# 数据库租约
+# --------------------------------------------------------------------------
+def _take_lease(project_id: str) -> str:
+    """拿租约,成功返回 owner,失败(别的进程持有 / 库出错)返回空串。"""
+    owner = f"{_PROCESS}:{threading.get_ident()}:{next(_seq)}"
+    try:
+        if not db.try_acquire_lease(project_id, owner, LEASE_TTL):
+            return ""
+    except Exception:  # noqa: BLE001 - 拿不准就当忙:宁可这一轮不做,也别两路一起写
+        log.warning("拿项目 %s 的租约失败,本轮当作忙", project_id, exc_info=True)
+        return ""
     with _guard:
-        return sorted(pid for pid, n in _refs.items() if n > 0)
+        _held[project_id] = owner
+    _ensure_keeper()
+    return owner
+
+
+def _drop_lease(project_id: str, owner: str) -> None:
+    with _guard:
+        if _held.get(project_id) == owner:
+            _held.pop(project_id, None)
+    try:
+        db.release_lease(project_id, owner)
+    except Exception:  # noqa: BLE001 - 放不掉也不要紧,TTL 到了自然过期
+        log.warning("释放项目 %s 的租约失败(%.0f 秒后自然过期)", project_id, LEASE_TTL,
+                    exc_info=True)
+
+
+def _ensure_keeper() -> None:
+    """起(或复用)续租线程:一个进程一个,给本进程持有的所有租约续期。"""
+    global _keeper
+    with _guard:
+        _keeper_stop.clear()
+        if _keeper is not None and _keeper.is_alive():
+            return
+        _keeper = threading.Thread(target=_keep, name="project-lease-keeper", daemon=True)
+        _keeper.start()
+
+
+def _keep() -> None:
+    while not _keeper_stop.wait(LEASE_TTL / 3):
+        with _guard:
+            held = dict(_held)
+        if not held:
+            continue
+        try:
+            lost = db.renew_leases(held, LEASE_TTL)
+        except Exception:  # noqa: BLE001 - 一次续不上不要紧,租约还有余量
+            log.warning("续项目租约失败", exc_info=True)
+            continue
+        for pid in lost:
+            # 只有本进程卡住超过 TTL 才会到这里(看门狗那时多半也在动手了)
+            log.error("项目 %s 的租约已被别的执行流接手,本进程手头那一步可能和它撞车", pid)
+
+
+def release_all() -> None:
+    """正常停机时放掉本进程持有的全部租约,重启后不用等 TTL 过期。"""
+    with _guard:
+        held = dict(_held)
+        _held.clear()
+    _keeper_stop.set()
+    for pid, owner in held.items():
+        try:
+            db.release_lease(pid, owner)
+        except Exception:  # noqa: BLE001
+            log.warning("停机时释放项目 %s 的租约失败", pid, exc_info=True)

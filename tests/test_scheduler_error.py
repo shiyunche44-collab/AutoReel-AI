@@ -25,10 +25,6 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
     db._INITIALISED = False
     db.init_db()
-    # 调度器是全局单例,失败计数与退避窗口也得清 —— 否则上一个用例
-    # 留下的退避窗口会让下一个用例的项目被直接跳过。
-    main.scheduler._failures.clear()
-    main.scheduler._retry_after.clear()
     yield db
     db._INITIALISED = False
 
@@ -41,6 +37,12 @@ def _project(pid: str = "p_fail", state: str = "DRAFT_RENDERING") -> dict:
         "state_reason": None, "quota_budget": 40.0, "spent_cost": 0.0,
         "est_cost": 1.0, "created_at": 1.0, "updated_at": 1.0,
     }
+
+
+def _skip_backoff(pid: str = "p_fail") -> None:
+    """跳过退避窗口 = 模拟"过了足够久,调度器又轮到它了"(失败次数保留)。"""
+    n = db.get_project(pid)["advance_failures"]
+    db.set_advance_failures(pid, n, 0.0)
 
 
 def _sweep() -> None:
@@ -90,7 +92,7 @@ def test_repeated_transient_failures_eventually_mark_failed(store, monkeypatch):
     for _ in range(main.MAX_CONSECUTIVE_FAILURES):
         # 清掉退避窗口 = 模拟"过了足够久,调度器又轮到它了"。
         # 退避窗口本身是防止短时间内疯狂重试的,不该挡住失败计数的累积。
-        main.scheduler._retry_after.pop("p_fail", None)
+        _skip_backoff()
         _sweep()
 
     row = store.get_project("p_fail")
@@ -110,7 +112,7 @@ def test_backoff_window_blocks_requeue(store, monkeypatch):
     monkeypatch.setattr(main.orchestrator, "advance", boom)
     _sweep()  # 推进一次 → 失败,进退避窗口
     assert calls["n"] == 1
-    assert main.scheduler._retry_after.get("p_fail", 0) > time.monotonic()
+    assert store.get_project("p_fail")["advance_retry_at"] > time.time()
 
     # 扫描:还在退避窗口里,不该排进队列
     main.scheduler._queue = asyncio.Queue()
@@ -119,7 +121,7 @@ def test_backoff_window_blocks_requeue(store, monkeypatch):
     assert "p_fail" not in main.scheduler._queued
 
     # 退避过去之后就该排进队列
-    main.scheduler._retry_after.pop("p_fail", None)
+    _skip_backoff()
     main.scheduler._scan()
     assert "p_fail" in main.scheduler._queued
 
@@ -137,10 +139,11 @@ def test_success_clears_failure_counters(store, monkeypatch):
 
     monkeypatch.setattr(main.orchestrator, "advance", maybe)
     _sweep()
-    assert main.scheduler._failures.get("p_fail") == 1
-    main.scheduler._retry_after.pop("p_fail", None)  # 跳过退避窗口
+    assert store.get_project("p_fail")["advance_failures"] == 1
+    _skip_backoff()
     _sweep()
-    assert "p_fail" not in main.scheduler._failures
+    assert store.get_project("p_fail")["advance_failures"] == 0
+    assert store.get_project("p_fail")["advance_retry_at"] == 0
 
 
 def test_state_raced_does_not_fail_a_finished_project(store, monkeypatch):
@@ -181,3 +184,31 @@ def test_pipeline_error_fails_from_current_state(store, monkeypatch):
     monkeypatch.setattr(main.orchestrator, "advance", boom)
     _sweep()
     assert store.get_project("p_fail")["state"] == "FAILED"
+
+
+def test_failure_counters_survive_a_restart(store, monkeypatch):
+    """失败次数和退避窗口落库:换一个调度器实例(= 服务重启)也还在。"""
+    store.create_project(_project())
+
+    def boom(pid, **kwargs):
+        raise RuntimeError("抖")
+
+    monkeypatch.setattr(main.orchestrator, "advance", boom)
+    _sweep()
+    _skip_backoff()
+    _sweep()
+    fresh = main.Scheduler()
+    fresh._queue = asyncio.Queue()
+    fresh._scan()
+    assert "p_fail" not in fresh._queued, "重启后仍在退避窗口里"
+    assert store.get_project("p_fail")["advance_failures"] == 2
+
+
+def test_state_change_resets_failure_counter(store, monkeypatch):
+    """人把 FAILED 项目点重试后,计数从零算:不能一次抖动就直接再判死。"""
+    store.create_project(_project())
+    store.set_advance_failures("p_fail", main.MAX_CONSECUTIVE_FAILURES - 1, 0.0)
+    assert store.cas_state("p_fail", "DRAFT_RENDERING", "FAILED")
+    assert store.cas_state("p_fail", "FAILED", "DRAFT_RENDERING")
+    row = store.get_project("p_fail")
+    assert row["advance_failures"] == 0 and row["advance_retry_at"] == 0

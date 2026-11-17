@@ -295,7 +295,7 @@ def health():
         "concurrency": config.PIPELINE_CONCURRENCY,
         "prep_concurrency": config.PREP_CONCURRENCY,
         "interval": SCHEDULER_INTERVAL,
-        "failures": dict(scheduler._failures),
+        "failures": db.advance_failures(),
         "busy_projects": locks_busy_ids(),
         "queued": sorted(scheduler._queued - scheduler._running),
         "running": sorted(scheduler._running),

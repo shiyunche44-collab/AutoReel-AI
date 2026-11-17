@@ -171,6 +171,11 @@ def update_project(project_id: str, *, conn: sqlite3.Connection | None = None,
         own.execute(sql, args)
 
 
+#: 状态一变,调度器的失败计数就清零:计数只算"在同一个状态上连着失败"。不清的话,
+#: 人把 FAILED 项目点重试后,一次瞬时失败就会直接再判死(计数还停在上限)。
+_RESET_FAILURES = "advance_failures = 0, advance_retry_at = 0 "
+
+
 def cas_state(project_id: str, expected: str, new: str, *,
               conn: sqlite3.Connection | None = None,
               reason: str | None = None) -> bool:
@@ -187,11 +192,11 @@ def cas_state(project_id: str, expected: str, new: str, *,
     init_db()
     now = time.time()
     if reason is None:
-        sql = ("UPDATE projects SET state = :new, updated_at = :now "
+        sql = ("UPDATE projects SET state = :new, updated_at = :now, " + _RESET_FAILURES +
                "WHERE id = :id AND state = :expected")
     else:
-        sql = ("UPDATE projects SET state = :new, state_reason = :reason, updated_at = :now "
-               "WHERE id = :id AND state = :expected")
+        sql = ("UPDATE projects SET state = :new, state_reason = :reason, updated_at = :now, "
+               + _RESET_FAILURES + "WHERE id = :id AND state = :expected")
     args = {"id": project_id, "expected": expected, "new": new,
             "reason": reason, "now": now}
     if conn is not None:
@@ -251,3 +256,81 @@ def release_spend(project_id: str, reserved: float) -> None:
     with connect() as conn:
         conn.execute(sql, {"id": project_id, "reserved": max(0.0, float(reserved)),
                            "now": now})
+
+
+# --------------------------------------------------------------------------
+# 调度器的失败计数与退避(落库,重启不丢)
+# --------------------------------------------------------------------------
+def set_advance_failures(project_id: str, n: int, retry_at: float = 0.0) -> None:
+    """记连续失败次数和退避到期时刻(epoch 秒)。不动 updated_at:这不是项目内容的变化。"""
+    init_db()
+    with connect() as conn:
+        conn.execute("UPDATE projects SET advance_failures = ?, advance_retry_at = ? WHERE id = ?",
+                     (max(0, int(n)), float(retry_at), project_id))
+
+
+def clear_advance_failures(project_id: str) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("UPDATE projects SET " + _RESET_FAILURES +
+                     "WHERE id = ? AND (advance_failures > 0 OR advance_retry_at > 0)",
+                     (project_id,))
+
+
+def advance_failures() -> dict[str, int]:
+    """有连续失败记录的项目 → 次数(健康检查用)。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("SELECT id, advance_failures FROM projects WHERE advance_failures > 0")
+        return {r["id"]: int(r["advance_failures"]) for r in cur.fetchall()}
+
+
+# --------------------------------------------------------------------------
+# 项目租约(跨进程的项目写锁,见 pipeline/locks.py)
+# --------------------------------------------------------------------------
+def try_acquire_lease(project_id: str, owner: str, ttl: float) -> bool:
+    """拿项目租约:没人持有或已过期才成功。一条 SQL 完成判断与写入,没有竞态窗口。"""
+    init_db()
+    now = time.time()
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO project_leases (project_id, owner, acquired_at, expires_at)"
+            " VALUES (:pid, :owner, :now, :exp)"
+            " ON CONFLICT(project_id) DO UPDATE SET owner = excluded.owner,"
+            " acquired_at = excluded.acquired_at, expires_at = excluded.expires_at"
+            " WHERE project_leases.expires_at < :now",
+            {"pid": project_id, "owner": owner, "now": now, "exp": now + ttl})
+        return cur.rowcount > 0
+
+
+def renew_leases(owners: dict[str, str], ttl: float) -> list[str]:
+    """给 {project_id: owner} 续租。返回续不上的项目(租约已被别人接手)。"""
+    if not owners:
+        return []
+    init_db()
+    now = time.time()
+    lost = []
+    with connect() as conn:
+        for pid, owner in owners.items():
+            cur = conn.execute(
+                "UPDATE project_leases SET expires_at = ? WHERE project_id = ? AND owner = ?",
+                (now + ttl, pid, owner))
+            if not cur.rowcount:
+                lost.append(pid)
+    return lost
+
+
+def release_lease(project_id: str, owner: str) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("DELETE FROM project_leases WHERE project_id = ? AND owner = ?",
+                     (project_id, owner))
+
+
+def active_leases() -> list[dict[str, Any]]:
+    """没过期的租约(健康检查 / 重启前看忙不忙用,跨进程)。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute("SELECT * FROM project_leases WHERE expires_at >= ? ORDER BY project_id",
+                           (time.time(),))
+        return [dict(r) for r in cur.fetchall()]

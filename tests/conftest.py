@@ -38,6 +38,20 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    """所有测试默认用临时数据目录(库、项目目录、锁文件都在里面)。
+
+    项目锁现在会写库里的租约(`project_leases`):只给 `orchestrator.db` 打桩、没用临时库的
+    测试一调 `advance()` 就会往真实的 data/AutoReel-AI.db 写行。以前也有测试漏写过真实库。
+    需要特定目录的测试照样自己 monkeypatch 覆盖。"""
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "_data")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "_data" / "projects")
+    monkeypatch.setattr(db, "_INITIALISED", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_machine_review(monkeypatch):
     """成片机审要抽帧 + 调视觉模型;默认关,专门的测试(test_cut_review)自己打开。"""
     from app import config

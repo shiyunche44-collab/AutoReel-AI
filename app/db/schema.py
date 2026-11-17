@@ -418,6 +418,16 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_pick ON jobs(state, next_run_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active ON jobs(kind, key)
     WHERE state IN ('queued', 'running');
+
+-- 项目租约:同一时刻一个项目只有一个写入者,**跨进程**也成立(见 pipeline/locks.py)。
+-- 进程内锁管不到另一个进程:只读服务上的「保存脚本」「重拍」会和主服务的调度器撞车。
+-- 持有者每 TTL/3 续一次;进程死了,过期后别人可以接手。
+CREATE TABLE IF NOT EXISTS project_leases (
+    project_id  TEXT PRIMARY KEY,
+    owner       TEXT NOT NULL,
+    acquired_at REAL NOT NULL,
+    expires_at  REAL NOT NULL
+);
 """
 
 
@@ -457,6 +467,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "aspect" not in _column_names(conn, "projects"):
         # 画幅:16:9 | 9:16。老库的项目一律横屏 —— 与它们改造前的行为一致。
         conn.execute("ALTER TABLE projects ADD COLUMN aspect TEXT NOT NULL DEFAULT '16:9'")
+    for col, ddl in (
+        # 调度器的连续失败次数与退避到期时刻(epoch 秒)。原来只在内存里:服务一重启,
+        # 退避窗口和"还差几次判死"全清零,坏项目立刻又被高频重试。
+        ("advance_failures", "INTEGER NOT NULL DEFAULT 0"),
+        ("advance_retry_at", "REAL NOT NULL DEFAULT 0"),
+    ):
+        if col not in _column_names(conn, "projects"):
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {ddl}")
     if "variant" not in _column_names(conn, "publications"):
         # 发布时用的标题写法 / 封面版本,数据回流后按它比 A/B。老记录是空对象。
         conn.execute("ALTER TABLE publications ADD COLUMN variant TEXT NOT NULL DEFAULT '{}'")
