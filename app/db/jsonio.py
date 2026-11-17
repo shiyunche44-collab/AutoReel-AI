@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -37,20 +38,8 @@ def _atomic_write(path: Path, text: str) -> None:
     """
     tmp = path.with_name(path.name + ".tmp")
     try:
-        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        for attempt in range(_REPLACE_RETRIES):
-            try:
-                os.replace(tmp, path)
-                return
-            except PermissionError:
-                if attempt == _REPLACE_RETRIES - 1:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
-        # 理论上到不了这里
-        os.replace(tmp, path)
+        _write_synced(tmp, text)
+        _replace(tmp, path)
     except BaseException:
         # 失败就把临时文件清掉,别在项目目录里留垃圾
         try:
@@ -59,6 +48,60 @@ def _atomic_write(path: Path, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def _write_synced(path: Path, text: str) -> None:
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _replace(tmp: Path, path: Path) -> None:
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRIES - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+#: 暂存文件名里的分隔记号:`script.json.staged-<pid>-<线程>`
+_STAGED = ".staged-"
+
+
+def stage_json(project_id: str, name: str, payload: Any) -> Path:
+    """把一份 JSON 先写到同目录的暂存文件,**还不生效**。
+
+    和 `commit_staged` / `discard_staged` 配对用:一步流水线的产物先暂存,
+    状态 CAS 抢到了再换成正式文件,抢输了就丢掉。否则输掉并发的那一路
+    会先把赢家的 script.json 覆盖掉,才发现状态已被推进(2026-11-17)。
+    暂存名带进程号和线程号,两路同时暂存同一个文件也不会互相踩。
+    """
+    path = _json_path(project_id, name)
+    tmp = path.with_name(f"{path.name}{_STAGED}{os.getpid()}-{threading.get_ident()}")
+    try:
+        _write_synced(tmp, json.dumps(payload, ensure_ascii=False, indent=2))
+    except BaseException:
+        discard_staged(tmp)
+        raise
+    return tmp
+
+
+def commit_staged(tmp: Path) -> Path:
+    """暂存文件换成正式文件(原子替换)。"""
+    path = tmp.with_name(tmp.name.split(_STAGED, 1)[0])
+    _replace(tmp, path)
+    return path
+
+
+def discard_staged(tmp: Path) -> None:
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def write_json(project_id: str, name: str, payload: Any) -> Path:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -67,7 +68,8 @@ def _profile(project: dict[str, Any]):
 
 
 def _set_state(project_id: str, src: State | str, dst: State | str,
-               reason: str = "", cost: float = 0.0) -> None:
+               reason: str = "", cost: float = 0.0, *,
+               before: Sequence[tuple[str, str]] = ()) -> None:
     """推进项目状态,并留一条事件。
 
     两件事合在一个**事务**里:状态与事件必须同生共死 ——
@@ -78,15 +80,41 @@ def _set_state(project_id: str, src: State | str, dst: State | str,
     转移合法 → 无条件 UPDATE"中间有 TOCTOU 窗口,两个执行流都读到
     DRAFT_RENDERING 时会各自开渲同一批拍。CAS 把判断和写合成一条
     SQL,窗口就没了。CAS 失败说明状态已被别人推进,放弃本轮。
+
+    `before`:要和这次转移同生共死的附带事件 `(kind, reason)`,记在状态事件前面
+    (如「写稿自修」)。抢输的那一路不该在事件流里留下一条没生效的记录。
     """
     assert_transition(src, dst)
     with db.transaction() as conn:
         moved = db.cas_state(project_id, str(src), str(dst), conn=conn, reason=reason)
         if not moved:
+            log.info("项目 %s 状态 CAS 落空(pid %s,期望 %s → %s)",
+                     project_id, os.getpid(), src, dst)
             raise StateRaced(
                 f"状态已被并发推进(期望 {src},实际不是),本轮放弃"
             )
+        for kind, text in before:
+            db.add_event(project_id, kind, reason=text, conn=conn)
         db.add_event(project_id, str(dst), src=str(src), reason=reason, cost=cost, conn=conn)
+
+
+def _commit_stage(project_id: str, src: State | str, dst: State | str, reason: str, *,
+                  files: dict[str, Any], before: Sequence[tuple[str, str]] = ()) -> None:
+    """一步流水线的产物和状态转移一起生效:先暂存文件 → CAS 改状态 → 换成正式文件。
+
+    原来是先写 script.json 再 CAS:两路(两个进程)同时写稿时,抢输的那一路
+    已经把赢家的稿覆盖了才发现状态被推进,状态里写着「lint 错误 8 条」,磁盘上
+    却是另一版稿(2026-11-17,p_70415cf39369)。现在抢输的只丢掉自己的暂存文件。
+    """
+    staged = [db.stage_json(project_id, name, payload) for name, payload in files.items()]
+    try:
+        _set_state(project_id, src, dst, reason=reason, before=before)
+    except BaseException:
+        for tmp in staged:
+            db.discard_staged(tmp)
+        raise
+    for tmp in staged:
+        db.commit_staged(tmp)
 
 
 def _review_history(project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -504,19 +532,22 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         # 自修:换说法的重复删掉,没出处的数字补引用 / 改写 / 删句。原来这两类只报不修,
         # 项目停在门禁 A 等人,人不在就断更。
         segments, fixes = script_gen.repair(segments, facts, profile, llm=script_llm, angle=angle)
-        if fixes:
-            db.write_json(project_id, "repair.json", fixes)
-            db.add_event(project_id, "script", reason=f"写稿自修 {len(fixes)} 处:" + ";".join(fixes)[:240])
         # 免责声明不再追加进旁白:TTS 会把它整段念出来,占片尾 9-10 秒并冲淡 CTA。
         # 发布简介由 publish.metadata 带上品类免责声明。
         issues =script_gen.compliance_lint(segments, profile, facts, theme=theme, thesis=thesis,
                                             variant=_variant(project), angle=angle)
         blocking = [i for i in issues if i.is_error]
-        db.write_json(project_id, "lint.json", [i.to_dict() for i in issues])
-        _save_script(project_id, segments)
+        files: dict[str, Any] = {"lint.json": [i.to_dict() for i in issues],
+                                 "script.json": [s.model_dump() for s in segments]}
+        if fixes:
+            files["repair.json"] = fixes
+        _commit_stage(project_id, state, State.SCRIPT_READY,
+                      reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条",
+                      files=files,
+                      before=[("script", f"写稿自修 {len(fixes)} 处:" + ";".join(fixes)[:240])]
+                      if fixes else ())
+        # 标题 / 论点在抢到状态之后才写:抢输的那一路不该改掉赢家的标题
         db.update_project(project_id, title=title, thesis=thesis)
-        _set_state(project_id, state, State.SCRIPT_READY,
-                   reason=f"脚本 {len(segments)} 段,lint 错误 {len(blocking)} 条")
         return {"state": str(State.SCRIPT_READY), "segments": len(segments),
                 "lint_errors": len(blocking), "issues": [i.to_dict() for i in blocking[:5]]}
 
@@ -542,16 +573,16 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
         problems = explainer.validate_beats(specs)
         if problems:
             raise PipelineError("分镜自检未通过:" + "; ".join(problems))
-        _save_specs(project_id, specs)
-        db.write_json(project_id, "cards.json", log)
-        db.update_project(project_id, shot_count=len(specs))
         counts: dict[str, int] = {}
         for s in specs:
             counts[s.layout] = counts.get(s.layout, 0) + 1
-        _set_state(project_id, state, State.STORYBOARD_READY,
-                   reason=f"分镜 {len(specs)} 拍(" + ",".join(
-                       f"{k} {v}" for k, v in sorted(counts.items())) + ")"
-                          + (f",{len(log)} 拍的叠加数据核对后降级" if log else ""))
+        _commit_stage(project_id, state, State.STORYBOARD_READY,
+                      reason=f"分镜 {len(specs)} 拍(" + ",".join(
+                          f"{k} {v}" for k, v in sorted(counts.items())) + ")"
+                             + (f",{len(log)} 拍的叠加数据核对后降级" if log else ""),
+                      files={"storyboard.json": [s.model_dump() for s in specs],
+                             "cards.json": log})
+        db.update_project(project_id, shot_count=len(specs))
         return {"state": str(State.STORYBOARD_READY), "shots": len(specs), "layouts": counts}
 
     if state == State.STORYBOARD_READY:
