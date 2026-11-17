@@ -163,8 +163,7 @@ from .tagging import (  # noqa: E402,F401
     tag_system,
 )
 from .builder import (  # noqa: E402,F401
-    _running,
-    _running_lock,
+    BUILD_JOB,
     _tag_queue,
     build,
     build_async,

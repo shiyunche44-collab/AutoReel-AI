@@ -816,12 +816,10 @@ def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -
         db.add_event(project_id, "assets", reason=f"素材池构建启动失败:{exc}")
         return
 
-    def _done(stats: dict) -> None:
-        delta = max(0, int(stats.get("vlm_calls") or 0) - before)
-        costs.commit_project(project_id, reserved, costs.estimate_library(delta))
-
     try:
-        if library.build_async(subject, profile=profile, llm=llm, on_done=_done, **kwargs):
+        # 预留额度随任务落库,建完(哪怕中途服务重启、重启后接着建完)按实际调用数结算
+        if library.build_async(subject, profile=profile, project_id=project_id,
+                               reserved=reserved, vlm_before=before, **kwargs):
             db.add_event(project_id, "assets", reason=f"素材池后台构建已启动({subject})")
         else:
             costs.release_project(project_id, reserved)
@@ -831,11 +829,11 @@ def _start_library(project_id: str, subject: str, profile, llm=None, **kwargs) -
 
 
 def _start_library_many(project_id: str, names: list[str], profile, llm=None, **kwargs) -> None:
-    """横评:车单上每台车一个轻量素材池,一个后台线程按车依次建(见 `library.build_many_async`)。"""
+    """横评:车单上每台车一个轻量素材池,每台车一个后台任务(见 `library.build_many_async`)。"""
     if not config.USE_LIBRARY:
         return
     try:
-        started = library.build_many_async(names, profile=profile, llm=llm,
+        started = library.build_many_async(names, profile=profile,
                                            enough_seconds=library.ROUNDUP_ENOUGH_SECONDS,
                                            max_sources=library.ROUNDUP_MAX_SOURCES, **kwargs)
         if started:

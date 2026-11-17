@@ -147,8 +147,10 @@ def test_tag_queue_caps_per_source(data_dir, monkeypatch):
     assert [i.id for i in queue] == ["img", "s4", "s3"]   # 图全打,视频长段优先
 
 
-def test_build_async_is_single_flight(monkeypatch):
+def test_build_async_is_single_flight(job_runner, monkeypatch):
     import threading
+
+    from tests.conftest import wait_until
 
     gate = threading.Event()
     calls: list[str] = []
@@ -156,17 +158,16 @@ def test_build_async_is_single_flight(monkeypatch):
     def _slow(subject, **k):
         calls.append(subject)
         gate.wait(5)
+        return {}
 
     patch_library(monkeypatch, "build", _slow)
     assert lib_mod.build_async("小米YU7")
     assert not lib_mod.build_async("小米 yu7")
     assert lib_mod.is_building("小米YU7")
+    assert wait_until(lambda: calls == ["小米YU7"])
     gate.set()
-    for t in threading.enumerate():
-        if t.name.startswith("library-"):
-            t.join(5)
+    assert wait_until(lambda: not lib_mod.is_building("小米YU7"))
     assert calls == ["小米YU7"]
-    assert not lib_mod.is_building("小米YU7")
 
 
 def test_rank_sources_filters_junk_and_prefers_showcase():

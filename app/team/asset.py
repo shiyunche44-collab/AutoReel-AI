@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from .. import config, db
-from ..categories import load_profile
 from . import Skip, chief
 
 #: 这些状态的选题还用得上提前建的池子
@@ -53,21 +52,20 @@ def wanted(items: list[dict[str, Any]]) -> list[tuple[str, str, float]]:
 def run() -> str:
     if not config.TEAM_ASSET_PREBUILD or not config.USE_LIBRARY:
         raise Skip("提前建池已关闭")
-    from ..pipeline import library, orchestrator
+    from ..pipeline import library
 
     if chief.render_busy():
         raise Skip("渲染名额占满,素材预建先让路")
     todo = wanted(db.list_plan_items(statuses=_WANT, limit=200))
     if not todo:
         raise Skip("已批选题的素材池都够了")
-    llm = orchestrator._llm()
-    # 同品类同目标的车交给一个后台线程依次建(视觉打标签有限流,并发只会排队)
+    # 每台车一个持久化任务,按素材池的并发上限排队(视觉打标签有限流,并发多了只会排队)
     groups: dict[tuple[str, float], list[str]] = {}
     for name, category, target in todo:
         groups.setdefault((category, target), []).append(name)
     started: list[str] = []
     for (category, target), names in groups.items():
-        kwargs: dict[str, Any] = {"profile": load_profile(category), "llm": llm}
+        kwargs: dict[str, Any] = {"category": category}
         if target < library.CONFIRMED_VIDEO_TARGET:
             kwargs.update(enough_seconds=library.ROUNDUP_ENOUGH_SECONDS,
                           max_sources=library.ROUNDUP_MAX_SOURCES)

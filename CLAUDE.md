@@ -22,6 +22,7 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - `app/scheduler.py` 的 `Scheduler`(`app.main` 仍重新导出) 每 20 秒自动推进 `AUTO_ADVANCE_STATES`:除门禁、终态、PAUSED_BUDGET 以外的全部状态。分两条通道 —— 渲染(DRAFT_RENDERING / COMPOSING,`PIPELINE_CONCURRENCY` 路)和备料(门禁 A 之前的事实 / 脚本 / 分镜与 ASSETS_READY,`PREP_CONCURRENCY` 路)。建项目后用 `scheduler.kick(pid)` 催它马上开始,别再起一次性线程去跑 `run_until_waiting`(服务重启后没人接手)。这些状态下 `/advance` 只会催调度器(见下),不会再和它抢写文件。只在 GATE_A / GATE_B 调 `/gate`,然后轮询 `/status`。
 - 状态的调度属性(自动 / 门禁 / 终态、归哪条通道、下一步)只在 `app/state.py` 的 `SPECS` 声明,调度器的 `AUTO_ADVANCE_STATES` 等集合由它推导,别再手写。新增自动态或门禁态还要在 `orchestrator.STAGES` 登记处理器;声明不自洽模块加载就失败,漏登记 `tests/test_state_specs.py` 会挂。
 - 自动态下 `/advance` 不再同步推进,只 `scheduler.kick()` 催调度器,返回 `queued: true`。
+- **后台活别再起一次性线程**,用 `app/jobs.py`:`jobs.register(kind, resource=..., max_attempts=...)` 登记 handler(模块加进 `HANDLER_MODULES`),`jobs.submit(kind, key, payload)` 排队。任务落 `jobs` 表,同 kind+key 只有一个在排 / 在跑,服务重启后接着跑(中断不算尝试),所以 handler 必须幂等、payload 只放能 JSON 化的东西。素材池构建(`library.build`)和精修(`refine.apply`)已迁过去;在跑的任务不挡 `restart_server.ps1`。
 - `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
 
 ## 测试

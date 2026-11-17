@@ -391,6 +391,33 @@ CREATE TABLE IF NOT EXISTS industry_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_day ON industry_events(category, day);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_key ON industry_events(category, day, title);
+
+-- 持久化的后台任务(见 app/jobs.py)。原来素材池构建、精修这类活跑在临时线程里,
+-- 服务一重启就没了,还会留下永远"在建"的池子和没结算的额度预留。
+CREATE TABLE IF NOT EXISTS jobs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL,
+    -- 去重键:同 kind 同 key 同一时刻只有一个排队 / 在跑(见下面的唯一索引)
+    key              TEXT NOT NULL DEFAULT '',
+    payload          TEXT NOT NULL DEFAULT '{}',
+    -- queued / running / done / failed
+    state            TEXT NOT NULL DEFAULT 'queued',
+    attempts         INTEGER NOT NULL DEFAULT 0,
+    max_attempts     INTEGER NOT NULL DEFAULT 3,
+    next_run_at      REAL NOT NULL DEFAULT 0,
+    -- 租约:谁在跑、跑到什么时候还算活着(心跳续期)。过期的 running 可被接手
+    lease_owner      TEXT NOT NULL DEFAULT '',
+    lease_expires_at REAL NOT NULL DEFAULT 0,
+    result           TEXT,
+    error            TEXT NOT NULL DEFAULT '',
+    created_at       REAL NOT NULL,
+    started_at       REAL,
+    finished_at      REAL,
+    updated_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_pick ON jobs(state, next_run_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_active ON jobs(kind, key)
+    WHERE state IN ('queued', 'running');
 """
 
 

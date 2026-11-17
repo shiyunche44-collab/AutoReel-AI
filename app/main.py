@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, costs, db, hang_watch, instance_lock, logging_setup, maintenance
+from . import config, costs, db, hang_watch, instance_lock, jobs, logging_setup, maintenance
 from .categories import available_categories, default_category, load_profile, suggest_theme
 from .llm.deepseek import DeepSeekProvider
 from .metrics import worker as metrics_worker
@@ -114,6 +114,8 @@ async def lifespan(app: FastAPI):
     HEALTH["background"] = {"ok": primary, "owner": {} if primary else instance_lock.owner()}
     if primary:
         scheduler.start()
+        # 持久化后台任务(素材池构建、精修):上次没跑完的接着跑
+        jobs.runner.start()
         # 分发侧的后台循环:发布任务、指标抓取。
         # 都是守护线程,进程退出即结束,不挡 Web。
         publish_accounts.import_from_file()
@@ -127,6 +129,7 @@ async def lifespan(app: FastAPI):
     yield
     if primary:
         await scheduler.stop()
+        jobs.runner.stop()
         publish_service.stop()
         metrics_worker.stop()
         team_scheduler.stop()
@@ -296,6 +299,14 @@ def health():
         "busy_projects": locks_busy_ids(),
         "queued": sorted(scheduler._queued - scheduler._running),
         "running": sorted(scheduler._running),
+    }
+    # 持久化后台任务:在跑的不用等它做完再重启 —— 重启后会被放回排队重跑
+    out["jobs"] = {
+        "runner": jobs.runner.started,
+        "running": sorted(jobs.runner.running.values()),
+        "active": [{"id": j["id"], "kind": j["kind"], "key": j["key"], "state": j["state"],
+                    "attempts": j["attempts"], "error": j["error"][:200]}
+                   for j in db.list_jobs(limit=50)],
     }
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size_cached()

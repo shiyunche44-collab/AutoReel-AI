@@ -43,3 +43,31 @@ def _no_machine_review(monkeypatch):
     from app import config
 
     monkeypatch.setattr(config, "TEAM_MACHINE_REVIEW", False)
+
+
+@pytest.fixture()
+def job_runner(tmp_path, monkeypatch):
+    """临时库 + 跑起来的后台任务执行器(`app/jobs.py`)。用完停掉,库重置。"""
+    from app import config, db, jobs
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
+    monkeypatch.setattr(db, "_INITIALISED", False)
+    monkeypatch.setattr(jobs, "POLL_SECONDS", 0.05)
+    runner = jobs.Runner()
+    monkeypatch.setattr(jobs, "runner", runner)
+    runner.start()
+    yield runner
+    runner.stop()
+    db._INITIALISED = False
+
+
+def wait_until(cond, timeout: float = 5.0) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return cond()
