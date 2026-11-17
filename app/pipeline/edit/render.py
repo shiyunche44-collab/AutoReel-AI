@@ -24,7 +24,7 @@ from .edl import Timeline
 log = logging.getLogger(__name__)
 
 #: 版本进缓存键:组件 / 规则改了升这个数
-EDIT_VERSION = 3
+EDIT_VERSION = 4
 RENDER_TIMEOUT = int(os.getenv("EDIT_V2_TIMEOUT", "3600"))
 
 
@@ -37,12 +37,34 @@ def _public_name(path: str) -> str:
     return hashlib.sha1(str(p.resolve()).encode("utf-8")).hexdigest()[:16] + p.suffix.lower()
 
 
+FONT_SUFFIXES = (".ttf", ".otf", ".woff", ".woff2")
+
+
+def font_file() -> Path | None:
+    """`EDIT_V2_FONT_FILE` 指定的字体(建议思源黑体 Heavy / Noto Sans SC Black,OFL 可商用)。
+    没配、文件不在、格式不对都返回 None:Remotion 按系统字体回退。.ttc 浏览器认不了,不收。"""
+    raw = os.getenv("EDIT_V2_FONT_FILE", "").strip().strip('"')
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_file() or path.suffix.lower() not in FONT_SUFFIXES:
+        log.warning("EDIT_V2_FONT_FILE 不可用(不存在或不是 ttf/otf/woff/woff2):%s", raw)
+        return None
+    return path
+
+
 def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
     """把时间线里用到的本地文件链进 Remotion 的 public 目录,返回改好 src 的 props。
     竖屏顺带给每刀做一张模糊底图(`backdrop`)。"""
     public.mkdir(parents=True, exist_ok=True)
     props = tl.to_props()
     portrait = tl.height > tl.width
+    font = font_file()
+    if font:
+        dest = public / f"editfont{font.suffix.lower()}"
+        if not dest.exists():
+            shutil.copy2(font, dest)
+        props["font"] = dest.name
     for clip in props["clips"]:
         src = clip["src"]
         if not src or src.startswith(("http:", "https:", "data:")):
@@ -85,14 +107,24 @@ def _reframe(clip: dict[str, Any], src: Path, public: Path) -> None:
         clip["backdrop"] = bd.name
 
 
+def source_digest() -> str:
+    """Remotion 组件源码的哈希:改了组件,旧缓存自动作废(不靠记得手动升 EDIT_VERSION)。"""
+    h = hashlib.sha1()
+    for f in sorted((caption_layer.REMOTION_DIR / "src").rglob("*")):
+        if f.is_file():
+            h.update(f.name.encode("utf-8"))
+            h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 def render_video(tl: Timeline, work: Path) -> Path:
     """Remotion 渲出静音 h264,按内容哈希缓存。失败抛 EditRenderError。"""
     ok, why = caption_layer.available()
     if not ok:
         raise EditRenderError(why)
     props = stage_media(tl, work / "public")
-    key = hashlib.sha1(json.dumps([EDIT_VERSION, props], sort_keys=True, ensure_ascii=False)
-                       .encode("utf-8")).hexdigest()[:16]
+    key = hashlib.sha1(json.dumps([EDIT_VERSION, source_digest(), props], sort_keys=True,
+                                  ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
     out = work / f"video_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:
         return out
@@ -102,7 +134,11 @@ def render_video(tl: Timeline, work: Path) -> Path:
     cmd = [
         config.motion_node(), str(caption_layer.REMOTION_DIR / caption_layer._CLI), "render",
         "src/index.jsx", "Edit", tmp.as_posix(),
-        "--codec=h264", "--crf=18", "--muted", "--image-format=jpeg",
+        # 画质:JPEG 帧质量 95(默认 80 时字边有压缩噪点);输出标准范围 yuv420p + bt709,
+        # 默认的 yuvj420p 全范围在平台转码时常被当成标准范围,画面发灰 / 暗部死黑
+        "--codec=h264", f"--crf={os.getenv('EDIT_V2_CRF', '16')}", "--muted",
+        "--image-format=jpeg", "--jpeg-quality=95", "--pixel-format=yuv420p", "--color-space=bt709",
+        f"--x264-preset={os.getenv('EDIT_V2_X264_PRESET', 'slow')}",
         f"--public-dir={(work / 'public').as_posix()}",
         f"--props={props_path.as_posix()}", f"--browser-executable={caption_layer.browser()}",
         f"--concurrency={os.getenv('EDIT_V2_CONCURRENCY', '50%')}",

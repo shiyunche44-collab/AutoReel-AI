@@ -6,28 +6,93 @@
 //   下部   花字字幕(关键词变色弹出)
 //   整屏卡片 / 概念动画 / 片尾卡(kind=beat)直接铺满,不画标题带和素材带
 // 横屏:素材带即全屏。
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   AbsoluteFill, Img, OffthreadVideo, Sequence, interpolate, spring, staticFile,
-  useCurrentFrame, useVideoConfig, Easing,
+  useCurrentFrame, useVideoConfig, Easing, continueRender, delayRender,
 } from "remotion";
 import { Cue } from "./Layer.jsx";
 
-const FONT = '"Noto Sans SC Black","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif';
+// EditFont = EDIT_V2_FONT_FILE 指定的字体(合成时嵌入);没配就按顺序找系统里的粗黑体
+const FONT = '"EditFont","Noto Sans SC Black","Source Han Sans SC Heavy","Source Han Sans CN Heavy",'
+  + '"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","WenQuanYi Zen Hei",sans-serif';
+const YELLOW = "#FFE14D";
+// 白字黑描边 + 投影:压在任何画面上都清楚
+const strokeText = (size, w = 0.1) => ({
+  WebkitTextStroke: `${Math.max(3, Math.round(size * w))}px #000`, paintOrder: "stroke fill",
+  textShadow: `0 ${Math.round(size * 0.06)}px ${Math.round(size * 0.12)}px rgba(0,0,0,.55)`,
+});
+// 色块底花字
+const plate = (bg, color, size) => ({
+  background: bg, color, padding: "0.06em 0.32em",
+  borderRadius: Math.round(size * 0.1), boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone",
+  boxShadow: `0 ${Math.round(size * 0.08)}px ${Math.round(size * 0.2)}px rgba(0,0,0,.35)`,
+});
+// 数字 / 英文型号上强调色
+const HOT = /(\d[\d,.]*\s*(?:万元?|公里|km|kWh|秒|马力|匹|英寸|mm|毫米|米|%|倍)?|[A-Za-z][A-Za-z0-9-]*\d[A-Za-z0-9-]*|[A-Z]{2,})/g;
+export const hotSpans = (text) => {
+  const out = [];
+  let pos = 0;
+  for (const m of String(text).matchAll(HOT)) {
+    if (m.index > pos) out.push({ t: text.slice(pos, m.index), hot: false });
+    out.push({ t: m[0], hot: true });
+    pos = m.index + m[0].length;
+  }
+  if (pos < text.length) out.push({ t: text.slice(pos), hot: false });
+  return out;
+};
+// 标题断成至多两行:一行放得下就不拆;要拆时优先在标点后断,其次离正中最近、
+// 且不切开数字 / 型号(HOT 片段)的位置
+export const splitTitle = (title, perLine) => {
+  const t = String(title || "").trim();
+  if (t.length <= perLine) return [t];
+  const banned = new Set();
+  for (const m of t.matchAll(HOT)) for (let k = m.index + 1; k < m.index + m[0].length; k++) banned.add(k);
+  // 英文 / 数字 / 连字符连着的("Model Y"、"DM-i"、"3.23")中间都不断
+  const w = (c) => /[A-Za-z0-9.\-]/.test(c || "");
+  const inWord = (i) => (w(t[i - 1]) && w(t[i]))
+    || (t[i - 1] === " " && w(t[i - 2]) && w(t[i])) || (t[i] === " " && w(t[i - 1]) && w(t[i + 1]));
+  const mid = t.length / 2;
+  const ok = (i) => !banned.has(i) && !inWord(i) && i > 0 && i < t.length;
+  let best = -1;
+  for (let i = 1; i < t.length; i++) {
+    if (ok(i) && "，,：:？?！!、".includes(t[i - 1]) && Math.abs(i - mid) <= t.length * 0.3
+        && (best < 0 || Math.abs(i - mid) < Math.abs(best - mid))) best = i;
+  }
+  if (best < 0) {
+    for (let d = 0; d < t.length; d++) {
+      for (const i of [Math.round(mid) - d, Math.round(mid) + d]) if (best < 0 && ok(i)) best = i;
+      if (best >= 0) break;
+    }
+  }
+  return [t.slice(0, best).trim(), t.slice(best).trim()];
+};
+
 const TRANS = 0.28; // 转场时长(秒)
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 
 const src = (s) => (/^(https?:|data:)/.test(s) ? s : staticFile(s));
 
-// 竖屏版面网格(相对高度)
+// 竖屏版面网格(相对高度)。底部 ~20% 和右侧一列会被抖音的文案 / 按钮盖住,字和数据都不放那里
 const grid = (w, h) => {
   if (w >= h) return { band: { top: 0, height: h }, title: null, capBottom: 0.1 };
   return {
-    title: { top: h * 0.055, height: h * 0.13 },
-    band: { top: h * 0.205, height: h * 0.44 },
-    capBottom: 0.255,
+    title: { top: h * 0.05, height: h * 0.17 },
+    band: { top: h * 0.235, height: h * 0.46 },
+    capBottom: 0.2,
   };
+};
+
+// 嵌入字体:FontFace 加载完才放行出帧,避免前几帧用了回退字体
+const useEmbeddedFont = (file) => {
+  const [handle] = useState(() => (file ? delayRender("edit-font") : null));
+  useEffect(() => {
+    if (!file) return;
+    const face = new FontFace("EditFont", `url(${staticFile(file)})`);
+    face.load().then((f) => { document.fonts.add(f); continueRender(handle); })
+      .catch(() => continueRender(handle));
+  }, [file, handle]);
 };
 
 // ---------------------------------------------------------------- 素材带里的一刀
@@ -117,14 +182,19 @@ const Hook = ({ o, accent, fps, band }) => {
       {o.props.lines.map((line, i) => {
         const p = popIn(frame, fps, i * 0.18, { damping: 9, stiffness: 240 });
         const shake = i === 0 ? Math.sin(frame * 1.7) * Math.max(0, 1 - frame / (fps * 0.4)) * 6 : 0;
+        const fs = i === 0 ? size : size * 0.6;
         return (
           <div key={i} style={{
-            fontFamily: FONT, fontWeight: 900, fontSize: i === 0 ? size : size * 0.62,
-            color: i === 0 ? "#fff" : accent, lineHeight: 1.15, textAlign: "center",
-            padding: "0 5%", WebkitTextStroke: `${Math.max(4, size / 12)}px #000`,
-            paintOrder: "stroke fill", opacity: Math.min(1, p * 1.5),
+            fontFamily: FONT, fontWeight: 900, fontSize: fs, lineHeight: 1.25, textAlign: "center",
+            padding: "0 5%", marginTop: i ? size * 0.12 : 0, opacity: Math.min(1, p * 1.5),
             transform: `translateX(${shake}px) scale(${interpolate(p, [0, 1], [1.6, 1])})`,
-          }}>{line}</div>
+          }}>
+            {i === 0
+              ? <span style={{ color: "#fff", ...strokeText(fs, 0.08) }}>
+                  {hotSpans(line).map((s, k) => <span key={k} style={{ color: s.hot ? YELLOW : undefined }}>{s.t}</span>)}
+                </span>
+              : <span style={plate(YELLOW, "#111", fs)}>{line}</span>}
+          </div>
         );
       })}
     </AbsoluteFill>
@@ -135,19 +205,17 @@ const Keyword = ({ o, accent, fps, band }) => {
   const frame = useCurrentFrame();
   const size = Math.round(band.height * 0.13);
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "flex-start", padding: "0 7%",
-      background: "linear-gradient(90deg,rgba(0,0,0,.65) 0%,rgba(0,0,0,0) 75%)" }}>
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "flex-start", padding: "0 6%",
+      background: "linear-gradient(90deg,rgba(0,0,0,.5) 0%,rgba(0,0,0,0) 70%)" }}>
       {o.props.lines.map((line, i) => {
         const p = popIn(frame, fps, i * 0.22);
+        const fs = i === 0 ? size : size * 0.66;
         return (
           <div key={i} style={{
-            fontFamily: FONT, fontWeight: 900, fontSize: i === 0 ? size : size * 0.7, lineHeight: 1.2,
-            color: i === 0 ? "#fff" : accent, opacity: p,
-            transform: `translateX(${interpolate(p, [0, 1], [-40, 0])}px)`,
+            fontFamily: FONT, fontWeight: 900, fontSize: fs, lineHeight: 1.3, marginTop: i ? size * 0.18 : 0,
+            opacity: p, transform: `translateX(${interpolate(p, [0, 1], [-60, 0])}px) skewX(${(1 - p) * -8}deg)`,
           }}>
-            {i === 0 && <span style={{ display: "inline-block", width: size * 0.16, height: size * 0.9,
-              background: accent, marginRight: size * 0.2, verticalAlign: "-0.1em" }} />}
-            {line}
+            <span style={i === 0 ? plate(accent, "#fff", fs) : plate(YELLOW, "#111", fs)}>{line}</span>
           </div>
         );
       })}
@@ -174,13 +242,15 @@ const Stat = ({ o, accent, fps, band }) => {
   const size = Math.round(band.height * 0.24);
   const enter = popIn(frame, fps, 0);
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", background: "rgba(0,0,0,.55)",
-      opacity: enter }}>
-      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size * 0.28, color: "#fff",
-        letterSpacing: 4 }}>{o.props.label}</div>
-      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size, color: accent, lineHeight: 1.1,
+    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center",
+      background: "radial-gradient(ellipse at center,rgba(0,0,0,.35) 0%,rgba(0,0,0,.7) 100%)", opacity: enter }}>
+      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size * 0.3, letterSpacing: 2 }}>
+        <span style={plate(accent, "#fff", size * 0.3)}>{o.props.label}</span></div>
+      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size * 1.15, color: YELLOW, lineHeight: 1.15,
+        ...strokeText(size * 1.15, 0.05),
         transform: `scale(${t > 0.8 ? 1 + 0.06 * Math.max(0, 1 - (t - 0.8) * 5) : 1})` }}>{shown}</div>
-      {o.props.note && <div style={{ fontFamily: FONT, fontSize: size * 0.2, color: "#ddd" }}>{o.props.note}</div>}
+      {o.props.note && <div style={{ fontFamily: FONT, fontWeight: 700, fontSize: size * 0.2, color: "#eee",
+        ...strokeText(size * 0.2, 0.06) }}>{o.props.note}</div>}
     </AbsoluteFill>
   );
 };
@@ -245,7 +315,8 @@ const Card = ({ o, accent, fps, band, theme }) => {
   const t = frame / fps;
   const p = o.props;
   const a2 = theme.accent2 || "#FFB547";
-  const size = Math.round(band.height * 0.066);
+  // 行少时字放大:一两行的对比卡数字才是主角
+  const size = Math.round(band.height * (p.rows.length <= 2 ? 0.088 : p.rows.length <= 3 ? 0.074 : 0.064));
   const enter = popIn(frame, fps, 0, { damping: 16, stiffness: 170 });
   const total = Math.round(o.dur * fps);
   const out = interpolate(frame, [total - 6, total], [1, 0], { extrapolateLeft: "clamp" });
@@ -262,10 +333,13 @@ const Card = ({ o, accent, fps, band, theme }) => {
         <div key={i} style={{ ...base, flexDirection: "column", alignItems: "stretch" }}>
           <div style={{ fontSize: size * 0.62, color: "#aeb6c2", textAlign: "center" }}>{r.label}</div>
           <div style={{ display: "flex" }}>
-            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.5, fontWeight: 900, color: accent }}>{r.values[0]}</div>
-            <div style={{ width: 2, background: "rgba(255,255,255,.25)" }} />
-            <div style={{ flex: 1, paddingLeft: size * 0.5, fontWeight: 900, color: a2, opacity: rp2,
-              transform: `translateX(${(1 - rp2) * 30}px)` }}>{r.values[1]}</div>
+            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.45, fontWeight: 900, color: accent,
+              fontSize: size * 1.25 }}>{r.values[0]}</div>
+            <div style={{ alignSelf: "center", fontSize: size * 0.42, fontWeight: 900, color: "#111",
+              background: YELLOW, borderRadius: "50%", width: size * 0.95, height: size * 0.95, lineHeight: `${size * 0.95}px`,
+              textAlign: "center", flex: "none", fontStyle: "italic" }}>VS</div>
+            <div style={{ flex: 1, paddingLeft: size * 0.45, fontWeight: 900, color: a2, opacity: rp2,
+              fontSize: size * 1.25, transform: `translateX(${(1 - rp2) * 30}px)` }}>{r.values[1]}</div>
           </div>
           {r.tag && <div style={{ fontSize: size * 0.48, color: "#8b93a1", lineHeight: 1.1, textAlign: "center" }}>{r.tag}</div>}
         </div>
@@ -307,15 +381,16 @@ const Card = ({ o, accent, fps, band, theme }) => {
     <AbsoluteFill style={{ background: "rgba(5,7,10,.45)", justifyContent: "center", alignItems: "center", opacity: out }}>
       <div style={{
         width: "86%", maxHeight: "92%", overflow: "hidden", fontFamily: FONT, color: "#fff",
-        background: "rgba(14,17,23,.86)", borderTop: `${size * 0.16}px solid ${accent}`,
+        background: "rgba(14,17,23,.88)", borderTop: `${size * 0.16}px solid ${accent}`,
+        borderRadius: Math.round(size * 0.18), boxShadow: "0 18px 50px rgba(0,0,0,.45)",
         padding: `${size * 0.6}px ${size * 0.9}px ${size * 0.5}px`,
         transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`, opacity: enter,
       }}>
         {p.title && <div style={{ fontWeight: 900, fontSize: size * 1.15, marginBottom: size * 0.35 }}>{p.title}</div>}
         {p.kind === "compare" && p.columns.length === 2 && (
           <div style={{ display: "flex", fontSize: size * 0.75, fontWeight: 900, marginBottom: size * 0.2 }}>
-            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.5, color: accent }}>{p.columns[0]}</div>
-            <div style={{ flex: 1, paddingLeft: size * 0.5, color: a2 }}>{p.columns[1]}</div>
+            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.95, color: accent }}>{p.columns[0]}</div>
+            <div style={{ flex: 1, paddingLeft: size * 0.95, color: a2 }}>{p.columns[1]}</div>
           </div>
         )}
         {p.rows.map(row)}
@@ -332,17 +407,27 @@ const TitleBar = ({ title, chapters, duration, accent, box, width }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const now = frame / fps;
-  const size = Math.round(box.height * 0.34);
+  const maxSize = box.height * 0.36;
+  // 一行时字号能到最大字号的七成以上就不拆行
+  const perLine = Math.max(6, Math.floor((width * 0.9) / (maxSize * 0.7)));
+  const lines = splitTitle(title, perLine);
+  const longest = Math.max(...lines.map((l) => l.length), 1);
+  const size = Math.round(Math.min(maxSize, (width * 0.9) / longest, lines.length > 1 ? box.height * 0.33 : maxSize));
   return (
     <div style={{ position: "absolute", top: box.top, height: box.height, left: "5%", right: "5%",
-      display: "flex", flexDirection: "column", justifyContent: "center" }}>
-      <div style={{ fontFamily: FONT, fontWeight: 900, fontSize: size, color: "#fff", lineHeight: 1.2,
-        textAlign: "center", overflow: "hidden", maxHeight: size * 2.5 }}>{title}</div>
-      <div style={{ display: "flex", gap: 6, marginTop: size * 0.35 }}>
+      display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+      {lines.map((line, i) => (
+        <div key={i} style={{ fontFamily: FONT, fontWeight: 900, fontSize: size, color: "#fff", lineHeight: 1.18,
+          textAlign: "center", whiteSpace: "nowrap", ...strokeText(size, 0.07) }}>
+          {hotSpans(line).map((s, k) => <span key={k} style={{ color: s.hot ? YELLOW : undefined }}>{s.t}</span>)}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, marginTop: size * 0.32, width: "100%" }}>
         {chapters.map((c, i) => {
           const p = Math.max(0, Math.min(1, (now - c.start) / Math.max(0.01, c.end - c.start)));
           return (
-            <div key={i} style={{ flex: (c.end - c.start) / duration, height: 8, background: "rgba(255,255,255,.25)" }}>
+            <div key={i} style={{ flex: (c.end - c.start) / duration, height: 10, borderRadius: 5,
+              background: "rgba(255,255,255,.28)", overflow: "hidden" }}>
               <div style={{ width: `${p * 100}%`, height: "100%", background: accent }} />
             </div>
           );
@@ -374,7 +459,9 @@ export const Edit = (props) => {
   const current = clips.find((c) => now >= c.start && now < c.start + c.dur) || clips[clips.length - 1];
   const fullScreen = current && current.kind === "beat";
   const seq = (start, dur) => ({ from: Math.round(start * fps), durationInFrames: Math.max(1, Math.round(dur * fps)) });
-  const bandStyle = { position: "absolute", left: 0, width: "100%", top: g.band.top, height: g.band.height, overflow: "hidden" };
+  const bandStyle = { position: "absolute", left: 0, width: "100%", top: g.band.top, height: g.band.height, overflow: "hidden",
+    boxShadow: "0 0 60px rgba(0,0,0,.55)" };
+  useEmbeddedFont(props.font);
 
   return (
     <AbsoluteFill style={{ background: "#0b0d10" }}>
@@ -388,6 +475,9 @@ export const Edit = (props) => {
           </AbsoluteFill>
         </Sequence>
       ))}
+      {/* 压暗底图:上下两端更暗,标题和字幕更跳,底部留白看起来是有意的 */}
+      {g.title && <AbsoluteFill style={{ background:
+        "linear-gradient(180deg,rgba(0,0,0,.45) 0%,rgba(0,0,0,.15) 30%,rgba(0,0,0,.25) 70%,rgba(0,0,0,.7) 100%)" }} />}
       {g.title && !fullScreen && (
         <TitleBar title={props.title} chapters={props.chapters || []} duration={props.duration}
           accent={accent} box={g.title} width={width} />
@@ -416,7 +506,7 @@ export const Edit = (props) => {
       ))}
       <AbsoluteFill>
         {(props.captions || []).filter((c) => now >= c.start && now < c.end).map((c, i) => (
-          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.072 : 0.06,
+          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.073 : 0.06,
             box: theme.subs === "outline" ? undefined : theme.subs, boxColor: theme.subBox }} />
         ))}
       </AbsoluteFill>

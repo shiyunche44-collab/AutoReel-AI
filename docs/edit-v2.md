@@ -101,6 +101,16 @@ python -I scripts/edit_v2_trial.py p_xxx --no-rerank
 4. 渲染时长:Remotion 比 ffmpeg 慢。4 核云容器实测 20 秒成片约 70 秒(竖屏模糊底图改成预先抽帧
    模糊的小图后,比实时 CSS 模糊快约 2.4 倍),本机核数多会更快。`EDIT_V2_CONCURRENCY`(默认 `50%`)控制并发,`EDIT_V2_TIMEOUT` 默认 3600 秒。
 
+## 画质与字体
+
+- 输出:h264,CRF 16(`EDIT_V2_CRF`),x264 `slow`(`EDIT_V2_X264_PRESET`),**标准范围 yuv420p + bt709**。
+  Remotion 默认出的 yuvj420p(全范围)在平台转码时常被当成标准范围,画面发灰或暗部死黑。
+  抽帧 JPEG 质量 95(默认 80 时字边有压缩噪点)。
+- 字体:`.env` 配 `EDIT_V2_FONT_FILE=<字体文件>`(ttf / otf / woff / woff2;.ttc 浏览器认不了),
+  合成时嵌入并等加载完才出帧。推荐思源黑体 Heavy / Noto Sans SC Black(SIL OFL,可商用)。
+  没配就按「Noto Sans SC Black → 思源黑体 Heavy → 微软雅黑」找系统字体,观感随机器变化。
+- 渲染缓存键含 `remotion/src` 源码哈希,改了组件旧缓存自动作废。
+
 ## 已知限制(第 1 阶段)
 
 - 主持人层、片头角标(intro)v2 里暂不叠。
