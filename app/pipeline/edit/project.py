@@ -70,6 +70,36 @@ def _picker(subject: str, vocab: Vocab | None, llm: Any = None) -> Any:
     return pick
 
 
+def _hex(rgb: Sequence[int]) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*rgb[:3])
+
+
+#: 深色卡片上的强调色至少要这么亮(相对亮度),否则往白色提:杂志包的深蓝压在深底上看不清
+MIN_LUMA = 0.32
+
+
+def _luma(rgb: Sequence[int]) -> float:
+    r, g, b = (c / 255 for c in rgb[:3])
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def readable(rgb: Sequence[int]) -> tuple[int, int, int]:
+    """把颜色往白色提到 MIN_LUMA 以上(色相大体不变)。"""
+    c = tuple(int(x) for x in rgb[:3])
+    k = 0.0
+    while _luma(c) < MIN_LUMA and k < 1.0:
+        k += 0.1
+        c = tuple(round(x + (255 - x) * k) for x in rgb[:3])
+    return c  # type: ignore[return-value]
+
+
+def theme_of(lk: Any) -> dict[str, Any]:
+    """视觉包 → Remotion 主题:强调色、第二强调色(对比卡右栏 / 柱状图)、字幕样式。"""
+    return {"accent": _hex(readable(lk.accent)), "accent2": _hex(readable(lk.card_accent_b)),
+            "subs": lk.subs if lk.subs in ("box", "outline", "band") else "outline",
+            "subBox": _hex(lk.accent)}
+
+
 def _sfx(project_dir: Path, tl: Timeline) -> Path | None:
     """音效:换章 / 进出整屏画面 whoosh,花字关键词与大数字 pop。"""
     if not config.SFX_ENABLED or not looks.current().sfx:
@@ -88,7 +118,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mappi
     beats = [s for s in specs if s.duration > 0]
     total = sum(s.duration for s in beats)
     lk = looks.current()
-    accent = "#{:02X}{:02X}{:02X}".format(*lk.accent)
+    accent = _hex(lk.accent)
     cues = list(nar.get("cues") or [])
     captions = caption_layer.build_layer(cues, size, render_mod.FPS, lk.accent,
                                          duration=total)["cues"] if cues else []
@@ -99,6 +129,7 @@ def compose(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mappi
         title=title, accent=accent, captions=captions,
         outro=(str(card[0]), float(card[1])) if card else None,
     )
+    tl.theme = theme_of(lk)
     stats = tl.match_stats()
     db.write_json(project_id, "edit_timeline.json",
                   tl.to_props() | {"notes": tl.notes, "match": stats})

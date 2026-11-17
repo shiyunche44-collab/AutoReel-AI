@@ -128,3 +128,40 @@ def test_hook_tail_shorter_than_min_shot_is_absorbed():
                             pick=_picker([]), beat_files={})
     assert min(c.dur for c in tl.clips) >= 0.6
     assert tl.clips[-1].start + tl.clips[-1].dur == pytest.approx(3.3)
+
+
+def test_card_beats_become_remotion_cards_with_footage():
+    card = {"kind": "bars", "title": "续航", "columns": [], "source": "数据来源:官方 2",
+            "rows": [{"label": "标准版", "values": ["620km"], "tag": "CLTC | 官方", "at": 0.5},
+                     {"label": "长续航", "values": ["1,200km"], "tag": "CLTC | 官方"}]}
+    specs = [_spec(0, 4.0), _spec(1, 4.0, layout="card", chapter="续航"),
+             _spec(2, 4.0, layout="card", chapter="续航")]
+    specs[1].card = card
+    specs[2].card = {"kind": "weird", "rows": [{"label": "x", "values": ["1"]}]}
+    tl = edl.build_timeline(specs, [], size=(1080, 1920), fps=30, pick=_picker([]),
+                            beat_files={1: "/b/1.mp4", 2: "/b/2.mp4"})
+    assert all(c.kind == "video" for c in tl.clips if c.beat == 1)  # 素材带照常取材
+    ov = next(o for o in tl.overlays if o.type == "card")
+    assert ov.start == pytest.approx(4.0) and ov.props["kind"] == "bars"
+    assert [r["num"] for r in ov.props["rows"]] == [620.0, 1200.0]
+    assert ov.props["rows"][0]["at"] == 0.5 and ov.props["rows"][1]["at"] is None
+    # 不认识的卡片种类仍用逐拍成品
+    assert [c.kind for c in tl.clips if c.beat == 2] == ["beat"]
+
+
+def test_punch_times_skip_hook_busy_and_respect_gap():
+    specs = [_spec(0, 4.0), _spec(1, 6.0, layout="stat", chapter="b",
+                                  overlay={"kind": "stat", "label": "x", "value": "9秒"}),
+             _spec(2, 8.0, chapter="c")]
+
+    def cue(t):
+        return {"start": t, "end": t + 1, "words": [{"text": "x", "hot": False, "start": t},
+                                                     {"text": "620km", "hot": True, "start": t + 0.2}]}
+
+    caps = [cue(1.0), cue(5.0), cue(10.5), cue(11.5), cue(14.0)]
+    tl = edl.build_timeline(specs, [], size=(1080, 1920), fps=30, pick=_picker([]),
+                            beat_files={}, captions=caps)
+    # 1.2 在钩子段、5.2 在大数字期间、11.7 离 10.7 太近
+    assert tl.punches == [10.7, 14.2]
+    back = edl.Timeline.from_props(tl.to_props())
+    assert back.punches == tl.punches

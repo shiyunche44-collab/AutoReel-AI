@@ -224,7 +224,96 @@ const ChapterChip = ({ o, accent, fps, band }) => {
   );
 };
 
-const OVERLAYS = { hook: Hook, keyword: Keyword, stat: Stat, panel: Panel, chapter: ChapterChip };
+// ---------------------------------------------------------------- 数据卡(spec / compare / bars / timeline)
+// 数字都在分镜阶段逐行核对过事实;行带 at(旁白念到它的秒数)就按旁白节奏出行
+const rowAt = (r, i, step = 0.4) => (r.at != null ? r.at : 0.35 + i * step);
+
+const Card = ({ o, accent, fps, band, theme }) => {
+  const frame = useCurrentFrame();
+  const t = frame / fps;
+  const p = o.props;
+  const a2 = theme.accent2 || "#FFB547";
+  const size = Math.round(band.height * 0.066);
+  const enter = popIn(frame, fps, 0, { damping: 16, stiffness: 170 });
+  const total = Math.round(o.dur * fps);
+  const out = interpolate(frame, [total - 6, total], [1, 0], { extrapolateLeft: "clamp" });
+  const maxNum = Math.max(1e-9, ...p.rows.map((r) => Math.abs(r.num || 0)));
+  const row = (r, i) => {
+    const at = rowAt(r, i, p.kind === "compare" ? 0.6 : 0.4);
+    const rp = popIn(frame, fps, at);
+    const base = { display: "flex", alignItems: "baseline", fontSize: size, lineHeight: 1.55,
+      opacity: Math.min(1, rp * 1.4), transform: `translateY(${(1 - rp) * 14}px)` };
+    const tag = r.tag && <div style={{ fontSize: size * 0.48, color: "#8b93a1", lineHeight: 1.1 }}>{r.tag}</div>;
+    if (p.kind === "compare") {
+      const rp2 = popIn(frame, fps, at + 0.28);
+      return (
+        <div key={i} style={{ ...base, flexDirection: "column", alignItems: "stretch" }}>
+          <div style={{ fontSize: size * 0.62, color: "#aeb6c2", textAlign: "center" }}>{r.label}</div>
+          <div style={{ display: "flex" }}>
+            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.5, fontWeight: 900, color: accent }}>{r.values[0]}</div>
+            <div style={{ width: 2, background: "rgba(255,255,255,.25)" }} />
+            <div style={{ flex: 1, paddingLeft: size * 0.5, fontWeight: 900, color: a2, opacity: rp2,
+              transform: `translateX(${(1 - rp2) * 30}px)` }}>{r.values[1]}</div>
+          </div>
+          {r.tag && <div style={{ fontSize: size * 0.48, color: "#8b93a1", lineHeight: 1.1, textAlign: "center" }}>{r.tag}</div>}
+        </div>
+      );
+    }
+    if (p.kind === "bars") {
+      const grow = interpolate(t - at, [0, 0.7], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp",
+        easing: Easing.out(Easing.cubic) });
+      const w = Math.abs(r.num || 0) / maxNum;
+      return (
+        <div key={i} style={{ ...base, flexDirection: "column", alignItems: "stretch", lineHeight: 1.25, marginBottom: size * 0.25 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: size * 0.8 }}>
+            <span style={{ color: "#cfd5de" }}>{r.label}</span><span style={{ fontWeight: 900 }}>{r.values[0]}</span>
+          </div>
+          <div style={{ height: size * 0.42, background: "rgba(255,255,255,.1)" }}>
+            <div style={{ width: `${w * grow * 100}%`, height: "100%", background: i === 0 ? accent : a2 }} />
+          </div>
+        </div>
+      );
+    }
+    if (p.kind === "timeline") {
+      return (
+        <div key={i} style={{ ...base, alignItems: "center" }}>
+          <div style={{ width: size * 0.4, height: size * 0.4, borderRadius: "50%", background: accent,
+            marginRight: size * 0.5, flex: "none", boxShadow: `0 0 0 ${size * 0.12}px rgba(255,255,255,.12)` }} />
+          <div style={{ fontWeight: 900, color: accent, minWidth: "30%" }}>{r.label}</div>
+          <div style={{ flex: 1 }}>{r.values[0]}{tag}</div>
+        </div>
+      );
+    }
+    return (
+      <div key={i} style={{ ...base, justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,.12)" }}>
+        <span style={{ color: "#bcc4cf" }}>{r.label}</span>
+        <span style={{ textAlign: "right", fontWeight: 900 }}>{r.values[0]}{tag}</span>
+      </div>
+    );
+  };
+  return (
+    <AbsoluteFill style={{ background: "rgba(5,7,10,.45)", justifyContent: "center", alignItems: "center", opacity: out }}>
+      <div style={{
+        width: "86%", maxHeight: "92%", overflow: "hidden", fontFamily: FONT, color: "#fff",
+        background: "rgba(14,17,23,.86)", borderTop: `${size * 0.16}px solid ${accent}`,
+        padding: `${size * 0.6}px ${size * 0.9}px ${size * 0.5}px`,
+        transform: `scale(${interpolate(enter, [0, 1], [0.92, 1])})`, opacity: enter,
+      }}>
+        {p.title && <div style={{ fontWeight: 900, fontSize: size * 1.15, marginBottom: size * 0.35 }}>{p.title}</div>}
+        {p.kind === "compare" && p.columns.length === 2 && (
+          <div style={{ display: "flex", fontSize: size * 0.75, fontWeight: 900, marginBottom: size * 0.2 }}>
+            <div style={{ flex: 1, textAlign: "right", paddingRight: size * 0.5, color: accent }}>{p.columns[0]}</div>
+            <div style={{ flex: 1, paddingLeft: size * 0.5, color: a2 }}>{p.columns[1]}</div>
+          </div>
+        )}
+        {p.rows.map(row)}
+        {p.source && <div style={{ fontSize: size * 0.44, color: "#7d8592", marginTop: size * 0.35 }}>{p.source}</div>}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const OVERLAYS = { hook: Hook, keyword: Keyword, stat: Stat, panel: Panel, chapter: ChapterChip, card: Card };
 
 // ---------------------------------------------------------------- 顶部标题带 + 章节进度
 const TitleBar = ({ title, chapters, duration, accent, box, width }) => {
@@ -251,13 +340,24 @@ const TitleBar = ({ title, chapters, duration, accent, box, width }) => {
   );
 };
 
+// 关键词冲击推:念到数字 / 车型代号时素材带快速放大 7% 再回落(0.35 秒)
+export const punchScale = (punches, now) => {
+  let s = 1;
+  for (const t0 of punches) {
+    const k = (now - t0) / 0.35;
+    if (k >= 0 && k < 1) s = Math.max(s, 1 + 0.07 * (1 - k) * (1 - k));
+  }
+  return s;
+};
+
 // ---------------------------------------------------------------- 整片
 export const Edit = (props) => {
   const { fps, width, height } = useVideoConfig();
   const frame = useCurrentFrame();
   const now = frame / fps;
   const g = grid(width, height);
-  const accent = props.accent || "#FF5A1F";
+  const theme = props.theme || {};
+  const accent = theme.accent || props.accent || "#FF5A1F";
   const clips = props.clips || [];
   const current = clips.find((c) => now >= c.start && now < c.start + c.dur) || clips[clips.length - 1];
   const fullScreen = current && current.kind === "beat";
@@ -281,16 +381,18 @@ export const Edit = (props) => {
           accent={accent} box={g.title} width={width} />
       )}
       <div style={bandStyle}>
-        {clips.filter((c) => c.kind !== "beat").map((c, i) => (
-          <Sequence key={`c${i}`} {...seq(c.start, c.dur)}>
-            <BandClip clip={c} fps={fps} />
-          </Sequence>
-        ))}
+        <AbsoluteFill style={{ transform: `scale(${punchScale(props.punches || [], now)})` }}>
+          {clips.filter((c) => c.kind !== "beat").map((c, i) => (
+            <Sequence key={`c${i}`} {...seq(c.start, c.dur)}>
+              <BandClip clip={c} fps={fps} />
+            </Sequence>
+          ))}
+        </AbsoluteFill>
         {(props.overlays || []).map((o, i) => {
           const C = OVERLAYS[o.type];
           return C ? (
             <Sequence key={`o${i}`} {...seq(o.start, o.dur)}>
-              <C o={o} accent={accent} fps={fps} band={g.band} />
+              <C o={o} accent={accent} fps={fps} band={g.band} theme={theme} />
             </Sequence>
           ) : null;
         })}
@@ -302,7 +404,8 @@ export const Edit = (props) => {
       ))}
       <AbsoluteFill>
         {(props.captions || []).filter((c) => now >= c.start && now < c.end).map((c, i) => (
-          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.072 : 0.06 }} />
+          <Cue key={i} cue={c} style={{ accent, bottom: g.capBottom, size: g.title ? 0.072 : 0.06,
+            box: theme.subs === "outline" ? undefined : theme.subs, boxColor: theme.subBox }} />
         ))}
       </AbsoluteFill>
     </AbsoluteFill>

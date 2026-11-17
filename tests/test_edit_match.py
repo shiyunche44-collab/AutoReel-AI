@@ -120,3 +120,14 @@ def test_match_stats_and_props_roundtrip():
     assert tl.match_stats() == {"need": 2, "hit": 1, "rate": 0.5, "llm": 1, "fallback": 0}
     back = edl.Timeline.from_props(tl.to_props() | {"match": {}, "notes": ["n"]})
     assert back.to_props() == tl.to_props() and back.notes == ["n"]
+
+
+def test_theme_colors_readable_on_dark_cards():
+    from app.pipeline import looks
+
+    for lk in looks.LOOKS.values():
+        th = edit_project.theme_of(lk)
+        for key in ("accent", "accent2"):
+            rgb = tuple(int(th[key][i:i + 2], 16) for i in (1, 3, 5))
+            assert edit_project._luma(rgb) >= edit_project.MIN_LUMA, (lk.id, key, th[key])
+        assert th["subs"] in ("box", "outline", "band")

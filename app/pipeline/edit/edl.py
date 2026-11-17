@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -30,6 +31,10 @@ HOOK_SHOT = 1.0
 CHAPTER_CHIP_SECONDS = 1.4
 #: 这些版式用逐拍渲染好的成品整段放(代码画的卡片 / 动画,不需要再取材)
 PRERENDERED = frozenset(("card", "concept", "mech"))
+#: 这几种数据卡改由 Remotion 画(素材带上压一张玻璃卡),不再用逐拍渲染的整屏卡
+REMOTION_CARDS = frozenset(("spec", "compare", "bars", "timeline"))
+#: 关键词冲击推:相邻两次至少隔多久;整屏 / 钩子 / 数据层期间不推(画面已经很忙)
+PUNCH_GAP = 2.5
 #: 分句断点:在这些标点之后下刀
 CLAUSE_BREAKS = "，。！？；：、,.!?;:"
 MOTIONS_VIDEO = ("push", "pull")
@@ -92,6 +97,10 @@ class Timeline:
     overlays: list[Overlay] = field(default_factory=list)
     captions: list[dict[str, Any]] = field(default_factory=list)
     chapters: list[dict[str, Any]] = field(default_factory=list)
+    #: 关键词冲击推的时刻(素材带快速放大再回落)
+    punches: list[float] = field(default_factory=list)
+    #: 视觉包配色 / 字幕样式(looks.Look → Remotion),见 project.theme_of
+    theme: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     @classmethod
@@ -106,6 +115,8 @@ class Timeline:
             overlays=[Overlay(float(o["start"]), float(o["dur"]), str(o["type"]), dict(o.get("props") or {}))
                       for o in d.get("overlays") or []],
             captions=list(d.get("captions") or []), chapters=list(d.get("chapters") or []),
+            punches=[float(x) for x in d.get("punches") or []],
+            theme=dict(d.get("theme") or {}),
             notes=list(d.get("notes") or []))
 
     def to_props(self) -> dict[str, Any]:
@@ -244,6 +255,50 @@ def beat_overlays(spec: Any, start: float, dur: float) -> list[Overlay]:
     return []
 
 
+def remotion_card(spec: Any) -> bool:
+    return spec.layout == "card" and (spec.card or {}).get("kind") in REMOTION_CARDS \
+        and bool((spec.card or {}).get("rows"))
+
+
+def _num(text: str) -> float | None:
+    m = re.search(r"-?\d+(?:\.\d+)?", (text or "").replace(",", ""))
+    return float(m.group(0)) if m else None
+
+
+def card_overlay(spec: Any, start: float, dur: float) -> Overlay:
+    """核对过事实的数据卡(cards.ground 的产物)→ Remotion 卡片层。柱状图预先解析出数值。"""
+    card = spec.card or {}
+    rows = []
+    for r in card.get("rows") or []:
+        vals = [str(v) for v in (r.get("values") or [])]
+        rows.append({"label": str(r.get("label") or ""), "values": vals,
+                     "tag": str(r.get("tag") or ""),
+                     "at": float(r["at"]) if isinstance(r.get("at"), (int, float)) else None,
+                     "num": _num(vals[0]) if vals else None})
+    return Overlay(start, dur, "card", {"kind": card["kind"], "title": str(card.get("title") or ""),
+                                        "columns": [str(c) for c in card.get("columns") or []][:2],
+                                        "rows": rows, "source": str(card.get("source") or "")})
+
+
+def punch_times(tl: Timeline, gap: float = PUNCH_GAP) -> list[float]:
+    """花字关键词(数字 / 车型代号)念出的时刻里挑冲击推点:钩子段、整屏画面、数据层期间不推。"""
+    busy = [(c.start, c.start + c.dur) for c in tl.clips if c.kind == "beat"]
+    busy += [(o.start, o.start + o.dur) for o in tl.overlays
+             if o.type in ("hook", "stat", "panel", "card")]
+    out: list[float] = []
+    for cue in tl.captions:
+        for w in cue.get("words") or []:
+            if not w.get("hot"):
+                continue
+            t = float(w.get("start") or 0.0)
+            if t < HOOK_SECONDS or any(a - 0.2 <= t < b for a, b in busy):
+                continue
+            if out and t - out[-1] < gap:
+                continue
+            out.append(round(t, 3))
+    return out
+
+
 # --------------------------------------------------------------------------
 # 组装
 # --------------------------------------------------------------------------
@@ -309,7 +364,7 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
         role = _role(ch_idx, len(chapters))
         prev_beat = tl.clips[-1].kind == "beat" if tl.clips else False
 
-        if s.layout in PRERENDERED and beat_files.get(s.idx):
+        if s.layout in PRERENDERED and beat_files.get(s.idx) and not remotion_card(s):
             tl.clips.append(Clip(start, round(end - start, 3), "beat", beat_files[s.idx],
                                  transition="zoom" if tl.clips else "cut", beat=s.idx))
             n_clip += 1
@@ -382,7 +437,10 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                 tl.overlays.append(Overlay(start, round(min(end, HOOK_SECONDS + 0.5) - start, 3),
                                            "hook", {"lines": lines}))
         tl.overlays.extend(beat_overlays(s, start, end - start))
+        if remotion_card(s):
+            tl.overlays.append(card_overlay(s, start, end - start))
 
+    tl.punches = punch_times(tl)
     if outro:
         path, secs = outro
         tl.clips.append(Clip(total, round(float(secs), 3), "beat", str(path), transition="zoom"))
