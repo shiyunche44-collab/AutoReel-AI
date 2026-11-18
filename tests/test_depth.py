@@ -1,15 +1,12 @@
 """技术深度:推算事实、原理库、深度提醒、口径上屏。不需要网络与额度。"""
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 
-from app.categories import Principle, ProfileError, _build_principles, load_profile
+from app.categories import ProfileError, _build_principles, load_profile
 from app.models import Fact, ScriptSegment
 from app.pipeline import cards, derive
-from app.pipeline.script_gen import (compliance_lint, depth_lint, matched_principles,
-                                     usable_facts)
+from app.pipeline.script_gen import compliance_lint, depth_lint, matched_principles, usable_facts
 
 
 @pytest.fixture(scope="module")

@@ -21,7 +21,7 @@ Profile 声明了什么:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,7 @@ def _load_raw(name: str, chain: tuple[str, ...] = ()) -> dict[str, Any]:
     return merged
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_profile(name: str) -> CategoryProfile:
     raw = _load_raw(name)
     profile = _build(name, raw)

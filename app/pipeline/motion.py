@@ -381,7 +381,7 @@ def _run_cli(scene: str, work: Path, out: Path, seconds: float) -> subprocess.Co
     attempts = [] if _gpu_hung or config.MOTION_BROWSER_GPU == "off" else [
         (base + ["--workers", str(config.MOTION_WORKERS)], config.MOTION_TIMEOUT, True)]
     attempts.append((software, sw_timeout, False))
-    for n, (cmd, timeout, gpu) in enumerate(attempts):
+    for cmd, timeout, gpu in attempts:
         try:
             return subprocess.run(cmd, env=_env(), capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", timeout=timeout)

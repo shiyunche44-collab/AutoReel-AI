@@ -7,14 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from tests.library_patch import patch_in_package
 from PIL import Image
 
 from app.publish import browser
 from app.publish.base import Account, PublishError, PublishRequest
 from app.publish.platforms import douyin
 from app.publish.platforms.douyin import DouyinAdapter, cover_files, set_covers
+from tests.library_patch import patch_in_package
 
 
 def _img(path: Path, size: tuple[int, int]) -> Path:

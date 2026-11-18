@@ -1,14 +1,28 @@
 """封面里的那台车:池子里挑白底官图,没有就生图并过质检门。"""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
 from ... import config
-
+from .reference import (
+    CAR_CLEAN_PROMPT,
+    CAR_MODES,
+    CAR_REF_PROMPT,
+    CAR_SAME_PROMPT,
+    COVER_CAR_FACING,
+    GATES_VERSION,
+    _cars_root,
+    _hash,
+    _read_json,
+    _write_json,
+    car_prompt,
+    pick_reference,
+    ref_attributes,
+)
 from .tone import log
-from .reference import CAR_CLEAN_PROMPT, CAR_MODES, CAR_REF_PROMPT, CAR_SAME_PROMPT, COVER_CAR_FACING, GATES_VERSION, _cars_root, _hash, _read_json, _write_json, car_prompt, pick_reference, ref_attributes
-
 
 # --------------------------------------------------------------------------
 # 车

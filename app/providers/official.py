@@ -31,8 +31,9 @@ import logging
 import re
 import time
 import urllib.parse
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from .. import config, degrade
 from . import browser_fetch, clips, platform_video, webassets

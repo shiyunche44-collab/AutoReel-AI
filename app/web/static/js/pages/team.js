@@ -1079,7 +1079,7 @@ function activeStats(s) {
 function render() {
   // 快反不等周单:排在待批最前面
   const pending = DATA.plan.filter((i) => i.status === 'proposed')
-    .sort((a, b) => (b.kind === 'rapid') - (a.kind === 'rapid'));
+    .sort((a, b) => Number(b.kind === 'rapid') - Number(a.kind === 'rapid'));
   const rest = DATA.plan.filter((i) => i.status !== 'proposed');
   $('#pending-count').textContent = String(pending.length);
   $('#btn-approve-all').disabled = !pending.length;
@@ -1159,7 +1159,10 @@ async function load() {
 }
 
 document.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-run]');
+  // 点在按钮里的 svg 图标上时 target 是 SVGElement,所以按 Element 判断再往上找按钮
+  const btn = e.target instanceof Element
+    ? /** @type {HTMLElement | null} */ (e.target.closest('[data-run]'))
+    : null;
   if (!btn) return;
   withLoading(btn, async () => {
     await call(`/api/team/roles/${btn.dataset.run}/run`, '已让它开始干活,稍后看动态');
@@ -1229,6 +1232,7 @@ setInterval(() => {
   // 正在填成片审核表单 / 看片时别刷新,不然输入和播放进度都会丢
   const busy = document.querySelector('.modal-backdrop')
     || document.activeElement?.closest?.('.review-card, .comment-row, .event-form')
-    || [...document.querySelectorAll('.review-card video')].some((v) => !v.paused);
+    || [.../** @type {NodeListOf<HTMLVideoElement>} */ (
+      document.querySelectorAll('.review-card video'))].some((v) => !v.paused);
   if (!document.hidden && !busy) load();
 }, 15000);

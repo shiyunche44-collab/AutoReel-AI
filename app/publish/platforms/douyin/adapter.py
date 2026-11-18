@@ -6,13 +6,37 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
-from ...base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishError, PublishRequest, PublishResult
+
+from ...base import (
+    Account,
+    AccountStatus,
+    MetricSnapshot,
+    PlatformRef,
+    PublishError,
+    PublishRequest,
+    PublishResult,
+)
 from ...http import UPLOAD_TIMEOUT, new_client, request_json
 from ...registry import PORTRAIT
-
-from .consts import CREATOR_UPLOAD, MAX_UPLOAD, OPEN, PUBLISH_WAIT_MS, TITLE_MAX, UPLOAD_ENTRY_TIMEOUT_MS, UPLOAD_WAIT_MS
+from .consts import (
+    CREATOR_UPLOAD,
+    MAX_UPLOAD,
+    OPEN,
+    PUBLISH_WAIT_MS,
+    TITLE_MAX,
+    UPLOAD_ENTRY_TIMEOUT_MS,
+    UPLOAD_WAIT_MS,
+)
 from .cover import dismiss_cover_prompt, set_covers
-from .publish_page import DECLARE_AI, _declare_enabled, click_publish, publish_done, set_declaration, set_description, wait_publish_ready
+from .publish_page import (
+    DECLARE_AI,
+    _declare_enabled,
+    click_publish,
+    publish_done,
+    set_declaration,
+    set_description,
+    wait_publish_ready,
+)
 from .works import resolve_published_work
 
 

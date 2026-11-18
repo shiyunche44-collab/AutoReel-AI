@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .tone import BG_MAX_SPREAD, RATIOS, STUDIO_PROMPT, Tone, VLM_CHECK, cache_dir, log, ratio_of
+from .tone import BG_MAX_SPREAD, RATIOS, STUDIO_PROMPT, VLM_CHECK, Tone, cache_dir, log, ratio_of
 
 
 def _luma(image: Any) -> float:

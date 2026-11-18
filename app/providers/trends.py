@@ -18,8 +18,9 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from . import cli, webassets
 from .facts import IFIND

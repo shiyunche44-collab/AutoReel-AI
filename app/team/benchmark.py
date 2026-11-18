@@ -25,8 +25,9 @@ import subprocess
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .. import db
 from . import Skip, TeamError

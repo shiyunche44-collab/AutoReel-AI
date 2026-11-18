@@ -19,8 +19,9 @@ import re
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from PIL import Image, ImageDraw
 

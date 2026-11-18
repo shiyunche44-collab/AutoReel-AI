@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-class State(str, Enum):
+class State(str, Enum):  # noqa: UP042 - 换 StrEnum 会改 format() 行为,状态值要落库
     DRAFT_INTENT = "DRAFT_INTENT"
     FACTS_RESOLVED = "FACTS_RESOLVED"
     SCRIPT_READY = "SCRIPT_READY"

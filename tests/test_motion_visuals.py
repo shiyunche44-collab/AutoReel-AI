@@ -14,7 +14,7 @@ from PIL import Image
 
 from app import config
 from app.categories import load_profile
-from app.models import Fact, ScriptSegment, ShotSpec
+from app.models import ScriptSegment, ShotSpec
 from app.pipeline import explainer, library, motion, overlays, render, timeline
 from tests.test_explainer import FakeLLM, _facts, _segments
 

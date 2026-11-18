@@ -22,7 +22,8 @@ import os  # noqa: F401
 import re  # noqa: F401
 from dataclasses import dataclass, field  # noqa: F401
 from pathlib import Path  # noqa: F401
-from typing import Any, Sequence  # noqa: F401
+from typing import Any  # noqa: F401
+from collections.abc import Sequence  # noqa: F401
 from ... import config  # noqa: F401
 
 from .tone import (  # noqa: E402,F401

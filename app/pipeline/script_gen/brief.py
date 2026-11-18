@@ -6,11 +6,12 @@
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 from ...categories import CategoryProfile, Slot
 from ...models import Fact
 from ..derive import LEDGER_TOPIC
-
 from .lint_base import log
 from .prompt import (
     COMPARE_TOPIC,
@@ -18,11 +19,10 @@ from .prompt import (
     HEADING_MAX_CHARS,
     OWNER_TOPIC,
     REVIEW_TOPIC,
-    reviewer_identity,
     banned_terms,
+    reviewer_identity,
     usable_facts,
 )
-
 
 #: 论点少于这个数,大纲撑不起全片:按没有分析处理
 MIN_ARGUMENTS = 2

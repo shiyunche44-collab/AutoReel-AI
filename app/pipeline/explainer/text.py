@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from ...categories import Vocab
 from ...models import Fact, ShotSpec
 from .. import cards, overlays
 from ..grounding import numbers_in
-
 from .consts import KEYWORD_CHARS
 
 

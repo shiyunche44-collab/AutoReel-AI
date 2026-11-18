@@ -1,14 +1,13 @@
 """封面 B(大字版):版式、尺寸、底图排除、文件名。"""
 from __future__ import annotations
 
-from tests.library_patch import patch_library
-
 from pathlib import Path
 from types import SimpleNamespace
 
 from app import config
 from app.pipeline import aspect, library, narration
 from app.pipeline import packaging as pk
+from tests.library_patch import patch_library
 
 
 def _pattern(path: Path, kind: str) -> Path:
@@ -121,7 +120,7 @@ def _fake_library(monkeypatch, tmp_path, kinds):
 
 
 def test_cover_still_exclude_skips_used_image(monkeypatch, tmp_path):
-    items = _fake_library(monkeypatch, tmp_path, ["grad", "stripes"])
+    _fake_library(monkeypatch, tmp_path, ["grad", "stripes"])
     first = library.cover_still("x")
     second = library.cover_still("x", exclude=[first])
     assert first and second and first != second

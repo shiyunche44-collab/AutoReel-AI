@@ -18,7 +18,8 @@ from __future__ import annotations
 import math
 import time
 from collections import Counter, defaultdict
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .. import db
 from . import beat_retention, engagement, health

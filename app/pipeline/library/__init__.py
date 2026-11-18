@@ -47,7 +47,8 @@ import threading  # noqa: F401
 import time  # noqa: F401
 from dataclasses import asdict, dataclass, field, fields  # noqa: F401
 from pathlib import Path  # noqa: F401
-from typing import Any, Iterable, Sequence  # noqa: F401
+from typing import Any  # noqa: F401
+from collections.abc import Iterable, Sequence  # noqa: F401
 from ... import config  # noqa: F401
 from ...categories import CategoryProfile, Vocab, load_profile  # noqa: F401
 from ...providers import clips as clips_mod  # noqa: F401

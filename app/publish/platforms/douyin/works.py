@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import time
 from typing import Any
-from ...base import PublishError
 
+from ...base import PublishError
 from .consts import CREATOR_MANAGE, WORK_LIST_API, WORK_RESOLVE_GAP, WORK_RESOLVE_ROUNDS, log
 
 

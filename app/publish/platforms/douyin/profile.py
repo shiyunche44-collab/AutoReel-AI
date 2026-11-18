@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from ...base import PublishError
 
+from ...base import PublishError
 
 # --------------------------------------------------------------------------
 # 对标账号主页(公开页,只读)

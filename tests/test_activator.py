@@ -227,7 +227,6 @@ def test_pick_text_prefers_llm_candidate(fresh_db):
 # 状态机与留痕
 # --------------------------------------------------------------------------
 def test_unique_target_once(fresh_db):
-    from app.team import activator
 
     n = fresh_db.add_outbound_actions([
         {"id": "a1", "day": DAY, "aweme_id": "aw1", "target": "aw1", "action": "like",
@@ -256,7 +255,6 @@ def test_cas_state_single_winner(fresh_db):
 
 
 def test_stuck_doing_is_reset(fresh_db):
-    from app.team import activator
 
     old = time.time() - 3600
     fresh_db.add_outbound_actions([{"id": "a1", "day": DAY, "aweme_id": "aw1", "target": "aw1",

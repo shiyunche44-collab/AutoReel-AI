@@ -200,8 +200,8 @@ def test_harvest_once_per_batch_and_lead_window(fresh_db):
 # 快反
 # --------------------------------------------------------------------------
 def _idea(subject="小米YU7", theme=None):
-    from app.categories import load_profile
     from app import config
+    from app.categories import load_profile
     from app.pipeline.topics import TopicIdea
 
     profile = load_profile(config.TEAM_CATEGORY)

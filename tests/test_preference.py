@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.test_coach import _project, fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import _project, no_playbook  # noqa: F401 - autouse fixture
 from tests.test_team import _fake_enqueue, _item
 
 

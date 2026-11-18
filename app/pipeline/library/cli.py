@@ -3,16 +3,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from typing import Sequence
-from ...categories import load_profile
-
 import time
-from .licensing import STATUSES, STATUS_LABEL, license_of_source, set_license
-from .licensing import summary as license_summary
-from .model import Library, MAX_AUTO_SOURCES, normalise_url
-from .sources import add_images, add_links
+from collections.abc import Sequence
+
+from ...categories import load_profile
 from .builder import build
+from .licensing import STATUS_LABEL, STATUSES, license_of_source, set_license
+from .licensing import summary as license_summary
+from .model import MAX_AUTO_SOURCES, Library, normalise_url
 from .sheet import contact_sheet
+from .sources import add_images, add_links
 
 
 def _license_cmd(args: argparse.Namespace) -> int:

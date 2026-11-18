@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from tests.test_coach import _row, fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import _row, no_playbook  # noqa: F401 - autouse fixture
 
 ACC = "MS4wLjABAAAA_a"
 

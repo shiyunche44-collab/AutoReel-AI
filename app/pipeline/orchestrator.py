@@ -14,9 +14,10 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import config, costs, db, degrade
 from ..categories import ProfileError, load_profile
@@ -24,10 +25,21 @@ from ..llm import ledger
 from ..llm.ark import ArkProvider
 from ..llm.deepseek import DeepSeekProvider
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
-from ..state import (GATE_STATES, TERMINAL_STATES, State, assert_transition,
-                     can_transition)
-from . import (aspect, concept_styles, explainer, intake, knobs, library, locks, looks, motion,
-               rhythm, script_gen, variety)
+from ..state import GATE_STATES, TERMINAL_STATES, State, assert_transition, can_transition
+from . import (
+    aspect,
+    concept_styles,
+    explainer,
+    intake,
+    knobs,
+    library,
+    locks,
+    looks,
+    motion,
+    rhythm,
+    script_gen,
+    variety,
+)
 
 log = logging.getLogger(__name__)
 

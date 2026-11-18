@@ -9,7 +9,6 @@ import pytest
 from app import config, db
 from app.pipeline import packaging as pk
 from app.publish import service
-from app.publish.base import PublishResult
 
 GOOD = {
     "titles": [

@@ -5,11 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.library_patch import patch_library
-
 from app import config
 from app.pipeline import library as lib_mod
 from app.pipeline.library import Item, Library, Source
+from tests.library_patch import patch_library
 
 
 @pytest.fixture

@@ -5,10 +5,6 @@ Wikimedia 有 robot policy,单测里绝不能真去连它 —— 一旦把 CI �
 """
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from app.providers import webassets
 
 

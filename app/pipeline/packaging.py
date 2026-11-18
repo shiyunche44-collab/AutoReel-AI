@@ -9,8 +9,9 @@ LLM 只负责出主意;**能不能用由这里的代码说了算** —— 标题
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -355,7 +356,7 @@ def fallback_title(kind: str, subject: str, *, thesis: str = "", price: str = ""
     pool |= figures_in(price)
     if style == "question":
         # 选题角度当标题:句中的逗号去掉(车名后面已经有一个),补上问号
-        ask = re.sub(r"[\s,,]+", "", angle or "").strip("。.??")
+        ask = re.sub(r"[\s,,]+", "", angle or "").strip("。.??")  # noqa: B005 - 按字符集去句末标点
         ask = ask + "?" if ask and _ASKS_RE.search(ask) else ""
         if ask and spaced:
             # 车名保留原来的空格(「比亚迪秦L DM-i」),挤掉以后「秦LDM-i」读不出来

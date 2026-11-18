@@ -9,6 +9,10 @@ from app.categories import load_profile
 from app.models import Fact, ScriptSegment, ShotSpec, SubtitleCue
 from app.pipeline import explainer, library, overlays
 
+#: 要真去切视频片段(`clips._ffmpeg`)的用例;CI 机器上没装 ffmpeg 时跳过
+needs_ffmpeg = pytest.mark.skipif(
+    not (config.FFMPEG_PATH and config.FFMPEG_PATH.is_file()), reason="没有 ffmpeg")
+
 
 def _facts() -> list[Fact]:
     return [
@@ -442,10 +446,11 @@ def test_fill_third_party_waits_for_logo_check_and_fresh_first_party(pool):
     # 没用过的一方素材够铺这一拍:测过台标的第三方也不进
     assert "unknown1" not in {p.item_id for p in library.fill("测试车", 3.0, used={})}
     # 一方素材都用过了:第三方排在用过的一方素材前面
-    used = {i: 1 for i in ("clean1", "clean2", "int1", "sub1", "still1")}
+    used = dict.fromkeys(("clean1", "clean2", "int1", "sub1", "still1"), 1)
     assert library.fill("测试车", 3.0, used=used)[0].item_id == "unknown1"
 
 
+@needs_ffmpeg
 def test_fill_video_first_look_prefers_video_over_stills(pool):
     from app.pipeline import looks
 
@@ -462,6 +467,7 @@ def test_fill_video_first_look_prefers_video_over_stills(pool):
         assert not any(p.third_party for p in edge)
 
 
+@needs_ffmpeg
 def test_fill_video_first_splits_long_video_so_remainder_is_reusable(pool):
     from app.pipeline import looks
 

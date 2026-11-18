@@ -3,18 +3,37 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+
 from ... import db, degrade
 from ...models import ShotSpec
 from .. import aspect, cards, library, looks, mechanism_art, motion, motion_assets, overlays
 from .. import render as render_mod
-
-from .consts import HOOK_CUT, HOOK_CUT_RETRIES, HOOK_SECONDS, SAFE_LAYOUT, SPLIT_MIN_SECONDS, _ENC, _log
 from . import mech
+from .consts import (
+    _ENC,
+    HOOK_CUT,
+    HOOK_CUT_RETRIES,
+    HOOK_SECONDS,
+    SAFE_LAYOUT,
+    SPLIT_MIN_SECONDS,
+    _log,
+)
+from .ffmpeg import (
+    CONCEPT_FOOTAGE_HINT,
+    _clip_luma,
+    _ff,
+    _framed,
+    _piece_clip,
+    background_clip,
+    concept_background,
+    footage_size,
+    motion_for,
+    split_clip,
+)
 from .planning_b import broll_style
-from .ffmpeg import CONCEPT_FOOTAGE_HINT, _clip_luma, _ff, _framed, _piece_clip, background_clip, concept_background, footage_size, motion_for, split_clip
 
 
 def chapters_of(specs: Sequence[ShotSpec]) -> tuple[list[tuple[str, float]], list[int]]:
@@ -111,15 +130,15 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool
     if layout == "highlight" and has_layer and aspect.is_portrait_size(size):
         # 竖屏:实拍本来就在画面带里,不用再缩小窗;关键词占标题区,淡入
         return (
-            f"[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
-            f"[0:v][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
+            "[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
+            "[0:v][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "highlight" and has_layer:
         # 横屏全屏实拍微压暗 + 大字淡入,视野通透不破坏实拍质感
         return (
-            f"[0:v]eq=brightness=-0.12:saturation=0.92[bgd];"
-            f"[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
-            f"[bgd][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
+            "[0:v]eq=brightness=-0.12:saturation=0.92[bgd];"
+            "[2:v]format=rgba,fade=in:st=0.12:d=0.28:alpha=1[txt];"
+            "[bgd][txt]overlay=0:0[v1];[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "hook" and has_layer:
         # [2] 是大字弹出关键帧(播完透明);前 3 秒压暗托字、不放章节条,之后条再淡入
@@ -133,9 +152,9 @@ def layout_filter(layout: str, size: tuple[int, int], has_layer: bool, pip: bool
     if layout == "stat" and has_layer:
         # [2] 是逐帧滚动的数字(concat 关键帧),播完停在最后一帧
         return (
-            f"[0:v]eq=brightness=-0.16:saturation=0.85[bgd];[2:v]format=rgba[num];"
-            f"[bgd][num]overlay=0:0:eof_action=repeat[v1];"
-            f"[v1][1:v]overlay=0:0,format=yuv420p[out]"
+            "[0:v]eq=brightness=-0.16:saturation=0.85[bgd];[2:v]format=rgba[num];"
+            "[bgd][num]overlay=0:0:eof_action=repeat[v1];"
+            "[v1][1:v]overlay=0:0,format=yuv420p[out]"
         )
     if layout == "panel" and has_layer:
         slide = int(w * 0.36)

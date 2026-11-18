@@ -70,7 +70,7 @@ def generate_one(prompt: str, *, aspect_ratio: str | None = None,
                     url = str(resp.json()["data"][0]["url"])
                 except (ValueError, KeyError, IndexError, TypeError):
                     _log(False, "返回格式不对")
-                    raise ConnectorError(TOOL, f"方舟返回格式不对:{resp.text[:200]}")
+                    raise ConnectorError(TOOL, f"方舟返回格式不对:{resp.text[:200]}") from None
                 _log(True)
                 return url
             last = ConnectorError(TOOL, f"HTTP {resp.status_code}:{resp.text[:300]}",

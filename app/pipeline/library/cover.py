@@ -1,12 +1,11 @@
 """封面底图:棚拍图判定与官图挑选。"""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from .model import Item, Library, vocab_of
 from .select import near_dup_groups
-
 
 #: 封面底图:边缘取样带宽(占图宽/高的比例)
 COVER_EDGE = 0.045

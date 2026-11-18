@@ -53,9 +53,10 @@ def probe(path: Path) -> dict:
 # --------------------------------------------------------------------------
 def detect_region(path: Path, duration: float) -> tuple[int, int, int, int]:
     """多帧差分:随时间变化的列/行才是视频本体。返回 (x, y, w, h),已对齐到偶数。"""
+    import io
+
     import numpy as np
     from PIL import Image
-    import io
 
     frames = []
     for k in range(1, 9):

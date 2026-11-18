@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from tests.test_coach import _project, fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import _project, no_playbook  # noqa: F401 - autouse fixture
 
 
 def test_pick_is_empty_without_playbook():

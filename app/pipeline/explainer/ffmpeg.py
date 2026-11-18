@@ -6,13 +6,13 @@ import re
 import shutil
 import subprocess
 import zlib
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
+
 from ... import config
 from .. import aspect, library, looks
 from .. import render as render_mod
-
-from .consts import STILL_MOTIONS, _ENC
+from .consts import _ENC, STILL_MOTIONS
 
 
 # --------------------------------------------------------------------------

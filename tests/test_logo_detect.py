@@ -64,7 +64,7 @@ def test_logo_too_deep_cannot_be_cropped():
 
 
 def test_crop_edge_follows_detection():
-    v = dict(kind="video", path="x.mp4")
+    v = {"kind": "video", "path": "x.mp4"}
     assert lib_mod._crop_edge(Item(id="a", official=False, **v)) == lib_mod.EDGE_CROP
     assert lib_mod._crop_edge(Item(id="b", official=True, **v)) == 0.0
     assert lib_mod._crop_edge(Item(id="c", official=True, logo_crop=0.2, **v)) == 0.2

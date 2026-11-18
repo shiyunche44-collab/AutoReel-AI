@@ -234,7 +234,8 @@ def test_editor_passes_audience_questions(fresh_db, monkeypatch):
     seen = {}
     monkeypatch.setattr(scout, "fresh_items", lambda category: [{"title": "x"}])
     monkeypatch.setattr(topics, "suggest", lambda items, **kw: seen.update(kw) or [])
-    with pytest.raises(Exception):
+    # llm=object() 让主编一调模型就炸;这里只关心炸之前喂进去的打法手册
+    with pytest.raises(Exception):  # noqa: B017
         editor.run(config.TEAM_CATEGORY, llm=object(), now=dt.datetime.now())
     assert "第0条 多少钱" in seen["playbook"]
 

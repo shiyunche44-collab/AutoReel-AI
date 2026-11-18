@@ -13,9 +13,10 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from .. import config, db
 from ..models import SubtitleCue
@@ -474,7 +475,6 @@ def audio_duration_fallback(path: str | Path, default: float = 2.5) -> float:
     dur = wav_duration_hint(path)
     if dur > 0:
         return dur
-    name = Path(path).name
     # 从文件名回推不了字数时,给一个保守的默认
     return default
 

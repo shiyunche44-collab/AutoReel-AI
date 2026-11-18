@@ -21,10 +21,9 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import config
-from ..publish.base import PublishError
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +224,7 @@ class BrowserSession:
         return self._browser.is_connected() if self._browser else bool(self._context.pages)
 
     # -- 生命周期 --------------------------------------------------------
-    def __enter__(self) -> "BrowserSession":
+    def __enter__(self) -> BrowserSession:
         sync_playwright = _import_playwright()
         self._pw = sync_playwright().start()
         if self.uses_profile:
@@ -265,7 +264,7 @@ class BrowserSession:
         self.page = self._context.new_page()
         return self
 
-    def _enter_profile(self) -> "BrowserSession":
+    def _enter_profile(self) -> BrowserSession:
         """固定配置目录:扫码和发布永远是同一个本机 Chrome、同一份配置、同一个 UA。"""
         lock = _profile_lock(self.key)
         if not lock.acquire(timeout=self.lock_timeout):

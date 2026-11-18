@@ -22,8 +22,9 @@ import hashlib
 import io
 import time
 import urllib.parse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
@@ -107,7 +108,7 @@ def _ark_tts_item(req: dict, timeout: float) -> str:
     voice = req.get("voice_id") or ""
     # 不缓存:同一句再合成就是重新合成(缓存会把语气不对的音频一直复用)。文件名唯一,不覆盖
     key = hashlib.sha1(f"{time.time_ns()}|{ark_tts.resolve_voice(voice)}|{req['text']}"
-                       .encode("utf-8")).hexdigest()
+                       .encode()).hexdigest()
     dest = config.DATA_DIR / "_cache" / "ark_tts_raw" / f"{key}.mp3"
     ark_tts.synthesize_to_file(req["text"], voice_id=voice, speed=req.get("speed", 1.0),
                                dest=dest, timeout=timeout, emotion=req.get("emotion", ""))
@@ -179,7 +180,7 @@ def _ark_vlm(image_url: str, prompt: str, timeout: float) -> str:
                     ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
                                   started=started, ok=False, prompt_chars=len(prompt),
                                   error="返回格式不对")
-                    raise ConnectorError("describe_images", f"方舟返回格式不对:{resp.text[:200]}")
+                    raise ConnectorError("describe_images", f"方舟返回格式不对:{resp.text[:200]}") from None
                 ledger.record(kind="vision", provider="ark", model=config.ARK_VLM_MODEL,
                               started=started, ok=True, usage=data.get("usage"),
                               prompt_chars=len(prompt))

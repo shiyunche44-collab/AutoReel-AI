@@ -8,7 +8,6 @@ import pytest
 
 from app.providers import platform_video as pv
 
-
 BILI_PAYLOAD = {
     "code": 0,
     "data": {"result": [
@@ -202,7 +201,7 @@ def test_search_respects_platform_order_and_isolates_failures(monkeypatch):
 
 def test_ffmpeg_dir_is_put_on_path(monkeypatch, tmp_path):
     """yt-dlp 判断能否分段下载只查 PATH,不读 ffmpeg_location。"""
-    monkeypatch.setenv("PATH", "C:\Windows")
+    monkeypatch.setenv("PATH", r"C:\Windows")
     monkeypatch.setattr(pv.config, "FFMPEG_PATH", tmp_path / "ffmpeg.exe")
     pv._base_opts()
     pv._base_opts()

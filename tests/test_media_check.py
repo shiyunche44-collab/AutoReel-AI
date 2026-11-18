@@ -6,13 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.library_patch import patch_library
-
 from app import config
 from app.pipeline import library as lib_mod
 from app.pipeline import media_check
 from app.pipeline.library import Item, Library
 from app.providers import clips as clips_mod
+from tests.library_patch import patch_library
 
 
 @pytest.fixture
@@ -41,8 +40,8 @@ def test_bitrate_floor_is_codec_aware():
 
 
 def test_low_res_video_is_not_usable_but_unknown_size_is():
-    base = dict(kind="video", path="x.mp4", tagged=True, view="exterior_45", target="yes",
-                start=0, end=3)
+    base = {"kind": "video", "path": "x.mp4", "tagged": True, "view": "exterior_45", "target": "yes",
+                "start": 0, "end": 3}
     assert not Item(id="a", width=480, height=852, **base).usable
     assert Item(id="b", width=1080, height=1920, **base).usable   # 竖屏 1080p 短边够
     assert Item(id="c", **base).usable                             # 老池子没回填:不拦
@@ -79,9 +78,9 @@ def test_fill_prefers_higher_bitrate_within_tier(data_dir, tmp_path, monkeypatch
     patch_library(monkeypatch, "near_dup_groups", lambda items, bits=0: {i.id: i.id for i in items})
     video = tmp_path / "v.mp4"
     video.write_bytes(b"x")
-    common = dict(kind="video", path=str(video), frame="", tagged=True, view="exterior_45",
-                  target="yes", official=True, start=1, end=4, width=1920, height=1080,
-                  vcodec="h264")
+    common = {"kind": "video", "path": str(video), "frame": "", "tagged": True, "view": "exterior_45",
+                  "target": "yes", "official": True, "start": 1, "end": 4, "width": 1920, "height": 1080,
+                  "vcodec": "h264"}
     lib = Library(subject="小米YU7")
     # 低码率的那条更长(原排序里长的优先),码率够的仍应先选
     lib.items = [Item(id="low", bitrate=600, **{**common, "end": 5}),

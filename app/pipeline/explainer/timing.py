@@ -1,7 +1,9 @@
 """按 TTS 时长给每拍写时间。"""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from ... import config, db
 from ...categories import CategoryProfile
 from ...models import ShotSpec

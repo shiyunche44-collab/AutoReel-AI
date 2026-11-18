@@ -10,7 +10,7 @@ import pytest
 from app.categories import load_profile
 from app.models import Fact
 from app.pipeline import script_gen
-from tests.test_coach import _project, fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import _project, no_playbook  # noqa: F401 - autouse fixture
 
 
 class _Capture:

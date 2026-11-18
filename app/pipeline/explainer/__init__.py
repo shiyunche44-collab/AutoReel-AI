@@ -34,7 +34,8 @@ import time  # noqa: F401
 import zlib  # noqa: F401
 from dataclasses import replace  # noqa: F401
 from pathlib import Path  # noqa: F401
-from typing import Any, Sequence  # noqa: F401
+from typing import Any
+from collections.abc import Sequence  # noqa: F401
 from ... import config, db, degrade  # noqa: F401
 from ...categories import CategoryProfile, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment, ShotSpec  # noqa: F401
@@ -268,7 +269,7 @@ def build_beats(*, subject: str, profile: CategoryProfile, segments: Sequence[Sc
 
 
 def measured_features(project_id: str, specs: Sequence[ShotSpec],
-                      narration: dict | None = None) -> dict[str, Any]:
+                      narration: dict | None = None) -> dict[str, Any]:  # noqa: F811
     """成片**实际**做成了什么样(复盘按它分档,而不是按旋钮当初想要的值):
     平均拍长、每分钟切几刀、第一拍版式、概念动画占比、素材构成、实际语速、时长。
 
@@ -541,7 +542,7 @@ def asset_coverage(project_id: str, specs: Sequence[ShotSpec], subjects: Sequenc
     if not cars:
         return {"cars": [], "missing": []}
     beats_of: dict[str, list[int]] = {c: [] for c in cars}
-    seconds_of: dict[str, float] = {c: 0.0 for c in cars}
+    seconds_of: dict[str, float] = dict.fromkeys(cars, 0.0)
     for s in specs:
         pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
         for p in pieces:

@@ -26,8 +26,9 @@ import contextlib
 import contextvars
 import hashlib
 import random
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any
 
 RGB = tuple[int, int, int]
 RGBA = tuple[int, int, int, int]

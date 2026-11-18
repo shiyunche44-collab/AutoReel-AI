@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from tests.test_coach import _published, fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import _published, no_playbook  # noqa: F401 - autouse fixture
 
 
 def test_weekly_buckets_and_gaps(fresh_db):

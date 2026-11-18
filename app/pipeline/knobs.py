@@ -29,8 +29,10 @@ import contextlib
 import contextvars
 import hashlib
 import random
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Iterator, Mapping
+from types import MappingProxyType
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,7 @@ KNOBS: dict[str, Knob] = {k.id: k for k in (
 VOICE = "voice"
 
 _current: contextvars.ContextVar[Mapping[str, Any]] = contextvars.ContextVar(
-    "knobs_variant", default={})
+    "knobs_variant", default=MappingProxyType({}))
 
 
 def label(knob: str) -> str:

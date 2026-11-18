@@ -7,8 +7,7 @@ import time
 
 import pytest
 
-from tests.test_coach import _project, fresh_db, no_playbook  # noqa: F401
-
+from tests.test_coach import _project, no_playbook  # noqa: F401
 
 # --------------------------------------------------------------------------
 # B站:view 接口(stat 在 data.stat 里,顺带时长 / 发布时间 / mid)

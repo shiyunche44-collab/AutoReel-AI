@@ -1,12 +1,13 @@
 """生成脚本用的提示词模板与事实整理。"""
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 from ...categories import CategoryProfile, Vocab
 from ...models import Fact
 from .. import variety
 from .lint_base import AD_ABSOLUTE_TERMS
-
 
 SYSTEM = """{role_line}
 

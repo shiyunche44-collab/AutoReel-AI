@@ -18,9 +18,10 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .. import config, db
 from . import aspect, timeline
@@ -304,9 +305,9 @@ def apply(project_id: str) -> dict[str, Any]:
 
     只改字幕文字,时间轴、旁白、各拍画面都不动:改 narration.json 的 cue 和 ASS,
     再 `explainer.recompose`。重出失败就把字幕文件原样放回去。"""
-    from . import explainer, locks, narration, orchestrator
     from ..models import SubtitleCue
     from ..state import State
+    from . import explainer, locks, narration, orchestrator
 
     edits = read_edits(project_id)
     if edits.structural:

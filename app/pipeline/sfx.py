@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import wave
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 

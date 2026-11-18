@@ -1,7 +1,8 @@
 """车牌上别家标识的检测与抹除。"""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .tone import log
 

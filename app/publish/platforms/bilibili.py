@@ -26,8 +26,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishError, \
-    PublishRequest, PublishResult
+from ..base import (
+    Account,
+    AccountStatus,
+    MetricSnapshot,
+    PlatformRef,
+    PublishError,
+    PublishRequest,
+    PublishResult,
+)
 from ..http import UPLOAD_TIMEOUT, find_key, new_client, request_json
 from ..registry import LANDSCAPE
 
@@ -213,7 +220,7 @@ class BilibiliAdapter:
                    blob: bytes, part: int) -> None:
         headers = {"X-Upos-Auth": session["auth"], "Content-Type": "application/octet-stream"}
         last = ""
-        for attempt in range(3):
+        for _attempt in range(3):
             try:
                 resp = client.put(url, params=params, content=blob, headers=headers,
                                   timeout=UPLOAD_TIMEOUT)

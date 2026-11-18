@@ -6,13 +6,12 @@ import shutil
 from pathlib import Path
 
 import pytest
-
-from tests.library_patch import patch_in_package
 from PIL import Image, ImageDraw
 
 from app import config
 from app.pipeline import cover_art, motion_assets
 from app.providers import images
+from tests.library_patch import patch_in_package
 
 
 def _studio_car(path, bg=(250, 250, 250)):

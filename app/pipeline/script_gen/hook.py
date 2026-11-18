@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...categories import CategoryProfile
 from ...models import ScriptSegment
 from .. import variety
-
 from .lint_base import LintIssue, forbidden_in, has_numeric_claim
-
 
 #: 口径词之后多远内出现的数字算"这个口径下的数"(如 "CLTC续航643公里")
 _BASIS_WINDOW = 40
@@ -147,7 +146,7 @@ _PAYOFF_STOP = set("的了是我你他她它这那有在就都也还和与及但
 
 
 def _grams(text: str) -> set[str]:
-    chars = [c for c in re.sub(r"[^一-鿿A-Za-z0-9]", "", text or "")]
+    chars = list(re.sub(r"[^一-鿿A-Za-z0-9]", "", text or ""))
     return {"".join(chars[i:i + _PAYOFF_GRAM]) for i in range(len(chars) - _PAYOFF_GRAM + 1)
             if not set(chars[i:i + _PAYOFF_GRAM]) <= _PAYOFF_STOP}
 

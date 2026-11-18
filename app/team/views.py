@@ -6,11 +6,26 @@ import time
 from typing import Any
 
 from .. import config, db
-from . import (activator, benchmark, compliance, engagement, events, iteration, next_slot, paused,
-               playbook, preference, publisher, rapid, roles, scout)
-from . import chief, health
-from .plan import view
+from . import (
+    activator,
+    benchmark,
+    chief,
+    compliance,
+    engagement,
+    events,
+    health,
+    iteration,
+    next_slot,
+    paused,
+    playbook,
+    preference,
+    publisher,
+    rapid,
+    roles,
+    scout,
+)
 from .features import duration_bucket
+from .plan import view
 
 #: 往回看多久的选题(已发布 / 失败的也显示一阵)
 LOOKBACK_DAYS = 3

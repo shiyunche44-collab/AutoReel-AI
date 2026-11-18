@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from tests.test_coach import fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import no_playbook  # noqa: F401 - autouse fixture
 
 #: 4 拍:开头章 0–10 秒 hook、正文 10–30 秒 panel + 30–42 秒 concept、结论章 42–50 秒 broll
 BOARD = [
@@ -82,7 +82,8 @@ def test_learn_groups_shrinks_and_needs_two_works():
 
 
 def test_layout_hint_and_describe(fresh_db):
-    from app.team import beat_retention as br, playbook
+    from app.team import beat_retention as br
+    from app.team import playbook
 
     rows = [{"id": "beat:beat_layout:concept:hold", "dimension": "beat_layout", "value": "concept",
              "metric": "hold", "effect": 0.7, "n": 6, "confidence": "medium", "evidence": []},
@@ -102,7 +103,8 @@ def test_layout_hint_and_describe(fresh_db):
 
 def test_hooks_feed_build_beats_and_pick_clips(fresh_db):
     from app.pipeline import explainer, repurpose
-    from app.team import beat_retention as br, playbook
+    from app.team import beat_retention as br
+    from app.team import playbook
 
     spans = [
         {"idx": 1, "start": 0, "end": 10, "chapter": "开场", "refs": 1, "card": False, "layout": "hook"},

@@ -3,15 +3,27 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
+
 from ... import config
 from ...categories import Vocab
 from ...providers import clips as clips_mod
 from ...providers import official, platform_video
-
-from .model import Library, MAX_AUTO_SOURCES, MAX_LAUNCH_SOURCES, MAX_OFFICIAL_SOURCES, MAX_SITE_SOURCES, OFFICIAL_ENOUGH_SOURCES, Source, THIRD_PARTY_WITH_OFFICIAL, normalise_url, platform_of, vocab_of
 from .ingest import _add_still
+from .model import (
+    MAX_AUTO_SOURCES,
+    MAX_LAUNCH_SOURCES,
+    MAX_OFFICIAL_SOURCES,
+    MAX_SITE_SOURCES,
+    OFFICIAL_ENOUGH_SOURCES,
+    THIRD_PARTY_WITH_OFFICIAL,
+    Library,
+    Source,
+    normalise_url,
+    platform_of,
+    vocab_of,
+)
 
 
 # --------------------------------------------------------------------------

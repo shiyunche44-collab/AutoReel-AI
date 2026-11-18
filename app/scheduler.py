@@ -211,7 +211,7 @@ class Scheduler:
         while not self._stop.is_set():
             try:
                 pid = await asyncio.wait_for(queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             self._running.add(pid)
             requeue = False

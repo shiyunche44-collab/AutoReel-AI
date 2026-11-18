@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
-from ...models import Fact, ScriptSegment
+from collections.abc import Sequence
 
+from ...models import Fact, ScriptSegment
 
 # --------------------------------------------------------------------------
 # 合规 lint

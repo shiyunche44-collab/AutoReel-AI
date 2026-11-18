@@ -226,7 +226,6 @@ def ffmpeg_status() -> tuple[bool, str]:
                         and FFPROBE_PATH.stem.lower() == "ffprobe")
         probe = "ffprobe 可用" if probe_ok else "ffprobe 缺失(时长探测将退化)"
         return True, f"ffmpeg: {FFMPEG_PATH}({probe})"
-    checked = [env for env in ("FFMPEG_BIN", _DEFAULT_FFMPEG_DIR) if env]
     return False, (
         "未找到 ffmpeg。已尝试 .env 中的 FFMPEG_BIN、默认目录 "
         + _DEFAULT_FFMPEG_DIR

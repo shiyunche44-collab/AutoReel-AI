@@ -11,7 +11,6 @@ import pytest
 from app.categories import load_profile
 from app.providers import official, platform_video
 
-
 SITES = load_profile("auto_long").official_sites
 
 

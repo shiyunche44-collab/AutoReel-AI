@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from app import config
-
 from app.pipeline.timeline import (
     build_subtitle_cues,
     format_ass,
