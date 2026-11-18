@@ -46,6 +46,8 @@ RESOURCES: dict[str, int] = {
     "library": 2,
     # 精修:一次完整合成,吃 ffmpeg 和内存
     "refine": 1,
+    # 剪辑 v2 门禁 B 审片预览(Remotion 半尺寸渲染,吃 CPU;和调度器的渲染通道分开算)
+    "render": 1,
     # 手动 / 事件触发的团队角色(定时的那些仍由 team.scheduler 串行跑)
     "team": 2,
     "default": 2,
@@ -54,6 +56,7 @@ RESOURCES: dict[str, int] = {
 #: 注册 handler 的模块。执行器启动时导入,保证 handler 都登记上了。
 HANDLER_MODULES = (
     "app.pipeline.library.builder",
+    "app.pipeline.edit.preview",
     "app.team",
     "app.team.publisher",
 )

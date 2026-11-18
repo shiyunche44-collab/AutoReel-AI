@@ -345,6 +345,15 @@ def health():
         out["llm_calls_24h"] = db.llm_usage(time.time() - 86400, "kind")
     except Exception:  # noqa: BLE001 - 账本读不了不该让健康检查挂掉
         out["llm_calls_24h"] = []
+    # 剪辑 v2:开到哪种画幅、成片字体在不在(没有就退系统字体,字重随机器变)
+    try:
+        from .pipeline.edit import render as edit_render
+
+        font = edit_render.font_file()
+        out["edit_v2"] = {"mode": config.edit_v2_mode(), "font": str(font) if font else None,
+                          "font_missing": config.edit_v2_mode() != "off" and font is None}
+    except Exception:  # noqa: BLE001
+        out["edit_v2"] = None
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size_cached()
     out["disk"] = {

@@ -47,8 +47,28 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
                           → -c:v copy 合流 → 解码检查 + 音频包检查 + final_qa
 ```
 
-流水线状态机不变:DRAFT_RENDERING 照旧逐拍渲染(门禁 B 审片、整屏卡片 / 概念动画都要用),
+流水线状态机不变:DRAFT_RENDERING 照旧逐拍渲染(整屏卡片 / 概念动画要用,门禁 B 也还能看逐拍),
 只有 COMPOSING 里的合成换成 v2。封面、包装、render.json 新旧共用(`explainer._finish_compose`)。
+
+### 取材一次定稿(门禁 B 审的就是成片)
+
+开关 `EDIT_V2`:`off`(默认)/ `portrait` / `landscape` / `all`(旧写法 `1` = portrait)。
+
+- **定稿**:逐拍渲染完、进门禁 B 之前,`edit.project.plan` 取材、编时间线,连同每一刀的取材记录
+  (`plan.picks`,键是「拍号:第几刀」)写进 `edit_timeline.json`。取材带上近期同车成片用过的
+  (`cross_project_seed`)、整屏拍用掉的、排除清单 `exclude_materials.json`。
+- **回放**:之后的预览、成片、只改字幕的重合成都按记录回放,不碰素材池。只有这几种情况会重取:
+  这一刀的时长 / 半句变了;素材文件没了或进了排除清单;重拍某拍(`mark_dirty`,原素材往后排);
+  审片「换一刀」(`swap`,这一刀排除原素材)。门禁 A 之后重建分镜会删掉整份时间线(`reset`)。
+- **门禁 B 审整片**:进门禁 B 时排 `edit.preview` 任务(`jobs`,资源类 `render` 一次一路),
+  半尺寸 + crf 28 + veryfast 出 `preview_v2.mp4`;项目页显示预览和刀表(时间、半句、缩略图、对题),
+  每刀可「换一刀」。`EDIT_V2_PREVIEW=0` 关预览。横屏静图秒数占比超过 `GATE_B_STILL_MAX`(默认 0.4)
+  门禁 B 拦下,可选「仍然继续」。
+- **记录跟着时间线**:有算数的时间线时,`materials_used.json`、来源声明、`features.json` 都按时间线的刀算
+  (`explainer.footage.beat_pieces`);成片退回旧合成会把时间线标成 `superseded`,记录退回读逐拍。
+- **试片**:`scripts/edit_v2_trial.py` 写 `edit_timeline_trial.json`,不顶掉正式时间线、不进使用记录;
+  `--fresh` 全部重取。
+- 测试:`tests/test_edit_plan.py`。
 
 ## 分阶段
 
@@ -111,9 +131,11 @@ python -I scripts/edit_v2_trial.py --landscape     # 横屏(流水线里要 EDIT
 - 输出:h264,CRF 16(`EDIT_V2_CRF`),x264 `slow`(`EDIT_V2_X264_PRESET`),**标准范围 yuv420p + bt709**。
   Remotion 默认出的 yuvj420p(全范围)在平台转码时常被当成标准范围,画面发灰或暗部死黑。
   抽帧 JPEG 质量 95(默认 80 时字边有压缩噪点)。
-- 字体:`.env` 配 `EDIT_V2_FONT_FILE=<字体文件>`(ttf / otf / woff / woff2;.ttc 浏览器认不了),
-  合成时嵌入并等加载完才出帧。推荐思源黑体 Heavy / Noto Sans SC Black(SIL OFL,可商用)。
-  没配就按「Noto Sans SC Black → 思源黑体 Heavy → 微软雅黑」找系统字体,观感随机器变化。
+- 字体:`python scripts/fetch_fonts.py` 把 Noto Sans SC Black(SIL OFL,可商用)下到
+  `data/fonts/NotoSansSC-Black.otf`,默认就用它;也可在 `.env` 配 `EDIT_V2_FONT_FILE=<字体文件>`
+  (ttf / otf / woff / woff2;.ttc 浏览器认不了)。合成时嵌入,等加载完才出帧,字幕(`Layer.jsx` 的 `Cue`)
+  和大字都用它。两样都没有时按「Noto Sans SC Black → 思源黑体 Heavy → 微软雅黑」找系统字体,
+  观感随机器变化;成片会带一条提示并记降级 `edit_v2.font`,`/api/health` 的 `edit_v2.font_missing` 为真。
 - 渲染缓存键含 `remotion/src` 源码哈希,改了组件旧缓存自动作废。
 
 ## 已知限制(第 1 阶段)

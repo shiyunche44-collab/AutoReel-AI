@@ -165,6 +165,56 @@ def review_rerender(project_id: str, payload: ReviewRerenderRequest):
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/api/projects/{project_id}/edit")
+def edit_cuts(project_id: str):
+    """剪辑 v2 刀表 + 门禁 B 整片预览状态。"""
+    if not db.get_project(project_id):
+        raise HTTPException(404, "项目不存在")
+    return orchestrator.edit_cuts(project_id)
+
+
+@router.post("/api/projects/{project_id}/edit/cuts/{key}/swap")
+def edit_swap_cut(project_id: str, key: str):
+    """门禁 B「换一刀」:排除这一刀现在的素材重新取材,再出一版预览。"""
+    try:
+        return orchestrator.swap_cut(project_id, key)
+    except orchestrator.PipelineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/api/projects/{project_id}/edit/cuts/{key}/thumb.jpg")
+def edit_cut_thumb(project_id: str, key: str):
+    from ..pipeline.edit import project as edit_project
+
+    path = edit_project.cut_thumb(project_id, key)
+    if path is None:
+        raise HTTPException(404, "没有这一刀的画面")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.post("/api/projects/{project_id}/edit/preview")
+def edit_preview_render(project_id: str):
+    """重排一版门禁 B 整片预览(已经在排 / 在跑时不重复排)。"""
+    from ..pipeline.edit import preview as edit_preview
+
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    if project.get("state") != "GATE_B":
+        raise HTTPException(400, "只有门禁 B 审片时出预览")
+    return {"queued": edit_preview.submit(project_id), **edit_preview.status(project_id)}
+
+
+@router.get("/api/projects/{project_id}/edit/preview.mp4")
+def edit_preview_file(project_id: str):
+    from ..pipeline.edit import preview as edit_preview
+
+    path = edit_preview.path(project_id)
+    if not path.is_file():
+        raise HTTPException(404, "预览还没出")
+    return FileResponse(path, media_type="video/mp4")
+
+
 @router.patch("/api/projects/{project_id}/script")
 def patch_script(project_id: str, payload: ScriptPatch):
     project = db.get_project(project_id)

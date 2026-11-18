@@ -750,15 +750,65 @@ def _stage_draft_rendering(c: _Ctx) -> dict[str, Any]:
                                       limit=EXPLAINER_BEATS_PER_TICK, subjects=names,
                                       should_stop=(stop_event.is_set if stop_event else None))
     if result["stage_complete"]:
+        planned = _plan_edit(c, specs)
         still_note = explainer.still_warning(explainer.footage_mix(project_id, specs))
         if still_note:
             db.add_event(project_id, "footage:still_heavy", reason=still_note)
         _set_state(project_id, state, State.GATE_B, reason="各拍渲染完成,等待审片")
+        if planned:
+            from .edit import preview as edit_preview
+
+            edit_preview.submit(project_id)  # 整片预览:门禁 B 审的就是成片的取材和刀口
         return {"state": str(State.GATE_B), "waiting": True, **result}
     failed = [r for r in db.get_shots(project_id, "draft") if r["status"] == "failed"]
     if failed and len(failed) == len(result["remaining"]) and not result["rendered"]:
         raise PipelineError("这几拍渲染失败:" + "; ".join(result["errors"][:3]))
     return {"state": str(state), **result}
+
+
+def _edit_v2_on(project: dict[str, Any]) -> bool:
+    from . import edit
+
+    return edit.enabled(aspect.is_portrait(project))
+
+
+def _plan_edit(c: _Ctx, specs: Sequence[ShotSpec]) -> bool:
+    """剪辑 v2:各拍渲完就把整片的取材定下来,写 edit_timeline.json(门禁 B 的预览、
+    成片合成都按它回放)。没开返回 False;失败记降级、不拦门禁(合成时会再取一次)。"""
+    project_id = c.project_id
+    if not _edit_v2_on(c.project):
+        return False
+    from .edit import project as edit_project
+
+    rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
+    nar = db.read_json(project_id, "narration.json", {}) or {}
+    try:
+        edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(c.project),
+                          title=str(c.project.get("title") or ""), subject=c.subject,
+                          subjects=c.names, vocab=c.profile.vocab, llm=c.llm)
+    except Exception as exc:  # noqa: BLE001 —— 取材失败不拦审片,合成时再取
+        log.warning("剪辑 v2 取材失败(%s)", project_id, exc_info=True)
+        db.add_event(project_id, "edit_v2:plan_failed", reason=str(exc)[:300])
+        degrade.note("edit_v2.plan", f"门禁 B 前取材失败:{exc}", project_id=project_id)
+        return False
+    try:
+        explainer.materials_used(project_id, specs)  # 使用记录按时间线重写(授权复核看它)
+    except OSError:
+        pass
+    return True
+
+
+def _still_blocker(project: dict[str, Any], project_id: str,
+                   specs: Sequence[ShotSpec]) -> str:
+    """剪辑 v2 横屏:静图秒数占比超过 `GATE_B_STILL_MAX` 就拦(幻灯片式的片子不放行)。"""
+    limit = config.GATE_B_STILL_MAX
+    if limit <= 0 or aspect.is_portrait(project) or not _edit_v2_on(project):
+        return ""
+    ratio = float(explainer.footage_mix(project_id, specs).get("still_ratio") or 0.0)
+    if ratio <= limit:
+        return ""
+    return (f"门禁 B 未放行:静图占画面 {ratio:.0%},超过 {limit:.0%} —— 这台车能用的动态实拍不够,"
+            "先补素材(配 cookies 重拉 1080p)再重渲,或显式选择「仍然继续」。")
 
 
 def _stage_gate_b(c: _Ctx) -> dict[str, Any]:
@@ -779,6 +829,9 @@ def _stage_gate_b(c: _Ctx) -> dict[str, Any]:
             + "、".join(missing)
             + " —— 素材池可能还没建好,回「先补素材」等它建完再重渲这几拍,"
               "或显式选择「仍然继续」。")
+    still = _still_blocker(c.project, project_id, specs)
+    if still and not force:
+        raise PipelineError(still)
     n = explainer.promote_all(project_id, specs)
     _set_state(project_id, state, State.COMPOSING, reason=f"{n} 拍转为成片,进入拼接混音")
     return {"state": str(State.COMPOSING), "promoted": n, "coverage": coverage}
@@ -791,7 +844,7 @@ def _stage_composing(c: _Ctx) -> dict[str, Any]:
     llm = c.llm
     try:
         payload = explainer.compose(project_id, _specs(project_id), profile,
-                                    project["title"], llm=llm)
+                                    project["title"], llm=llm, subjects=c.names)
     except RuntimeError as exc:
         raise PipelineError(str(exc)) from exc
     _set_state(project_id, State.COMPOSING, State.DONE,
@@ -1042,6 +1095,52 @@ def rerender_beats(project_id: str, idxs: Sequence[int]) -> dict[str, Any]:
         _set_state(project_id, State.GATE_B, State.DRAFT_RENDERING,
                    reason=f"重拍第 {', '.join(str(i) for i in idxs)} 拍(换背景)")
         return {"rerender": idxs}
+
+
+def edit_cuts(project_id: str) -> dict[str, Any]:
+    """门禁 B 刀表 + 预览状态(剪辑 v2 没有时间线时 cuts 为空)。"""
+    from .edit import preview as edit_preview
+    from .edit import project as edit_project
+
+    saved = edit_project.load(project_id)
+    return {"enabled": _edit_v2_on(db.get_project(project_id) or {}),
+            "cuts": edit_project.cuts(project_id), "match": saved.get("match") or {},
+            "plan": {k: (saved.get("plan") or {}).get(k)
+                     for k in ("source", "planned_at", "replayed", "fresh", "superseded")},
+            "preview": edit_preview.status(project_id)}
+
+
+def swap_cut(project_id: str, key: str) -> dict[str, Any]:
+    """门禁 B「换一刀」:排除这一刀现在的素材重新取材,写回时间线,再排一版预览。"""
+    from .edit import preview as edit_preview
+    from .edit import project as edit_project
+
+    with locks.require_project_lock(project_id):
+        project = db.get_project(project_id)
+        if not project:
+            raise PipelineError("项目不存在")
+        if State(project["state"]) != State.GATE_B:
+            raise PipelineError("只有门禁 B 审片时能换刀")
+        if not edit_project.active(project_id):
+            raise PipelineError("这个项目没有剪辑 v2 时间线")
+        profile, theme = _theme_of(project)
+        names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+        specs = _specs(project_id)
+        rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
+        nar = db.read_json(project_id, "narration.json", {}) or {}
+        try:
+            with ledger.tag(project_id=project_id):
+                edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(project),
+                                  title=str(project.get("title") or ""),
+                                  subject=str(project.get("subject") or ""), subjects=names,
+                                  vocab=profile.vocab, llm=_llm(), source="swap", swap=key)
+        except KeyError as exc:
+            raise PipelineError(str(exc.args[0] if exc.args else exc)) from exc
+        explainer.materials_used(project_id, specs)
+        db.add_event(project_id, "edit_v2:swap", reason=f"换一刀 {key}")
+    queued = edit_preview.submit(project_id)
+    return {"key": key, "cut": next((r for r in edit_project.cuts(project_id) if r["key"] == key),
+                                    None), "preview_queued": queued}
 
 
 def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[ShotSpec]:

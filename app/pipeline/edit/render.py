@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ... import config
+from ... import config, degrade
 from .. import caption_layer, final_qa
 from .. import render as render_mod
 from .. import timeline as timeline_mod
@@ -41,11 +41,13 @@ FONT_SUFFIXES = (".ttf", ".otf", ".woff", ".woff2")
 
 
 def font_file() -> Path | None:
-    """`EDIT_V2_FONT_FILE` 指定的字体(建议思源黑体 Heavy / Noto Sans SC Black,OFL 可商用)。
-    没配、文件不在、格式不对都返回 None:Remotion 按系统字体回退。.ttc 浏览器认不了,不收。"""
+    """`EDIT_V2_FONT_FILE` 指定的字体(建议思源黑体 Heavy / Noto Sans SC Black,OFL 可商用);
+    没配就用 `scripts/fetch_fonts.py` 下好的 `data/fonts/NotoSansSC-Black.otf`。
+    都没有、文件不在、格式不对返回 None:Remotion 按系统字体回退。.ttc 浏览器认不了,不收。"""
     raw = os.getenv("EDIT_V2_FONT_FILE", "").strip().strip('"')
     if not raw:
-        return None
+        default = config.edit_font_default()
+        return default if default.is_file() else None
     path = Path(raw)
     if not path.is_file() or path.suffix.lower() not in FONT_SUFFIXES:
         log.warning("EDIT_V2_FONT_FILE 不可用(不存在或不是 ttf/otf/woff/woff2):%s", raw)
@@ -117,28 +119,52 @@ def source_digest() -> str:
     return h.hexdigest()[:12]
 
 
-def render_video(tl: Timeline, work: Path) -> Path:
-    """Remotion 渲出静音 h264,按内容哈希缓存。失败抛 EditRenderError。"""
+#: 门禁 B 审片预览的画质:半尺寸、快编码。只给人看刀口和取材,不是成片
+PREVIEW_SCALE = 0.5
+PREVIEW_CRF = 28
+PREVIEW_PRESET = "veryfast"
+
+
+def _quality(preview: bool) -> tuple[str, list[str]]:
+    """(缓存文件名前缀, Remotion 画质参数)。"""
+    if preview:
+        return "preview", [f"--scale={PREVIEW_SCALE}", f"--crf={PREVIEW_CRF}",
+                           "--jpeg-quality=80", f"--x264-preset={PREVIEW_PRESET}"]
+    # 画质:JPEG 帧质量 95(默认 80 时字边有压缩噪点)
+    return "video", [f"--crf={os.getenv('EDIT_V2_CRF', '16')}", "--jpeg-quality=95",
+                     f"--x264-preset={os.getenv('EDIT_V2_X264_PRESET', 'slow')}"]
+
+
+def _drop_stale(work: Path, prefix: str, keep: Path) -> None:
+    """同一档画质只留最新的一份(换一刀 / 重合成每次都是新哈希,旧的几百 MB 留着没用)。"""
+    for f in work.glob(f"{prefix}_*.mp4"):
+        if f != keep and ".part" not in f.name:  # 正在渲的临时文件不动
+            f.unlink(missing_ok=True)
+
+
+def render_video(tl: Timeline, work: Path, *, preview: bool = False) -> Path:
+    """Remotion 渲出静音 h264,按内容哈希缓存。失败抛 EditRenderError。
+    `preview`:门禁 B 审片用的半尺寸快编码版(和成片分开缓存)。"""
     ok, why = caption_layer.available()
     if not ok:
         raise EditRenderError(why)
+    prefix, quality = _quality(preview)
     props = stage_media(tl, work / "public")
-    key = hashlib.sha1(json.dumps([EDIT_VERSION, source_digest(), props], sort_keys=True,
+    key = hashlib.sha1(json.dumps([EDIT_VERSION, source_digest(), props, quality], sort_keys=True,
                                   ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
-    out = work / f"video_{key}.mp4"
+    out = work / f"{prefix}_{key}.mp4"
     if out.is_file() and out.stat().st_size > 0:
         return out
     props_path = work / f"timeline_{key}.json"
     props_path.write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
-    tmp = work / f"video_{key}.part.mp4"
+    tmp = work / f"{prefix}_{key}.part.mp4"
     cmd = [
         config.motion_node(), str(caption_layer.REMOTION_DIR / caption_layer._CLI), "render",
         "src/index.jsx", "Edit", tmp.as_posix(),
-        # 画质:JPEG 帧质量 95(默认 80 时字边有压缩噪点);输出标准范围 yuv420p + bt709,
-        # 默认的 yuvj420p 全范围在平台转码时常被当成标准范围,画面发灰 / 暗部死黑
-        "--codec=h264", f"--crf={os.getenv('EDIT_V2_CRF', '16')}", "--muted",
-        "--image-format=jpeg", "--jpeg-quality=95", "--pixel-format=yuv420p", "--color-space=bt709",
-        f"--x264-preset={os.getenv('EDIT_V2_X264_PRESET', 'slow')}",
+        # 输出标准范围 yuv420p + bt709:默认的 yuvj420p 全范围在平台转码时常被当成标准范围,
+        # 画面发灰 / 暗部死黑
+        "--codec=h264", "--muted", "--image-format=jpeg", "--pixel-format=yuv420p",
+        "--color-space=bt709", *quality,
         f"--public-dir={(work / 'public').as_posix()}",
         f"--props={props_path.as_posix()}", f"--browser-executable={caption_layer.browser()}",
         f"--concurrency={os.getenv('EDIT_V2_CONCURRENCY', '50%')}",
@@ -155,6 +181,8 @@ def render_video(tl: Timeline, work: Path) -> Path:
         tmp.unlink(missing_ok=True)
         raise EditRenderError("Remotion 渲染失败:" + (proc.stderr or proc.stdout or "")[-500:])
     os.replace(tmp, out)
+    props_path.unlink(missing_ok=True)
+    _drop_stale(work, prefix, out)
     return out
 
 
@@ -176,6 +204,11 @@ def compose(project_id: str, tl: Timeline, *, narration_path: Path | None,
     work = project_dir / "_edit"
     work.mkdir(parents=True, exist_ok=True)
     warnings = list(tl.notes)
+    if font_file() is None:
+        # 系统里的粗黑体各机器不一样,成片字幕 / 大字的字重和字宽跟着变
+        warnings.append("没有剪辑字体(python scripts/fetch_fonts.py),字幕用了系统字体")
+        degrade.note("edit_v2.font", "没有 EDIT_V2_FONT_FILE / data/fonts 字体,用系统字体",
+                     project_id=project_id)
     mix, err = render_mod._mix_audio(narration_path, bgm_path, tl.duration,
                                      project_dir / "_render" / "mix.wav", sfx_path=sfx_path,
                                      pad=True)
@@ -200,3 +233,27 @@ def compose(project_id: str, tl: Timeline, *, narration_path: Path | None,
         warnings.extend(final_qa.inspect(output))
     return render_mod.RenderResult(ok=True, output_path=output, duration=duration,
                                    warnings=warnings, log="edit-v2")
+
+
+def preview(project_id: str, tl: Timeline, *, narration_path: Path | None,
+            bgm_path: Path | None, sfx_path: Path | None, output_name: str) -> Path:
+    """门禁 B 审片预览:半尺寸快编码 + 同一套混音,写到项目目录的 `output_name`。
+
+    混音放 `_edit/`(`_render/` 在成片合成时整个清掉);不做成片的 final_qa,只查能不能解码。"""
+    project_dir = config.project_dir(project_id)
+    work = project_dir / "_edit"
+    work.mkdir(parents=True, exist_ok=True)
+    mix, err = render_mod._mix_audio(narration_path, bgm_path, tl.duration,
+                                     work / "preview_mix.wav", sfx_path=sfx_path, pad=True)
+    if (narration_path or bgm_path) and not mix:
+        raise EditRenderError(f"混音失败:{err}")
+    video = render_video(tl, work, preview=True)
+    output = project_dir / output_name
+    tmp = project_dir / f"{Path(output_name).stem}.part{Path(output_name).suffix}"
+    tmp.unlink(missing_ok=True)
+    mux(video, mix, tmp, tl.duration)
+    if not render_mod._decodes_clean(tmp):
+        tmp.unlink(missing_ok=True)
+        raise EditRenderError("预览解码有错误")
+    os.replace(tmp, output)
+    return output

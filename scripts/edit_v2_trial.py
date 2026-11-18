@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="列出能试的项目")
     ap.add_argument("--no-rerank", action="store_true", help="不让文字模型复选素材")
     ap.add_argument("--landscape", action="store_true", help="试横屏项目")
+    ap.add_argument("--fresh", action="store_true",
+                    help="重新取材(默认沿用上次试片的取材,只比包装)")
     args = ap.parse_args()
 
     found = candidates(landscape=args.landscape)
@@ -130,16 +132,22 @@ def main() -> int:
     print(f"试片:{pid} {project.get('subject', '')}《{project.get('title', '')}》"
           f",{len(specs)} 拍,文字模型复选:{'开' if llm else '关'}")
 
+    _, theme = orchestrator._theme_of(project)
+    names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+
     t0 = time.time()
+    # source="trial":时间线写 edit_timeline_trial.json,不动正式的时间线和使用记录;
+    # 再跑一次默认沿用上次试片的取材(只比包装),--fresh 重新取材
     result = edit_project.compose(
         pid, specs, rows, nar, size=aspect.frame_size(project),
         title=str(project.get("title") or ""), subject=str(project.get("subject") or ""),
-        output_name=OUTPUT, vocab=profile.vocab, llm=llm)
+        output_name=OUTPUT, vocab=profile.vocab, llm=llm, subjects=names,
+        source="trial", fresh=args.fresh)
     spent = time.time() - t0
     project_dir = config.project_dir(pid)
     new = project_dir / OUTPUT
     old = aspect.output_path(pid)
-    saved = db.read_json(pid, "edit_timeline.json", {}) or {}
+    saved = edit_project.load(pid, trial=True)
     sheet = project_dir / "_edit" / "compare.jpg"
     has_sheet = compare_sheet(old, new, sheet, result.duration, portrait=aspect.is_portrait(project))
     report = {

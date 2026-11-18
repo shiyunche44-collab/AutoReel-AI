@@ -162,6 +162,8 @@ from .beat_render import (  # noqa: E402,F401
     with_sting,
 )
 from .footage import (  # noqa: E402,F401
+    beat_pieces,
+    cut_count,
     footage_mix,
     still_warning,
     footage_source_note,
@@ -278,12 +280,11 @@ def measured_features(project_id: str, specs: Sequence[ShotSpec],
     total = sum(s.duration for s in beats)
     if not beats or not total:
         return {}
-    cuts = official = 0.0
-    for s in beats:
-        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
-        cuts += max(1, len(pieces))
-        official += sum(float(p.get("length") or 0.0) for p in pieces
-                        if p.get("kind") != "still" and not p.get("third_party"))
+    # 剪辑 v2 的时间线算数时按时间线的刀算(成片实际的样子),否则按逐拍记录
+    by_beat = beat_pieces(project_id, beats)
+    cuts = cut_count(project_id, beats)
+    official = sum(float(p.get("length") or 0.0) for s in beats for p in by_beat.get(s.idx) or []
+                   if p.get("kind") != "still" and not p.get("third_party"))
     concept = sum(1 for s in beats if s.layout == "concept")
     nar = narration or {}
     chars = int(nar.get("total_chars") or 0)
@@ -368,6 +369,9 @@ def init_beats(project_id: str, specs: Sequence[ShotSpec]) -> None:
     素材用量也清零:全片重渲,上一轮的次数留着只会把用过的视频一路压到静图后面。"""
     db.write_json(project_id, "beats_used.json", {})
     db.write_json(project_id, "beats_recent.json", [])
+    from ..edit import project as edit_project
+
+    edit_project.reset(project_id)  # 剪辑 v2 的取材记录按旧分镜的拍号记的,一并作废
     for stage in ("draft", "final"):
         db.delete_shots(project_id, stage)
         db.upsert_shots(project_id, [
@@ -543,9 +547,9 @@ def asset_coverage(project_id: str, specs: Sequence[ShotSpec], subjects: Sequenc
         return {"cars": [], "missing": []}
     beats_of: dict[str, list[int]] = {c: [] for c in cars}
     seconds_of: dict[str, float] = dict.fromkeys(cars, 0.0)
+    by_beat = beat_pieces(project_id, specs)  # 有算数的剪辑 v2 时间线就按它
     for s in specs:
-        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
-        for p in pieces:
+        for p in by_beat.get(s.idx) or []:
             parts = Path(str(p.get("path") or "")).parts
             for car in cars:
                 if library.slug(car) in parts:
@@ -568,6 +572,9 @@ def rerender(project_id: str, idx: int) -> None:
     for p in pieces:
         used[p["item_id"]] = used.get(p["item_id"], 0) + 3
     db.write_json(project_id, "beats_used.json", used)
+    from ..edit import project as edit_project
+
+    edit_project.mark_dirty(project_id, [idx])  # 剪辑 v2:这一拍的刀下次重新取材
     db.update_shot(project_id, idx, "draft", status="pending", draft_path=None, error=None)
     db.update_shot(project_id, idx, "final", status="pending", final_path=None, error=None)
 
@@ -757,8 +764,9 @@ def _host_seed(project_id: str) -> int:
 
 
 def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile,
-            title: str, llm: Any = None) -> dict[str, Any]:
-    """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。"""
+            title: str, llm: Any = None, subjects: Sequence[str] = ()) -> dict[str, Any]:
+    """成片:拼各拍 + 旁白/BGM 混音 + 字幕。旁白在门禁 A 之后已经生成好了。
+    `subjects`:横评车单(剪辑 v2 每一刀按 `beat_subject` 取那台车的素材)。"""
     rows = {r["idx"]: r for r in db.get_shots(project_id, "final")}
     beats = [s for s in specs if s.duration > 0]
     missing = [s.idx for s in beats if not (rows.get(s.idx) or {}).get("final_path")]
@@ -771,8 +779,12 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
     # 拼接缓存按序号命名,重拍过的拍必须重新归一化
     shutil.rmtree(project_dir / "_render", ignore_errors=True)
     result = _compose_v2(project_id, specs, rows, nar, project, size, title,
-                         vocab=profile.vocab, llm=llm)
+                         vocab=profile.vocab, llm=llm, subjects=subjects)
     if result is None:
+        from ..edit import project as edit_project
+
+        # 成片走旧合成:剪辑 v2 的时间线(门禁 B 前取的材)不再算数,使用记录退回逐拍
+        edit_project.supersede(project_id, "成片走了旧合成")
         result = _compose_v1(project_id, beats, rows, nar, project, project_dir, size)
     return _finish_compose(project_id, specs, profile, title, llm, beats, nar, project,
                            project_dir, size, result)
@@ -780,8 +792,10 @@ def compose(project_id: str, specs: Sequence[ShotSpec], profile: CategoryProfile
 
 def _compose_v2(project_id: str, specs: Sequence[ShotSpec], rows: dict, nar: dict,
                 project: dict, size: tuple[int, int], title: str, *,
-                vocab: Vocab | None = None, llm: Any = None) -> Any:
-    """剪辑 v2(`EDIT_V2`,见 pipeline/edit/):没开返回 None;失败记一条事件也返回 None,退回旧合成。"""
+                vocab: Vocab | None = None, llm: Any = None,
+                subjects: Sequence[str] = ()) -> Any:
+    """剪辑 v2(`EDIT_V2`,见 pipeline/edit/):没开返回 None;失败记一条事件也返回 None,退回旧合成。
+    取材按门禁 B 前存下的时间线回放(`edit.project.plan`),审片看到的就是成片画面。"""
     from .. import edit
 
     if not edit.enabled(aspect.is_portrait(project)):
@@ -792,8 +806,8 @@ def _compose_v2(project_id: str, specs: Sequence[ShotSpec], rows: dict, nar: dic
         result = edit_project.compose(
             project_id, specs, rows, nar, size=size,
             title=str(project.get("title") or title), subject=str(project.get("subject") or ""),
-            output_name=aspect.output_name(project), vocab=vocab, llm=llm)
-    except Exception as exc:  # noqa: BLE001 —— 新剪辑是试点,任何失败都退回旧合成,不拦出片
+            output_name=aspect.output_name(project), vocab=vocab, llm=llm, subjects=subjects)
+    except Exception as exc:  # noqa: BLE001 —— 任何失败都退回旧合成,不拦出片
         _log.warning("剪辑 v2 合成失败,退回旧合成", exc_info=True)
         db.add_event(project_id, "edit_v2:fallback", reason=str(exc)[:300])
         degrade.note("edit_v2.to_v1", f"合成:{exc}", project_id=project_id)
@@ -877,6 +891,12 @@ def _finish_compose(project_id: str, specs: Sequence[ShotSpec], profile: Categor
     cover = Path(art["path"]) if art else render_mod.build_cover(
         result.output_path, title, dest_a, subtitle=meta["subtitle"], size=size,
         still=still, kicker=meta["kicker"])
+    try:
+        # 成片时个别刀可能重取过(素材文件没了 / 进了排除清单):使用记录按成片重写,
+        # 授权复核和跨项目去重看的是它
+        materials_used(project_id, specs)
+    except OSError:
+        _log.warning("materials_used.json 写入失败", exc_info=True)
     source_note = footage_source_note(project_id, specs, profile.vocab.subject_label)
     if art and art.get("car_source") == "ai_generated":
         # 封面那台车是生图出来的:说清楚,别让人以为是官方实拍

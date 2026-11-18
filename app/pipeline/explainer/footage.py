@@ -1,4 +1,7 @@
-"""已渲染各拍的素材使用情况统计。"""
+"""成片的素材使用情况统计。
+
+剪辑 v2 的时间线算数时(`edit.project.active`)按时间线上的刀算:成片用的就是那一组;
+否则按逐拍渲染记录 `beats/NNN.json` 算(旧合成)。两者都按拍号归组,见 `beat_pieces`。"""
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -15,6 +18,78 @@ from .beat_render import beat_role, chapters_of
 STILL_RATIO_WARN = 0.5
 
 
+def _beat_file_pieces(project_id: str, idx: int) -> list[dict[str, Any]]:
+    return list(db.read_json(project_id, f"beats/{idx:03d}.json", None) or [])
+
+
+def _slice(pieces: Sequence[dict[str, Any]], start: float, length: float) -> list[dict[str, Any]]:
+    """逐拍成品里 [start, start+length) 这一段用到了哪些素材(按各段时长累加定位),长度截成重叠部分。"""
+    out: list[dict[str, Any]] = []
+    t = 0.0
+    end = start + length
+    for p in pieces:
+        n = float(p.get("length") or 0.0)
+        a, b = max(t, start), min(t + n, end)
+        if b - a > 1e-3:
+            out.append(dict(p) | {"length": round(b - a, 3)})
+        t += n
+    return out
+
+
+def _clip_piece(c: dict[str, Any]) -> dict[str, Any]:
+    return {"item_id": c.get("item_id") or "", "kind": c.get("kind"), "path": c.get("src") or "",
+            "start": c.get("src_in"), "length": c.get("dur"),
+            "source_url": c.get("source_url") or "", "platform": c.get("platform") or "",
+            "license_status": c.get("license_status") or "",
+            "third_party": bool(c.get("third_party")),
+            "crop_bottom": c.get("crop_bottom") or 0.0, "crop_edge": c.get("crop_edge") or 0.0}
+
+
+def timeline_clips(project_id: str) -> list[dict[str, Any]] | None:
+    """算数的剪辑 v2 时间线上的刀(不含片尾);没有算数的时间线返回 None。"""
+    from ..edit import project as edit_project
+
+    saved = edit_project.active(project_id)
+    if saved is None:
+        return None
+    return [c for c in saved.get("clips") or [] if int(c.get("beat", -1)) >= 0]
+
+
+def beat_pieces(project_id: str, specs: Sequence[ShotSpec]) -> dict[int, list[dict[str, Any]]]:
+    """每拍成片里实际用到的素材段(拍号 → [{item_id, kind, path, length, source_url, ...}])。
+
+    有算数的时间线:素材刀直接算;整屏卡片 / 概念动画的刀算那一拍逐拍记录里的全部素材;
+    取不到素材、借用逐拍成品的刀(fallback)按借用的那一段去逐拍记录里截。
+    没有时间线:就是逐拍记录。"""
+    idxs = [s.idx for s in specs]
+    clips = timeline_clips(project_id)
+    if clips is None:
+        return {i: _beat_file_pieces(project_id, i) for i in idxs}
+    out: dict[int, list[dict[str, Any]]] = {i: [] for i in idxs}
+    cache: dict[int, list[dict[str, Any]]] = {}
+    for c in clips:
+        b = int(c.get("beat", -1))
+        if b not in out:
+            continue
+        if c.get("kind") == "beat":
+            out[b] += [dict(p) for p in cache.setdefault(b, _beat_file_pieces(project_id, b))]
+        elif c.get("via") == "fallback":
+            out[b] += _slice(cache.setdefault(b, _beat_file_pieces(project_id, b)),
+                             float(c.get("src_in") or 0.0), float(c.get("dur") or 0.0))
+        else:
+            out[b].append(_clip_piece(c))
+    return out
+
+
+def cut_count(project_id: str, specs: Sequence[ShotSpec]) -> float:
+    """成片一共切了几刀:有时间线按时间线的刀数,否则每拍按背景段数(至少 1)。"""
+    clips = timeline_clips(project_id)
+    if clips is not None:
+        return float(len(clips))
+    return float(sum(max(1, len(_beat_file_pieces(project_id, s.idx)))
+                     for s in specs if s.duration > 0))
+
+
 def still_warning(mix: dict[str, Any]) -> str:
     ratio = mix.get("still_ratio") or 0.0
     if ratio <= STILL_RATIO_WARN:
@@ -23,12 +98,13 @@ def still_warning(mix: dict[str, Any]) -> str:
 
 
 def footage_mix(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
-    """已渲染各拍的背景构成(读 beats/NNN.json):总秒数、静图占比、第三方视频占比,
+    """成片的背景构成(见 `beat_pieces`):总秒数、静图占比、第三方视频占比,
     以及开场 / 结论段里的第三方秒数(应当是 0)。一拍都没渲过返回空字典。"""
     chapters, where = chapters_of(specs)
+    by_beat = beat_pieces(project_id, specs)
     total = still = third = edge = 0.0
     for pos, s in enumerate(specs):
-        pieces = db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []
+        pieces = by_beat.get(s.idx) or []
         role = beat_role(where, pos, len(chapters))
         for p in pieces:
             n = float(p.get("length") or 0.0)
@@ -50,13 +126,14 @@ _UNCLEARED = {"", "unverified", "pending", "denied", "expired"}
 
 
 def materials_used(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
-    """成片用了哪些原始素材(读 beats/NNN.json,写 materials_used.json):
+    """成片用了哪些原始素材(见 `beat_pieces`,写 materials_used.json):
     每段的拍号、起止秒、原始来源地址、平台、取材当时的授权状态。版权投诉 / 下架时按来源地址
     反查(`projects_using`)。授权没核验的段汇总在 `uncleared`,发布前人工复核。"""
     rows: list[dict[str, Any]] = []
+    by_beat = beat_pieces(project_id, specs)
     for s in specs:
-        for p in db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []:
-            if p.get("item_id") == "bg":  # 卡片底图,不是素材池里的素材
+        for p in by_beat.get(s.idx) or []:
+            if p.get("item_id") in ("bg", "", None):  # 卡片底图,不是素材池里的素材
                 continue
             rows.append({"beat": s.idx, "item_id": p.get("item_id"), "kind": p.get("kind"),
                          "start": p.get("start"), "length": p.get("length"),
@@ -99,12 +176,13 @@ def _source_label(piece: dict[str, Any]) -> str:
 
 
 def footage_source_note(project_id: str, specs: Sequence[ShotSpec], subject_label: str) -> str:
-    """简介里的来源声明:按成片实际用到的素材写(读 beats/NNN.json),用得多的来源在前。
+    """简介里的来源声明:按成片实际用到的素材写(见 `beat_pieces`),用得多的来源在前。
     一段素材都没用(全是卡片)返回空串。卡片底图 "bg" 不算。"""
     seconds: dict[str, float] = {}
+    by_beat = beat_pieces(project_id, specs)
     for s in specs:
-        for p in db.read_json(project_id, f"beats/{s.idx:03d}.json", None) or []:
-            if p.get("item_id") != "bg":
+        for p in by_beat.get(s.idx) or []:
+            if p.get("item_id") not in ("bg", "", None):
                 label = _source_label(p)
                 seconds[label] = seconds.get(label, 0.0) + float(p.get("length") or 0.0)
     if not seconds:

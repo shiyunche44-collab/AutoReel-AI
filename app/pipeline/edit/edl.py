@@ -15,11 +15,12 @@
 from __future__ import annotations
 
 import math
-import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+from ... import config
 
 #: 实拍子镜头的时长范围(秒)。竖屏信息类对标中位约 2 秒一刀
 MIN_SHOT = 1.2
@@ -46,11 +47,9 @@ Pick = Callable[[Any, float, str, str], list[Mapping[str, Any]]]
 
 
 def enabled(portrait: bool) -> bool:
-    """`EDIT_V2=1` 开启;试点只开竖屏,横屏要显式 `EDIT_V2=all`。"""
-    v = os.getenv("EDIT_V2", "0").strip().lower()
-    if v in ("all", "both"):
-        return True
-    return portrait and v in ("1", "true", "on", "portrait")
+    """这个画幅走不走剪辑 v2(`config.edit_v2_mode()`:off / portrait / landscape / all)。"""
+    mode = config.edit_v2_mode()
+    return mode == "all" or mode == ("portrait" if portrait else "landscape")
 
 
 # --------------------------------------------------------------------------
@@ -77,6 +76,13 @@ class Clip:
     match: str = ""
     #: 怎么挑出来的:rank(排序第一)/ llm(文字模型复选)/ fallback(逐拍成品兜底)
     via: str = ""
+    #: 这一刀的取材键「拍号:第几刀」:同一刀拼的几段共用。重排时间线按它复用 / 换掉取材
+    key: str = ""
+    #: 使用记录(materials_used / 来源声明 / 复盘特征都从时间线派生,见 explainer.footage)
+    source_url: str = ""
+    platform: str = ""
+    license_status: str = ""
+    third_party: bool = False
 
 
 @dataclass
@@ -418,11 +424,12 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                         trans = "cut"
                 else:
                     trans = "cut"
+                key = f"{s.idx}:{k}"
                 if kind == "beat_slice":
                     clip = Clip(round(cursor, 3), round(d, 3), "video", str(p["path"]),
                                 src_in=round(float(p.get("start") or 0.0), 3), motion="none",
                                 transition=trans, beat=s.idx, text=text,
-                                need=bool(p.get("need")), via="fallback")
+                                need=bool(p.get("need")), via="fallback", key=key)
                 else:
                     motions = MOTIONS_STILL if kind == "still" else MOTIONS_VIDEO
                     clip = Clip(round(cursor, 3), round(d, 3), "still" if kind == "still" else "video",
@@ -432,7 +439,11 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                                 crop_bottom=float(p.get("crop_bottom") or 0.0),
                                 beat=s.idx, text=text, item_id=str(p.get("item_id") or ""),
                                 need=bool(p.get("need")), match=str(p.get("match") or ""),
-                                via=str(p.get("via") or ""))
+                                via=str(p.get("via") or ""), key=key,
+                                source_url=str(p.get("source_url") or ""),
+                                platform=str(p.get("platform") or ""),
+                                license_status=str(p.get("license_status") or ""),
+                                third_party=bool(p.get("third_party")))
                 tl.clips.append(clip)
                 n_clip += 1
                 cursor += d

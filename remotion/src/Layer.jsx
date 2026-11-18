@@ -1,7 +1,8 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, spring, interpolate } from "remotion";
 
-const FONT = '"Noto Sans SC Black","Microsoft YaHei",sans-serif';
+// EditFont:剪辑 v2 合成时由 Edit.jsx 嵌入(EDIT_V2_FONT_FILE / data/fonts);单独渲字幕层时没有,往后回退
+const FONT = '"EditFont","Noto Sans SC Black","Microsoft YaHei",sans-serif';
 
 // 一条字幕:整句白字描边,关键词(hot)变强调色并弹出放大;整句 0.12s 弹入。
 // style.box:"box" = 半透明黑底条、"band" = 色块底(style.boxColor),不描边;缺省 = 描边无底

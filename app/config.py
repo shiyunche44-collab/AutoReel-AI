@@ -385,6 +385,38 @@ SFX_ENABLED = os.getenv("SFX_ENABLED", "0") == "1"
 #: 成片统一调色(轻微对比 / 饱和 + 极轻颗粒),抹平官方片、第三方片、静图之间的色差。
 #: 没在真实成片上对比过观感,默认关;GRADE_ENABLED=1 开
 GRADE_ENABLED = os.getenv("GRADE_ENABLED", "0") == "1"
+#: 剪辑 v2(统一时间线 + Remotion 主合成,见 docs/edit-v2.md)对哪些画幅生效。
+EDIT_V2_MODES = ("off", "portrait", "landscape", "all")
+
+
+def edit_v2_mode() -> str:
+    """`EDIT_V2`:off / portrait / landscape / all。每次调用现读环境变量(测试和试片脚本临时改它)。
+
+    旧写法 1 / true / on 等于 portrait(竖屏试点时期),both 等于 all,认不出的值按 off。"""
+    raw = os.getenv("EDIT_V2", "off").strip().lower()
+    raw = {"1": "portrait", "true": "portrait", "on": "portrait", "both": "all",
+           "0": "off", "false": "off", "": "off"}.get(raw, raw)
+    return raw if raw in EDIT_V2_MODES else "off"
+
+
+#: 剪辑 v2 的默认字体(`scripts/fetch_fonts.py` 下到 data/fonts/;SIL OFL,可商用)。
+#: `EDIT_V2_FONT_FILE` 优先
+EDIT_FONT_DEFAULT_NAME = "NotoSansSC-Black.otf"
+
+
+def edit_font_default() -> Path:
+    return DATA_DIR / "fonts" / EDIT_FONT_DEFAULT_NAME
+
+
+#: 剪辑 v2 横屏的门禁 B:静图秒数占比超过它就拦(可选「仍然继续」);0 = 不拦
+GATE_B_STILL_MAX = float(os.getenv("GATE_B_STILL_MAX", "0.4") or 0.4)
+
+
+def edit_v2_preview() -> bool:
+    """`EDIT_V2_PREVIEW`(默认开):进门禁 B 时用剪辑 v2 出一版半尺寸整片预览给人审。"""
+    return os.getenv("EDIT_V2_PREVIEW", "1") != "0"
+
+
 #: 自备目录没曲子时,是否按 profile.bgm_genres 从 Mixkit 自动收一批
 BGM_AUTO_COLLECT = os.getenv("BGM_AUTO_COLLECT", "1") != "0"
 BGM_DIR = Path(os.getenv("BGM_DIR", "")) if os.getenv("BGM_DIR") else None

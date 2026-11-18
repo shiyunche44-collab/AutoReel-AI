@@ -145,6 +145,24 @@
 </section>
 {% endif %}
 
+{# 剪辑 v2 整片预览 + 刀表:门禁 B 审的就是成片的取材和刀口;JS 拉到有时间线才显示 #}
+{% if p.state == 'GATE_B' %}
+<section class="card er-card hidden" id="edit-review">
+  <div class="card-head">
+    <h2>{{ m.icon("film", "i-sm") }}整片预览<span class="tag" id="er-state"></span></h2>
+    <span class="subtle small" id="er-match"></span>
+    <button class="btn btn-ghost btn-sm" id="er-rerender" type="button">{{ m.icon("refresh", "i-sm") }}重出预览</button>
+  </div>
+  <div class="card-body er-body">
+    <div class="er-player">
+      <video id="er-video" controls playsinline preload="metadata"></video>
+      <div class="er-ph subtle small hidden" id="er-ph">预览还在渲染(半尺寸快编码,通常几分钟),好了会自动出现</div>
+    </div>
+    <div class="er-cuts" id="er-cuts" role="list"></div>
+  </div>
+</section>
+{% endif %}
+
 <!-- 内容 Tabs -->
 {%- set default_tab = {"GATE_A": "script", "GATE_B": "board", "DONE": "output", "DRAFT_RENDERING": "board", "COMPOSING": "board"}.get(p.state, "overview") -%}
 <section class="card content-card" id="content" data-default-tab="{{ default_tab }}">

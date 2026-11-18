@@ -897,3 +897,20 @@
 .piece-clip { width: 120px; aspect-ratio: 9 / 16; border-radius: 6px; background: #000; }
 .piece-body summary { cursor: pointer; font-weight: 600; }
 .piece-body pre { white-space: pre-wrap; font: inherit; font-size: 13px; margin: 6px 0 0; max-height: 240px; overflow: auto; }
+
+/* 剪辑 v2 门禁 B:整片预览 + 刀表 */
+.er-card { margin-bottom: 16px; }
+.er-card .card-head { gap: 12px; }
+.er-card .card-head .subtle { margin-left: auto; }
+.er-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.er-player video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; }
+.er-ph { padding: 24px 0; }
+.er-cuts { max-height: 480px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.er-cut { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+  padding: 6px; border-radius: 6px; cursor: pointer; }
+.er-cut:hover, .er-cut.is-now { background: var(--brand-soft); }
+.er-cut img { width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #111; }
+.er-cut .er-text { font-size: 13px; line-height: 1.4; overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.er-cut .er-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 2px; }
+@media (max-width: 900px) { .er-body { grid-template-columns: 1fr; } }
