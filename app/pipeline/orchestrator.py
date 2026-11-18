@@ -1129,7 +1129,8 @@ def swap_cut(project_id: str, key: str) -> dict[str, Any]:
         rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
         nar = db.read_json(project_id, "narration.json", {}) or {}
         try:
-            with ledger.tag(project_id=project_id):
+            # 按项目的视觉包重编时间线(不然换一刀会把包装换回默认的 hud)
+            with ledger.tag(project_id=project_id), looks.use(looks.of_project(project_id)):
                 edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(project),
                                   title=str(project.get("title") or ""),
                                   subject=str(project.get("subject") or ""), subjects=names,

@@ -5,6 +5,7 @@
     python -I scripts/edit_v2_trial.py p_xxxxxxxxxxxx    # 指定项目
     python -I scripts/edit_v2_trial.py p_xxx --no-rerank # 不让文字模型复选素材(不花 LLM 额度)
     python -I scripts/edit_v2_trial.py --landscape       # 试横屏(自动挑 / --list 都换成横屏项目)
+    python -I scripts/edit_v2_trial.py p_xxx --look commercial  # 换个视觉包试(默认用项目自己的)
 
 不改项目状态、不覆盖原成片:新片写成项目目录下的 `output_v2_trial.mp4`,
 对比图写成 `_edit/compare.jpg`(上排旧成片、下排新成片,同一时刻各取一帧)。
@@ -27,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from app import config, db  # noqa: E402
 from app.categories import load_profile  # noqa: E402
-from app.pipeline import aspect, caption_layer  # noqa: E402
+from app.pipeline import aspect, caption_layer, looks  # noqa: E402
 from app.pipeline import render as render_mod  # noqa: E402
 
 OUTPUT = "output_v2_trial.mp4"
@@ -82,6 +83,7 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="列出能试的项目")
     ap.add_argument("--no-rerank", action="store_true", help="不让文字模型复选素材")
     ap.add_argument("--landscape", action="store_true", help="试横屏项目")
+    ap.add_argument("--look", choices=sorted(looks.LOOKS), help="用这个视觉包试(默认项目自己的)")
     ap.add_argument("--fresh", action="store_true",
                     help="重新取材(默认沿用上次试片的取材,只比包装)")
     args = ap.parse_args()
@@ -138,11 +140,14 @@ def main() -> int:
     t0 = time.time()
     # source="trial":时间线写 edit_timeline_trial.json,不动正式的时间线和使用记录;
     # 再跑一次默认沿用上次试片的取材(只比包装),--fresh 重新取材
-    result = edit_project.compose(
-        pid, specs, rows, nar, size=aspect.frame_size(project),
-        title=str(project.get("title") or ""), subject=str(project.get("subject") or ""),
-        output_name=OUTPUT, vocab=profile.vocab, llm=llm, subjects=names,
-        source="trial", fresh=args.fresh)
+    look = looks.get(args.look) if args.look else looks.of_project(pid)
+    print(f"视觉包:{look.id}({look.label})")
+    with looks.use(look):
+        result = edit_project.compose(
+            pid, specs, rows, nar, size=aspect.frame_size(project),
+            title=str(project.get("title") or ""), subject=str(project.get("subject") or ""),
+            output_name=OUTPUT, vocab=profile.vocab, llm=llm, subjects=names,
+            source="trial", fresh=args.fresh)
     spent = time.time() - t0
     project_dir = config.project_dir(pid)
     new = project_dir / OUTPUT

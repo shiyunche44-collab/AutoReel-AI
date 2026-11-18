@@ -130,8 +130,27 @@ def test_theme_colors_readable_on_dark_cards():
         for key in ("accent", "accent2"):
             rgb = tuple(int(th[key][i:i + 2], 16) for i in (1, 3, 5))
             assert edit_project._luma(rgb) >= edit_project.MIN_LUMA, (lk.id, key, th[key])
-        assert th["subs"] in ("box", "outline", "band")
+        assert th["subs"] in ("box", "outline", "band", "clean")
 
 
 def test_sitting_inside_means_interior(vocab):
     assert "interior" in match.views_for("坐进车里", vocab)
+
+
+def test_commercial_theme_and_clean_captions():
+    from app.pipeline import looks
+
+    lk = looks.get("commercial")
+    th = edit_project.theme_of(lk)
+    assert th["style"] == "commercial" and th["subs"] == "clean" and th["grade"] == "commercial"
+    assert th["chart"] == {"bg": "paper", "accent": "#DE3E1E", "accent2": "#1E5CA8"}
+    assert edit_project.theme_of(looks.get("hud"))["style"] == "classic"
+    assert "chart" not in edit_project.theme_of(looks.get("lite"))
+    cues = [{"start": 0.0, "end": 4.0, "text": "十五分钟补能620公里,吃顿饭的工夫就够跑一趟长途"}]
+    caps = edit_project.captions_for(cues, (1920, 1080), 30, lk, 4.0)
+    # 白字字幕:不标关键词,一条一个词;横屏一行至多 16 字
+    assert [c["words"][0]["text"] for c in caps] == ["十五分钟补能620公里", "吃顿饭的工夫就够跑一趟长途"]
+    assert all(len(c["words"]) == 1 and not c["words"][0]["hot"] for c in caps)
+    classic = edit_project.captions_for(cues, (1920, 1080), 30, looks.get("lite"), 4.0)
+    assert any(w["hot"] for c in classic for w in c["words"]) and len(classic) == 3
+    assert edit_project.captions_for([], (1920, 1080), 30, lk, 4.0) == []

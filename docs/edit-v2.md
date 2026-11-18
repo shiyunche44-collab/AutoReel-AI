@@ -58,7 +58,8 @@ pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/f
   (`plan.picks`,键是「拍号:第几刀」)写进 `edit_timeline.json`。取材带上近期同车成片用过的
   (`cross_project_seed`)、整屏拍用掉的、排除清单 `exclude_materials.json`。
 - **回放**:之后的预览、成片、只改字幕的重合成都按记录回放,不碰素材池。只有这几种情况会重取:
-  这一刀的时长 / 半句变了;素材文件没了或进了排除清单;重拍某拍(`mark_dirty`,原素材往后排);
+  这一刀的时长 / 半句变了;素材文件没了或进了排除清单;上次没取到、退回了逐拍成品(空记录不回放,
+  素材池补上了就换成实拍);重拍某拍(`mark_dirty`,原素材往后排);
   审片「换一刀」(`swap`,这一刀排除原素材)。门禁 A 之后重建分镜会删掉整份时间线(`reset`)。
 - **门禁 B 审整片**:进门禁 B 时排 `edit.preview` 任务(`jobs`,资源类 `render` 一次一路),
   半尺寸 + crf 28 + veryfast 出 `preview_v2.mp4`;项目页显示预览和刀表(时间、半句、缩略图、对题),
@@ -137,6 +138,51 @@ python -I scripts/edit_v2_trial.py --landscape     # 横屏(流水线里要 EDIT
   和大字都用它。两样都没有时按「Noto Sans SC Black → 思源黑体 Heavy → 微软雅黑」找系统字体,
   观感随机器变化;成片会带一条提示并记降级 `edit_v2.font`,`/api/health` 的 `edit_v2.font_missing` 为真。
 - 渲染缓存键含 `remotion/src` 源码哈希,改了组件旧缓存自动作废。
+
+## 商业包装(视觉包 commercial)
+
+对标抖音头部说车号(三驱兄弟、车圈三七):满屏调色实拍,关键数字和判断上大字,数据段用整屏图表,
+不出 HUD / 侧面板 / 章节进度条 / 主持人。视觉包 `commercial`(`looks.py`,`extra.edit_style`)
+选中时走这套;剪辑 v2 默认开之前它不参与自动挑选,试片用 `scripts/edit_v2_trial.py --look commercial`。
+旧合成(EDIT_V2 关)下它近似 lite 去掉主持人。
+
+**时间线**(`edl.build_timeline(style="commercial")`,纯函数,`tests/test_edit_edl.py`):
+
+- 叠加层只有五种:`hook`(开场大标题)、`headline`(左上角粗斜体大字)、`stat`(压暗实拍上的大数字)、
+  `card`(整屏图表)、`chapter_card`(换章约 1 秒的章节卡)。不做关键词冲击推(`punches` 为空)。
+- 大字按语义挑,不靠正则:来源是分镜里 highlight / stat / panel 拍已核对过的数据行和判断句
+  (`commercial_overlays`)。panel 拍够 3 行(`CHART_MIN_ROWS`)转整屏图表,不够就挑一个带数字的行出大字。
+- 限流(`space_headlines`):大字和前后的大字、钩子、大数字至少隔 `HEADLINE_GAP`(6 秒),
+  压在图表上的不要,章节卡没走就等它走;章节第一拍就是大数字 / 图表时不出章节卡(两层会叠在一起)。
+- 运镜只有缓动的 `drift`(≤3%)和 `push_slow`;转场默认硬切,换章 whip,首刀白闪。
+
+**组件**(`remotion/src/edit/`,`Edit.jsx` 只做编排):
+
+| 文件 | 内容 |
+|---|---|
+| `theme.js` | 字体、缓动、描边、数字拆分、滚数、弹入等共用函数 |
+| `Media.jsx` | 素材带、运镜、转场。commercial 的 whip 带水平动态模糊(SVG `feGaussianBlur` 只模糊 x 方向),方向按次序左右交替,前一刀最后几帧跟着甩出 |
+| `Headline.jsx` | `CHook` 开场砸字、`Headline` 左上角大字(数字用强调色)、`BigStat` 大数字从 0 滚到位 |
+| `Charts.jsx` | 整屏图表 spec / compare / bars / timeline。纸纹浅底(`chart_bg: paper`)或深色底,同列字号统一,行按旁白时刻 `at` 出现,底部一行数据来源与口径 |
+| `ChapterCard.jsx` | 实拍模糊压暗,章节号 `NN / TT` + 强调色细线 + 章名 |
+| `Captions.jsx` | 白字无底字幕,横屏单行 ≤16 字(`project.CLEAN_CAPTION_CHARS`);超长句对半切时不切断数字 / 英文代号(`caption_layer._cut_at`,"2.5K" 不会拆成两条) |
+| `Classic.jsx` | 旧包装(花字、侧面板、章节小标、进度条),classic 原样不动 |
+
+和换章 whip 同一时刻开始的叠加层(章节卡、章节首拍的大数字 / 图表)由 `Edit.jsx` 往后挪半个 whip,
+等素材甩到位再出,不和动态模糊叠在一起。强调色:实拍上用视觉包的亮黄,纸面图表用 `chart_accent`(朱红)。
+
+**调色**(`pipeline/edit/grade.py`,`tests/test_edit_grade.py`):CSS 套不了 LUT,所以在
+`render.stage_media` 里用 ffmpeg 预处理。
+
+- LUT 运行时按参数算(轻 S 曲线、暗部偏青亮部偏橙、按饱和度反比加鲜艳度、黑位微抬白位微压),
+  33³,缓存在 `data/_cache/luts/<名>_v<版本>.cube`,没有第三方文件。改公式升 `GRADE_VERSION`。
+- 每刀实拍按入点和时长预裁(多留 0.25 秒),只缩不放(比画幅大 1.25 倍以上的才缩),统一帧率,
+  16 位 RGB 套 LUT 后回 bt709 标准范围,crf 14(`EDIT_V2_GRADE_CRF`)、3 路并行(`EDIT_V2_GRADE_JOBS`);
+  静图同一个 LUT 出 JPEG。整屏成品(卡片 / 动画)不调。没带色彩标记的素材按 bt709 解。
+- 中间文件在 `_edit/public/g_*`,按内容哈希复用(门禁 B 换刀只重做换掉的那刀),成片合成完删掉
+  (一条 6 分钟片约 1 GB)。
+- 某刀失败就用原色原入点,LUT 生成失败整片原色;都记降级 `edit_v2.grade`,不拦出片。
+- 实测:恒等 LUT 预裁前后平均每通道误差 <1/255(没有色彩矩阵偏移);commercial 平均改动约 2.5–5.5/255。
 
 ## 已知限制(第 1 阶段)
 

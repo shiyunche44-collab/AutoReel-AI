@@ -62,11 +62,28 @@ def split_cue(text: str, limit: int = MAX_CHARS) -> list[str]:
     out: list[str] = []
     for p in parts:
         while len(p) > limit:
-            n = -(-len(p) // -(-len(p) // limit))  # 均分,不留孤字
+            n = _cut_at(p, -(-len(p) // -(-len(p) // limit)), limit)  # 均分,不留孤字
             out.append(p[:n])
             p = p[n:]
         out.append(p)
     return [p for p in out if p]
+
+
+def _token(ch: str) -> bool:
+    return ch.isascii() and (ch.isalnum() or ch in ".%-+")
+
+
+def _cut_at(p: str, n: int, limit: int) -> int:
+    """对半切的位置落在数字 / 英文代号中间("2.5|K")时挪到最近的词边界(不超过 `limit`)。"""
+    def ok(j: int) -> bool:
+        return not (_token(p[j - 1]) and _token(p[j]))
+    if ok(n):
+        return n
+    for d in range(1, limit):
+        for j in (n - d, n + d):
+            if 2 <= j <= limit and j < len(p) and ok(j):
+                return j
+    return n
 
 
 def mark_words(text: str) -> list[dict[str, Any]]:
@@ -85,12 +102,14 @@ def mark_words(text: str) -> list[dict[str, Any]]:
 
 
 def build_layer(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: int,
-                accent: tuple[int, int, int], *, duration: float | None = None) -> dict[str, Any]:
-    """字幕 cue(旁白每句一条)→ Remotion props。长句切短,时间按字数比例分。"""
+                accent: tuple[int, int, int], *, duration: float | None = None,
+                limit: int = MAX_CHARS, hot: bool = True) -> dict[str, Any]:
+    """字幕 cue(旁白每句一条)→ Remotion props。长句切短(每条至多 `limit` 字),时间按字数比例分。
+    `hot=False`:不标关键词(整条一个词,剪辑 v2 的 commercial 白字字幕用)。"""
     shown: list[dict[str, Any]] = []
     for cue in cues:
         start, end = float(cue["start"]), float(cue["end"])
-        pieces = split_cue(str(cue.get("text") or ""))
+        pieces = split_cue(str(cue.get("text") or ""), limit)
         total = sum(len(p) for p in pieces)
         if not pieces or end <= start or total <= 0:
             continue
@@ -113,7 +132,7 @@ def build_layer(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: i
                 nxt = start + char_t[spans[k + 1]] if k + 1 < len(pieces) else end
                 d = max(0.05, nxt - t)
             words = []
-            for w in mark_words(p):
+            for w in (mark_words(p) if hot else [{"text": p, "hot": False, "at": 0.0}]):
                 if char_t:
                     ws = start + char_t[min(len(text) - 1, spans[k] + round(w["at"] * len(p)))]
                 else:

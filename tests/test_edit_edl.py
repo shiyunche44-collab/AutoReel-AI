@@ -177,3 +177,118 @@ def test_short_tail_piece_is_merged_into_previous():
     body = [c for c in tl.clips if c.start >= edl.HOOK_SECONDS]
     assert all(c.dur >= edl.MIN_PIECE for c in tl.clips)
     assert all(c.src == "/a.mp4" for c in body)
+
+
+# --------------------------------------------------------------------------
+# commercial 包装
+# --------------------------------------------------------------------------
+def _commercial(specs, cues, log=None, size=(1920, 1080), **kw):
+    return edl.build_timeline(specs, cues, size=size, fps=30, pick=_picker([] if log is None else log),
+                              beat_files={}, title="标题", style="commercial", **kw)
+
+
+def test_commercial_keeps_cuts_and_picks_but_swaps_packaging():
+    specs = [_spec(0, 3.0, layout="hook", overlay={"lines": ["2秒破百?"]}),
+             _spec(1, 6.0, chapter="外观"),
+             _spec(2, 5.0, layout="highlight", chapter="外观", overlay={"lines": ["15分钟补620公里", "快"]})]
+    cues = [_cue(0, 0.0, 3.0, "它两秒破百", 0),
+            _cue(1, 3.0, 9.0, "前脸是封闭式格栅,侧面线条很低趴,尾灯是贯穿式", 1),
+            _cue(2, 9.0, 14.0, "十五分钟补六百二十公里", 2)]
+    classic_log: list = []
+    commercial_log: list = []
+    classic = edl.build_timeline(specs, cues, size=(1920, 1080), fps=30, pick=_picker(classic_log),
+                                 beat_files={}, title="标题")
+    tl = _commercial(specs, cues, commercial_log)
+    # 下刀和取材与 classic 一样:包装风格不动剪辑
+    assert [(c.start, c.dur, c.key) for c in tl.clips] == [(c.start, c.dur, c.key) for c in classic.clips]
+    assert commercial_log == classic_log
+    types = {o.type for o in tl.overlays}
+    assert "chapter_card" in types and "headline" in types and "hook" in types
+    assert not types & {"keyword", "chapter", "panel"}
+    card = next(o for o in tl.overlays if o.type == "chapter_card")
+    assert card.props == {"n": 1, "name": "外观", "total": 1} and card.dur == edl.CHAPTER_CARD_SECONDS
+    head = next(o for o in tl.overlays if o.type == "headline")
+    assert head.props["lines"] == ["15分钟补620公里", "快"] and head.start == pytest.approx(9.1)
+    assert edl.HEADLINE_MIN <= head.dur <= edl.HEADLINE_MAX
+    # 不做冲击推;视频缓推、不再按刀序号交替推拉
+    assert tl.punches == []
+    assert {c.motion for c in tl.clips} == {edl.MOTION_VIDEO_COMMERCIAL}
+    assert tl.clips[0].transition == "flash"
+    assert next(c for c in tl.clips if c.beat == 1).transition == "whip"
+
+
+def test_commercial_still_pushes_slowly():
+    def pick(spec, seconds, text, role):
+        return [{"kind": "still", "path": "/m/a.jpg", "item_id": "s"}]
+
+    tl = edl.build_timeline([_spec(0, 4.0)], [_cue(0, 0.0, 4.0, "看看这台车", 0)], size=(1920, 1080),
+                            fps=30, pick=pick, beat_files={}, style="commercial")
+    assert {c.motion for c in tl.clips} == {edl.MOTION_STILL_COMMERCIAL}
+
+
+def test_commercial_panel_becomes_chart_or_headline():
+    rows3 = [{"label": "续航", "values": ["835km"], "at": 0.5}, {"label": "功率", "values": ["5.2C"]},
+             {"label": "补能", "values": ["620km"], "basis": "厂商口径"}]
+    rows1 = [{"label": "车身", "values": ["中大型"]}, {"label": "轴距", "values": ["3000mm"], "at": 1.0}]
+    specs = [_spec(0, 4.0, chapter="开场"),
+             _spec(1, 5.0, layout="panel", chapter="开场", overlay={"title": "补能", "rows": rows3}),
+             _spec(2, 5.0, layout="panel", chapter="开场", overlay={"title": "尺寸", "rows": rows1})]
+    tl = _commercial(specs, [])
+    chart = next(o for o in tl.overlays if o.type == "card")
+    assert chart.props["kind"] == "spec" and chart.start == 4.0 and chart.dur == 5.0
+    assert [r["values"] for r in chart.props["rows"]] == [["835km"], ["5.2C"], ["620km"]]
+    assert chart.props["rows"][0]["at"] == 0.5 and chart.props["rows"][2]["tag"] == "厂商口径"
+    assert chart.props["rows"][0]["num"] == 835
+    # 两行的面板:挑第一个带数字的行上大字,念到它时上屏,标签做眉题
+    head = next(o for o in tl.overlays if o.type == "headline")
+    assert head.props == {"lines": ["3000mm"], "kicker": "轴距"}
+    assert head.start == pytest.approx(9.0 + 1.0 - 0.15)
+
+
+def test_commercial_stat_is_kept_and_headlines_are_spaced():
+    hl = {"lines": ["一句判断"]}
+    specs = [_spec(0, 6.0, chapter="开场"),                                    # 0:钩子大标题
+             _spec(1, 3.0, layout="highlight", chapter="开场", overlay=hl),   # 6.1:前后都够远
+             _spec(2, 3.5, layout="highlight", chapter="开场", overlay=hl),   # 9.1:离上一条 3 秒,不要
+             _spec(3, 4.0, layout="stat", chapter="开场", overlay={"label": "零百", "value": "2.78秒"}),
+             _spec(4, 3.0, layout="highlight", chapter="开场", overlay=hl),   # 16.6:离大数字 4 秒,不要
+             _spec(5, 4.0, layout="highlight", chapter="开场", overlay=hl)]   # 19.6:够远
+    tl = _commercial(specs, [])
+    assert [o.start for o in tl.overlays if o.type == "hook"] == [0.0]
+    heads = [o.start for o in tl.overlays if o.type == "headline"]
+    assert heads == [pytest.approx(6.1), pytest.approx(19.6)]
+    assert [o.start for o in tl.overlays if o.type == "stat"] == [12.5]
+    # 大数字是这一拍的内容:离大字不到 6 秒也留着,让的是大字(前后都算)
+    specs[2] = _spec(2, 3.0, layout="highlight", chapter="开场", overlay=hl)
+    tl = _commercial(specs, [])
+    assert [o.start for o in tl.overlays if o.type == "stat"] == [12.0]
+    assert [o.start for o in tl.overlays if o.type == "headline"] == [pytest.approx(19.1)]
+
+
+def test_space_headlines_waits_for_chapter_card_and_skips_charts():
+    O = edl.Overlay
+    out = edl.space_headlines([
+        O(10.0, 1.0, "chapter_card", {}), O(10.1, 3.0, "headline", {"lines": ["a"]}),
+        O(20.0, 5.0, "card", {}), O(21.0, 2.0, "headline", {"lines": ["b"]}),
+    ])
+    heads = [o for o in out if o.type == "headline"]
+    assert len(heads) == 1 and heads[0].start == pytest.approx(11.05)
+    assert heads[0].start + heads[0].dur == pytest.approx(13.1)
+
+
+def test_space_headlines_drops_chapter_card_under_stat_or_chart():
+    O = edl.Overlay
+    out = edl.space_headlines([
+        O(28.3, 1.0, "chapter_card", {"n": 2}), O(28.3, 4.0, "stat", {}),
+        O(60.0, 1.0, "chapter_card", {"n": 3}), O(60.0, 6.0, "card", {}),
+        O(90.0, 1.0, "chapter_card", {"n": 4}), O(91.2, 3.0, "stat", {}),
+    ])
+    assert [o.props["n"] for o in out if o.type == "chapter_card"] == [4]
+    assert [o.type for o in out].count("stat") == 2 and [o.type for o in out].count("card") == 1
+
+
+def test_classic_style_unchanged_by_default():
+    specs = [_spec(0, 4.0, chapter="开场"), _spec(1, 4.0, layout="highlight", chapter="外观",
+                                                   overlay={"lines": ["关键词"]})]
+    tl = edl.build_timeline(specs, [], size=(1920, 1080), fps=30, pick=_picker([]), beat_files={})
+    assert {o.type for o in tl.overlays} == {"chapter", "keyword"}

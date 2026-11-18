@@ -210,3 +210,18 @@ def test_reset_drops_timeline_and_picks(pool):
     pool.calls.clear()
     _plan(pool)
     assert pool.calls
+
+
+def test_cuts_that_fell_back_are_repicked_next_time(pool, monkeypatch):
+    real = library.fill
+    monkeypatch.setattr(library, "fill", lambda *a, **k: [])  # 池子空:全部退回逐拍成品
+    first = _plan(pool)
+    assert first.clips and all(c.via == "fallback" for c in first.clips)
+    monkeypatch.setattr(library, "fill", real)
+    pool.calls.clear()
+    second = _plan(pool)
+    assert pool.calls  # 空记录不回放
+    assert second.clips and not any(c.via == "fallback" for c in second.clips)
+    pool.calls.clear()
+    _plan(pool)
+    assert pool.calls == []  # 取到了的照常回放

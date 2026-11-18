@@ -191,6 +191,24 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         auto_pick=True, sub_layer=False, cam_push=True, sfx=True, broll_cycle=("plain",),
         host=True,
     ),
+    # 商业大片:剪辑 v2 的包装(`extra.edit_style`,见 edit/edl.py 与 remotion/src/edit/):
+    # 满屏调色实拍、粗斜体描边大字、白字无底字幕、纸面整屏图表、章节卡。
+    # 旧合成(EDIT_V2 关)下近似 lite 去掉主持人。剪辑 v2 默认开之前不参与自动挑选
+    Look(
+        "commercial", "商业大片", "满屏调色实拍、粗斜体大字、白字无底字幕、纸面整屏图表;对标抖音头部说车号",
+        paper=(20, 21, 24), ink=(246, 244, 238), key=(206, 208, 212), muted=(146, 150, 158),
+        accent=(255, 200, 30), paper_alpha=232, grid=False, brackets=False,
+        card_bg_top=(14, 15, 18), card_bg_bottom=(30, 32, 38), card_panel=(255, 255, 255, 14),
+        card_text=(246, 244, 238), card_muted=(160, 164, 172), card_accent=(255, 200, 30),
+        card_accent_b=(80, 176, 255), card_rule=(255, 255, 255, 32),
+        bar_bg=(0, 0, 0, 160), bar_on_text=(20, 18, 10, 255), label_bg=(0, 0, 0),
+        subs="outline", sub_text="&H00F4F8FA",
+        concept="cinema", chapter_bar=False, video_first=True, panel=False, sfx=True,
+        bgm_genres=("tech", "cinematic"), broll_cycle=("plain",), cover_accent=(255, 200, 30),
+        extra={"edit_style": "commercial", "grade": "commercial", "chart_bg": "paper",
+               # 纸面图表上的强调色(亮黄在米白纸上看不清)
+               "chart_accent": (222, 62, 30), "chart_accent2": (30, 92, 168)},
+    ),
 )}
 
 _ACTIVE: contextvars.ContextVar[str] = contextvars.ContextVar("look", default=DEFAULT)

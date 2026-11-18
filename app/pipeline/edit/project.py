@@ -27,7 +27,7 @@ from .. import render as render_mod
 from ..explainer.planning_b import beat_subject
 from . import match
 from . import render as edit_render
-from .edl import PRERENDERED, Timeline, build_timeline, remotion_card
+from .edl import PRERENDERED, STYLES, Timeline, build_timeline, remotion_card
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +89,12 @@ class _Picker:
         return self._items[car].get(library.base_item_id(item_id)) or self._items[car].get(item_id)
 
     def replayable(self, old: Mapping[str, Any], seconds: float, text: str) -> bool:
-        """旧取材还能不能原样用:这一刀时长、半句没变,素材文件都在,也没进排除清单。"""
+        """旧取材还能不能原样用:这一刀时长、半句没变,素材文件都在,也没进排除清单。
+
+        上次没取到(退回了逐拍成品)的刀不回放、每次重取:素材池可能已经补上了,
+        回放空记录会让这几刀一直用烧了旧字幕的逐拍成品。"""
+        if not old.get("pieces"):
+            return False
         if abs(float(old.get("seconds") or 0.0) - seconds) > SPAN_TOLERANCE:
             return False
         if str(old.get("text") or "") != text:
@@ -184,11 +189,49 @@ def readable(rgb: Sequence[int]) -> tuple[int, int, int]:
     return c  # type: ignore[return-value]
 
 
+def style_of(lk: Any) -> str:
+    """包装风格:classic(旧的花字 / 侧面板 / 章节条)或 commercial(见 edl.build_timeline)。"""
+    style = str((getattr(lk, "extra", None) or {}).get("edit_style") or "classic")
+    return style if style in STYLES else "classic"
+
+
 def theme_of(lk: Any) -> dict[str, Any]:
-    """视觉包 → Remotion 主题:强调色、第二强调色(对比卡右栏 / 柱状图)、字幕样式。"""
-    return {"accent": _hex(readable(lk.accent)), "accent2": _hex(readable(lk.card_accent_b)),
-            "subs": lk.subs if lk.subs in ("box", "outline", "band") else "outline",
-            "subBox": _hex(lk.accent)}
+    """视觉包 → Remotion 主题:强调色、第二强调色(对比卡右栏 / 柱状图)、字幕样式。
+
+    commercial 另带:字幕 `clean`(白字无底)、整屏图表的底(paper / dark)和配色、
+    调色(`grade`,由 render.stage_media 预处理素材时套 LUT)。"""
+    theme: dict[str, Any] = {
+        "accent": _hex(readable(lk.accent)), "accent2": _hex(readable(lk.card_accent_b)),
+        "subs": lk.subs if lk.subs in ("box", "outline", "band") else "outline",
+        "subBox": _hex(lk.accent), "style": style_of(lk)}
+    if theme["style"] == "commercial":
+        extra = dict(lk.extra or {})
+        paper = extra.get("chart_bg", "paper") == "paper"
+        theme["subs"] = "clean"
+        theme["grade"] = str(extra.get("grade") or "")
+        theme["chart"] = {
+            "bg": "paper" if paper else "dark",
+            # 纸面上用深一点的强调色;深底沿用亮色
+            "accent": _hex(extra.get("chart_accent") or lk.accent) if paper else theme["accent"],
+            "accent2": _hex(extra.get("chart_accent2") or lk.card_accent_b) if paper
+            else theme["accent2"]}
+    return theme
+
+
+#: 横屏 commercial 字幕单行字数上限(短边 × 0.065 的字号,1920 宽放 16 个字还留边)
+CLEAN_CAPTION_CHARS = 16
+
+
+def captions_for(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: int, lk: Any,
+                 duration: float) -> list[dict[str, Any]]:
+    """旁白 cue → 时间线字幕。commercial 不做关键词变色,横屏一行放 16 字;其余沿用花字字幕。"""
+    if not cues:
+        return []
+    if style_of(lk) == "commercial":
+        limit = CLEAN_CAPTION_CHARS if size[0] >= size[1] else caption_layer.MAX_CHARS
+        return caption_layer.build_layer(cues, size, fps, lk.accent, duration=duration,
+                                         limit=limit, hot=False)["cues"]
+    return caption_layer.build_layer(cues, size, fps, lk.accent, duration=duration)["cues"]
 
 
 def _sfx(project_dir: Path, tl: Timeline, dest: Path | None = None) -> Path | None:
@@ -338,15 +381,14 @@ def plan(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[
     lk = looks.current()
     cues = list(nar.get("cues") or [])
     total = sum(s.duration for s in beats)
-    captions = caption_layer.build_layer(cues, size, render_mod.FPS, lk.accent,
-                                         duration=total)["cues"] if cues else []
+    captions = captions_for(cues, size, render_mod.FPS, lk, total)
     card = outro.build(project_dir, size)
     with library.banned_materials(sorted(banned)):
         tl = build_timeline(
             beats, cues, size=size, fps=render_mod.FPS, pick=picker,
             beat_files={s.idx: _beat_file(rows.get(s.idx)) for s in beats},
             title=title, accent=_hex(lk.accent), captions=captions,
-            outro=(str(card[0]), float(card[1])) if card else None,
+            outro=(str(card[0]), float(card[1])) if card else None, style=style_of(lk),
         )
     tl.theme = theme_of(lk)
     stats = tl.match_stats()
@@ -393,8 +435,7 @@ def recompose(project_id: str, nar: Mapping[str, Any], *, output_name: str) -> r
     tl = Timeline.from_props(saved)
     lk = looks.current()
     cues = list(nar.get("cues") or [])
-    tl.captions = caption_layer.build_layer(cues, (tl.width, tl.height), tl.fps, lk.accent,
-                                            duration=tl.duration)["cues"] if cues else []
+    tl.captions = captions_for(cues, (tl.width, tl.height), tl.fps, lk, tl.duration)
     _save(project_id, tl, saved.get("match") or tl.match_stats(), _plan_of(saved))
     project_dir = config.project_dir(project_id)
     return edit_render.compose(

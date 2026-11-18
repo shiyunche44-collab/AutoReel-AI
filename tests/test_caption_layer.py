@@ -50,3 +50,12 @@ def test_render_layer_unavailable_returns_none(tmp_path, monkeypatch):
 def test_no_look_uses_layer_by_default():
     assert looks.get("lite").sub_layer is False
     assert not any(lk.sub_layer for lk in looks.LOOKS.values())
+
+
+def test_split_cue_never_cuts_inside_numbers_or_codes():
+    text = "中控是一块15.6英寸2.5K大屏配高通8155芯片"
+    for limit in (8, 10, 12, 16):
+        parts = cl.split_cue(text, limit)
+        assert "".join(parts) == text and all(len(p) <= limit for p in parts)
+        for a, b in zip(parts, parts[1:]):
+            assert not (cl._token(a[-1]) and cl._token(b[0])), (limit, parts)

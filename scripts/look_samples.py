@@ -2,12 +2,17 @@
 
     python -m scripts.look_samples              # 写到 app/web/static/looks/<id>.jpg 和 <id>_v.jpg
     python -m scripts.look_samples --sheet x.jpg  # 另外拼一张总览图
+    python -m scripts.look_samples --look commercial  # 只重画一套
 
 背景是中性灰渐变(素材库的帧多带别人的字幕和水印)。改了 looks.py 的配色就重跑一次。
+剪辑 v2 包装的视觉包(`extra.edit_style`,如 commercial)在 Remotion 里出一帧整屏图表 + 字幕,
+要装好 remotion/ 的依赖;没装就退回 PIL 画法(只能示意配色)。
 """
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -80,6 +85,40 @@ def sample(look: looks.Look, size: tuple[int, int]) -> Image.Image:
         return img
 
 
+def remotion_sample(look: looks.Look, size: tuple[int, int]) -> Image.Image | None:
+    """剪辑 v2 包装:同一份面板数据画成整屏图表,配一行字幕,取第 4 秒(行都出完了)。"""
+    from app import config
+    from app.pipeline import caption_layer
+    from app.pipeline.edit import edl, project
+    from app.pipeline.edit import render as er
+
+    ok, why = caption_layer.available()
+    if not ok:
+        print("  Remotion 不可用,退回 PIL:", why)
+        return None
+    card = {"kind": "spec", "title": PANEL["title"], "columns": [], "source": PANEL["source"],
+            "rows": [dict(r) for r in PANEL["rows"]]}
+    tl = edl.Timeline(width=size[0], height=size[1], fps=30, duration=5.0, theme=project.theme_of(look),
+                      overlays=[edl.Overlay(0.0, 5.0, "card", card)],
+                      captions=[{"start": 0.0, "end": 5.0,
+                                 "words": [{"text": SUBTITLE, "start": 0.0, "end": 5.0}]}])
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        props = er.stage_media(tl, work / "public")
+        (work / "props.json").write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
+        out = work / "still.png"
+        cmd = [config.motion_node(), str(caption_layer.REMOTION_DIR / caption_layer._CLI), "still",
+               "src/index.jsx", "Edit", out.as_posix(), "--frame=120",
+               f"--props={(work / 'props.json').as_posix()}", f"--public-dir={(work / 'public').as_posix()}",
+               f"--browser-executable={caption_layer.browser()}", "--log=error", "--overwrite"]
+        proc = subprocess.run(cmd, cwd=caption_layer.REMOTION_DIR, env=caption_layer._env(),
+                              capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if proc.returncode != 0 or not out.is_file():
+            print("  Remotion 出图失败,退回 PIL:", (proc.stderr or proc.stdout)[-300:])
+            return None
+        return Image.open(out).convert("RGB")
+
+
 def card_sample(look: looks.Look, size: tuple[int, int]) -> Image.Image:
     card = {"kind": "compare", "title": "补能对比", "columns": ["小米YU7", "特斯拉Model Y"],
             "rows": [{"label": "峰值充电", "values": ["5.2C", "4C"]},
@@ -92,14 +131,18 @@ def card_sample(look: looks.Look, size: tuple[int, int]) -> Image.Image:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sheet", help="另外拼一张总览图(每行一套 look:面板 / 数据卡)")
+    ap.add_argument("--look", action="append", help="只重画这几套(可重复)")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     land, port = (1920, 1080), (1080, 1920)
     rows = []
     for look in looks.LOOKS.values():
-        a = sample(look, land)
+        if args.look and look.id not in args.look:
+            continue
+        v2 = bool(look.extra.get("edit_style"))
+        a = (v2 and remotion_sample(look, land)) or sample(look, land)
         a.resize((960, 540), Image.LANCZOS).save(OUT / f"{look.id}.jpg", quality=86)
-        b = sample(look, port)
+        b = (v2 and remotion_sample(look, port)) or sample(look, port)
         b.resize((540, 960), Image.LANCZOS).save(OUT / f"{look.id}_v.jpg", quality=86)
         if args.sheet:
             rows.append((a.resize((960, 540)), card_sample(look, land).resize((960, 540))))

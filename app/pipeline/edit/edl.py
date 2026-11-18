@@ -11,6 +11,14 @@
 3. **开头 `HOOK_SECONDS` 秒是钩子**:≤`HOOK_SHOT` 秒一刀的快切 + 大标题,首刀白闪。
 4. **转场有语义**:同拍内硬切;换章 whip;进出整屏卡片 / 概念动画 zoom。
 5. **画面一直在动**:视频交替推 / 拉,静图做平移,不出现静止的整屏。
+
+包装风格(`style`,来自视觉包 `extra.edit_style`):
+
+- `classic`:花字关键词、侧面板、章节小标、关键词冲击推(上面这套)。
+- `commercial`(对标抖音头部说车号,见 docs/edit-v2.md「商业包装」):满屏实拍;关键数字 /
+  判断句上左上角粗斜体大字(`headline`),由分镜里核对过的数据挑,相邻至少 `HEADLINE_GAP` 秒、
+  每拍至多一条;参数多的面板拍改成整屏图表;换章出 `CHAPTER_CARD_SECONDS` 秒的章节卡;
+  视频只做 ≤3% 的缓推(`drift`)、静图朝主体慢推(`push_slow`);不做冲击推。
 """
 from __future__ import annotations
 
@@ -42,6 +50,19 @@ PUNCH_GAP = 2.5
 CLAUSE_BREAKS = "，。！？；：、,.!?;:"
 MOTIONS_VIDEO = ("push", "pull")
 MOTIONS_STILL = ("pan_l", "pan_r", "push")
+#: 包装风格(见模块说明)
+STYLES = ("classic", "commercial")
+#: commercial:章节卡停留多久
+CHAPTER_CARD_SECONDS = 1.0
+#: commercial 大字:相邻两条(含钩子、大数字)至少隔多久;每条停留的上下限
+HEADLINE_GAP = 6.0
+HEADLINE_MIN = 1.2
+HEADLINE_MAX = 4.0
+#: commercial:面板拍至少这么多行数据才改成整屏图表,更少的挑一行上大字
+CHART_MIN_ROWS = 3
+#: commercial 运镜:视频缓推、静图朝主体慢推(Remotion 里都是缓动曲线)
+MOTION_VIDEO_COMMERCIAL = "drift"
+MOTION_STILL_COMMERCIAL = "push_slow"
 
 Pick = Callable[[Any, float, str, str], list[Mapping[str, Any]]]
 
@@ -89,7 +110,9 @@ class Clip:
 class Overlay:
     start: float
     dur: float
-    type: str  # hook / keyword / stat / panel / chapter
+    #: classic:hook / keyword / stat / panel / chapter / card;
+    #: commercial:hook / headline / stat / card / chapter_card
+    type: str
     props: dict[str, Any] = field(default_factory=dict)
 
 
@@ -288,6 +311,83 @@ def card_overlay(spec: Any, start: float, dur: float) -> Overlay:
                                         "rows": rows, "source": str(card.get("source") or "")})
 
 
+def _row_at(row: Mapping[str, Any]) -> float | None:
+    at = row.get("at")
+    return float(at) if isinstance(at, (int, float)) else None
+
+
+def panel_chart(ov: Mapping[str, Any], start: float, dur: float) -> Overlay:
+    """面板拍(核对过的参数行)→ 整屏参数图表(和 `card_overlay` 同一形状,kind=spec)。"""
+    rows = [{"label": r["label"], "values": [r["value"]], "tag": r["basis"], "at": r["at"],
+             "num": _num(r["value"])} for r in _rows(ov)[:5]]
+    return Overlay(start, dur, "card", {"kind": "spec", "title": str(ov.get("title") or ""),
+                                        "columns": [], "rows": rows,
+                                        "source": str(ov.get("source") or "")})
+
+
+def _headline(start: float, end: float, at: float, lines: Sequence[str],
+              kicker: str = "") -> Overlay | None:
+    """一条大字:念到它时(拍内 `at` 秒)上屏,停到这拍结束,至多 `HEADLINE_MAX` 秒。"""
+    shown = [str(x).strip() for x in lines if str(x).strip()][:2]
+    a = round(start + max(0.0, at), 3)
+    b = min(end, a + HEADLINE_MAX)
+    if not shown or b - a < HEADLINE_MIN:
+        return None
+    return Overlay(a, round(b - a, 3), "headline", {"lines": shown, "kicker": kicker})
+
+
+def commercial_overlays(spec: Any, start: float, dur: float) -> list[Overlay]:
+    """commercial 包装的一拍:大字 / 大数字 / 整屏图表(数据都在分镜阶段核对过,这里只挑和换形状)。
+
+    - highlight:第一行上大字,第二行做副标;
+    - stat:大数字压在压暗的实拍上(不再整屏纯黑);
+    - panel:行数够就整屏图表,不够挑第一个带数字的行上大字(标签做眉题),念到它时上屏。"""
+    ov = dict(spec.overlay or {})
+    end = start + dur
+    layout = spec.layout
+    if layout == "highlight" and ov.get("lines"):
+        h = _headline(start, end, 0.1, [str(x) for x in ov["lines"]])
+        return [h] if h else []
+    if layout == "stat" and ov.get("value"):
+        return beat_overlays(spec, start, dur)
+    if layout == "panel" and ov.get("rows"):
+        rows = _rows(ov)
+        if len(rows) >= CHART_MIN_ROWS:
+            return [panel_chart(ov, start, dur)]
+        for r in rows:
+            if _num(r["value"]) is not None:
+                at = _row_at(r)
+                h = _headline(start, end, max(0.0, at - 0.15) if at is not None else 0.1,
+                              [r["value"]], kicker=r["label"])
+                return [h] if h else []
+    return []
+
+
+def space_headlines(overlays: Sequence[Overlay], gap: float = HEADLINE_GAP) -> list[Overlay]:
+    """大字限流:钩子 / 大数字 / 图表都留着(那是这一拍的内容),
+    大字和前后的大字、钩子、大数字至少隔 `gap` 秒;压在图表上的不要,章节卡没走就等它走。
+    章节第一拍就是大数字 / 图表时不出章节卡(两层会叠在一起,换章的 whip 已经交代了换章)。"""
+    full = [(o.start, o.start + o.dur) for o in overlays if o.type in ("stat", "card")]
+    keep = [o for o in overlays if o.type != "headline"
+            and not (o.type == "chapter_card"
+                     and any(s0 < o.start + o.dur and o.start < e0 for s0, e0 in full))]
+    marks = [o.start for o in keep if o.type in ("hook", "stat")]
+    busy = [(o.start, o.start + o.dur) for o in keep if o.type in ("card", "chapter_card")]
+    out = list(keep)
+    for o in sorted((o for o in overlays if o.type == "headline"), key=lambda o: o.start):
+        a, b = o.start, o.start + o.dur
+        for s0, e0 in busy:
+            if s0 - 0.05 <= a < e0:
+                a = e0 + 0.05
+        if b - a < HEADLINE_MIN or any(s0 < b and a < e0 for s0, e0 in busy):
+            continue
+        if any(abs(a - t) < gap for t in marks):
+            continue
+        marks.append(a)
+        out.append(Overlay(round(a, 3), round(b - a, 3), o.type, o.props))
+    return sorted(out, key=lambda o: o.start)
+
+
 def punch_times(tl: Timeline, gap: float = PUNCH_GAP) -> list[float]:
     """花字关键词(数字 / 车型代号)念出的时刻里挑冲击推点:钩子段、整屏画面、数据层期间不推。"""
     busy = [(c.start, c.start + c.dur) for c in tl.clips if c.kind == "beat"]
@@ -340,13 +440,15 @@ def _hook_lines(spec: Any, title: str) -> list[str]:
 def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int, int],
                    fps: int, pick: Pick, beat_files: Mapping[int, str], title: str = "",
                    accent: str = "#FF5A1F", captions: Sequence[Mapping[str, Any]] = (),
-                   outro: tuple[str, float] | None = None) -> Timeline:
+                   outro: tuple[str, float] | None = None, style: str = "classic") -> Timeline:
     """分镜(已按 TTS 定好时长) + 旁白 cue → 时间线。
 
     `pick(spec, seconds, text, role)` 返回取材片段([{kind, path, start, length, ...}]),
     一刀可能拿到几段(池子里没有够长的),按顺序铺满这一刀。
     `beat_files`:拍号 → 逐拍渲染的成品(整屏卡片 / 概念动画 / 机构画面,以及取不到素材时兜底)。
+    `style`:包装风格(classic / commercial,见模块说明);只影响叠加层和运镜,不影响下刀和取材。
     """
+    commercial = style == "commercial"
     beats = [s for s in specs if s.duration > 0]
     chapters = _chapters(beats)
     total = round(sum(s.duration for s in beats), 3)
@@ -366,7 +468,11 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
         new_chapter = ch_idx < 0 or chapters[ch_idx]["name"] != name
         if new_chapter:
             ch_idx += 1
-            if ch_idx > 0:
+            if ch_idx > 0 and commercial:
+                tl.overlays.append(Overlay(start, min(CHAPTER_CARD_SECONDS, end - start),
+                                           "chapter_card", {"n": ch_idx, "name": name,
+                                                            "total": len(chapters) - 1}))
+            elif ch_idx > 0:
                 tl.overlays.append(Overlay(start, min(CHAPTER_CHIP_SECONDS, end - start), "chapter",
                                            {"n": ch_idx, "name": name}))
         role = _role(ch_idx, len(chapters))
@@ -431,10 +537,14 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                                 transition=trans, beat=s.idx, text=text,
                                 need=bool(p.get("need")), via="fallback", key=key)
                 else:
-                    motions = MOTIONS_STILL if kind == "still" else MOTIONS_VIDEO
+                    if commercial:
+                        motion = MOTION_STILL_COMMERCIAL if kind == "still" else MOTION_VIDEO_COMMERCIAL
+                    else:
+                        motions = MOTIONS_STILL if kind == "still" else MOTIONS_VIDEO
+                        motion = motions[n_clip % len(motions)]
                     clip = Clip(round(cursor, 3), round(d, 3), "still" if kind == "still" else "video",
                                 str(p["path"]), src_in=round(float(p.get("start") or 0.0), 3),
-                                motion=motions[n_clip % len(motions)], transition=trans,
+                                motion=motion, transition=trans,
                                 crop_edge=float(p.get("crop_edge") or 0.0),
                                 crop_bottom=float(p.get("crop_bottom") or 0.0),
                                 beat=s.idx, text=text, item_id=str(p.get("item_id") or ""),
@@ -452,11 +562,17 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
             if lines:
                 tl.overlays.append(Overlay(start, round(min(end, HOOK_SECONDS + 0.5) - start, 3),
                                            "hook", {"lines": lines}))
-        tl.overlays.extend(beat_overlays(s, start, end - start))
+        if commercial:
+            tl.overlays.extend(commercial_overlays(s, start, end - start))
+        else:
+            tl.overlays.extend(beat_overlays(s, start, end - start))
         if remotion_card(s):
             tl.overlays.append(card_overlay(s, start, end - start))
 
-    tl.punches = punch_times(tl)
+    if commercial:
+        tl.overlays = space_headlines(tl.overlays)
+    else:
+        tl.punches = punch_times(tl)
     if outro:
         path, secs = outro
         tl.clips.append(Clip(total, round(float(secs), 3), "beat", str(path), transition="zoom"))

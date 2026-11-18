@@ -18,7 +18,7 @@ from ... import config, degrade
 from .. import caption_layer, final_qa
 from .. import render as render_mod
 from .. import timeline as timeline_mod
-from . import reframe
+from . import grade, reframe
 from .edl import Timeline
 
 log = logging.getLogger(__name__)
@@ -57,7 +57,8 @@ def font_file() -> Path | None:
 
 def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
     """把时间线里用到的本地文件链进 Remotion 的 public 目录,返回改好 src 的 props。
-    竖屏顺带给每刀做一张模糊底图(`backdrop`)。"""
+    竖屏顺带给每刀做一张模糊底图(`backdrop`)。视觉包要调色(theme.grade)时,
+    实拍 / 静图换成预裁好、套过 LUT 的中间文件(`edit/grade.py`,失败的刀用原色)。"""
     public.mkdir(parents=True, exist_ok=True)
     props = tl.to_props()
     portrait = tl.height > tl.width
@@ -67,7 +68,8 @@ def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
         if not dest.exists():
             shutil.copy2(font, dest)
         props["font"] = dest.name
-    for clip in props["clips"]:
+    sources: dict[int, Path] = {}
+    for i, clip in enumerate(props["clips"]):
         src = clip["src"]
         if not src or src.startswith(("http:", "https:", "data:")):
             continue
@@ -81,8 +83,10 @@ def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
             except OSError:
                 shutil.copy2(src, dest)
         clip["src"] = name
+        sources[i] = Path(src)
         if clip["kind"] != "beat" and portrait:
             _reframe(clip, Path(src), public)
+    grade.apply(props, sources, public)
     return props
 
 
@@ -228,6 +232,8 @@ def compose(project_id: str, tl: Timeline, *, narration_path: Path | None,
             tmp.unlink(missing_ok=True)
             raise EditRenderError(problem)
     os.replace(tmp, output)
+    # 调色中间文件一条片上 G,成片出来就不需要了(再改刀会按需重做)
+    grade.prune(work / "public")
     duration = timeline_mod.probe_safe(output, default=0.0)
     if mix:
         warnings.extend(final_qa.inspect(output))
