@@ -27,7 +27,8 @@ jobs:
     name: Python (pytest / ruff / mypy)
     # 开发机和日常跑服务的都是 Windows:路径、编码、子进程的坑只有在 Windows 上才露出来
     runs-on: windows-latest
-    timeout-minutes: 30
+    # runner 只有 4 核,pytest 比开发机慢一个数量级;30 分钟在第一次跑时就差点不够
+    timeout-minutes: 45
     env:
       # GitHub 的 Windows runner 是英文区域设置,控制台按 cp1252 输出;测试名和跳过原因里有中文
       PYTHONIOENCODING: utf-8
@@ -37,16 +38,25 @@ jobs:
       PUBLISH_ENABLED: "0"
       METRICS_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      # 临时文件改放到工作区所在的 D: 盘。默认的 %TEMP% 在系统盘 C: 上,小文件读写慢得多,
+      # 而几乎每条用例都要在 tmp_path 下建库、写文件
+      - name: Put temp files on the workspace drive
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "tmp"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          "TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TEMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
 
       # 有几条用例拿 node 检查概念动画模版里的 JS 语法(不需要 motion/ 下的依赖)
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -67,8 +77,9 @@ jobs:
       - name: mypy
         run: python -m mypy
 
+      # --durations:变慢时直接在日志末尾看到是哪几条
       - name: pytest
-        run: python -m pytest -n auto -m "not network and not quota" -p no:cacheprovider
+        run: python -m pytest -n auto -m "not network and not quota" -p no:cacheprovider --durations=20
 
   web:
     name: Web (eslint / tsc / vitest)
@@ -76,9 +87,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
