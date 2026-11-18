@@ -15,8 +15,7 @@ import pytest
 
 from app import config, db
 from app.publish import service
-from app.publish.base import Account, AccountStatus, MetricSnapshot, PublishError, \
-    PublishResult
+from app.publish.base import Account, AccountStatus, MetricSnapshot, PublishError, PublishResult
 
 
 class FakeAdapter:

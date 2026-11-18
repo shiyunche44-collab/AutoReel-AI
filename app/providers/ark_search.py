@@ -88,7 +88,7 @@ def search(query: str, *, count: int = 10, time_range: str | None = None,
                 try:
                     return parse(resp.json())
                 except ValueError:
-                    raise ConnectorError(TOOL, f"豆包搜索返回格式不对:{resp.text[:200]}")
+                    raise ConnectorError(TOOL, f"豆包搜索返回格式不对:{resp.text[:200]}") from None
             last = ConnectorError(TOOL, f"HTTP {resp.status_code}:{resp.text[:200]}",
                                   code=resp.status_code)
             if resp.status_code not in _RETRY_HTTP:

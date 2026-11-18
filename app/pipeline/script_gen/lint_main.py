@@ -1,17 +1,44 @@
 """compliance_lint:把各项校验串起来。"""
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
 from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment
-from ..grounding import price_band, strip_band
 from .. import variety
-
-from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
-from .scrub import _BENIGN_FIRST_RE, _COMPETITOR_MARKERS, _DISPARAGING_TERMS, _is_comparison_section, vendor_attribution
+from ..grounding import price_band, strip_band
 from .hook import hook_lint, hook_payoff_lint, hook_verdict_lint, stance_lint
-from .lint_checks import attribution_lint, conflict_lint, density_lint, depth_lint, derived_lint, duplicate_lint, ending_lint, firsthand_lint, hero_lint, ledger_use_lint, meaning_lint, number_source_lint, range_lint, repeat_lint, review_use_lint, rival_lint, stock_phrase_lint, term_lint, thesis_lint
+from .lint_base import AD_ABSOLUTE_TERMS, LintIssue, has_numeric_claim
+from .lint_checks import (
+    attribution_lint,
+    conflict_lint,
+    density_lint,
+    depth_lint,
+    derived_lint,
+    duplicate_lint,
+    ending_lint,
+    firsthand_lint,
+    hero_lint,
+    ledger_use_lint,
+    meaning_lint,
+    number_source_lint,
+    range_lint,
+    repeat_lint,
+    review_use_lint,
+    rival_lint,
+    stock_phrase_lint,
+    term_lint,
+    thesis_lint,
+)
 from .repair import NEAR_REPEAT_ERROR, near_repeats
+from .scrub import (
+    _BENIGN_FIRST_RE,
+    _COMPETITOR_MARKERS,
+    _DISPARAGING_TERMS,
+    _is_comparison_section,
+    vendor_attribution,
+)
 from .spoken import spoken_lint
 
 

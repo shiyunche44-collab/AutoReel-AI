@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from tests.test_coach import _project, _published, fresh_db, no_playbook  # noqa: F401
+from tests.test_coach import _project, _published, no_playbook  # noqa: F401
 
 NOW = time.time()
 DAY = 86400

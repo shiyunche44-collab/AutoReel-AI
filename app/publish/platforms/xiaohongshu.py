@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
-from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishError, \
-    PublishRequest, PublishResult
+from ..base import (
+    Account,
+    AccountStatus,
+    MetricSnapshot,
+    PlatformRef,
+    PublishError,
+    PublishRequest,
+    PublishResult,
+)
 from ..registry import PORTRAIT
 
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish"
@@ -164,8 +170,8 @@ class XiaohongshuAdapter:
 
         以前读数据中心的页面文字,拿到的是整个账号的总数 —— 每篇笔记记成一样的数,
         学习时会被当成每篇的成绩,宁可抓不到也不能这么记。"""
-        from .. import browser
         from ...metrics.collector import match_xhs_note, parse_xhs_notes
+        from .. import browser
 
         payloads: list = []
 

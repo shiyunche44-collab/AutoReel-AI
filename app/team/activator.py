@@ -39,7 +39,7 @@ import random
 import re
 import statistics
 import time
-from typing import Any, Callable
+from typing import Any
 
 from .. import config, db
 from . import Skip, TeamError
@@ -172,7 +172,7 @@ def account_paused() -> bool:
 # --------------------------------------------------------------------------
 def _seed(day: str) -> int:
     """按日期取稳定的随机种子 —— 同一天生成两次,计划必须一模一样。"""
-    digest = hashlib.sha256(f"AutoReel-AI-active-{day}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"AutoReel-AI-active-{day}".encode()).hexdigest()
     return int(digest[:16], 16)
 
 
@@ -312,7 +312,7 @@ def candidates(now: float | None = None, *, category: str | None = None,
 
 def accounts_to_follow(day: str) -> list[dict[str, Any]]:
     """今天还能关注的对标号(已经关注过的不再关注;一天最多 TEAM_ACTIVE_PER_ACCOUNT 个)。"""
-    accounts = [a for a in db.list_benchmark_accounts(enabled_only=True)]
+    accounts = list(db.list_benchmark_accounts(enabled_only=True))
     done = acted_targets(FOLLOW)
     return [a for a in accounts if a["id"] not in done]
 
@@ -538,8 +538,8 @@ def execute_batch(items: list[dict[str, Any]], day: str, now: float,
                   llm: Any = None, category: str | None = None) -> dict[str, Any]:
     """执行一个批次里的动作。返回 {"done", "failed", "skipped", "notes"}。"""
     from ..publish.base import PublishError
-    from ..publish.platforms.douyin_outreach import VerificationNeeded
     from ..publish.platforms import douyin_outreach
+    from ..publish.platforms.douyin_outreach import VerificationNeeded
 
     out = {"done": 0, "failed": 0, "skipped": 0, "notes": []}
     cars = _known_cars(category)
@@ -628,9 +628,9 @@ def execute_batch(items: list[dict[str, Any]], day: str, now: float,
 
 def run(now: float | None = None) -> str:
     """角色入口:到点就做一个批次。"""
+    from ..pipeline import orchestrator
     from ..publish.base import PublishError
     from ..publish.platforms.douyin_outreach import VerificationNeeded
-    from ..pipeline import orchestrator
 
     now = now or time.time()
     day = _day(now)

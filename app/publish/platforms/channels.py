@@ -13,8 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishError, \
-    PublishRequest, PublishResult
+from ..base import (
+    Account,
+    AccountStatus,
+    MetricSnapshot,
+    PlatformRef,
+    PublishError,
+    PublishRequest,
+    PublishResult,
+)
 from ..registry import PORTRAIT
 
 PUBLISH_URL = "https://channels.weixin.qq.com/platform/post/create"
@@ -106,8 +113,8 @@ class ChannelsAdapter:
 
     # -- 数据 ------------------------------------------------------------
     def fetch_metrics(self, ref: PlatformRef, account: Account) -> MetricSnapshot:
-        from .. import browser
         from ...metrics.collector import parse_metric_text
+        from .. import browser
 
         try:
             with browser.BrowserSession(self.key) as session:

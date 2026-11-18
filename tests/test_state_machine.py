@@ -8,9 +8,9 @@ import pytest
 
 from app.state import (
     GATE_STATES,
+    TERMINAL_STATES,
     IllegalTransition,
     State,
-    TERMINAL_STATES,
     assert_transition,
     can_transition,
     is_gate,

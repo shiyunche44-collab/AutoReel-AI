@@ -31,7 +31,7 @@ from .. import config, db
 from ..pipeline import aspect as aspect_mod
 from . import accounts as accounts_mod
 from . import metadata as md
-from .base import Account, PlatformRef, PublishError, PublishRequest, PublishResult
+from .base import Account, PublishError, PublishRequest, PublishResult
 from .registry import LANDSCAPE, adapter_for, rule_for
 
 log = logging.getLogger(__name__)

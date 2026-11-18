@@ -22,9 +22,10 @@ import logging
 import re
 import statistics
 import subprocess
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 from .. import config, degrade
 from .timeline import probe_safe

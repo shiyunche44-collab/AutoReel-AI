@@ -31,9 +31,10 @@ import re
 import shutil
 import time
 import urllib.parse
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from .. import config
 from . import webassets

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...categories import CategoryProfile, Vocab
 from ...models import ShotSpec
 from .. import knobs
-
 from .consts import MAX_CONCEPT
 
 

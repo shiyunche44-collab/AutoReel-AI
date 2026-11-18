@@ -2,15 +2,26 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
-from ... import config, degrade
+from typing import Any
 
-from .tone import Tone, log, tone_of
-from .studio import background
+from ... import config, degrade
 from .car_ai import pick_visual
-from .layout import (Frame, model_word, place_art, place_car, question_part, render, short_name,
-                     split_title, strip_figure, usable_hook)
+from .layout import (
+    Frame,
+    model_word,
+    place_art,
+    place_car,
+    question_part,
+    render,
+    short_name,
+    split_title,
+    strip_figure,
+    usable_hook,
+)
+from .studio import background
+from .tone import Tone, log, tone_of
 
 
 # --------------------------------------------------------------------------

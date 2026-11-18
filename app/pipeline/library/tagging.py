@@ -3,13 +3,26 @@ from __future__ import annotations
 
 import functools
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
 from ...categories import Vocab
 from ...providers import images
 from .. import vision_verdict
-
-from .model import DUP_BITS, EARLY_STOP_RATIO, EARLY_STOP_SAMPLE, LAUNCH_EARLY_STOP_RATIO, LAUNCH_EARLY_STOP_SAMPLE, Item, Library, TAG_BATCH, confirmed_seconds, is_waste, vocab_of
+from .model import (
+    DUP_BITS,
+    EARLY_STOP_RATIO,
+    EARLY_STOP_SAMPLE,
+    LAUNCH_EARLY_STOP_RATIO,
+    LAUNCH_EARLY_STOP_SAMPLE,
+    TAG_BATCH,
+    Item,
+    Library,
+    confirmed_seconds,
+    is_waste,
+    vocab_of,
+)
 
 
 # --------------------------------------------------------------------------

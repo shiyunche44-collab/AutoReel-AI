@@ -29,7 +29,8 @@ import logging
 import random
 import re
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .. import db
 from . import Skip, TeamError

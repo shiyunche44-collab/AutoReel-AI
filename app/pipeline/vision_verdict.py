@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Sequence
+from typing import Any
 
 from ..providers import images
 

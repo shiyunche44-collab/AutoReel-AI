@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import Any
 
 from . import config, db
-from .pipeline import aspect, variety
 from .categories import load_profile
 from .models import (
     Fact,
@@ -23,6 +22,7 @@ from .models import (
     Shot,
     ShotSpec,
 )
+from .pipeline import aspect, variety
 
 
 class ProjectNotFound(RuntimeError):

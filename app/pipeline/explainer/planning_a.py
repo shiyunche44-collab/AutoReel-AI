@@ -2,15 +2,28 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment, ShotSpec
 from .. import cards, knobs, rhythm
-from . import mech
 from ..grounding import numbers_in
-
+from . import mech
 from .consts import LAYOUTS, MAX_BROLL_RUN, SAFE_LAYOUT
-from .text import _fact_label, _fact_value, _hint, _panel_from_rows, _stat_overlay, _unit_after, echoes_narration, ground_keywords, ground_stat, said, said_overlay
+from .text import (
+    _fact_label,
+    _fact_value,
+    _hint,
+    _panel_from_rows,
+    _stat_overlay,
+    _unit_after,
+    echoes_narration,
+    ground_keywords,
+    ground_stat,
+    said,
+    said_overlay,
+)
 
 
 def _beat_line(i: int, seg: ScriptSegment | None, profile: CategoryProfile,

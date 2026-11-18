@@ -18,11 +18,11 @@ def _lib(tmp_path, monkeypatch, items):
 
 def test_coverage_counts_confirmed_video_per_required_view(tmp_path, monkeypatch):
     lib = _lib(tmp_path, monkeypatch, [
-        dict(id="f", view="exterior_front", start=0, end=10, official=True),
-        dict(id="s", view="seat", start=10, end=15, official=True),
-        dict(id="d", view="aerial", start=20, end=26, official=True),
-        dict(id="u", view="rear", start=30, end=40, target="unknown"),   # 没认出、非官方:不算
-        dict(id="h", view="exterior_side", start=40, end=50, official=True, desc="博主出镜讲解"),
+        {"id": "f", "view": "exterior_front", "start": 0, "end": 10, "official": True},
+        {"id": "s", "view": "seat", "start": 10, "end": 15, "official": True},
+        {"id": "d", "view": "aerial", "start": 20, "end": 26, "official": True},
+        {"id": "u", "view": "rear", "start": 30, "end": 40, "target": "unknown"},   # 没认出、非官方:不算
+        {"id": "h", "view": "exterior_side", "start": 40, "end": 50, "official": True, "desc": "博主出镜讲解"},
     ])
     cov = library.coverage_seconds(lib)
     assert cov == {"正面": 10.0, "侧面": 0.0, "尾部": 0.0, "内饰": 5.0, "行驶": 6.0}
@@ -42,11 +42,11 @@ def test_footage_gaps_hint_on_seconds_or_missing_views():
 
 def test_stats_report_resolution_and_logo_results(tmp_path, monkeypatch):
     lib = _lib(tmp_path, monkeypatch, [
-        dict(id="hd", view="driving", start=0, end=5, width=1920, height=1080),
-        dict(id="mid", view="driving", start=5, end=10, width=1280, height=720),
-        dict(id="lo", view="driving", start=10, end=15, width=480, height=852),
-        dict(id="drop", view="driving", start=15, end=20, skipped="logo_uncroppable"),
-        dict(id="dup", view="driving", start=20, end=25, skipped="dup_official"),
+        {"id": "hd", "view": "driving", "start": 0, "end": 5, "width": 1920, "height": 1080},
+        {"id": "mid", "view": "driving", "start": 5, "end": 10, "width": 1280, "height": 720},
+        {"id": "lo", "view": "driving", "start": 10, "end": 15, "width": 480, "height": 852},
+        {"id": "drop", "view": "driving", "start": 15, "end": 20, "skipped": "logo_uncroppable"},
+        {"id": "dup", "view": "driving", "start": 20, "end": 25, "skipped": "dup_official"},
     ])
     lib.sources = [library.Source(url="a", id="a", logo_checked=True, logo_boxes=[[0.8, 0, 1, 0.1]]),
                    library.Source(url="b", id="b", logo_checked=True)]

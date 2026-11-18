@@ -5,13 +5,26 @@ import logging
 import re
 import subprocess
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
+
 from ...providers import clips as clips_mod
 from ...providers import images, official, platform_video
 from .. import logo_detect, media_check, watermark_vlm
-
-from .model import Item, LAUNCH_WINDOWS, Library, MIN_TAG_SECONDS, SCENE_THRESHOLD, Source, WHOLE_MAX_SECONDS, WINDOWS_PER_LONG_SOURCE, WINDOW_SECONDS, platform_of, profile_of, short_id
+from .model import (
+    LAUNCH_WINDOWS,
+    MIN_TAG_SECONDS,
+    SCENE_THRESHOLD,
+    WHOLE_MAX_SECONDS,
+    WINDOW_SECONDS,
+    WINDOWS_PER_LONG_SOURCE,
+    Item,
+    Library,
+    Source,
+    platform_of,
+    profile_of,
+    short_id,
+)
 
 log = logging.getLogger(__name__)
 

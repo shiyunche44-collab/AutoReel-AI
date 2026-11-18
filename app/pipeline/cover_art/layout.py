@@ -5,10 +5,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from ... import config
 
-from .tone import Tone
+from ... import config
 from .plates import _car_layer
+from .tone import Tone
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class Frame:
     margin: int
 
     @classmethod
-    def of(cls, size: tuple[int, int]) -> "Frame":
+    def of(cls, size: tuple[int, int]) -> Frame:
         w, h = size
         if w >= h:
             return cls(w, h, True, 0, h, max(48, int(w * 0.05)))
@@ -307,7 +307,7 @@ def question_part(title: str, subject: str) -> str:
             n += 1
         if n >= len(lead):
             break
-    rest = title[k + 1:].strip(" ,,::、")
+    rest = title[k + 1:].strip(" ,,::、")  # noqa: B005 - 按字符集去头尾标点
     return rest if len(rest) >= 5 else title
 
 
@@ -416,18 +416,18 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
             subs, sf = _fit(sub, BOLD, max_w - int(f.w * 0.08), max(56, int(mf.size * 0.46)),
                             int(f.w * 0.05), int(f.w * 0.065))
             for ln in subs:
-                l, _, r, _ = sf.getbbox(ln)
-                bw = r - l + int(sf.size * 1.0)
+                x0, _, x1, _ = sf.getbbox(ln)
+                bw = x1 - x0 + int(sf.size * 1.0)
                 y += _pill(canvas, ((f.w - bw) // 2, y), ln, sf, tone.accent, band_text)[1] \
                     + int(sf.size * 0.18)
     if brand:
         bf = _font(BOLD, int(min(f.w, f.h) * 0.032))
-        l, t, r, b = bf.getbbox(brand)
-        bx, by = f.w - f.margin - (r - l), f.y(0.965) - (b - t)
+        x0, y0, x1, y1 = bf.getbbox(brand)
+        bx, by = f.w - f.margin - (x1 - x0), f.y(0.965) - (y1 - y0)
         layer = Image.new("L", canvas.size, 0)
-        ImageDraw.Draw(layer).text((bx - l, by - t), brand, font=bf, fill=150)
+        ImageDraw.Draw(layer).text((bx - x0, by - y0), brand, font=bf, fill=150)
         canvas.paste(Image.new("RGB", canvas.size, tone.text), (0, 0), layer)
-        _host_badge(canvas, bx, by + (b - t), int(bf.size * 3.0))
+        _host_badge(canvas, bx, by + (y1 - y0), int(bf.size * 3.0))
     return canvas
 
 

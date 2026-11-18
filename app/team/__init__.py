@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 from .. import db
 

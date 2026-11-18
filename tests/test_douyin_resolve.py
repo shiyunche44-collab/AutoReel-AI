@@ -7,10 +7,9 @@
 """
 from __future__ import annotations
 
-from tests.library_patch import patch_in_package
-
 from app.publish.base import PublishError
 from app.publish.platforms import douyin
+from tests.library_patch import patch_in_package
 
 
 def _work(wid: str, desc: str, create_time: int) -> dict:

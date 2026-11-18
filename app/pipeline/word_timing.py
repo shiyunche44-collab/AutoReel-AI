@@ -9,8 +9,9 @@ from __future__ import annotations
 import difflib
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import config, degrade
 

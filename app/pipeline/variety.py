@@ -16,8 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 #: 没声明 openings / endings 的片型用这一对:就是变体出现之前写死在提示词里的那套
 DEFAULT_OPENING = "conflict"

@@ -5,12 +5,12 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
 from ... import config
-
 from .tone import log
-
 
 # --------------------------------------------------------------------------
 # 车:素材池抠不出白底官图时的兜底 —— 生图生成一台车

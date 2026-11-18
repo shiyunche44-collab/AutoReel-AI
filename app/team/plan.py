@@ -4,9 +4,9 @@ from __future__ import annotations
 from typing import Any
 
 from .. import config, db
-from . import preference
 from ..categories import load_profile
 from ..models import ProjectCreate, SubjectEntry
+from . import preference
 
 STATUS_LABEL = {
     "proposed": "待批", "approved": "已批", "rejected": "已驳回", "expired": "过期未批",

@@ -76,6 +76,17 @@ def job_runner(tmp_path, monkeypatch):
     db._INITIALISED = False
 
 
+@pytest.fixture()
+def fresh_db(tmp_path, monkeypatch):
+    """临时库(返回 `app.db`)。团队类测试共用;以前是从 test_coach 导入的。"""
+    from app import config, db
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
+    monkeypatch.setattr(db, "_INITIALISED", False)
+    return db
+
+
 def wait_until(cond, timeout: float = 5.0) -> bool:
     import time
 

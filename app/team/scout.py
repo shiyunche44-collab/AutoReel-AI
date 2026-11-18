@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .. import config, db
 from ..categories import load_profile

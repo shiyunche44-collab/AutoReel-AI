@@ -1,7 +1,6 @@
 """分发官:切片挑段、笔记正文收口、衍生品发布任务、成片闸一起排。"""
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 

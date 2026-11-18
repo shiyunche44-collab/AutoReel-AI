@@ -7,14 +7,15 @@ import os
 import re
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
 from ... import config
 from ...categories import CategoryProfile, Vocab, load_profile
 from ...providers import platform_video
 from .. import media_check
-
 
 LIB_ROOT_NAME = "library"
 
@@ -37,7 +38,7 @@ def _save_lock(subject: str) -> threading.Lock:
         return lock
 
 
-def profile_of(lib: "Library") -> CategoryProfile:
+def profile_of(lib: Library) -> CategoryProfile:
     """建池的品类。旧池子没记品类的按汽车(当时只有汽车)。"""
     try:
         return load_profile(lib.category or "auto_long")
@@ -45,7 +46,7 @@ def profile_of(lib: "Library") -> CategoryProfile:
         return load_profile("auto_long")
 
 
-def vocab_of(lib: "Library") -> Vocab:
+def vocab_of(lib: Library) -> Vocab:
     return profile_of(lib).vocab
 
 #: 素材视角(打标签的 view)、视角 → 镜头 angle、背景偏好分组都随品类变,
@@ -259,7 +260,7 @@ class Library:
         return self.dir_for(self.subject)
 
     @classmethod
-    def load(cls, subject: str) -> "Library":
+    def load(cls, subject: str) -> Library:
         path = cls.dir_for(subject) / "library.json"
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -474,7 +475,7 @@ def coverage_seconds(lib: Library) -> dict[str, float]:
     """品类必备视角(`vocab.coverage_views`)各有多少秒确认视频(口径同 `confirmed_seconds`)。"""
     groups = vocab_of(lib).coverage_views
     hosts = _host_sources(lib.items)
-    out = {label: 0.0 for label in groups}
+    out = dict.fromkeys(groups, 0.0)
     for i in lib.items:
         if (i.kind != "video" or not i.usable or not _confirmed(i) or _hard_bad(i, hosts)
                 or i.length < FILL_MIN_PIECE):

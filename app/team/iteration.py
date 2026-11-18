@@ -56,7 +56,7 @@ def weekly(now: float | None = None, weeks: int = WEEKS) -> list[dict[str, Any]]
             for i in range(weeks)]
     buckets: dict[str, dict[str, list[float]]] = {
         k: {"views": [], "retention_2s": [], "avg_watch_sec": [], "followers": []} for k in keys}
-    works = {k: 0 for k in keys}
+    works = dict.fromkeys(keys, 0)
     for pub in db.list_publications(limit=1000):
         if not features.is_main(pub) or pub["state"] != "published":
             continue
@@ -76,8 +76,8 @@ def weekly(now: float | None = None, weeks: int = WEEKS) -> list[dict[str, Any]]
         if o.get("followers_gained") is not None:
             b["followers"].append(float(o["followers_gained"]))
 
-    decided = {k: 0 for k in keys}
-    rejected = {k: 0 for k in keys}
+    decided = dict.fromkeys(keys, 0)
+    rejected = dict.fromkeys(keys, 0)
     for item in db.list_plan_items(since=since, limit=2000):
         k = week_key(item["slot_at"])
         if k not in decided or item["status"] not in DECIDED:

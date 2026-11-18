@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import logging
+
 from ... import config
 from .. import aspect
 from .. import render as render_mod
-
 
 _log = logging.getLogger(__name__)
 

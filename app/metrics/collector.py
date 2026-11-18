@@ -284,7 +284,7 @@ def parse_metric_text(text: str) -> dict[str, Any]:
     认标签后面的第一个数字:「播放量 1.2万」→「views: 12000」。
     认不出来就 None(不填 0)。
     """
-    out: dict[str, Any] = {key: None for key in TEXT_LABELS}
+    out: dict[str, Any] = dict.fromkeys(TEXT_LABELS)
     flat = re.sub(r"[ \t　]+", " ", str(text or ""))
     for key, labels in TEXT_LABELS.items():
         for label in labels:

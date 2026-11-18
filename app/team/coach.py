@@ -16,8 +16,19 @@ import time
 from typing import Any
 
 from .. import db
-from . import (Skip, activator, beat_retention, benchmark, engagement, features, health, iteration,
-               playbook, preference, stats)
+from . import (
+    Skip,
+    activator,
+    beat_retention,
+    benchmark,
+    engagement,
+    features,
+    health,
+    iteration,
+    playbook,
+    preference,
+    stats,
+)
 
 log = logging.getLogger(__name__)
 

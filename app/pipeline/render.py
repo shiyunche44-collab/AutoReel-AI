@@ -15,12 +15,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import config
-from ..models import SubtitleCue
 from . import final_qa
 from . import timeline as timeline_mod
 

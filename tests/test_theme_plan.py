@@ -156,7 +156,7 @@ def test_unknown_theme_sources_fall_back(auto):
 # ---------------------------------------------------------------------------
 def test_too_many_blocks_is_rejected(tmp_path, monkeypatch):
     """块数超过最短时长的镜头数,铺展必然压到 0 —— 必须在加载期报错。"""
-    blocks = "\n".join(f"      - {{section: 开场钩子, weight: 1}}" for _ in range(11))
+    blocks = "\n".join("      - {section: 开场钩子, weight: 1}" for _ in range(11))
     yaml_text = (
         "name: badcat\nlabel: 坏品类\nduration_grid: 6\ndurations: [60]\n"
         "sections:\n  开场钩子:\n    beat: x\n"

@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...categories import CategoryProfile
 from ...models import Fact, ScriptSegment, ShotSpec
 from .. import looks, rhythm
-
 from ..script_gen.fit import PORTRAIT_CHARS_PER_SECOND
 from .consts import BROLL_STYLES, KEYWORD_CHARS, LAYOUTS, MAX_CARD_RUN, MAX_CONCEPT, SAFE_LAYOUT
-from .text import _as_panel_overlay, _hint, ground_keywords, said_overlay
 from .planning_a import facts_for
-
+from .text import _as_panel_overlay, _hint, ground_keywords, said_overlay
 
 #: 估算一拍多长(合成旁白之前还不知道):字数 ÷ 这个语速。偏慢一点,宁可多配
 QUIET_CPS = 5.0

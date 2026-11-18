@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import re
 import statistics
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...models import ScriptSegment
-
-from .lint_base import LintIssue
 from .hook import first_sentence
-from .segments import SHOOT_CHARS_MAX, _SENT_END, _split_keep
-
+from .lint_base import LintIssue
+from .segments import _SENT_END, SHOOT_CHARS_MAX, _split_keep
 
 # --------------------------------------------------------------------------
 # 口播清洗:碎句、半句、自曝

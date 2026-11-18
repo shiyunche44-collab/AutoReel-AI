@@ -10,8 +10,13 @@ import pytest
 from app.categories import load_profile
 from app.models import Fact, ScriptSegment, ShotSpec
 from app.pipeline import explainer, script_gen
-from app.pipeline.script_gen import (compliance_lint, depth_lint, duplicate_lint,
-                                     hook_lint, vendor_attribution)
+from app.pipeline.script_gen import (
+    compliance_lint,
+    depth_lint,
+    duplicate_lint,
+    hook_lint,
+    vendor_attribution,
+)
 
 
 @pytest.fixture(scope="module")
@@ -324,7 +329,6 @@ def test_gate_a_blocks_on_lint_error(monkeypatch):
 
 def test_gate_a_force_overrides(monkeypatch):
     """明知有问题仍然继续:必须显式给 force,不能默认放行。"""
-    from app.pipeline import orchestrator
 
     orch = _patch_gate(monkeypatch, [{"segment_idx": 0, "severity": "error",
                                        "message": "开场第一句是套话「朋友们好」"}])

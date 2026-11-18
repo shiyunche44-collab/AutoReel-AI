@@ -11,8 +11,8 @@ from __future__ import annotations
 import html
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import httpx
 

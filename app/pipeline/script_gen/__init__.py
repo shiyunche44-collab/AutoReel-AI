@@ -12,7 +12,8 @@ from __future__ import annotations
 import json  # noqa: F401
 import logging  # noqa: F401
 import re  # noqa: F401
-from typing import Any, Callable, Iterable, Mapping, Sequence  # noqa: F401
+from typing import Any
+from collections.abc import Callable, Iterable, Mapping, Sequence  # noqa: F401
 from ...categories import CategoryProfile, Slot, Vocab  # noqa: F401
 from ...models import Fact, ScriptSegment  # noqa: F401
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in, price_band, strip_band  # noqa: F401

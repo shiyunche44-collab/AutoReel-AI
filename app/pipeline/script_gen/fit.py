@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...models import ScriptSegment
-
 from .lint_base import log
-
 
 #: 竖屏按实测 TTS 语速算字数预算。默认的 5.8 字/秒比实际快:四个成片实测
 #: 4.58–4.82 字/秒(YU7 90 秒竖屏 479 字念了 104.5 秒)。竖屏 60/90 秒是平台档位,

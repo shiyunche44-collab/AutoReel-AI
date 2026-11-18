@@ -169,7 +169,7 @@ def test_arbitrate_switch_off(fresh_db, monkeypatch):
 
 def test_producer_run_respects_cap(fresh_db, monkeypatch):
     from app import config
-    from app.team import Skip, producer
+    from app.team import producer
 
     monkeypatch.setattr(config, "TEAM_CHIEF_DAILY_MAX", 1)
     monkeypatch.setattr(config, "TEAM_LEAD_HOURS", 30)

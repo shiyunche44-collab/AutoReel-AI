@@ -61,7 +61,7 @@ def _cache_dir() -> Path:
 
 
 def _cache_key(kind: str, query: str) -> Path:
-    digest = hashlib.sha1(f"{kind}:{query}".encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha1(f"{kind}:{query}".encode()).hexdigest()[:16]
     safe = re.sub(r"[^\w一-鿿-]+", "_", str(query))[:32]
     return _cache_dir() / f"{kind}_{safe}_{digest}.json"
 

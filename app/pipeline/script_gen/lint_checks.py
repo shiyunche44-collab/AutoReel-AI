@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from collections.abc import Sequence
+
 from ...categories import CategoryProfile, Vocab
 from ...models import Fact, ScriptSegment
+from .. import variety
 from ..derive import LEDGER_TOPIC, ledger_numbers
 from ..grounding import YEAR_RE, arabicize, differing_measures, numbers_in
-from .. import variety
-
-from .lint_base import LintIssue, _MODEL_CODE_RE, _YEAR_RE, has_numeric_claim
+from .hook import _BASIS_WINDOW
+from .lint_base import _MODEL_CODE_RE, _YEAR_RE, LintIssue, has_numeric_claim
 from .prompt import CATCHPHRASE_MAX, REVIEW_TOPIC, matched_principles, usable_facts
 from .scrub import _is_comparison_section
-from .hook import _BASIS_WINDOW
-
 
 #: "所以呢"的痕迹:换算成场景、跟别的比、点出对谁。含数字的段一个都没有,就是在念参数
 _MEANING_WORDS = ("意味着", "相当于", "等于", "也就是", "换句话说", "够", "比", "同级", "同价位",

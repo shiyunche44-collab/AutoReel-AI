@@ -34,7 +34,7 @@ def _load_pool(slug: str) -> library.Library:
     try:
         subject = json.loads(path.read_text(encoding="utf-8")).get("subject") or slug
     except (OSError, json.JSONDecodeError):
-        raise HTTPException(status_code=404, detail="素材池已损坏")
+        raise HTTPException(status_code=404, detail="素材池已损坏") from None
     lib = library.Library.load(subject)
     if lib.dir.name != slug:
         raise HTTPException(status_code=404, detail="素材池不存在")

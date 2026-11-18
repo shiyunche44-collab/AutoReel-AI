@@ -8,16 +8,6 @@ import time
 import pytest
 
 
-@pytest.fixture
-def fresh_db(tmp_path, monkeypatch):
-    from app import config, db
-
-    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(config, "PROJECTS_DIR", tmp_path / "data" / "projects")
-    monkeypatch.setattr(db, "_INITIALISED", False)
-    return db
-
-
 @pytest.fixture(autouse=True)
 def no_playbook():
     """每个测试前后都把回灌钩子摘掉,别影响别的测试的变体 / 标题顺序。"""
@@ -232,10 +222,9 @@ def test_weights_contradicting_signals_cancel(fresh_db):
 # --------------------------------------------------------------------------
 def test_plan_fixes_one_dimension_until_samples(fresh_db):
     """计划点名要试的开头 → 固定用它;连发够 3 条 → 自动回到正常挑选。"""
+    from app.categories import load_profile
     from app.pipeline import variety
     from app.team import playbook
-
-    from app.categories import load_profile
 
     theme = load_profile("auto_long").themes["buyguide"]
     t0 = time.time()
@@ -258,10 +247,9 @@ def test_plan_fixes_one_dimension_until_samples(fresh_db):
 
 def test_plan_only_fixes_the_named_dimension(fresh_db):
     """一次只固定一个变量:固定开头时结尾照常轮换,不然比不出是谁的功劳。"""
+    from app.categories import load_profile
     from app.pipeline import variety
     from app.team import playbook
-
-    from app.categories import load_profile
 
     theme = load_profile("auto_long").themes["buyguide"]
     fresh_db.set_team_setting(playbook.PLAN_KEY,
@@ -290,10 +278,9 @@ def test_coach_writes_experiment_plan(fresh_db):
 
 def test_variety_unchanged_without_playbook(fresh_db):
     """没挂手册 / 挂了但没结论:挑法逐字和以前一样(golden 不动)。"""
+    from app.categories import load_profile
     from app.pipeline import variety
     from app.team import playbook
-
-    from app.categories import load_profile
 
     theme = load_profile("auto_long").themes["buyguide"]
     before = [variety.pick(theme, f"p{i}") for i in range(20)]
@@ -302,10 +289,9 @@ def test_variety_unchanged_without_playbook(fresh_db):
 
 
 def test_variety_leans_on_playbook_but_explores(fresh_db):
+    from app.categories import load_profile
     from app.pipeline import variety
     from app.team import playbook
-
-    from app.categories import load_profile
 
     theme = load_profile("auto_long").themes["buyguide"]
     openings = variety.allowed_openings(theme)

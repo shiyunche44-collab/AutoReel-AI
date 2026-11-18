@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from ... import config
 from .model import Item, Library, Source
@@ -150,10 +150,10 @@ def set_license(lib: Library, source_ids: Sequence[str], *, status: str | None =
 def summary(lib: Library, *, now: float | None = None) -> dict:
     """池子的授权汇总:各状态的源数、视频段数,以及当前闸门下取材会被拦的段数。"""
     book = LicenseBook(lib, now=now)
-    sources = {s: 0 for s in STATUSES}
+    sources = dict.fromkeys(STATUSES, 0)
     for src in lib.sources:
         sources[license_of_source(src, now=book.now).status] += 1
-    segs = {s: 0 for s in STATUSES}
+    segs = dict.fromkeys(STATUSES, 0)
     blocked = 0
     for i in lib.items:
         lic = book.license(i)

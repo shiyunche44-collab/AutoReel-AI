@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.team import benchmark, benchmark_discover as disc
+from app.team import benchmark
+from app.team import benchmark_discover as disc
 
 
 @pytest.fixture

@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -141,7 +140,7 @@ _SUM_KEYS = ("views", "likes", "comments", "favorites", "shares", "followers")
 
 
 def _bucket(**head: Any) -> dict[str, Any]:
-    return {**head, "published": 0, "count": 0, "with_views": 0, **{k: 0 for k in _SUM_KEYS}}
+    return {**head, "published": 0, "count": 0, "with_views": 0, **dict.fromkeys(_SUM_KEYS, 0)}
 
 
 def _add(bucket: dict[str, Any], row: dict[str, Any], metrics: dict[str, Any]) -> None:

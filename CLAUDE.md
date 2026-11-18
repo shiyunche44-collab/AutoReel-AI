@@ -13,6 +13,8 @@ npm run check                   # 前端 lint + typecheck + vitest(app/web/stati
 python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / e2e 配置)
 ```
 
+仓库不配 CI(GitHub 的 Windows runner 跑一轮 pytest 要 25 分钟左右),提交前本地先跑通前四条(pytest 加 `-n auto` 约 2 分钟)。ruff / mypy 在 pyproject 里钉了版本,升级时本地先清干净再改版本号。
+
 ## 服务器与调度器(最容易出事)
 
 - **一个库只跑一个服务器。** 8848(用户自用)、8860(`scripts/serve.ps1` 默认)、8849(开发/e2e)共用同一个 `data/AutoReel-AI.db`(`data/aimovice.db` 是 0 字节的旧空文件,别用)。两个调度器会推进同一个项目,导致重复渲染、重复合成,报"后台推进失败"。现在有文件锁兜底(`app/instance_lock.py`,锁文件 `data/<库名>.scheduler.lock`):后启动的服务抢不到锁就只开 Web,不推进、不发布、不跑团队,首页有「只读服务」横幅,`/api/health` 的 `background.ok` 为 false。所以想在 8849 上验证流水线改动,得先停掉占着锁的那个服务。锁只管带这段代码的进程:还在跑旧代码的服务不认锁,启动前仍要先确认端口。

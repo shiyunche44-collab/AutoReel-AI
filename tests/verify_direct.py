@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app import config  # noqa: E402
-from app.providers import ark_image, audio, cli, direct, facts, images  # noqa: E402
+from app.providers import ark_image, audio, cli, facts, images  # noqa: E402
 
 
 def step(name: str, fn) -> bool:

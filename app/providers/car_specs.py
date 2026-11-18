@@ -198,7 +198,7 @@ def specs(subject: str, project_dir=None) -> RawDoc:  # noqa: ARG001 - 与其它
         trims = on_sale_specs(sid)
         if not trims:
             raise SpecsError(f"汽车之家「{name}」没有版本")
-        names = {i: n for i, n in trims}
+        names = dict(trims)
         result = _get_json(_PARAM_API, {"speclist": ",".join(str(i) for i in names),
                                         "_appid": "cms"})
         rows = parse_params(result, names)

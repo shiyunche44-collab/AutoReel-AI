@@ -31,9 +31,10 @@ from __future__ import annotations
 import re
 import subprocess
 import urllib.parse
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from .. import config
 from . import webassets
@@ -160,7 +161,7 @@ def _commons_candidates(data: dict[str, Any], query: str, limit: int) -> list[Cl
             continue
         meta = info.get("extmetadata") or {}
 
-        def _meta(key: str) -> str:
+        def _meta(key: str, meta: dict = meta) -> str:
             raw = (meta.get(key) or {}).get("value", "")
             return re.sub(r"<[^>]+>", "", str(raw)).strip()
 

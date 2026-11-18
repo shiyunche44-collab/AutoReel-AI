@@ -138,7 +138,7 @@ def test_full_rerender_resets_footage_counts(tmp_path, monkeypatch):
     assert db.read_json("p", "beats_recent.json", None) == []
 
 
-def test_lite_skips_dark_spans_of_any_video(data_dir, tmp_path, monkeypatch):
+def test_lite_skips_dark_spans_of_any_video(data_dir, tmp_path, monkeypatch):  # noqa: F811
     src = tmp_path / "teaser.mp4"
     src.write_bytes(b"x")
     items = [Item(id=n, kind="video", path=str(src), start=s, end=s + 4.0, tagged=True, target="yes",

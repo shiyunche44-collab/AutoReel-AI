@@ -6,16 +6,28 @@ import datetime as dt
 import functools
 import logging
 import re
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+
 from ... import config
 from ...categories import Vocab
 from .. import knobs, looks, media_check
-
 from .licensing import BACKGROUND, LicenseBook
-from .model import FILL_MIN_PIECE, Item, Library, STILL_SECONDS, _confirmed, _hard_bad, _has_host, _host_sources, _third_party, _third_party_ok, vocab_of
+from .model import (
+    FILL_MIN_PIECE,
+    STILL_SECONDS,
+    Item,
+    Library,
+    _confirmed,
+    _hard_bad,
+    _has_host,
+    _host_sources,
+    _third_party,
+    _third_party_ok,
+    vocab_of,
+)
 from .tagging import _dhash
 
 log = logging.getLogger(__name__)
@@ -606,7 +618,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}
         last = by_id.get(window[-1]) if window else None
-        key = lambda x: rank(x, recent_groups, last.view if last else "")  # noqa: E731
+        key = lambda x, g=recent_groups, v=(last.view if last else ""): rank(x, g, v)  # noqa: E731
         if choose is not None and not out and len(left) > 1:
             top = sorted(left, key=key)[:CHOOSE_TOP]
             try:

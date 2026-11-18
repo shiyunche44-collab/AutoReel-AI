@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 
 from ..models import Fact
 

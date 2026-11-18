@@ -6,23 +6,23 @@
 from __future__ import annotations
 
 from app.publish import metadata as md
-from app.publish.registry import LANDSCAPE, PORTRAIT, PLATFORMS, rule_for
+from app.publish.registry import LANDSCAPE, PLATFORMS, PORTRAIT, rule_for
 
 
 def _ctx(**kw) -> md.ContentContext:
-    base = dict(
-        subject="小米YU7",
-        title="小米YU7 值不值得买",
-        thesis="同价位里,它的补能效率最扎实。",
-        segments=["小米YU7 是今年最热门的 25 万级纯电 SUV。",
+    base = {
+        "subject": "小米YU7",
+        "title": "小米YU7 值不值得买",
+        "thesis": "同价位里,它的补能效率最扎实。",
+        "segments": ["小米YU7 是今年最热门的 25 万级纯电 SUV。",
                   "续航 835 公里,实际跑高速大概掉到 640。",
                   "结论:如果你家有家充,它是这个价位最稳的选择。"],
-        topics=["续航", "补能"],
-        disclaimers=["数据来源:公开信息与官方渠道,仅供参考,实际以购车时为准"],
-        source_note="画面素材:品牌官方宣传片与官方图片,仅作车型展示",
-        category="auto_long",
-        subject_label="车型",
-    )
+        "topics": ["续航", "补能"],
+        "disclaimers": ["数据来源:公开信息与官方渠道,仅供参考,实际以购车时为准"],
+        "source_note": "画面素材:品牌官方宣传片与官方图片,仅作车型展示",
+        "category": "auto_long",
+        "subject_label": "车型",
+    }
     base.update(kw)
     return md.ContentContext(**base)
 

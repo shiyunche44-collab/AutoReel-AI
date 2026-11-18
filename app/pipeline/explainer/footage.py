@@ -1,12 +1,12 @@
 """已渲染各拍的素材使用情况统计。"""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from ... import db
 from ...models import ShotSpec
-
 from .beat_render import beat_role, chapters_of
-
 
 # --------------------------------------------------------------------------
 # 接入流水线

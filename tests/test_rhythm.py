@@ -388,7 +388,6 @@ def test_ending_with_a_preview_is_quiet():
 # 提示词口径
 # --------------------------------------------------------------------------
 def test_beat_prompt_tells_the_model_broll_is_capped():
-    p = load_profile("auto_long")
     text = explainer.SYSTEM
     assert "不超过三成" in text
     assert "全片大约四成是 broll" not in text

@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import logging
 import re
+
 from ...categories import CategoryProfile
 from ..grounding import arabicize
-
 from .scrub import _BENIGN_FIRST_RE
-
 
 log = logging.getLogger(__name__)
 

@@ -20,8 +20,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..base import Account, AccountStatus, MetricSnapshot, PlatformRef, PublishError, \
-    PublishRequest, PublishResult
+from ..base import (
+    Account,
+    AccountStatus,
+    MetricSnapshot,
+    PlatformRef,
+    PublishError,
+    PublishRequest,
+    PublishResult,
+)
 from ..http import new_client, request_json
 from ..registry import LANDSCAPE
 
@@ -185,12 +192,12 @@ class YoutubeAdapter:
         head = (
             f"--{boundary}\r\n"
             "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-        ).encode("utf-8") + metadata + b"\r\n"
+        ).encode() + metadata + b"\r\n"
         body = (
             f"--{boundary}\r\n"
             f"Content-Type: video/mp4\r\n\r\n"
-        ).encode("utf-8") + video + b"\r\n"
-        tail = f"--{boundary}--\r\n".encode("utf-8")
+        ).encode() + video + b"\r\n"
+        tail = f"--{boundary}--\r\n".encode()
         return head + body + tail
 
     # -- 数据 ------------------------------------------------------------

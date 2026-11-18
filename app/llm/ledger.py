@@ -18,8 +18,8 @@ import logging
 import sys
 import time
 from collections.abc import Iterator
-from types import FrameType
 from contextlib import contextmanager
+from types import FrameType
 from typing import Any
 
 log = logging.getLogger(__name__)

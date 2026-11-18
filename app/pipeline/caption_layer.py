@@ -16,8 +16,9 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .. import config
 
@@ -127,7 +128,7 @@ def build_layer(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: i
         "width": size[0], "height": size[1], "fps": fps,
         "duration": round(duration if duration else end_all + 0.1, 3),
         "cues": shown,
-        "style": {"accent": "#%02X%02X%02X" % tuple(accent)},
+        "style": {"accent": "#{:02X}{:02X}{:02X}".format(*accent)},
     }
 
 

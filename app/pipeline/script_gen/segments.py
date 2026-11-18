@@ -1,11 +1,11 @@
 """段落对齐与按句拆分。"""
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
+
 from ...categories import CategoryProfile, Slot
 from ...models import ScriptSegment
 from ..grounding import arabicize
-
 from .hook import HOOK_MAX_CHARS
 
 

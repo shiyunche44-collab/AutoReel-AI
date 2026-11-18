@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from tests.test_coach import fresh_db, no_playbook  # noqa: F401 - fixtures
+from tests.test_coach import no_playbook  # noqa: F401 - autouse fixture
 from tests.test_engagement import _pub
 
 H = 3600

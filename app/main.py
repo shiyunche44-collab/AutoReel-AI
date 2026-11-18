@@ -29,14 +29,6 @@ from .pipeline import render as render_mod
 from .pipeline.locks import ProjectBusy
 from .pipeline.locks import busy_project_ids as locks_busy_ids
 from .providers import cli
-from .views import ProjectNotFound, build_detail, build_summary, needs_attention
-
-log = logging.getLogger(__name__)
-
-# Windows 注册表可能把 .js 登记成 text/plain,浏览器会拒绝按 ES Module 加载前端脚本
-mimetypes.add_type("text/javascript", ".js")
-mimetypes.add_type("text/css", ".css")
-
 from .routes import library as library_routes
 from .routes import projects as projects_routes
 from .routes import publish as publish_routes
@@ -51,6 +43,13 @@ from .scheduler import (  # noqa: F401 - 旧代码与测试从 app.main 引用�
     scheduler,
 )
 from .templating import BASE_DIR, templates
+from .views import ProjectNotFound, build_detail, build_summary, needs_attention
+
+log = logging.getLogger(__name__)
+
+# Windows 注册表可能把 .js 登记成 text/plain,浏览器会拒绝按 ES Module 加载前端脚本
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
 
 HEALTH: dict[str, Any] = {}
 # 侧边栏每页都要显示健康状态和套餐到期,做成模板全局,免得每个路由各传一遍
