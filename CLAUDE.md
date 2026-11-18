@@ -13,7 +13,7 @@ npm run check                   # 前端 lint + typecheck + vitest(app/web/stati
 python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / e2e 配置)
 ```
 
-前四条(pytest 用 `-n auto`)在 PR 和 main 上由 GitHub Actions 跑(`.github/workflows/ci.yml`),提交前本地先跑通。ruff / mypy 在 pyproject 里钉了版本,升级时本地先清干净再改版本号。
+仓库不配 CI(GitHub 的 Windows runner 跑一轮 pytest 要 25 分钟左右),提交前本地先跑通前四条(pytest 加 `-n auto` 约 2 分钟)。ruff / mypy 在 pyproject 里钉了版本,升级时本地先清干净再改版本号。
 
 ## 服务器与调度器(最容易出事)
 
