@@ -11,23 +11,19 @@ def _cue(start, hot_at=None):
     return {"start": start, "end": start + 2, "words": words}
 
 
-def test_events_whoosh_per_chapter_and_pop_gap():
+def test_legacy_events_whip_per_chapter_no_pop():
+    # 旧接口:关键词 pop 已删,章节起点 → whip,上屏时刻 → 大字,间隔至少 MIN_GAP
     cues = [_cue(1.0, 1.2), _cue(2.0, 2.2), _cue(5.0, 5.3)]
-    ev = sfx.events_for(cues, [0.0, 4.0])
-    kinds = [k for _, k in ev]
-    assert kinds.count("whoosh") == 1  # 第 0 章在片头,不放
-    assert [t for t, k in ev if k == "pop"] == [1.2, 5.3]  # 2.2 离上一个不到 POP_MIN_GAP
-    assert ev == sorted(ev)
-    assert next(t for t, k in ev if k == "whoosh") < 4.0  # 提前一点
+    ev = sfx.events_for(cues, [0.0, 4.0, 20.0], reveal_times=[6.0, 12.0])
+    assert ev == [(4.0, "whip"), (12.0, "headline"), (20.0, "whip")]  # 第 0 章在片头不放;6.0 离换章太近
 
 
-def test_build_track_length_and_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(sfx, "SFX_DIR", tmp_path / "lib")
+def test_build_track_length_and_empty(tmp_path):
     assert sfx.build_track([], 5.0, tmp_path / "a.wav") is None
     out = sfx.build_track([(1.0, "pop"), (2.0, "whoosh")], 5.0, tmp_path / "a.wav")
     with wave.open(str(out)) as w:
         assert w.getframerate() == sfx.SR and w.getnframes() == 5 * sfx.SR
-    assert (tmp_path / "lib" / "pop.wav").is_file()
+    assert sfx.build_track([(1.0, "pop")], 5.0, tmp_path / "b.wav") is None  # pop 不再出声
 
 
 def test_audio_graph_sfx_is_extra_amix_input():

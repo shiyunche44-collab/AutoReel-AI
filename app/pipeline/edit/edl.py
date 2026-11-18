@@ -132,6 +132,8 @@ class Timeline:
     punches: list[float] = field(default_factory=list)
     #: 视觉包配色 / 字幕样式(looks.Look → Remotion),见 project.theme_of
     theme: dict[str, Any] = field(default_factory=dict)
+    #: 配乐编排(`edit/music.plan` 的结果,可 JSON 化);不进 Remotion props,只给混音用
+    music: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     @classmethod
@@ -147,7 +149,7 @@ class Timeline:
                       for o in d.get("overlays") or []],
             captions=list(d.get("captions") or []), chapters=list(d.get("chapters") or []),
             punches=[float(x) for x in d.get("punches") or []],
-            theme=dict(d.get("theme") or {}),
+            theme=dict(d.get("theme") or {}), music=dict(d.get("music") or {}),
             notes=list(d.get("notes") or []))
 
     def to_props(self) -> dict[str, Any]:
@@ -170,6 +172,64 @@ class Timeline:
 
     def transitions_at(self, kinds: Sequence[str]) -> list[float]:
         return [c.start for c in self.clips if c.transition in kinds and c.start > 0]
+
+
+# --------------------------------------------------------------------------
+# 配乐对拍(见 edit/music.py)
+# --------------------------------------------------------------------------
+#: 钩子收尾那一刀:在 HOOK_SECONDS 前后这个范围里找
+HOOK_CUT_WINDOW = (-0.5, 1.5)
+
+
+def hook_cut(tl: Timeline) -> float:
+    """钩子收尾的那个切点(配乐 drop、开场音效都对它):HOOK_SECONDS 附近最近的一刀,
+    附近没有切点就用 HOOK_SECONDS 本身(片子更短时取片长)。"""
+    lo, hi = HOOK_SECONDS + HOOK_CUT_WINDOW[0], HOOK_SECONDS + HOOK_CUT_WINDOW[1]
+    near = [t for t in tl.cut_times() if lo <= t <= hi]
+    if near:
+        return min(near, key=lambda t: abs(t - HOOK_SECONDS))
+    return min(HOOK_SECONDS, tl.duration)
+
+
+def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[float, float]]:
+    """换章 whip 的切点吸到 ±`tol` 秒内最近的拍点上(原地改时间线),返回 [(原时刻, 新时刻)]。
+
+    前一刀跟着伸缩,和 whip 同时起的叠加层(章节卡、章节首拍的大字)一起挪、结尾不动;
+    旁白和字幕不动(画面早 / 晚零点一几秒换章,听感上是正常的 J / L 切)。
+    整屏成品(`beat`,长度正好等于这一拍)不往后拉长;后一刀往前拉长时入点跟着往前挪,
+    入点不够挪就不吸。吸完前后两刀都至少留 `MIN_PIECE` 秒。"""
+    import bisect
+
+    beats = sorted(float(b) for b in beats)
+    moved: list[tuple[float, float]] = []
+    if not beats:
+        return moved
+    for i in range(1, len(tl.clips)):
+        cur, prev = tl.clips[i], tl.clips[i - 1]
+        if cur.transition != "whip" or abs(prev.start + prev.dur - cur.start) > 0.01:
+            continue
+        t = cur.start
+        k = bisect.bisect_left(beats, t)
+        near = [beats[j] for j in (k - 1, k) if 0 <= j < len(beats)]
+        target = min(near, key=lambda b: abs(b - t))
+        d = round(target - t, 3)
+        if abs(d) < 0.01 or abs(d) > tol:
+            continue
+        if d > 0 and prev.kind == "beat":
+            continue  # 整屏成品往后拉长会放到文件外面
+        if d < 0 and cur.kind != "still" and cur.src_in < -d - 1e-6:
+            continue  # 入点前面没有素材可补
+        if prev.dur + d < MIN_PIECE or cur.dur - d < MIN_PIECE:
+            continue
+        prev.dur = round(prev.dur + d, 3)
+        cur.start, cur.dur = round(target, 3), round(cur.dur - d, 3)
+        if cur.kind != "still":
+            cur.src_in = round(max(0.0, cur.src_in + d), 3)
+        for o in tl.overlays:
+            if abs(o.start - t) < 0.01 and o.dur - d > 0.2:
+                o.start, o.dur = round(target, 3), round(o.dur - d, 3)
+        moved.append((round(t, 3), round(target, 3)))
+    return moved
 
 
 # --------------------------------------------------------------------------

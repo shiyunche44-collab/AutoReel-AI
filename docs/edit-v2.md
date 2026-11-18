@@ -43,7 +43,7 @@ pipeline/edit/edl.py      build_timeline():纯函数
 remotion/src/Edit.jsx     竖屏:标题带 + 章节进度 / 素材带(推拉 + 转场 + 叠加层)/ 花字字幕
         │  静音 h264
         ▼
-pipeline/edit/render.py   mix.wav(沿用 render._mix_audio,音效在 whip/zoom/flash 处 whoosh)
+pipeline/edit/render.py   mix.wav(render._mix_audio:旁白 + 踩点配乐底床 + 三处音效,见「声音」)
                           → -c:v copy 合流 → 解码检查 + 音频包检查 + final_qa
 ```
 
@@ -183,6 +183,51 @@ python -I scripts/edit_v2_trial.py --landscape     # 横屏(流水线里要 EDIT
   (一条 6 分钟片约 1 GB)。
 - 某刀失败就用原色原入点,LUT 生成失败整片原色;都记降级 `edit_v2.grade`,不拦出片。
 - 实测:恒等 LUT 预裁前后平均每通道误差 <1/255(没有色彩矩阵偏移);commercial 平均改动约 2.5–5.5/255。
+
+## 声音(配乐踩点 + 音效)
+
+对标说车号是"整片垫一首有律动的电子乐、换章甩镜带一声 whoosh"。11-12 关掉的配乐 / 音效在
+v2 里改成**跟着视觉包开**:`Look.bgm` / `Look.sfx`(commercial 都开,旧包不开配乐),
+`.env` 的 `BGM_ENABLED` / `SFX_ENABLED` 写了 1 / 0 就强制开 / 关,不写(或空)才跟视觉包
+(`config.bgm_on` / `sfx_on`)。
+
+**曲库与节拍**:曲子在 `data/bgm/<品类>/`(含视觉包子目录、`pool/` 情绪曲库,Mixkit,
+许可证和情绪标签记在各目录的 `_licenses.json`)。`pipeline/beat_track.py` 纯 numpy 离线算
+BPM、拍点、强拍(小节线)、起势点(drop)、律动清晰度 `pulse`,写回 `_licenses.json`
+(`python -m app.pipeline.beat_track`,新曲入库后跑一次)。
+
+**配乐编辑**(`edit/music.py` 的 `plan`,`edit/project.score` 在定稿时调用,结果存进时间线的 `music`):
+
+- 整片一种情绪:按视觉包 `bgm_moods` 的先后取第一个"律动清楚的曲子 ≥3 首"的情绪
+  (`project.film_mood`;commercial 是 科技 → 热血),同情绪里按项目 id 轮换,不同片子用不同的曲。
+- 起始偏移让曲子的 drop 落在钩子收尾那一刀(`edl.hook_cut`,3 秒附近的切点)。
+- 片子比曲子长时在换章处交叉淡入下一首(2 秒),不中途循环;片尾在小节线收,2.5 秒淡出。
+- 换章 whip 吸到 ±0.15 秒内最近的拍点(`edl.snap_whips`):前一刀伸缩、后一刀入点跟着挪,
+  同时起的章节卡一起挪。入点前没素材可补、前一刀是整屏成品(卡片 / 动画)、挪完不够最短刀长的不动。
+- 各段按整曲响度对齐到 -20 LUFS 再叠成底床 `_render/bgm_bed.wav`(旁边 `.plan.json`),
+  混音时有这个旁注就不再循环 / 淡变。曲子没打节拍时只按淡入淡出排(`mode: simple`,不吸拍);
+  曲库空记降级 `bgm.no_tracks`,底床渲失败,两种都退回旧的按哈希选一首(`narration.json` 的 `bgm_path`)。
+
+**音效**(`pipeline/sfx.py`,CC0 采样在 `data/sfx/pack/`):只在三处响 ——
+开场(钩子收尾那刀,前面够 0.8 秒用 riser,否则 hit)、换章 whip(whoosh)、大字 / 大数字落定
+(hit,大字弹入后 0.1 秒、大数字滚到位 0.8 秒)。相邻至少隔 4 秒,冲突时 开场 > 换章 > 大字。
+
+**混音**(`render._mix_audio`,单独出 `mix.wav`,loudnorm 不进视频命令):旁白静态增益到 -16 LUFS,
+底床比旁白低 10 LU(`BGM_UNDER_LU`),旁白做侧链压底床(阈值 0.05、3:1、起 20 ms、放 350 ms),
+混好线性增益到 -14 LUFS、-2 dBFS 限幅。
+
+**实测**(p_32fca54820eb 7:05,只出声音的试混,`docs/benchmark-baseline.md` 的对标口径):
+
+| 指标 | 旧片(无配乐) | 对标讲解片 | v2 |
+|---|---|---|---|
+| 停顿处底噪比旁白低(`quiet_gap_db`) | 61–64 | 17–36(中位约 21) | 32.2 |
+| 有旁白时旁白高出音乐 | — | — | 16 dB |
+| 整体响度 | — | — | -14.2 LUFS / TP -1.9 |
+
+底床压低 8 LU 试过:停顿 30.9 dB(只近 1.3 dB),旁白高出音乐从 16 降到 14 dB。11-12 吃过
+配乐闪避淹没解说的亏,得不偿失,维持 10 LU。
+`music_bed` 的"有没有垫乐"判定对鼓点重的 techno / 摇滚不灵(停顿处频谱太平,像噪声),
+这条片子 57% 的窗口判垫乐、结论为"说不清";这是判定器的局限,不是没垫上。
 
 ## 已知限制(第 1 阶段)
 

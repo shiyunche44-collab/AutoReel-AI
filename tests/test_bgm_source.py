@@ -41,3 +41,32 @@ def test_own_bgm_none_without_tracks_or_genres():
 def test_seconds():
     assert bgm_source._seconds("2:24") == 144
     assert bgm_source._seconds("") == 0
+
+
+def test_mood_of_prefers_ledger_then_curated_then_genre():
+    assert bgm_source.mood_of("mixkit_871.mp3", {"genre": "cinematic", "mood": "热血"}) == "热血"
+    assert bgm_source.mood_of("mixkit_1167.mp3", {"genre": "corporate-music"}) == "科技"  # 精选清单
+    assert bgm_source.mood_of("mixkit_99999.mp3", {"genre": "ambient"}) == "舒缓"
+    assert bgm_source.mood_of("x.mp3", {"genre": "mood/suspenseful"}) == "悬念"
+    assert bgm_source.mood_of("x.mp3", {"genre": "polka"}) is None
+    assert all(t["mood"] in bgm_source.MOODS for t in bgm_source.LIBRARY)
+    assert 20 <= len({t["id"] for t in bgm_source.LIBRARY}) <= 30
+
+
+def test_tag_moods_and_library_plan(tmp_path):
+    import json
+
+    root = tmp_path / "auto_long"
+    (root / "cinema").mkdir(parents=True)
+    (root / "mixkit_34.mp3").write_bytes(b"x")
+    (root / "cinema" / "mixkit_871.mp3").write_bytes(b"x")
+    (root / "_licenses.json").write_text(json.dumps({"mixkit_34.mp3": {"genre": "corporate-music"}}),
+                                         encoding="utf-8")
+    (root / "cinema" / "_licenses.json").write_text(
+        json.dumps({"mixkit_871.mp3": {"genre": "cinematic", "bpm": 93}}), encoding="utf-8")
+    assert bgm_source.tag_moods(root / "cinema") == 1
+    meta = json.loads((root / "cinema" / "_licenses.json").read_text(encoding="utf-8"))
+    assert meta["mixkit_871.mp3"] == {"genre": "cinematic", "bpm": 93, "mood": "悬念"}
+    assert bgm_source.tag_moods(root / "cinema") == 0
+    todo = {t["id"] for t in bgm_source.library_plan(root)}
+    assert 34 not in todo and 871 not in todo and 51 in todo

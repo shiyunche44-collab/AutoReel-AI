@@ -25,9 +25,9 @@ from ...models import ShotSpec
 from .. import caption_layer, library, looks, outro, sfx
 from .. import render as render_mod
 from ..explainer.planning_b import beat_subject
-from . import match
+from . import match, music
 from . import render as edit_render
-from .edl import PRERENDERED, STYLES, Timeline, build_timeline, remotion_card
+from .edl import PRERENDERED, STYLES, Timeline, build_timeline, hook_cut, remotion_card, snap_whips
 
 log = logging.getLogger(__name__)
 
@@ -234,14 +234,92 @@ def captions_for(cues: Sequence[Mapping[str, Any]], size: tuple[int, int], fps: 
     return caption_layer.build_layer(cues, size, fps, lk.accent, duration=duration)["cues"]
 
 
+# --------------------------------------------------------------------------
+# 声音:配乐编排 + 音效
+# --------------------------------------------------------------------------
+#: 大字弹到位(Headline.jsx 的弹入约 0.1 秒)、大数字滚完落定(BigStat.jsx:`at` 起滚 0.8 秒)
+HEADLINE_LAND = 0.1
+STAT_LAND = 0.8
+
+
+def music_tracks(category: str, moods: Sequence[str] = ()) -> list[dict[str, Any]]:
+    """配乐候选:`<BGM_DIR>/<品类>/` 整个曲库(含视觉包子目录和 `pool/`),只留视觉包要的情绪;
+    一首都对不上就不限情绪。没有品类目录时读 `BGM_DIR` 根下全部。"""
+    root = config.BGM_DIR or (config.DATA_DIR / "bgm")
+    folder = root / category if category and (root / category).is_dir() else root
+    tracks = music.library(folder)
+    if moods:
+        tracks = [t for t in tracks if t.get("mood") in moods] or tracks
+    return tracks
+
+
+#: 一个情绪至少要有这么多首律动清楚的曲子,才拿它当整片的情绪(不够就往下一个情绪退)
+MOOD_MIN_TRACKS = 3
+
+
+def film_mood(tracks: Sequence[Mapping[str, Any]], moods: Sequence[str]) -> str | None:
+    """整片只用一种情绪,中途换曲不跳情绪。按视觉包 `bgm_moods` 的先后取第一个
+    曲子够用的(打过节拍、律动清楚的 ≥ `MOOD_MIN_TRACKS` 首);都不够返回 None(不限情绪)。"""
+    for mood in moods:
+        n = sum(1 for t in tracks if t.get("mood") == mood and t.get("beats")
+                and float(t.get("pulse") if t.get("pulse") is not None else 1.0) >= music.PULSE_MIN)
+        if n >= MOOD_MIN_TRACKS:
+            return mood
+    return None
+
+
+def score(project_id: str, tl: Timeline, lk: Any, category: str) -> dict[str, Any]:
+    """给时间线排配乐(`music.plan`):drop 对钩子收尾那一刀,换曲落在换章处;
+    然后把换章 whip 吸到 ±`music.SNAP_TOL` 秒内的拍点上(原地改 `tl`)。
+    视觉包不要配乐(且没用 BGM_ENABLED 强制开)、或曲库里没有曲子返回空字典。"""
+    if not config.bgm_on(lk.bgm):
+        return {}
+    tracks = music_tracks(category, lk.bgm_moods)
+    if not tracks:
+        degrade.note("bgm.no_tracks", f"曲库里没有曲子({category or '根目录'})", project_id=project_id)
+        return {}
+    cuts = [float(c["start"]) for c in tl.chapters[1:]]
+    bgm = music.plan(tl.duration, hook_cut(tl), cuts, tracks, film_mood(tracks, lk.bgm_moods),
+                     seed=project_id)
+    if bgm.get("mode") == "none":
+        return {}
+    bgm["snapped"] = [list(m) for m in snap_whips(tl, bgm.get("beats") or [], music.SNAP_TOL)]
+    return bgm
+
+
+def reveal_times(tl: Timeline) -> list[float]:
+    """大字 / 大数字落定的时刻(音效 hit 对它)。"""
+    out = []
+    for o in tl.overlays:
+        if o.type == "headline":
+            out.append(o.start + HEADLINE_LAND)
+        elif o.type == "stat":
+            out.append(o.start + float(o.props.get("at") or 0.0) + STAT_LAND)
+    return sorted(round(t, 3) for t in out if t < tl.duration)
+
+
 def _sfx(project_dir: Path, tl: Timeline, dest: Path | None = None) -> Path | None:
-    """音效:换章 / 进出整屏画面 whoosh,花字关键词与大数字 pop。默认写 `_render/sfx.wav`。"""
-    if not config.SFX_ENABLED or not looks.current().sfx:
+    """音效:钩子收尾那一刀(开场)、换章 whip、大字 / 大数字落定,任意两处至少隔 4 秒
+    (`sfx.cue_events`)。默认写 `_render/sfx.wav`。视觉包不要(或 SFX_ENABLED=0)返回 None。"""
+    if not config.sfx_on(looks.current().sfx) or not tl.clips:
         return None
-    reveals = [o.start + float(o.props.get("at") or 0.0) for o in tl.overlays if o.type == "stat"]
-    events = sfx.events_for(tl.captions, tl.transitions_at(("whip", "zoom", "flash")),
-                            reveal_times=reveals)
-    return sfx.build_track(events, tl.duration, dest or project_dir / "_render" / "sfx.wav")
+    events = sfx.cue_events(open_at=hook_cut(tl), whips=tl.transitions_at(("whip",)),
+                            headlines=reveal_times(tl))
+    return sfx.build_track(events, tl.duration, dest or project_dir / "_render" / "sfx.wav",
+                           seed=project_dir.name)
+
+
+def _bgm(tl: Timeline, nar: Mapping[str, Any], dest: Path) -> Path | None:
+    """配乐底床:时间线排过配乐就按它渲(`music.render_bed`,长度正好、淡变做好);
+    没排上(曲库空)或渲失败时,旁白阶段挑过曲子(BGM_ENABLED=1)就退回整首循环垫底。"""
+    if tl.music.get("segments"):
+        bed = music.render_bed(tl.music, dest)
+        if bed:
+            return bed
+    if not config.bgm_on(looks.current().bgm):
+        return None
+    old = Path(str(nar.get("bgm_path") or ""))
+    return old if nar.get("bgm_path") and old.is_file() else None
 
 
 # --------------------------------------------------------------------------
@@ -391,6 +469,8 @@ def plan(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[
             outro=(str(card[0]), float(card[1])) if card else None, style=style_of(lk),
         )
     tl.theme = theme_of(lk)
+    tl.music = score(project_id, tl, lk,
+                     str((db.get_project(project_id) or {}).get("category") or ""))
     stats = tl.match_stats()
     if picker.fresh and stats["fallback"]:
         degrade.note("edit_v2.shot_to_beat", f"{stats['fallback']} 刀取不到素材,用了逐拍成品",
@@ -412,11 +492,12 @@ def compose(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mappi
     tl = plan(project_id, specs, rows, nar, size=size, title=title, subject=subject,
               subjects=subjects, vocab=vocab, llm=llm, source=source, fresh=fresh)
     stats = tl.match_stats()
+    project_dir = config.project_dir(project_id)
     result = edit_render.compose(
         project_id, tl,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
-        bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
-        sfx_path=_sfx(config.project_dir(project_id), tl), output_name=output_name,
+        bgm_path=_bgm(tl, nar, project_dir / "_render" / "bgm_bed.wav"),
+        sfx_path=_sfx(project_dir, tl), output_name=output_name,
     )
     if stats["need"]:
         result.warnings = [f"画面对题 {stats['hit']}/{stats['need']} 刀"
@@ -441,7 +522,7 @@ def recompose(project_id: str, nar: Mapping[str, Any], *, output_name: str) -> r
     return edit_render.compose(
         project_id, tl,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
-        bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
+        bgm_path=_bgm(tl, nar, project_dir / "_render" / "bgm_bed.wav"),
         sfx_path=_sfx(project_dir, tl), output_name=output_name,
     )
 

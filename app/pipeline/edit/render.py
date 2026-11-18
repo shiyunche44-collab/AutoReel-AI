@@ -61,6 +61,7 @@ def stage_media(tl: Timeline, public: Path) -> dict[str, Any]:
     实拍 / 静图换成预裁好、套过 LUT 的中间文件(`edit/grade.py`,失败的刀用原色)。"""
     public.mkdir(parents=True, exist_ok=True)
     props = tl.to_props()
+    props.pop("music", None)  # 配乐编排只给混音用,画面不需要(也别让它进渲染缓存键)
     portrait = tl.height > tl.width
     font = font_file()
     if font:

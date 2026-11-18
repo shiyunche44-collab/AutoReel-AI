@@ -83,8 +83,13 @@ class Look:
     sub_layer: bool = False
     #: 实拍视频镜头加缓推 / 拉远 / 冲击推(静图镜头本来就有运镜,见 render.still_filter)
     cam_push: bool = False
-    #: 成片混入音效:章节切换 whoosh、关键词弹出 pop(见 sfx.py)
+    #: 成片混入音效(见 sfx.py)。旧合成:章节切换 whoosh、关键词弹出 pop(还要 SFX_ENABLED=1);
+    #: 剪辑 v2:换章 whip、大字落定、开场钩子收尾三处采样音效,跟着这个开(config.sfx_on)
     sfx: bool = False
+    #: 剪辑 v2 配乐:按情绪选曲、drop 对钩子收尾、换章切点吸拍(edit/music.py,config.bgm_on)
+    bgm: bool = False
+    #: 配乐从这几种情绪里挑(bgm_source.MOODS 的词);空 = 不限
+    bgm_moods: tuple[str, ...] = ()
     #: 角落常驻虚拟主持人(host.py);全局开关另见 config.HOST_ENABLED
     host: bool = False
     # ---- 字幕 ----
@@ -204,6 +209,7 @@ LOOKS: dict[str, Look] = {lk.id: lk for lk in (
         bar_bg=(0, 0, 0, 160), bar_on_text=(20, 18, 10, 255), label_bg=(0, 0, 0),
         subs="outline", sub_text="&H00F4F8FA",
         concept="cinema", chapter_bar=False, video_first=True, panel=False, sfx=True,
+        bgm=True, bgm_moods=("科技", "热血"),
         bgm_genres=("tech", "cinematic"), broll_cycle=("plain",), cover_accent=(255, 200, 30),
         extra={"edit_style": "commercial", "grade": "commercial", "chart_bg": "paper",
                # 纸面图表上的强调色(亮黄在米白纸上看不清)

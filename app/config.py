@@ -378,10 +378,36 @@ def tts_tag() -> str:
     return f"ark:seed-tts-2.0:{ARK_TTS_VOICE}"
 
 
-#: 是否给成片配 BGM。方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。2026-10-21 重写了混音(旁白侧链闪避,实测与旁白相关 0.98);2026-11-12 用户不要配乐,默认关,BGM_ENABLED=1 开
-BGM_ENABLED = os.getenv("BGM_ENABLED", "0") == "1"
-#: 成片混入音效(章节 whoosh、关键词 pop)。2026-11-12 用户反馈弹字音效像"叮叮叮",默认关;SFX_ENABLED=1 开
-SFX_ENABLED = os.getenv("SFX_ENABLED", "0") == "1"
+def _switch(name: str) -> bool | None:
+    """三态开关:=1 / true / on 强制开,=0 / false / off 强制关,不设(或空)= 交给视觉包决定。"""
+    raw = os.getenv(name, "").strip().lower()
+    if raw in ("1", "true", "on", "yes"):
+        return True
+    if raw in ("0", "false", "off", "no"):
+        return False
+    return None
+
+
+#: 配乐 / 音效开关(`BGM_ENABLED` / `SFX_ENABLED`),三态见 `_switch`。
+#: 剪辑 v2 跟着视觉包走(`looks.Look.bgm` / `sfx`,见 `bgm_on` / `sfx_on`),环境变量仍能强制开关。
+#: 方舟套餐没有音乐模型:BGM 来自自备目录 BGM_DIR(mp3/m4a/wav),没有就从 Mixkit 收。
+#: 2026-11-12 用户不要配乐、嫌弹字音效像"叮叮叮",旧合成默认都关;2026-11-18 定的商业包装
+#: (commercial)改成情绪选曲 + 踩点 + 少量真实采样音效(edit/music.py、sfx.py),跟着包开
+BGM_SWITCH = _switch("BGM_ENABLED")
+SFX_SWITCH = _switch("SFX_ENABLED")
+#: 旧合成(逐拍拼接)只在显式开时配乐 / 加音效
+BGM_ENABLED = BGM_SWITCH is True
+SFX_ENABLED = SFX_SWITCH is True
+
+
+def bgm_on(look_wants: bool) -> bool:
+    """剪辑 v2 配不配乐:环境变量设了就听它的,否则看视觉包。"""
+    return bool(look_wants) if BGM_SWITCH is None else BGM_SWITCH
+
+
+def sfx_on(look_wants: bool) -> bool:
+    """剪辑 v2 加不加音效:环境变量设了就听它的,否则看视觉包。"""
+    return bool(look_wants) if SFX_SWITCH is None else SFX_SWITCH
 #: 成片统一调色(轻微对比 / 饱和 + 极轻颗粒),抹平官方片、第三方片、静图之间的色差。
 #: 没在真实成片上对比过观感,默认关;GRADE_ENABLED=1 开
 GRADE_ENABLED = os.getenv("GRADE_ENABLED", "0") == "1"

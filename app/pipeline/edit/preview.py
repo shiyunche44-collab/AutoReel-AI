@@ -77,14 +77,14 @@ def render_once(project_id: str) -> dict[str, Any]:
     tl = Timeline.from_props(saved)
     nar = db.read_json(project_id, "narration.json", {}) or {}
     work = config.project_dir(project_id) / "_edit"
-    # 任务线程里没有项目的视觉包上下文:音效开不开跟着项目的包走,和成片一致
+    # 任务线程里没有项目的视觉包上下文:配乐 / 音效开不开跟着项目的包走,和成片一致
     with looks.use(looks.of_project(project_id)):
         sfx_path = edit_project._sfx(config.project_dir(project_id), tl, work / "preview_sfx.wav")
+        bgm_path = edit_project._bgm(tl, nar, work / "preview_bed.wav")
     out = edit_render.preview(
         project_id, tl,
         narration_path=Path(nar["narration_path"]) if nar.get("narration_path") else None,
-        bgm_path=Path(nar["bgm_path"]) if nar.get("bgm_path") else None,
-        sfx_path=sfx_path, output_name=PREVIEW_FILE)
+        bgm_path=bgm_path, sfx_path=sfx_path, output_name=PREVIEW_FILE)
     db.write_json(project_id, "preview_v2.json",
                   {"planned_at": planned, "rendered_at": round(time.time(), 1),
                    "seconds": tl.duration})

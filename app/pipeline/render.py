@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .. import config
+from .. import config, degrade
 from . import final_qa
 from . import timeline as timeline_mod
 
@@ -383,16 +383,28 @@ def _dissolve_heads(clips: Sequence[Path], starts: Sequence[int], work_dir: Path
 # --------------------------------------------------------------------------
 # 第二段:拼接 + 字幕 + 混音
 # --------------------------------------------------------------------------
-#: BGM 的静态音量(相对旁白)。旁白停顿时 BGM 以这个电平托底
-BGM_BED_GAIN = 0.35
-#: 旁白出声时 BGM 额外压到这个增益以下(侧链压缩的目标)
-BGM_DUCK_RATIO = 12
-BGM_DUCK_THRESHOLD = 0.01
+#: 混音电平(2026-11-18 起,配合按情绪选曲的 BGM 底床与少量采样音效):
+#: 旁白先按实测响度用**静态增益**对齐到 NARRATION_LUFS;BGM 底床对齐到比旁白低 BGM_UNDER_LU;
+#: 侧链在旁白出声时再让几 dB,release 350 ms,句间停顿里 BGM 能浮回来;
+#: 混好后整体按实测做线性增益到 TARGET_LUFS,只过一道峰值限幅。全程不做动态响度归一,
+#: 旁白和 BGM 的相对电平就是这里写的数。
+NARRATION_LUFS = -16.0
+BGM_UNDER_LU = 10.0
+BGM_DUCK_THRESHOLD = 0.05
+BGM_DUCK_RATIO = 3
+BGM_DUCK_ATTACK = 20
+BGM_DUCK_RELEASE = 350
+#: 限幅器的天花板(dBFS)。alimiter 是采样峰值限幅,留 0.5 dB 余量给真峰值
+LIMIT_DBFS = -2.0
+#: 测不出响度时(ffmpeg 测量失败)退回动态 loudnorm:BGM 单独归一到这个电平
+FALLBACK_BGM_LUFS = NARRATION_LUFS - BGM_UNDER_LU
 
-
-#: BGM 淡入 / 淡出秒数。片太短(不够淡出)或不知道总时长时只淡入
+#: BGM 淡入 / 淡出秒数(只用于没经 `edit/music.render_bed` 编排的原始曲子)。
+#: 片太短(不够淡出)或不知道总时长时只淡入
 BGM_FADE_IN = 1.5
 BGM_FADE_OUT = 2.5
+#: `music.render_bed` 出的底床旁边放的编排说明;有它就说明首尾淡变、拼接都已做好
+BED_SIDECAR_SUFFIX = ".plan.json"
 
 
 def _bgm_fades(seconds: float) -> str:
@@ -403,55 +415,95 @@ def _bgm_fades(seconds: float) -> str:
     return fades
 
 
+def is_planned_bed(bgm_path: Path | None) -> bool:
+    """这条 BGM 是不是 `edit/music.render_bed` 编排好的底床(旁边有 .plan.json)。"""
+    return bool(bgm_path) and Path(str(bgm_path) + BED_SIDECAR_SUFFIX).is_file()
+
+
+def measure_loudness(path: Path, *, timeout: int = 600) -> dict[str, float] | None:
+    """整段响度:{"I": 积分响度 LUFS, "TP": 真峰值 dBTP}。测不出(没 ffmpeg、文件坏、全静音)返回 None。
+
+    不走 `_run`:测量是只读的旁路,测试里把 `_run` 换成假的时不该连带它。
+    """
+    if not config.FFMPEG_PATH or not Path(config.FFMPEG_PATH).is_file() or not Path(path).is_file():
+        return None
+    try:
+        proc = subprocess.run(
+            [str(config.FFMPEG_PATH), "-hide_banner", "-nostdin", "-v", "info", "-i", str(path),
+             "-vn", "-af", "ebur128=peak=true:framelog=quiet", "-f", "null", "-"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    res = final_qa.analyse(proc.stderr or "")
+    lufs = res.get("lufs")
+    if lufs is None or lufs < -70:
+        return None
+    peak = res.get("true_peak")
+    return {"I": float(lufs), "TP": float(peak) if peak is not None else 0.0}
+
+
 def _build_audio_graph(
     has_narration: bool, has_bgm: bool, narration_duration: float, first_input: int = 1,
-    has_sfx: bool = False, pad_to: float = 0.0,
+    has_sfx: bool = False, pad_to: float = 0.0, *,
+    narration_gain_db: float | None = None, bgm_gain_db: float | None = None,
+    bgm_fades: bool = True, normalize: bool = True,
 ) -> tuple[str, str]:
     """构造 filter_complex 的音频部分,返回 (滤镜串, 输出标签)。
 
-    旁白优先:先把旁白和 BGM 各自响度对齐(BGM 比旁白低),再用旁白做侧链压 BGM,
-    最后 amix **不做归一化**(默认的 amix 会把每路除以路数,旁白白白少一半),
-    整体只过一遍 loudnorm。旁白在侧链和混音两处都要用,必须先 asplit。
+    旁白优先:旁白和 BGM 各自对齐电平(BGM 比旁白低 `BGM_UNDER_LU`),再用旁白做侧链压 BGM,
+    最后 amix **不做归一化**(默认的 amix 会把每路除以路数,旁白白白少一半)。
+    旁白在侧链和混音两处都要用,必须先 asplit。
 
-    `first_input`:旁白(没旁白时是 BGM)的输入序号。单独混音时是 0,
-    跟视频同一条命令时视频占了 0,就是 1。
-    `pad_to`:大于 0 时把混音补静音到这个总长(片尾卡在旁白之后,BGM 以外是静音)。
-    `has_sfx`:音效轨(sfx.build_track),输入序号排在旁白、BGM 之后,不进侧链,
-    直接和旁白 / BGM 一起 amix 再过 loudnorm。
+    - `narration_gain_db` / `bgm_gain_db`:按实测响度算好的静态增益(`_mix_audio` 两遍法)。
+      不给时退回动态 loudnorm:旁白不动、BGM 归一到 `FALLBACK_BGM_LUFS`。
+    - `normalize`:末尾是否带整体 loudnorm(单遍法)。两遍法第一遍传 False,
+      量出响度后再统一做线性增益 + 限幅。
+    - `bgm_fades`:原始曲子要首尾淡变;`music.render_bed` 编排好的底床自带,传 False。
+    - `first_input`:旁白(没旁白时是 BGM)的输入序号。单独混音时是 0,
+      跟视频同一条命令时视频占了 0,就是 1。
+    - `pad_to`:大于 0 时把混音补静音到这个总长(片尾卡在旁白之后,BGM 以外是静音)。
+    - `has_sfx`:音效轨(sfx.build_track),输入序号排在旁白、BGM 之后,不进侧链,
+      直接和旁白 / BGM 一起 amix。音效电平在 sfx 里按旁白 `NARRATION_LUFS` 定好,这里不再动。
     """
     filters: list[str] = []
     tail = f",apad=whole_dur={pad_to:.3f}" if pad_to > 0 else ""
+    final = f",loudnorm={TARGET_LOUDNESS}" if normalize else ""
+    fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
     sfx_index = first_input + int(has_narration) + int(has_bgm)
     sfx_mix = ""
     if has_sfx and (has_narration or has_bgm):
-        filters.append(f"[{sfx_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[sfx]")
+        filters.append(f"[{sfx_index}:a]{fmt}[sfx]")
         sfx_mix = "[sfx]"
     if has_narration:
-        filters.append(f"[{first_input}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[narr0]")
+        gain = f",volume={narration_gain_db:.2f}dB" if narration_gain_db is not None else ""
+        filters.append(f"[{first_input}:a]{fmt}{gain}[narr0]")
     if has_bgm:
         bgm_index = first_input + 1 if has_narration else first_input
-        filters.append(
-            f"[{bgm_index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
-            f"loudnorm=I=-26:TP=-3:LRA=7,volume={BGM_BED_GAIN}{_bgm_fades(narration_duration)}[bgmraw]"
-        )
+        level = (f"volume={bgm_gain_db:.2f}dB" if bgm_gain_db is not None
+                 else f"loudnorm=I={FALLBACK_BGM_LUFS:g}:TP=-3:LRA=7")
+        fades = _bgm_fades(narration_duration) if bgm_fades else ""
+        filters.append(f"[{bgm_index}:a]{fmt},{level}{fades}[bgmraw]")
     if has_narration and has_bgm:
         filters.append("[narr0]asplit=2[narr][narrsc]")
-        # 侧链:旁白一出声,BGM 自动让位;停顿时 attack/release 让它缓缓浮回来
+        # 侧链:旁白一出声,BGM 自动让位;停顿时 release 让它缓缓浮回来
         filters.append(
             f"[bgmraw][narrsc]sidechaincompress=threshold={BGM_DUCK_THRESHOLD}:ratio={BGM_DUCK_RATIO}"
-            ":attack=15:release=500:makeup=1[bgm]"
+            f":attack={BGM_DUCK_ATTACK}:release={BGM_DUCK_RELEASE}:makeup=1[bgm]"
         )
         filters.append(
-            f"[narr][bgm]{sfx_mix}amix=inputs={3 if sfx_mix else 2}:duration=first:dropout_transition=0:normalize=0,"
-            f"loudnorm={TARGET_LOUDNESS}{tail}[aout]"
+            f"[narr][bgm]{sfx_mix}amix=inputs={3 if sfx_mix else 2}:duration=first:dropout_transition=0:normalize=0"
+            f"{final}{tail}[aout]"
         )
     elif has_narration or has_bgm:
         main = "[narr0]" if has_narration else "[bgmraw]"
         if sfx_mix:
-            filters.append(f"{main}{sfx_mix}amix=inputs=2:duration=first:dropout_transition=0:normalize=0,"
-                           f"loudnorm={TARGET_LOUDNESS}{tail}[aout]")
+            filters.append(f"{main}{sfx_mix}amix=inputs=2:duration=first:dropout_transition=0:normalize=0"
+                           f"{final}{tail}[aout]")
         else:
-            filters.append(f"{main}loudnorm={TARGET_LOUDNESS}{tail}[aout]")
+            filters.append(f"{main}{final.lstrip(',') or 'anull'}{tail}[aout]")
     else:
         # **既没旁白也没 BGM**:TTS 全失败 + BGM 也失败时就是这种。
         #
@@ -464,38 +516,82 @@ def _build_audio_graph(
         # 归一化时每拍都带了 anullsrc 静音音轨,所以拼接流本身就有音轨,
         # 直接取过来用:成片是"哑片"(有音轨、没声音),但**是能出的片**。
         # 哑片这件事由调用方的警告告诉人,不该让成片直接出不来。
-        filters.append(
-            "[0:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]"
-        )
+        filters.append(f"[0:a]{fmt}[aout]")
     return ";".join(f for f in filters if f), "[aout]"
 
 
+def _limit_filter() -> str:
+    lin = 10 ** (LIMIT_DBFS / 20)
+    # level=0:不自动把输出拉满(否则整体响度会被它改掉);latency=1:补偿前瞻延迟,不让音画错位
+    return f"alimiter=limit={lin:.4f}:attack=5:release=50:level=0:latency=1"
+
+
 def _mix_audio(narration_path: Path | None, bgm_path: Path | None, seconds: float,
-               dest: Path, sfx_path: Path | None = None, pad: bool = False) -> tuple[Path | None, str]:
-    """旁白 + BGM 单独混成一条 wav,返回 (路径, 错误信息)。
+               dest: Path, sfx_path: Path | None = None, pad: bool = False, *,
+               bgm_planned: bool | None = None) -> tuple[Path | None, str]:
+    """旁白 + BGM(+ 音效)单独混成一条 wav,返回 (路径, 错误信息)。
 
     **不能**跟视频放在同一条 ffmpeg 里混:2026-10-23 实测(ffmpeg 9.0.2),
     视频拼接/烧字幕与 loudnorm 同一条命令时,音频帧会成段丢掉 —— 成片
     音轨时间戳出现一串约 3 秒(正好是 loudnorm 前瞻窗口)的空洞,
     108 秒的片只剩 64 秒声音,播放时就是"好几处没配音"。
     同样的滤镜单独跑一条纯音频命令,一帧不丢。
+
+    两遍法(能测响度时):先测旁白、BGM 各自的积分响度算静态增益,混出 `<dest>.pre.wav`(浮点,
+    不削波),再测混音整体响度,线性增益到 TARGET_LUFS + 限幅,写 `dest`。测不出响度就退回
+    单遍:BGM 动态归一、末尾整体 loudnorm(老做法)。
+
+    `bgm_planned`:BGM 是否是 `edit/music.render_bed` 编排好的底床(自带淡变、长度正好,
+    不再循环、不再淡变)。不传时看旁边有没有 `.plan.json`。
     """
     has_narration = bool(narration_path and Path(narration_path).is_file())
     has_bgm = bool(bgm_path and Path(bgm_path).is_file())
     if not has_narration and not has_bgm:
         return None, ""
+    planned = is_planned_bed(bgm_path) if bgm_planned is None else bgm_planned
     inputs: list[str] = []
     if has_narration:
         inputs += ["-i", str(narration_path)]
     if has_bgm:
-        # -stream_loop -1:BGM 比成片短时循环铺满
-        inputs += ["-stream_loop", "-1", "-i", str(bgm_path)]
+        # 原始曲子比成片短时循环铺满(-stream_loop -1);编排好的底床长度正好,不循环
+        inputs += ([] if planned else ["-stream_loop", "-1"]) + ["-i", str(bgm_path)]
     has_sfx = bool(sfx_path and Path(sfx_path).is_file())
     if has_sfx:
         inputs += ["-i", str(sfx_path)]
-    graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx,
-                                      pad_to=seconds if pad else 0.0)
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    narr_loud = measure_loudness(Path(narration_path)) if has_narration else None  # type: ignore[arg-type]
+    bgm_loud = measure_loudness(Path(bgm_path)) if has_bgm else None  # type: ignore[arg-type]
+    two_pass = (narr_loud is not None or not has_narration) and (bgm_loud is not None or not has_bgm)
+    if two_pass:
+        narr_gain = NARRATION_LUFS - narr_loud["I"] if narr_loud else None
+        bgm_gain = NARRATION_LUFS - BGM_UNDER_LU - bgm_loud["I"] if bgm_loud else None
+        pre = dest.with_name(dest.stem + ".pre.wav")
+        graph, label = _build_audio_graph(
+            has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx,
+            pad_to=seconds if pad else 0.0, narration_gain_db=narr_gain, bgm_gain_db=bgm_gain,
+            bgm_fades=not planned, normalize=False)
+        proc = _run(["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
+                     "-t", f"{seconds:.3f}", "-c:a", "pcm_f32le", "-ar", "48000", str(pre)],
+                    timeout=900)
+        mixed = measure_loudness(pre) if proc.returncode == 0 and pre.is_file() else None
+        if mixed is not None:
+            gain = config.TARGET_LUFS - mixed["I"]
+            proc = _run(["-y", "-v", "error", "-i", str(pre), "-filter_complex",
+                         f"[0:a]volume={gain:.2f}dB,{_limit_filter()}[aout]", "-map", "[aout]",
+                         "-t", f"{seconds:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", str(dest)],
+                        timeout=900)
+            pre.unlink(missing_ok=True)
+            if proc.returncode == 0 and dest.is_file() and dest.stat().st_size > 0:
+                return dest, ""
+            log.warning("混音第二遍失败,退回单遍:%s", (proc.stderr or "")[-200:])
+            degrade.note("mix.single_pass", f"第二遍失败:{(proc.stderr or '')[-200:]}")
+        else:
+            pre.unlink(missing_ok=True)
+            log.warning("混音第一遍失败或测不出响度,退回单遍:%s", (proc.stderr or "")[-200:])
+            degrade.note("mix.single_pass", f"第一遍失败:{(proc.stderr or '')[-200:]}")
+    graph, label = _build_audio_graph(has_narration, has_bgm, seconds, first_input=0, has_sfx=has_sfx,
+                                      pad_to=seconds if pad else 0.0, bgm_fades=not planned)
     proc = _run(
         ["-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", label,
          "-t", f"{seconds:.3f}", "-c:a", "pcm_s16le", "-ar", "48000", str(dest)],

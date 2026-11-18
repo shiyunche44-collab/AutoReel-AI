@@ -62,7 +62,8 @@ def pool(tmp_path, monkeypatch):
     monkeypatch.setattr(library, "fill", fill)
     monkeypatch.setattr(outro, "build", lambda *a, **k: None)
     monkeypatch.setattr(explainer, "cross_project_seed", lambda pid, car: {})
-    monkeypatch.setattr(config, "SFX_ENABLED", False)
+    monkeypatch.setattr(config, "SFX_SWITCH", False)
+    monkeypatch.setattr(config, "BGM_SWITCH", False)
     beat = config.project_dir(PID) / "beats" / "draft_001.mp4"
     beat.parent.mkdir(parents=True, exist_ok=True)
     beat.write_bytes(b"x")
@@ -225,3 +226,50 @@ def test_cuts_that_fell_back_are_repicked_next_time(pool, monkeypatch):
     pool.calls.clear()
     _plan(pool)
     assert pool.calls == []  # 取到了的照常回放
+
+
+def _bgm_library(root, *, spacing):
+    """曲库里放一首假曲子:drop 在 10 秒,拍点从 drop 起每 `spacing` 秒一个(往前也排)。"""
+    import json
+
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "a.mp3").write_bytes(b"x")
+    beats = sorted({round(10.0 + k * spacing, 3) for k in range(-18, 180) if 10.0 + k * spacing >= 0})
+    meta = {"title": "A", "mood": "科技", "duration": 120.0, "bpm": round(60 / spacing, 2),
+            "pulse": 0.8, "beats": beats, "downbeats": beats[::4], "drops": [10.0],
+            "drop_db": [6.0], "lufs": -14.0, "source": "test:a"}
+    (root / "_licenses.json").write_text(json.dumps({"a.mp3": meta}), encoding="utf-8")
+
+
+def test_plan_scores_music_and_snaps_chapter_whip_to_the_beat(pool, tmp_path, monkeypatch):
+    """开了配乐:drop 对钩子收尾那一刀(3 秒),换章 whip(4 秒)吸到 0.1 秒后的拍上,
+    前一刀跟着拉长、章节卡跟着挪,配乐编排存进时间线文件。"""
+    _bgm_library(tmp_path / "bgm", spacing=0.55)  # 拍点在 3.0、3.55、4.1 …
+    monkeypatch.setattr(config, "BGM_DIR", tmp_path / "bgm")
+    monkeypatch.setattr(config, "BGM_SWITCH", True)
+    specs = [_spec(0, 4.0, layout="hook", text="它两秒破百"),
+             _spec(1, 6.0, chapter="外观", text="前脸是封闭式格栅,侧面线条很低趴,尾灯是贯穿式")]
+    cues = [_cue(0, 0.0, 4.0, "它两秒破百", 0),
+            _cue(1, 4.0, 10.0, "前脸是封闭式格栅,侧面线条很低趴,尾灯是贯穿式", 1)]
+    rows = {s.idx: {"draft_path": str(pool.beat)} for s in specs}
+    with edit_project.looks.use("commercial"):
+        tl = edit_project.plan(PID, specs, rows, {"cues": cues}, size=(1920, 1080), title="t",
+                               subject="车A")
+    bgm = tl.music
+    assert bgm["mode"] == "beats" and bgm["drop_at"] == 3.0
+    assert bgm["snapped"] == [[4.0, 4.1]]
+    whip = next(c for c in tl.clips if c.transition == "whip")
+    prev = tl.clips[tl.clips.index(whip) - 1]
+    assert whip.start == 4.1 and prev.start + prev.dur == pytest.approx(4.1)
+    assert whip.src_in == pytest.approx(1.1)  # 头上剪掉 0.1 秒,素材出点不变
+    card = next(o for o in tl.overlays if o.type == "chapter_card")
+    assert card.start == 4.1
+    ends = [round(c.start + c.dur, 3) for c in tl.clips]
+    assert [round(c.start, 3) for c in tl.clips[1:]] == ends[:-1]  # 刀与刀首尾相接
+    assert edit_project.load(PID)["music"]["segments"][0]["path"].endswith("a.mp3")
+
+
+def test_plan_without_music_leaves_cuts_alone(pool):
+    tl = _plan(pool)
+    assert tl.music == {}
+    assert "music" not in edit_render.stage_media(tl, config.project_dir(PID) / "_pub")
