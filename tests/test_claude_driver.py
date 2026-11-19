@@ -567,3 +567,49 @@ def test_claude_projects_do_not_rerank_cuts_with_llm(monkeypatch):
     monkeypatch.setattr(orchestrator, "_llm", lambda: sentinel)
     assert orchestrator._edit_llm({"id": "p_1", "driver": "claude"}) is None
     assert orchestrator._edit_llm({"id": "p_1", "driver": "scheduler"}) is sentinel
+
+
+# --------------------------------------------------------------------------
+# Web 只看不改
+# --------------------------------------------------------------------------
+def test_web_write_routes_refuse_claude_projects(store, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    row = {
+        "id": "p_web", "title": "t", "subject": "车", "category": "auto_long",
+        "theme": "buyguide", "angle": "", "subjects": [], "duration": 240,
+        "shot_count": 1, "narration_mode": "tts", "state": "GATE_A",
+        "state_reason": None, "quota_budget": 40.0, "spent_cost": 0.0,
+        "est_cost": 1.0, "created_at": 1.0, "updated_at": 1.0,
+    }
+    db.create_project(row)
+    db.update_project("p_web", driver="claude")
+    touched: list[str] = []
+    for name in ("confirm_gate", "advance", "rerender_beats", "swap_cut", "retry"):
+        monkeypatch.setattr(orchestrator, name, lambda *a, _n=name, **k: touched.append(_n))
+
+    client = TestClient(main.app)
+    calls = [("/api/projects/p_web/gate", {"gate": "A"}),
+             ("/api/projects/p_web/advance", None),
+             ("/api/projects/p_web/review/rerender", {"idxs": [0]}),
+             ("/api/projects/p_web/edit/cuts/0:0/swap", None),
+             ("/api/projects/p_web/shots/0/retry", None),
+             ("/api/projects/p_web/packaging/regenerate", None)]
+    for url, body in calls:
+        res = client.post(url, json=body)
+        assert res.status_code == 409, url
+        assert "Claude Code" in res.json()["detail"]
+    assert touched == []
+    assert client.get("/api/projects/p_web").status_code == 200  # 只读照常
+    page = client.get("/project/p_web")
+    assert page.status_code == 200 and "在 Claude Code 里继续" in page.text
+    assert 'id="btn-gate-a"' not in page.text
+    assert client.post("/api/projects/nope/gate", json={"gate": "A"}).status_code == 404
+
+
+def test_team_is_off_by_default():
+    """制作改由 Claude Code 驱动:不设 TEAM_ENABLED 时团队不按节奏跑(重新导入 config 代价大,看源码)。"""
+    src = Path(config.__file__).read_text(encoding="utf-8")
+    assert 'TEAM_ENABLED = os.getenv("TEAM_ENABLED", "0")' in src

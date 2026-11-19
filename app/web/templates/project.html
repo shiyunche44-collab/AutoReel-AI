@@ -74,8 +74,9 @@
       {%- elif p.state == 'FAILED' -%}流水线执行失败
       {%- else -%}{{ meta.label }}{%- endif -%}
     </div>
-    <div class="action-desc muted" id="gate-hint">
-      {%- if p.state_reason -%}{{ p.state_reason }}
+    <div class="action-desc muted" id="gate-hint"{% if claude_driven %} data-claude="1"{% endif %}>
+      {%- if claude_driven and p.state not in ('DONE', 'PAUSED_BUDGET') -%}这个项目由 Claude Code 推进,Web 只能查看。在 Claude Code 里输入 <code>/make-video {{ p.id }}</code> 继续{% if p.state_reason %}({{ p.state_reason }}){% endif %}。
+      {%- elif p.state_reason -%}{{ p.state_reason }}
       {%- elif p.state == 'GATE_A' -%}确认后先合成旁白,按旁白时长逐拍渲染,不调用视频生成。可以先在「脚本」里修改文案。
       {%- elif p.state == 'GATE_B' -%}各拍已渲染完成,确认后直接合成成片。
       {%- elif p.state == 'DONE' -%}{{ frame }} 成片已合成,可以预览和下载。
@@ -90,7 +91,9 @@
     {% endif %}
   </div>
   <div class="action-btns">
-    {% if p.state == 'GATE_A' %}
+    {% if claude_driven and p.state not in ('DONE', 'PAUSED_BUDGET') %}
+      <span class="badge" data-tip="门禁、推进、重渲、换刀都在 Claude Code 会话里做" data-tip-pos="left">{{ m.icon("zap", "i-sm") }}在 Claude Code 里继续</span>
+    {% elif p.state == 'GATE_A' %}
       <button class="btn btn-ghost" type="button" data-goto="script">{{ m.icon("pen", "i-sm") }}查看脚本</button>
       <button class="btn btn-success btn-lg" id="btn-gate-a" type="button">{{ m.icon("check") }}确认并开始渲染</button>
     {% elif p.state == 'GATE_B' %}

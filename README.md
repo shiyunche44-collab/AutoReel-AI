@@ -31,7 +31,7 @@
 |---|---|---|
 | Python 3.12 | 是 | `pip install -r requirements.txt`；连测试工具一起装用 `pip install -e ".[dev]"`（清单的单一来源是 `pyproject.toml`） |
 | ffmpeg | 是 | 本机装在 `C:\ffmpeg\bin`，不在系统 PATH，在 `.env` 的 `FFMPEG_BIN` 里指定 |
-| DeepSeek API Key | 是 | 事实抽取、脚本、逐拍版式、团队各角色的文字工作都用它 |
+| DeepSeek API Key | 否 | 只有 `TEXT_LLM=deepseek`(退回官方接口)时才要。Claude 驱动的项目文字由 Claude 写,不调它 |
 | 火山方舟 Agent Plan 专属 Key | 是 | 语音、生图、图片理解、搜索、专业数据集的通道。见下文「接口后端」 |
 | yt-dlp | 是 | 素材池从 B站 / YouTube / TikTok 拉片。YouTube 还需要 PATH 上有 node 或 deno |
 | node 22+ 和 HyperFrames | 可选 | 概念动画用。在 `motion/` 下运行 `npm install`。没装时这类拍退回数据卡 |
@@ -50,7 +50,7 @@ copy .env.example .env
 |---|---|---|
 | `TEXT_LLM` / `ARK_TEXT_MODEL` | `ark` / `deepseek-v4.1-flash` | 文字通道与方舟上的文字模型 |
 | `DEFAULT_CATEGORY` | `auto_long` | 默认品类 |
-| `TEAM_ENABLED` | `1` | AI 团队总开关。开着时，服务一启动就会按节奏真实调用 LLM、抓数据 |
+| `TEAM_ENABLED` | `0` | AI 团队总开关,默认关(制作改由 Claude Code 驱动)。设成 `1` 后服务一启动就会按节奏真实调用 LLM、抓数据 |
 | `TEAM_AUTO_GATES` | `1` | 团队出的片零 blocker 时自动过门禁 A/B |
 | `TEAM_DAILY_SLOTS` / `TEAM_SLOT_TIMES` | `1` / `18:30` | 每天出几条、几点发 |
 | `TEAM_ASPECT` / `TEAM_DURATION` | `16:9` / `240` | 团队选题默认的画幅和时长 |
@@ -95,7 +95,16 @@ powershell -ExecutionPolicy Bypass -File scripts\serve.ps1 -Port 8848
 
 ### 4. 出第一条片
 
-**团队模式（日常用法）**：打开 `/team`。
+**Claude Code 驱动(推荐)**:在这个仓库里打开 Claude Code,说「做一期 xx 车型」或输入 `/make-video`。
+
+- Claude 是编排者:选题、事实抽取、写稿、分镜、配音导演、生图、**现写概念动画**、剪辑钉选画面、封面、包装、审片都在对话里做。
+- 工具层是 `python -m app.cli <命令>`(输出 JSON,`--help` 看全部命令),硬校验照旧由代码拦:无来源数字、节奏、音频数包、解码完整性、竖屏安全区。外部能力全走火山方舟(TTS、Seedream、豆包搜索、专业数据集、看图)。
+- 各环节的写法在 `.claude/skills/`:make-video(总流程)、topic、facts、script、storyboard、voice、visuals、motion、edit、cover、package。
+- 这类项目在库里 `projects.driver = 'claude'`:调度器不推进、AI 团队不替人过门禁,Web 上的推进 / 门禁 / 重渲 / 换刀按钮会改成「在 Claude Code 里继续」(接口返回 409),Web 只用来看。门禁 A / B 都是 Claude 自审后在对话里交你确认,你同意了才执行 `step <pid> --confirm`。
+- 老项目改归 Claude:`python -m app.cli adopt <pid>`(`--release` 还给调度器)。
+- 渲染、素材池构建、整片预览这些重活仍在 worker 进程里跑,所以 8848 照旧用 `ensure_server.ps1` 起两个进程;只是团队默认关了。
+
+**团队模式**(需要 `TEAM_ENABLED=1`):打开 `/team`。
 
 1. 情报员和主编按节奏跑，也可以在页面上手动触发。跑完后选题单出现在「待我处理」里，批准、驳回或修改都行。
 2. 批准后由素材官建素材池，制片到点建项目、出片。机器检查不过的项目会停在「等你处理」。
@@ -384,7 +393,7 @@ LLM 偶尔整篇用中文数字写稿来绕过数字 lint，所以 lint 前会�
 
 - **配音**：豆包 seed-tts-2.0（`ark_tts.py`）。**生图**：Seedream（`ark_image.py`，模型 `IMAGE_MODEL`，默认 `doubao-seedream-5-0-flash`，封面影棚底、AI 车、图生图参考图都走它）。**图片理解**：`ARK_VLM_MODEL`。**搜索**：豆包搜索（`ark_search.py`），**专业数据集**：`ark_datapro.py`。
 - 图片检索走 Bing。同花顺、企查查、音乐、语音识别套餐里没有，这几个来源会记为失败，其余照常。BGM 见上文。
-- LLM（脚本、事实抽取）用 DeepSeek 自己的 Key：方舟文档明确文本模型不得用于非 AI 工具的 API 调用，所以不把它们接进来。
+- 文字:Claude 驱动的项目由 Claude Code 会话自己写,不走接口。调度器项目和团队角色默认经方舟调 `deepseek-v4.1-flash`(`TEXT_LLM=ark`),`TEXT_LLM=deepseek` 退回 DeepSeek 官方接口。
 - 自检命令：`python -m tests.verify_direct`（方舟各能力各发一次）。
 
 ⚠️ 套餐接口的路径里带 `/plan`，不要和按量接口混用，否则会产生额外费用。

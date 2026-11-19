@@ -109,12 +109,20 @@ def _hold(item_id: str, state: str, reason: str) -> None:
     log.info("plan %s held at %s: %s", item_id, state, reason)
 
 
+def _claude_driven(project: dict[str, Any] | None) -> bool:
+    from ..pipeline import orchestrator
+
+    return orchestrator.is_claude_driven(project)
+
+
 def pass_gate(item: dict[str, Any], state: str) -> None:
-    """替人确认门禁。拦下就记 hold。"""
+    """替人确认门禁。拦下就记 hold。Claude 项目的门禁由会话自审后交用户放行,这里不碰。"""
     from ..models import GateRequest
     from ..pipeline import locks, orchestrator
 
     pid = item["project_id"]
+    if _claude_driven(db.get_project(pid)):
+        return
     gate = "A" if state == str(State.GATE_A) else "B"
     try:
         if gate == "B":
@@ -237,7 +245,7 @@ def sync(*, background: bool = True) -> int:
             else:
                 # 人处理过了
                 db.update_plan_item(item["id"], hold="", hold_state="", hold_count=0)
-        if state in _GATES and config.TEAM_AUTO_GATES:
+        if state in _GATES and config.TEAM_AUTO_GATES and not _claude_driven(project):
             if chief.render_busy():
                 continue  # 总管:渲染名额占满,放闸会排队抢资源,下一轮再看
             if _gate_async(item, state, background):

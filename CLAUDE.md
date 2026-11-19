@@ -27,7 +27,14 @@ python run.py --port 8849       # 开发服务(.claude/launch.json 里有 dev / 
 - 自动态下 `/advance` 不再同步推进,只 `scheduler.kick()` 催调度器,返回 `queued: true`。
 - **后台活别再起一次性线程**,用 `app/jobs.py`:`jobs.register(kind, resource=..., max_attempts=...)` 登记 handler(模块加进 `HANDLER_MODULES`),`jobs.submit(kind, key, payload)` 排队。任务落 `jobs` 表,同 kind+key 只有一个在排 / 在跑,服务重启后接着跑(中断不算尝试),所以 handler 必须幂等、payload 只放能 JSON 化的东西。素材池构建(`library.build`)和精修(`refine.apply`)已迁过去;在跑的任务不挡 `restart_server.ps1`。
 - 项目写锁(`pipeline/locks.py`)是两层:进程内锁 + 库里的项目租约(`project_leases`,TTL 120 秒,后台续租),所以只读服务上的写接口和主服务的调度器也互斥。进程被强杀后该项目最多 2 分钟内推进不了(等租约过期),正常停机会立刻放掉。调度器的连续失败次数 / 退避窗口在 `projects.advance_failures` / `advance_retry_at`,状态一变就清零。
-- `TEAM_ENABLED` 默认开:服务一启动就会按节奏真实调用 LLM、抓平台数据。测试和临时实验服务注意关掉或隔离。
+- `TEAM_ENABLED` 默认关(2026-11-19 起)。设成 1 后服务一启动就会按节奏真实调用 LLM、抓平台数据,测试和临时实验服务注意隔离。
+
+## Claude 驱动的项目
+
+- 制作默认由 Claude Code 驱动:总流程在 `.claude/skills/make-video`,各环节一个 skill;工具层 `python -m app.cli`(`app/cli/main.py`,JSON 输出,退出码 0 成功 / 1 失败 / 2 被拒 / 3 要 Claude 回答)。
+- `projects.driver = 'claude'` 的项目:调度器跳过,`team/producer.py` 不替人过门禁,Web 写接口(推进、门禁、重渲、换刀、重试、重写包装)经 `routes.web_writable` 返回 409。新加会推进项目或调文字模型的 Web 接口也要过它。
+- 流水线里的文字模型调用对 Claude 项目会抛 `NeedsClaude`(`llm/handoff.py`),请求落盘等会话回答;别在调用点用 `except Exception` 吞掉它(它是 `BaseException`)。
+- 门禁只在用户在对话里同意后才 `step <pid> --confirm`。
 
 ## 观测与分层
 

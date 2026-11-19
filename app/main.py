@@ -224,6 +224,7 @@ def project_page(request: Request, project_id: str):
         {
             "request": request,
             "p": detail,
+            "claude_driven": orchestrator.is_claude_driven(db.get_project(project_id)),
             "health": HEALTH,
             "lint": db.read_json(project_id, "lint.json", []) or [],
             "facts_report": facts_report,

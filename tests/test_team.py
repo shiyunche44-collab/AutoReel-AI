@@ -347,6 +347,19 @@ def test_auto_gate_a_passes(fresh_db, monkeypatch):
     assert not fresh_db.get_plan_item("pl_1")["hold"]
 
 
+def test_auto_gate_skips_claude_driven_projects(fresh_db, monkeypatch):
+    """Claude 项目的门禁由会话自审后交用户放行,制片人不替人过闸。"""
+    from app.team import producer
+
+    _project(fresh_db)
+    fresh_db.update_project("p_x", driver="claude")
+    _item(fresh_db, status="producing", project_id="p_x")
+    calls = _gates(monkeypatch)
+    producer.sync(background=False)
+    producer.pass_gate(fresh_db.get_plan_item("pl_1"), "GATE_A")
+    assert calls == [] and not fresh_db.get_plan_item("pl_1")["hold"]
+
+
 def test_auto_gate_blocked_holds_until_state_moves(fresh_db, monkeypatch):
     from app.team import producer
 

@@ -17,6 +17,7 @@ from ..pipeline import aspect, concept_styles, orchestrator
 from ..scheduler import scheduler
 from ..state import State, is_auto
 from ..views import ProjectNotFound, build_detail, build_summary
+from . import web_writable
 
 log = logging.getLogger(__name__)
 
@@ -92,9 +93,7 @@ class AdvanceRequest(BaseModel):
 
 @router.post("/api/projects/{project_id}/advance")
 def advance_project(project_id: str):
-    row = db.get_project(project_id)
-    if not row:
-        raise HTTPException(404, "项目不存在")
+    row = web_writable(project_id)
     if is_auto(row["state"]):
         # 自动态归后台调度器,这里不再同步推进:两路抢写同一批文件会写坏 mp4、把项目判 FAILED。
         # 「推进」的意思改成「催调度器马上排它」。本进程只读(没拿到实例锁)时
@@ -122,6 +121,7 @@ def rebuild_project_library(project_id: str):
 
 @router.post("/api/projects/{project_id}/gate")
 def confirm_gate(project_id: str, payload: GateRequest):
+    web_writable(project_id)
     try:
         return orchestrator.confirm_gate(project_id, payload)
     except orchestrator.PipelineError as exc:
@@ -159,6 +159,7 @@ def review_flag(project_id: str, payload: ReviewFlagRequest):
 @router.post("/api/projects/{project_id}/review/rerender")
 def review_rerender(project_id: str, payload: ReviewRerenderRequest):
     """门禁 B「重拍所选」:只重渲选中的几拍。"""
+    web_writable(project_id)
     try:
         return orchestrator.rerender_beats(project_id, payload.idxs)
     except orchestrator.PipelineError as exc:
@@ -176,6 +177,7 @@ def edit_cuts(project_id: str):
 @router.post("/api/projects/{project_id}/edit/cuts/{key}/swap")
 def edit_swap_cut(project_id: str, key: str):
     """门禁 B「换一刀」:排除这一刀现在的素材重新取材,再出一版预览。"""
+    web_writable(project_id)
     try:
         return orchestrator.swap_cut(project_id, key)
     except orchestrator.PipelineError as exc:
@@ -241,6 +243,7 @@ def patch_shots(project_id: str, payload: ShotPatch):
 
 @router.post("/api/projects/{project_id}/shots/{idx}/retry")
 def retry_shot(project_id: str, idx: int, payload: RetryRequest | None = None):
+    web_writable(project_id)
     stage = (payload.stage if payload else "final")
     try:
         orchestrator.retry(project_id, idx, stage)

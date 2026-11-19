@@ -17,6 +17,7 @@ from ..publish import metadata as publish_metadata
 from ..publish import service as publish_service
 from ..publish.registry import PLATFORMS, platforms_info
 from ..templating import templates
+from . import web_writable
 
 log = logging.getLogger(__name__)
 
@@ -278,9 +279,7 @@ def project_packaging_regenerate(project_id: str):
     from ..categories import load_profile
     from ..pipeline import packaging
 
-    project = db.get_project(project_id)
-    if not project:
-        raise HTTPException(404, "项目不存在")
+    project = web_writable(project_id)  # Claude 项目的包装是会话写的,别拿默认模型覆盖
     if not db.read_json(project_id, "script.json", []):
         raise HTTPException(400, "还没有脚本,先跑到成片")
     profile = load_profile(project.get("category") or "auto_long")

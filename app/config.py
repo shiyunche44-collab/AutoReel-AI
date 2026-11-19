@@ -528,8 +528,9 @@ METRICS_INTERVAL_MIN = int(os.getenv("METRICS_INTERVAL_MIN", "30"))
 # --------------------------------------------------------------------------
 # AI 团队(app/team):情报 → 选题单 → 出片 的后台节奏
 # --------------------------------------------------------------------------
-#: 团队总开关。关掉后各角色不按节奏跑,页面上手动「立即运行」仍可用。
-TEAM_ENABLED = os.getenv("TEAM_ENABLED", "1") not in ("0", "false", "False")
+#: 团队总开关,默认关(制作改由 Claude Code 驱动,见 make-video skill)。关着时各角色
+#: 不按节奏跑,页面上手动「立即运行」仍可用。
+TEAM_ENABLED = os.getenv("TEAM_ENABLED", "0") not in ("0", "false", "False")
 #: 团队做哪个品类
 TEAM_CATEGORY = os.getenv("TEAM_CATEGORY", "") or DEFAULT_CATEGORY
 #: 每天排几条

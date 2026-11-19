@@ -1014,8 +1014,9 @@ async function refreshStatus() {
     }
 
     const hint = $('#gate-hint');
-    // 门禁 B 的说明是分批进度,比 state_reason 更有用,不覆盖
-    if (hint && s.state_reason && s.state === lastState && !btnGateB) hint.textContent = s.state_reason;
+    // 门禁 B 的说明是分批进度,比 state_reason 更有用,不覆盖;Claude 项目的「去 Claude Code 继续」也不覆盖
+    if (hint && s.state_reason && s.state === lastState && !btnGateB && !hint.dataset.claude)
+      hint.textContent = s.state_reason;
 
     if (s.state !== lastState) {
       onStateChanged(s.state);
