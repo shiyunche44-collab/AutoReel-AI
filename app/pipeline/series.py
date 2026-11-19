@@ -71,5 +71,6 @@ def script_rule(variant: Mapping[str, Any] | None, host: str = "", outro: bool =
     if not outro:
         return (f"   - 这是栏目「{name}」{nth}。结尾按上面的写法收,"
                 "不加下期预告,也不加关注口播。")
-    return (f"   - 这是栏目「{name}」{nth}。最后一句先预告具体的下期内容,"
-            f"再用一句短话请观众关注{who},下期「{name}」接着聊。")
+    return (f"   - 这是栏目「{name}」{nth}。最后一句要给足【关注利益+互动钩子】:"
+            f"提醒正在看同级车的观众点关注翻主页「{name}」合集,并在评论区报【预算+纠结哪两台】,"
+            f"预告下期{who}在「{name}」按高赞问题拆解(口播里不要写阿拉伯数字期号,免得缺事实引用)。")

@@ -36,6 +36,15 @@
 </div>
 {% endif %}
 
+{# 素材清晰度体检(library/footage_health.py):B 站只给 480p = 没登录态,素材池全是低清 #}
+{% if health.footage is defined and health.footage and health.footage.low_res_only %}
+<div class="callout tone-warning">
+  <span class="row">{{ m.icon("alert-triangle") }}<strong>素材只拿得到 {{ health.footage.best_height.bilibili }}p:{{ health.footage.cookies.note }}</strong></span>
+  <p class="subtle small">{{ health.footage.note }}</p>
+  <p class="subtle small">配好后可以运行 <code>python -m app.pipeline.library upgrade --all</code> 把老池子的低清段重拉成 1080p。</p>
+</div>
+{% endif %}
+
 {# 这个库已有别的服务在跑后台循环:本服务只开 Web。不说清楚的话,在这里建的项目
    "不动"看上去就像卡死了。 #}
 {% if health.background is defined and not health.background.ok and health.background.mode == 'web' %}

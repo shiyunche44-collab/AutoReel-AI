@@ -10,7 +10,7 @@ from ...categories import load_profile
 from .builder import build
 from .licensing import STATUS_LABEL, STATUSES, license_of_source, set_license
 from .licensing import summary as license_summary
-from .model import MAX_AUTO_SOURCES, Library, normalise_url
+from .model import MAX_AUTO_SOURCES, Library, normalise_url, slug
 from .sheet import contact_sheet
 from .sources import add_images, add_links
 
@@ -39,6 +39,92 @@ def _license_cmd(args: argparse.Namespace) -> int:
         flag = "已驳回" if lic.rejected else (s.review_status and "已通过") or "未审"
         print(f"{s.id}  {STATUS_LABEL[lic.status]:<5} {flag:<4} 到期 {exp}  {s.platform}  {s.title[:30]}  {s.url}")
     print(json.dumps(license_summary(lib), ensure_ascii=False))
+    return 0
+
+
+def _cookies_check_cmd(args: argparse.Namespace) -> int:
+    """探一条官方号投稿(只解析不下载),报 B 站 / YouTube 肯给的最高清晰度。"""
+    from . import footage_health
+
+    urls = {k: v for k, v in (("bilibili", args.bilibili), ("youtube", args.youtube)) if v}
+    data = footage_health.check(urls)
+    print(f"cookies:{data.get('config_note') or '未知'}")
+    for platform in footage_health.PLATFORMS:
+        row = (data.get("platforms") or {}).get(platform) or {}
+        height, err = int(row.get("height") or 0), str(row.get("error") or "")
+        print(f"  {platform:<9} 最高 {f'{height}p' if height else '—':<6} "
+              f"{err[:120] if err else row.get('url', '')}")
+    eff = data.get("effective")
+    print("结论:" + ("cookies 已生效,能拿到高清" if eff is True else
+                    "只拿得到低清:cookies 未配置或未生效" if eff is False else "没探成功,不知道"))
+    share = footage_health.low_res_share()
+    if share["video_segments"]:
+        print(f"素材池低清段:{share['low_res_segments']} / {share['video_segments']}"
+              f"({share['low_res_ratio'] * 100:.0f}%)")
+    return 0
+
+
+def _upgrade_cmd(args: argparse.Namespace) -> int:
+    """重拉高清:默认排后台任务(服务的 worker 跑);--now 在本进程里跑。"""
+    from ... import jobs
+    from .builder import BUILD_JOB
+    from .upgrade import all_subjects, candidates, job_key, submit_upgrade, upgrade
+
+    if not args.all and not args.subject:
+        print("要给车型,或者 --all")
+        return 2
+    subjects = all_subjects() if args.all else [args.subject]
+    if args.dry_run:
+        for name in subjects:
+            picked = candidates(Library.load(name))
+            if picked:
+                print(f"{name}:{len(picked)} 个源要重拉")
+                for s in picked[:args.limit or None]:
+                    print(f"  {s.id} {'官方' if s.official else '    '} {s.platform:<8} {s.title[:40]}")
+        return 0
+    if not args.now:
+        job = submit_upgrade(args.subject, all_=args.all, limit=args.limit, no_llm=args.no_llm)
+        print(f"已排任务 #{job}(在服务的后台跑,进度看 /api/health 的 jobs)" if job else
+              f"{job_key(args.subject, args.all)} 已经在排 / 在跑")
+        return 0
+    # 本进程直接跑:和服务里的建池 / 重拉不互斥(池锁只管进程内),撞上就别跑
+    busy = [n for n in subjects if jobs.active(BUILD_JOB, slug(n))]
+    if busy:
+        print(f"这些车的素材池正在建,等建完再 --now:{', '.join(busy)}")
+        return 1
+    llm = None
+    if not args.no_llm:
+        from ..orchestrator import _llm
+
+        llm = _llm()
+    errors: list[str] = []
+    out = upgrade(subjects, llm=llm, limit=args.limit, errors=errors,
+                  log_fn=lambda m: print(m, flush=True))
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    return 0
+
+
+def _backfill_cmd(args: argparse.Namespace) -> int:
+    from .upgrade import all_subjects, backfill, job_key, submit_backfill
+
+    if not args.all and not args.subject:
+        print("要给车型,或者 --all")
+        return 2
+    if not args.now:
+        job = submit_backfill(args.subject, all_=args.all, shots=args.shots)
+        print(f"已排任务 #{job}" if job else f"{job_key(args.subject, args.all)} 已经在排 / 在跑")
+        return 0
+    llm = None
+    if args.shots:
+        from ..orchestrator import _llm
+
+        llm = _llm()
+    errors: list[str] = []
+    for name in (all_subjects() if args.all else [args.subject]):
+        got = backfill(name, shots=args.shots, llm=llm, errors=errors)
+        print(f"{name}:动感 {got['motion']} 段,景别 {got['shots']} 段", flush=True)
+    for e in errors[:15]:
+        print(" -", e)
     return 0
 
 
@@ -82,7 +168,30 @@ def _cli(argv: Sequence[str] | None = None) -> int:
     sh.add_argument("subject")
     sh.add_argument("out", nargs="?", default="")
     sh.add_argument("--usable", action="store_true")
+    cc = sub.add_parser("cookies-check",
+                        help="cookies 体检:探一条官方号投稿(不下载),报 B 站 / YouTube 能给的最高清晰度")
+    cc.add_argument("--bilibili", default="", help="指定探哪条 B 站视频(默认取池子里的官方号投稿)")
+    cc.add_argument("--youtube", default="", help="指定探哪条 YouTube 视频")
+    up = sub.add_parser("upgrade", help="重拉高清:低清段占多数的源按 1080p 重下、切段、打标签,换掉老段")
+    up.add_argument("subject", nargs="?", default="")
+    up.add_argument("--all", action="store_true", help="所有池子")
+    up.add_argument("--limit", type=int, default=0, help="最多重拉几个源,0 不限")
+    up.add_argument("--dry-run", action="store_true", help="只列出要重拉的源")
+    up.add_argument("--now", action="store_true", help="在本进程里跑(默认排后台任务)")
+    up.add_argument("--no-llm", action="store_true", help="新段只继承老段的标签,不调视觉模型")
+    bf = sub.add_parser("backfill", help="回填:补测动感(不调模型);--shots 再补打景别 / 大镜头分")
+    bf.add_argument("subject", nargs="?", default="")
+    bf.add_argument("--all", action="store_true", help="所有池子")
+    bf.add_argument("--shots", action="store_true", help="补打景别 / 大镜头分(花视觉调用)")
+    bf.add_argument("--now", action="store_true", help="在本进程里跑(默认排后台任务)")
     args = parser.parse_args(argv)
+
+    if args.cmd == "cookies-check":
+        return _cookies_check_cmd(args)
+    if args.cmd == "upgrade":
+        return _upgrade_cmd(args)
+    if args.cmd == "backfill":
+        return _backfill_cmd(args)
 
     if args.cmd == "add":
         added = add_links(args.subject, args.urls)

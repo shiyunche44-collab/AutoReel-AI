@@ -277,3 +277,27 @@ def test_parse_bili_space_and_users():
         {"mid": 8, "uname": "路人", "official_verify": {"type": -1}}]}})
     assert users == [{"mid": 7, "name": "小米汽车", "verified": True},
                      {"mid": 8, "name": "路人", "verified": False}]
+
+
+def test_proxy_bypasses_domestic_video_domains(monkeypatch):
+    monkeypatch.setattr(pv.config, "YTDLP_PROXY", "http://127.0.0.1:7897")
+    assert "proxy" not in pv._base_opts("https://www.bilibili.com/video/BV1xx411c7mD")
+    assert "proxy" not in pv._base_opts("https://b23.tv/abc123")
+    assert "proxy" not in pv._base_opts("bilisearch5:小米YU7")
+    assert "proxy" not in pv._base_opts("https://www.douyin.com/video/123")
+    assert pv._base_opts("https://www.youtube.com/watch?v=abc")["proxy"] == "http://127.0.0.1:7897"
+    assert pv._base_opts("ytsearch5:Xiaomi YU7")["proxy"] == "http://127.0.0.1:7897"
+    assert pv._base_opts("https://www.tiktok.com/@xiaomi/video/1")["proxy"] == "http://127.0.0.1:7897"
+
+
+def test_still_blocker_guards_portrait_but_exempts_mechanism(monkeypatch):
+    from app.pipeline import orchestrator
+
+    monkeypatch.setenv("EDIT_V2", "all")
+    monkeypatch.setattr(orchestrator.config, "GATE_B_STILL_MAX", 0.35)
+    monkeypatch.setattr(orchestrator.explainer, "footage_mix",
+                        lambda pid, specs: {"still_ratio": 0.9})
+    msg = orchestrator._still_blocker({"aspect": "9:16", "theme": "buyguide"}, "p1", [])
+    assert "静图占画面 90%" in msg
+    assert orchestrator._still_blocker({"aspect": "9:16", "theme": "mechanism"}, "p1", []) == ""
+

@@ -92,6 +92,8 @@ async def lifespan(app: FastAPI):
     # 磁盘水位先在后台算好,第一次 /api/health 不用现等遍历 data/
     threading.Thread(target=maintenance.data_size_cached, name="data-size-warm",
                      daemon=True).start()
+    # 素材清晰度体检(读缓存;低清占比顺带在后台算上)
+    HEALTH["footage"] = _footage_status()
 
     # 后台循环(调度器、任务、发布、指标、团队)。`--role web` 时不跑,交给单独的 worker 进程
     # (见 app/background.py);all 模式下抢实例锁,抢不到说明别的进程在推进这个库,本进程只开 Web。
@@ -144,6 +146,8 @@ def index(request: Request):
                                                    db.recent_themes(cat["name"]))
     # 方向下拉按当前品类联动:默认展示第一个品类的方向
     active = cats[0] if cats else {"themes": [], "default_theme": ""}
+    # 素材清晰度横幅:读体检缓存(低清占比在后台算,不等)
+    HEALTH["footage"] = _footage_status()
     # ⚠️ 新版 Starlette 的签名为 TemplateResponse(request, name, context),
     #    旧的 (name, context) 形式会把 context 误当成 name,报 "unhashable type: dict"。
     return templates.TemplateResponse(
@@ -161,6 +165,17 @@ def index(request: Request):
             "plan_expires_on": config.PLAN_EXPIRES_ON,
         },
     )
+
+
+def _footage_status() -> dict | None:
+    """素材清晰度体检的结论(`library.footage_health.status`)。读不了就 None,不拖垮页面。"""
+    try:
+        from .pipeline.library import footage_health
+
+        return footage_health.status()
+    except Exception:  # noqa: BLE001
+        log.warning("素材清晰度体检读取失败", exc_info=True)
+        return None
 
 
 #: 解说轨每拍的墙钟(秒),含 TTS 分摊与最终合成。YU7 实测 27 拍 5.4 分钟 ≈ 12 秒/拍
@@ -355,6 +370,9 @@ def health():
                           "font_missing": config.edit_v2_mode() != "off" and font is None}
     except Exception:  # noqa: BLE001
         out["edit_v2"] = None
+    # 素材清晰度:cookies 配没配 / 生没生效、平台最高给多少、池子里低清段占比(体检见
+    # `python -m app.pipeline.library cookies-check`)
+    out["footage"] = _footage_status()
     # 磁盘水位:data/ 只会涨,并行渲染会成倍放大
     size = maintenance.data_size_cached()
     out["disk"] = {

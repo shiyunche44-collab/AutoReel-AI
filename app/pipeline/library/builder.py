@@ -22,6 +22,7 @@ from .model import (
     Item,
     Library,
     confirmed_seconds,
+    pool_lock,
     profile_of,
     slug,
 )
@@ -168,7 +169,8 @@ def _build_job(payload: dict[str, Any]) -> dict[str, Any]:
         from ...llm import ledger
 
         profile = load_profile(category) if category else None
-        with ledger.tag(project_id=project_id):  # 打标签的看图调用记到项目名下
+        # 池锁:重拉高清 / 回填也改这个池子的条目,和建池按车型互斥(见 model.pool_lock)
+        with pool_lock(subject), ledger.tag(project_id=project_id):  # 看图调用记到项目名下
             stats = build(subject, profile=profile, llm=orchestrator._llm(),
                           **dict(payload.get("opts") or {}))
         return stats
@@ -187,6 +189,10 @@ def _register_jobs() -> None:
     # max_attempts=1:build 本身不抛异常,抛了就是配置问题(品类不存在之类),重试无益;
     # 而且额度已在 finally 里结算,重跑会重复结算。进程被杀导致的中断不算尝试,照样接着跑。
     jobs.register(BUILD_JOB, resource="library", max_attempts=1, lease=180.0)(_build_job)
+    # 重拉高清 / 回填(library.upgrade / library.backfill)
+    from .upgrade import register_jobs
+
+    register_jobs()
 
 
 _register_jobs()
@@ -241,7 +247,8 @@ def _tag_queue(lib: Library) -> list[Item]:
     out: list[Item] = [i for i in lib.items if i.kind == "still" and not i.tagged and i.frame]
     by_src: dict[str, list[Item]] = {}
     for i in lib.items:
-        if i.kind == "video" and i.frame:
+        # 重拉高清换下来的老段不占名额、不参与去重(新段同一画面的会直接继承它的标签)
+        if i.kind == "video" and i.frame and i.skipped != "replaced":
             by_src.setdefault(i.source, []).append(i)
     samples: list[Item] = []
     rest: list[Item] = []

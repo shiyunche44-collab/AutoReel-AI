@@ -76,6 +76,24 @@ def test_learn_uses_retention_metrics():
     assert got["opening:scene:retention_2s"]["n"] == 6
 
 
+def test_sparse_single_follower_does_not_fabricate_lift():
+    """回归:10 条 0 涨粉 + 1 条 1 涨粉时,不许算出 11 倍提升把偶然特征学成正向规则。"""
+    from app.team import stats
+
+    rows = [_row("hit", 200, m_official="低", out={"followers_gained": 1})] + [
+        _row(f"z{i}", 100, m_official="低" if i < 7 else "高", out={"followers_gained": 0})
+        for i in range(10)
+    ]
+    got = {r["id"]: r for r in stats.learn(rows, "w")}
+    assert "m_official:低:followers_gained" not in got
+
+    # 涨粉样本足够(≥3 条有涨粉且总涨粉 ≥10)时正常学习
+    rich = ([_row(f"h{i}", 300, opening="conflict", out={"followers_gained": 5}) for i in range(6)]
+            + [_row(f"l{i}", 100, opening="question", out={"followers_gained": 0}) for i in range(6)])
+    got_rich = {r["id"]: r for r in stats.learn(rich, "w")}
+    assert got_rich["opening:conflict:followers_gained"]["effect"] > 1.2
+
+
 # --------------------------------------------------------------------------
 # 早期诊断
 # --------------------------------------------------------------------------

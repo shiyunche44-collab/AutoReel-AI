@@ -196,19 +196,33 @@ _NO_START = set("个的了吗呢吧啊们着过得地么")
 _NO_END = set("这那几每第")
 
 
-def _soft_cuts(title: str) -> list[int]:
-    """没有标点的标题能断的位置:不拆英文数字串(YU7、23.35),不违反上面的禁忌。
-    只取中间一段,免得断成一长一短。"""
+def _soft_cuts(title: str, keep: tuple[str, ...] = ()) -> list[int]:
+    """没有标点的标题能断的位置:不拆英文数字串(YU7、23.35)、不拆保护词(完整车名),不违反禁忌。"""
     n = len(title)
-    out = []
-    for k in range(max(2, n // 3), min(n - 1, n - n // 3) + 1):
-        a, b = title[k - 1], title[k]
-        if (a.isascii() and a.isalnum() or a == ".") and (b.isascii() and b.isalnum() or b == "."):
+    spans: list[tuple[int, int]] = []
+    for word in keep:
+        w = (word or "").strip()
+        if len(w) < 2 or len(w) >= n:
             continue
-        if b in _NO_START or a in _NO_END:
-            continue
-        out.append(k)
-    return out
+        start = 0
+        while (idx := title.find(w, start)) >= 0:
+            spans.append((idx, idx + len(w)))
+            start = idx + 1
+
+    def _allowed(lo: int, hi: int) -> list[int]:
+        pts = []
+        for k in range(max(2, lo), min(n - 1, hi) + 1):
+            a, b = title[k - 1], title[k]
+            if (a.isascii() and a.isalnum() or a == ".") and (b.isascii() and b.isalnum() or b == "."):
+                continue
+            if b in _NO_START or a in _NO_END:
+                continue
+            if any(s < k < e for s, e in spans):
+                continue
+            pts.append(k)
+        return pts
+
+    return _allowed(n // 3, n - n // 3) or (spans and _allowed(2, n - 1)) or []
 
 
 _ASK_WORDS = ("凭什么", "为什么", "为啥", "到底", "怎么", "靠什么")
@@ -226,7 +240,7 @@ def _ask_cuts(title: str) -> list[int]:
 
 
 def _title_lines(title: str, bold: str | None, max_width: int, biggest: int,
-                 smallest: int = 56) -> tuple[list[str], Any]:
+                 smallest: int = 56, keep: tuple[str, ...] = ()) -> tuple[list[str], Any]:
     """一段字最多两行:放得下就一行;否则断在标点 / 安全位置上,在 biggest..smallest 里取最大字号。"""
     from ..narration import _COVER_BREAK, _cover_wrap
 
@@ -234,7 +248,7 @@ def _title_lines(title: str, bold: str | None, max_width: int, biggest: int,
     if font.getlength(title) <= max_width:
         return [title], font
     cuts = ([k + 1 for k, ch in enumerate(title[:-1]) if ch in _COVER_BREAK] + _ask_cuts(title)
-            or _soft_cuts(title))
+            or _soft_cuts(title, keep))
     if cuts:
         # 离中间最近的断点先试(一样近取靠后的,上行长一点);它放不下再试下一个 ——
         # 只试一个的话,标点偏在一头时会掉进按宽度硬折,把「凭什么」拆成两行
@@ -260,19 +274,41 @@ def _title_lines(title: str, bold: str | None, max_width: int, biggest: int,
 
 
 def _fit(text: str, bold: str | None, max_width: int, biggest: int, smallest: int,
-         one_line_min: int) -> tuple[list[str], Any]:
+         one_line_min: int, keep: tuple[str, ...] = ()) -> tuple[list[str], Any]:
     """先缩字号保一行(不小于 one_line_min),放不下一行再按 `_title_lines` 断两行。
     「23.35万起」「小米YU7」拆成两行比字小一号难看得多。"""
     for size in range(biggest, one_line_min - 1, -4):
         font = _font(bold, size)
         if font.getlength(text) <= max_width:
             return [text], font
-    return _title_lines(text, bold, max_width, one_line_min, smallest)
+    return _title_lines(text, bold, max_width, one_line_min, smallest, keep)
 
 
 def short_name(kicker: str) -> str:
     """kicker「小米YU7 · 25.35万元起」→「小米YU7」"""
     return (kicker or "").split("·")[0].strip()
+
+
+def _norm_key(text: str) -> str:
+    return re.sub(r"[\s\-_·:：,，、]+", "", text or "").lower()
+
+
+def _strip_name_prefix(text: str, name: str) -> str:
+    """剥掉开头的车名(忽略空格差异,如 name='小鹏MONA L03' 能剥掉 '小鹏MONAL03')。"""
+    text = (text or "").strip()
+    target = _norm_key(name)
+    if not text or not target:
+        return text
+    acc = ""
+    for idx, ch in enumerate(text):
+        if not re.match(r"[\s\-_·:：,，、]", ch):
+            acc += ch.lower()
+        if acc == target:
+            rest = text[idx + 1:].strip(" :：,，、")
+            return rest
+        if len(acc) >= len(target) and not target.startswith(acc):
+            break
+    return text
 
 
 def split_title(title: str, name: str = "") -> tuple[str, str]:
@@ -285,9 +321,11 @@ def split_title(title: str, name: str = "") -> tuple[str, str]:
             main, sub = title[:k].strip(), title[k + 1:].strip()
             if ch in "?？!！":
                 main += ch
+            if name and _norm_key(main) == _norm_key(name):
+                sub = _strip_name_prefix(sub, name) or sub
             return main, sub
-    if name and name != title:
-        rest = title[len(name):].strip(" :：") if title.startswith(name) else title
+    if name and _norm_key(name) != _norm_key(title):
+        rest = _strip_name_prefix(title, name)
         return name, rest or title
     return title, ""
 
@@ -363,7 +401,7 @@ def _pill(canvas: Any, xy: tuple[int, int], text: str, font: Any, fill: tuple[in
 
 
 def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
-           brand: str = "") -> Any:
+           brand: str = "", keep: tuple[str, ...] = ()) -> Any:
     """排字(原地画,返回 canvas)。纯本地,单测直接调。
 
     信息层级(从上到下,一屏只讲一件事):
@@ -381,8 +419,8 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
     if f.landscape:
         col_w = int(f.w * 0.48)
         x, y = f.margin, f.y(0.12)
-        mains, mf = _title_lines(main, HEAVY, col_w, int(f.h * 0.15), int(f.h * 0.07)) if tone.dark \
-            else _fit(main, HEAVY, col_w, int(f.h * 0.16), int(f.h * 0.07), int(f.h * 0.10))
+        mains, mf = _title_lines(main, HEAVY, col_w, int(f.h * 0.15), int(f.h * 0.07), keep) if tone.dark \
+            else _fit(main, HEAVY, col_w, int(f.h * 0.16), int(f.h * 0.07), int(f.h * 0.10), keep)
         if chip:
             cf = _font(BOLD, int(f.h * 0.05))
             y += _pill(canvas, (x, y), chip, cf, chip_fill, chip_text)[1] + int(cf.size * 0.55)
@@ -400,8 +438,8 @@ def render(canvas: Any, tone: Tone, *, main: str, sub: str = "", chip: str = "",
         max_w = f.w - f.margin * 2
         y = f.y(0.07)
         # 暗底(拆解封面)的大字是一句问题:宁可两行大字,也不缩成一行小字
-        mains, mf = _title_lines(main, HEAVY, max_w, int(f.w * 0.17), int(f.w * 0.09)) if tone.dark \
-            else _fit(main, HEAVY, max_w, int(f.w * 0.21), int(f.w * 0.09), int(f.w * 0.12))
+        mains, mf = _title_lines(main, HEAVY, max_w, int(f.w * 0.17), int(f.w * 0.09), keep) if tone.dark \
+            else _fit(main, HEAVY, max_w, int(f.w * 0.21), int(f.w * 0.09), int(f.w * 0.12), keep)
         if chip:
             cf = _font(BOLD, int(f.w * 0.042))
             bw = cf.getbbox(chip)[2] - cf.getbbox(chip)[0] + int(cf.size * 1.0)

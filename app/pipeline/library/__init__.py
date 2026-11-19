@@ -100,15 +100,23 @@ from .model import (  # noqa: E402,F401
     _save_locks_guard,
     _third_party,
     _third_party_ok,
+    DYNAMIC_MOTION,
+    HERO_MAX,
+    SHOTS,
     confirmed_seconds,
     coverage_seconds,
     footage_gaps,
     is_waste,
+    normalise_shot,
     normalise_url,
+    on_target,
     platform_of,
+    pool_lock,
     profile_of,
     short_id,
     slug,
+    title_names_subject,
+    titled_sources,
     usable_seconds,
     vocab_of,
 )
@@ -150,6 +158,7 @@ from .ingest import (  # noqa: E402,F401
     ingest_source,
     scene_cuts,
     split_segments,
+    split_window,
 )
 from .tagging import (  # noqa: E402,F401
     TAG_SYSTEM,
@@ -158,9 +167,11 @@ from .tagging import (  # noqa: E402,F401
     apply_tag,
     inherit_duplicates,
     mark_official_duplicates,
+    needs_shot,
     reject_sources,
     tag_items,
     tag_prompt,
+    tag_shots,
     tag_system,
 )
 from .builder import (  # noqa: E402,F401
@@ -220,6 +231,18 @@ from .cover import (  # noqa: E402,F401
 from .sheet import (  # noqa: E402,F401
     contact_sheet,
 )
+from .upgrade import (  # noqa: E402,F401
+    BACKFILL_JOB,
+    UPGRADE_JOB,
+    backfill,
+    needs_upgrade,
+    submit_backfill,
+    submit_upgrade,
+    upgrade_source,
+)
+# `library.upgrade` 是子模块(整轮重拉的函数是 `library.upgrade.upgrade`):
+# 别把函数导到包上,会遮住子模块,测试就 patch 不到它
+from . import footage_health, motion, upgrade  # noqa: E402,F401
 from .cli import (  # noqa: E402,F401
     _cli,
 )

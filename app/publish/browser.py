@@ -284,17 +284,25 @@ class BrowserSession:
         extra_args = real_ip_args(self.key)
         if extra_args:
             kwargs["args"] = extra_args
-        try:
-            self._context = self._pw.chromium.launch_persistent_context(
-                str(profile_dir(self.key)), **kwargs)
-        except Exception as exc:  # noqa: BLE001
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                self._context = self._pw.chromium.launch_persistent_context(
+                    str(profile_dir(self.key)), **kwargs)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 - 跨进程刚关掉 Chrome 时等句柄释放重试一次
+                last_exc = exc
+                if attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))
+        if last_exc is not None:
             self._pw.stop()
             self._pw = None
             self._lock = None
             lock.release()
             raise BrowserUnavailable(
-                f"启动浏览器失败:{exc}。配置目录同一时间只能被一个浏览器用 ——"
-                "扫码窗口还开着的话先关掉。") from exc
+                f"启动浏览器失败:{last_exc}。配置目录同一时间只能被一个浏览器用 ——"
+                "扫码窗口还开着的话先关掉。") from last_exc
         self.page = self._context.pages[0] if self._context.pages else self._context.new_page()
         return self
 

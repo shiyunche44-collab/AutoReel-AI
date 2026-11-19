@@ -10,6 +10,7 @@ from ... import config, degrade
 from .car_ai import pick_visual
 from .layout import (
     Frame,
+    _norm_key,
     model_word,
     place_art,
     place_car,
@@ -39,7 +40,7 @@ def _save(image: Any, dest: Path) -> None:
 
 def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str = "",
             name: str = "", brand: str = "", series: str = "",
-            art: Any = None) -> tuple[Any, str]:
+            art: Any = None, keep: tuple[str, ...] = ()) -> tuple[Any, str]:
     """底图 → 型号大字 + 车 → 字。返回 (图, 底图来源)。
     `art`:拆解封面的剖视图(暗底色调才用):图当主角,车缩小放右下角,不画型号大字。"""
     canvas, source = background(tone, size)
@@ -48,13 +49,11 @@ def compose(cut: Any, tone: Tone, size: tuple[int, int], *, main: str, sub: str 
         place_car(canvas, cut, Frame.of(size), tone=tone, small=True)
     else:
         place_car(canvas, cut, Frame.of(size), tone=tone, ghost="" if tone.dark else model_word(name))
-    # 车名角标**始终画**:主页一排封面靠它认出同一个号(账号里已发的几条都有这块)。
-    # 以前是「主标题已经是车名就不重复」—— 大唐、小米YU7 那几条的角标能出现是因为
-    # 大字和车名不是同一个字符串,纯属巧合;蔚来ES8 这种大字就是车名的就整个没了,
-    # 一排看过去跟别人的封面不是一套(实跑踩过)。
-    # 挂了栏目就并进角标:「车名 | 柒哥帮你挑·第3期」,观众一眼知道这是哪个系列的第几期
-    chip = " | ".join(x for x in (name, series) if x)
-    return render(canvas, tone, main=main, sub=sub, chip=chip, brand=brand), source
+    # 车名角标始终保留胶囊视觉统一;但当主标题已经是完整车名、且有栏目名时,胶囊只写栏目,避免车名连写两遍
+    same_main = bool(name and _norm_key(main) == _norm_key(name))
+    chip = series if (same_main and series) else " | ".join(x for x in (name, series) if x)
+    protect = tuple(x for x in dict.fromkeys((name, *keep)) if x)
+    return render(canvas, tone, main=main, sub=sub, chip=chip, brand=brand, keep=protect), source
 
 
 def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: str, subject: str,
@@ -98,10 +97,11 @@ def build(project_id: str, dest: str | Path, *, size: tuple[int, int], title: st
         jobs = [(Path(dest), size),
                 (cover_3x4_path(dest), (short, short * 4 // 3)),
                 (cover_4x3_path(dest), (short * 4 // 3, short))]
-        name = short_name(kicker)
+        name = short_name(kicker) or subject
         series_chip = _series_chip(project_id)
         rendered = [(path, compose(cut, tone, sz, main=main, sub=sub, name=name,
-                                   brand=config.COVER_BRAND, series=series_chip, art=art))
+                                   brand=config.COVER_BRAND, series=series_chip, art=art,
+                                   keep=(subject, name)))
                     for path, sz in jobs]
         for path, (im, _) in rendered:
             _save(im, path)

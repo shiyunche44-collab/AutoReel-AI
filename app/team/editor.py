@@ -137,14 +137,14 @@ RANK_BONUS = 0.3
 OUTSIDE_WEIGHT = 0.5
 #: 单点深挖(只讲一项技术 / 配置)这类片型打的折:讲给已经在看这台车的人听,新号没有这批人
 NICHE_WEIGHT = 0.7
-#: 冲粉期高转化片型加权:双车对决(pk)、同预算选购(priceband/roundup)、买车避坑问答(buyguide/qa)优先
+#: 冲粉期高转化片型加权:双车对决(pk)搜索占比最高且最易引发评论站队,同预算选购(priceband/roundup)、买车避坑问答(buyguide/qa)次之
 GROWTH_THEMES: dict[str, float] = {
-    "pk": 1.25,
-    "priceband": 1.2,
+    "pk": 1.45,
+    "priceband": 1.25,
     "roundup": 1.15,
+    "debate": 1.15,
     "buyguide": 1.1,
     "qa": 1.1,
-    "debate": 1.05,
 }
 
 
@@ -285,9 +285,10 @@ def rotation_hint(slots: list[float]) -> str:
         if n:
             lines.append(f"- {KIND_LABEL[kind]} {n} 条")
     if "band" in need:
+        pk_min = 2 if need.count("band") >= 2 else 1
         lines.append(f"- 价位段选购的价位段与能源写「{config.TEAM_BAND_HINT}」(angle 写明取舍点),"
-                     "本批必须包含至少 1 条 1v1 对决(theme=pk,subjects 填 2 款榜单内同级车)"
-                     "或价位段选购(theme=priceband)")
+                     f"本批必须优先包含至少 {pk_min} 条热门车 1v1 对决(theme=pk,subjects 填 2 款榜单内同级直接对手,"
+                     "优先选观众常搜的对比组合)以及价位段选购(theme=priceband)")
     if "topic" in need:
         lines.append("- 热点话题 = 当前热榜 / 新闻 / 行业事件里最多人在讨论的那个点,或观众评论里问得多的")
     return "\n".join(lines)

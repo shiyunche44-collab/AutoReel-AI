@@ -27,6 +27,8 @@ from .model import (
     _host_sources,
     _third_party,
     _third_party_ok,
+    on_target,
+    titled_sources,
     vocab_of,
 )
 from .tagging import _dhash
@@ -75,7 +77,10 @@ def screen(lib: Library, pool: list[Item]) -> list[Item]:
         if i.source in stale:
             continue
         if banned and (i.id in banned or base_item_id(i.id) in banned or i.url in banned
-                       or urls.get(i.source, "") in banned):
+                       or urls.get(i.source, "") in banned
+                       # 重拉高清换下来的段:点名的是老段,新段同一个镜头,一起不要
+                       or (i.replaces and (i.replaces in banned
+                                           or base_item_id(i.replaces) in banned))):
             continue
         out.append(i)
     return out
@@ -313,6 +318,45 @@ FIT_OVERLAP_MIN = 2
 #: 车型没确认的素材整体后移的档数:要大过任何实际的使用次数罚档,重复再多也不换成别的车
 UNCONFIRMED_TIER = 1000
 
+#: 画面质量进排序时,没量过的按这个算(中性:不因为没量过而靠前或靠后)。
+#: 动感取本地 1080p 可用段的中位数附近(见 motion.py 的标定)
+NEUTRAL_HERO = 1
+NEUTRAL_MOTION = 0.25
+#: 本地体检的边缘方差低于它算"偏软",同档里往后排(可用段 p5≈500,见 media_check.FLAT_SHARPNESS)
+SOFT_SHARP = 500.0
+
+
+def _hero_of(item: Item) -> int:
+    return item.hero if item.hero >= 0 else NEUTRAL_HERO
+
+
+def _motion_of(item: Item) -> float:
+    if item.kind != "video":
+        return 0.0
+    return item.motion if item.motion >= 0 else NEUTRAL_MOTION
+
+
+def _bucket(value: float, step: float = 0.25) -> float:
+    """连续分数分档:太细的话它一个键就决定了全部先后,后面的键(官方、时长)形同虚设。"""
+    return round(value / step) * step
+
+
+def _big(item: Item) -> float:
+    """开场挑大镜头:hero × motion(没量过的按中性值),静图 0。"""
+    if item.kind != "video":
+        return 0.0
+    return _bucket(_hero_of(item) * _motion_of(item))
+
+
+def _soft(item: Item) -> bool:
+    return 0 <= item.sharp < SOFT_SHARP
+
+
+def _premium(item: Item, used: int, titled: set[str]) -> bool:
+    """第一档素材:确认本车、1080p、动态的视频,没用过。量不到(老池子没测动感)就不算。"""
+    return (used == 0 and item.kind == "video" and item.hd and item.dynamic
+            and on_target(item, titled) and item.view != "people" and not _audience(item))
+
 
 def _reuse_penalty(used: int) -> int:
     """用过一次以上,每多用一次降一档。池子用尽后所有候选都在"用过"档,光看档位的话
@@ -505,7 +549,8 @@ def _chunk_videos(pool: list[Item], group: dict[str, str], members: dict[str, li
 def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] | None = None,
          recent: list[str] | None = None, detail: str = "", role: str = "body",
          views: Iterable[str] | None = None,
-         choose: Callable[[str, list[Item]], int | None] | None = None) -> list[Piece]:
+         choose: Callable[[str, list[Item]], int | None] | None = None,
+         prefer_video: bool | None = None) -> list[Piece]:
     """给一个节拍铺背景:从这台车的池子里挑干净片段**连拼**到 `seconds`。
 
     这里不要求画面对上旁白,也不要求单段撑满时长 ——
@@ -527,6 +572,12 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     且视角命中的素材和"讲到的部件"一样算对题、排在前面。
     `choose`(剪辑 v2):第一刀从排序前 `CHOOSE_TOP` 名里再挑一次(`choose(detail, 候选)` 返回下标,
     None 或越界就用排第一的)。用来让文字模型按素材描述挑最贴这半句的画面。
+    `prefer_video`:静图只在没用过的视频铺不满时兜底(贴旁白也不插到视频前面)。
+    None = 跟着 look 的 `video_first` 走;False = 老排法(静图和带角标的视频同档)。
+
+    排序的大头(`rank`):静图闸门 → 贴旁白 → 用过没有 → 第一档素材(确认本车的 1080p 动态
+    视频,`_premium`)→ 档位 → …… → 大镜头分 / 动感 / 清晰度 → 其余细项。
+    `role="hook"` 改成按 `hero × motion`(`_big`)挑大镜头,用过的排后。
     返回空列表表示池子里什么都没有。
     """
     if role not in ROLES:
@@ -537,6 +588,9 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     lib = Library.load(subject)
     vocab = vocab_of(lib)
     book = LicenseBook(lib)
+    titled = titled_sources(lib)
+    if prefer_video is None:
+        prefer_video = looks.current().video_first
     text_views = set(views or ())
     want = text_views or vocab.hint_views(hint)
     want_detail = vocab.detail_types_in(detail) if detail else set()
@@ -575,7 +629,8 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
     max_piece = FILL_MAX_PIECE * knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]
     if video_first:
         pool = _chunk_videos(pool, group, members, by_id, max_piece)
-    fallback = video_first or         _pool_seconds([i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
+    fallback = video_first or _pool_seconds(
+        [i for i in pool if not _third_party(i) and not group_used(i)]) < seconds
     if not fallback:
         pool = [i for i in pool if not _third_party(i)]
 
@@ -589,7 +644,7 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             return 0 if i.kind == "video" else 1
         return 1 if _third_party(i) else 0
 
-    def rank(i: Item, recent_groups: set[str], last_view: str) -> tuple:
+    def rank(i: Item, recent_groups: set[str], last_view: str, videos_left: bool) -> tuple:
         # 认出是这台车的排在没认出的前面:没认出的常是同品牌别的车型(YU7 池子里
         # 混着 SU7 的赛道活动),背景里出现别的车比画面不对口严重得多
         n = group_used(i)
@@ -604,12 +659,20 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
                      or i.view in text_views)
                     and n < FIT_REUSE_MAX and _confirmed(i) and i.view != "people"
                     and not _audience(i) and group[i.id] not in recent_groups)
+        # 视频优先:还有没用过的视频时,静图一律排在视频后面(贴旁白也不插队)
+        gate = bool(prefer_video) and i.kind == "still" and videos_left
+        # 开场:大镜头(hero × motion)排第一,用过的排后(三刀不能是同一个镜头)
+        head = ((gate, stage(i, n), n > 0, -_big(i), not on_topic) if role == "hook"
+                else (gate, not on_topic, stage(i, n)))
         # 码率不够的视频同档里往后排(不降档:AV1 官方片普遍码率低,降档就全让给静图了)
-        return (not on_topic, stage(i, n), tier, i.view == "people", _audience(i), i.target != "yes", i.low_bitrate, _branded_still(i),
-                group[i.id] in recent_groups,
-                bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
-                _dirt(i), fit, -_desc_overlap(i, detail), _detail_conflict(i, want_detail, vocab),
-                not i.official, -i.length)
+        return head + (
+            not _premium(i, n, titled), tier, i.view == "people", _audience(i),
+            not on_target(i, titled), i.low_bitrate, _branded_still(i),
+            group[i.id] in recent_groups,
+            bool(want) and i.view not in want, bool(last_view) and i.view == last_view, n,
+            -_hero_of(i), -_bucket(_motion_of(i)), _soft(i),
+            _dirt(i), fit, -_desc_overlap(i, detail), _detail_conflict(i, want_detail, vocab),
+            not i.official, -i.length)
 
     out: list[Piece] = []
     covered = 0.0
@@ -619,7 +682,11 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
         window = recent[-RECENT_PIECES:]
         recent_groups = {group.get(r, r) for r in window}
         last = by_id.get(window[-1]) if window else None
-        key = lambda x, g=recent_groups, v=(last.view if last else ""): rank(x, g, v)  # noqa: E731
+        videos_left = bool(prefer_video) and any(
+            x.kind == "video" and not group_used(x) for x in left)
+        def key(x: Item, g: set[str] = recent_groups,
+                v: str = last.view if last else "", vl: bool = videos_left) -> tuple:
+            return rank(x, g, v, vl)
         if choose is not None and not out and len(left) > 1:
             top = sorted(left, key=key)[:CHOOSE_TOP]
             try:
@@ -797,7 +864,8 @@ def long_take(subject: str, seconds: float, *, hint: str = "",
         return None
     group = near_dup_groups(pool)
     recent_groups = {group.get(r, r) for r in recent[-RECENT_PIECES:]}
-    i = min(pool, key=lambda x: (_third_party(x), x.target != "yes", x.low_bitrate,
+    titled = titled_sources(lib)
+    i = min(pool, key=lambda x: (_third_party(x), not on_target(x, titled), not x.hd, x.low_bitrate,
                                  used.get(group[x.id], 0) + used.get(x.id, 0),
                                  group[x.id] in recent_groups, x.view not in LONG_TAKE_VIEWS,
                                  _dirt(x), not x.official, -x.length))

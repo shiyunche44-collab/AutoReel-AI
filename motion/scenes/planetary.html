@@ -15,11 +15,16 @@
     const M = HF.mech(tl);
     const sv = M.svg, W = D.words || {};
     const mode = D.mode === "reduce" ? "reduce" : "split";
-    const CAMS = [null, [33, 50, 1.0, 1.22], [33, 30, 1.3, 1.1], [45, 60, 1.12, 1.0]];
+    const defs = HF.svg("defs", {}, sv);
+    const cp = HF.svg("clipPath", { id: "pg-clip" }, defs);
+    HF.svg("rect", { x: 0, y: 0, width: 632, height: 640 }, cp);
+    const clipG = HF.svg("g", { "clip-path": "url(#pg-clip)" }, sv);
+    const stage = HF.svg("g", {}, clipG);
+    const CAMS = [null, [330, 320, 1.0, 1.18], [330, 260, 1.2, 1.06], [350, 360, 1.12, 1.0]];
     const cam = CAMS[(D.variant || 0) % CAMS.length];
     if (cam) {
-      sv.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
-      tl.fromTo(sv, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+      stage.style.transformOrigin = cam[0] + "px " + cam[1] + "px";
+      tl.fromTo(stage, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
     }
     const SUN = HF.c("hi"), CAR = HF.c("acc"), RING = HF.c("acc2");
     const CX = 330, CY = 320, MOD = 8, NS = 24, NP = 18, NR = 60;
@@ -40,39 +45,40 @@
     const place = (g, x, y, deg) => g.setAttribute("transform", "translate(" + x.toFixed(1) + " " + y.toFixed(1) + ") rotate(" + deg.toFixed(2) + ")");
 
     // ring: an annulus with internal teeth
-    const ring = HF.svg("g", {}, sv);
+    const ring = HF.svg("g", {}, stage);
     HF.svg("path", { d: circlePath(RR + 34) + " " + gearPath(NR, RR, true), "fill-rule": "evenodd", fill: HF.c("acc2", 0.16), stroke: RING, "stroke-width": 3, "stroke-linejoin": "round" }, ring);
     HF.svg("circle", { cx: RR + 18, cy: 0, r: 7, fill: RING }, ring);
     // carrier: three arms under the planets
-    const carrier = HF.svg("g", {}, sv);
+    const carrier = HF.svg("g", {}, stage);
     const TH = [0, 1, 2].map((k) => k * Math.PI * 2 / 3);
     HF.svg("path", { d: "M" + TH.map((a) => (Math.cos(a) * RC).toFixed(1) + " " + (Math.sin(a) * RC).toFixed(1)).join(" L") + " Z", fill: HF.c("acc", 0.10), stroke: CAR, "stroke-width": 12, "stroke-linejoin": "round" }, carrier);
     // sun
-    const sun = HF.svg("g", {}, sv);
+    const sun = HF.svg("g", {}, stage);
     HF.svg("path", { d: gearPath(NS, RS, false), fill: HF.c("hi", 0.20), stroke: SUN, "stroke-width": 3, "stroke-linejoin": "round" }, sun);
     HF.svg("circle", { cx: 0, cy: 0, r: 26, fill: HF.c("bg", 0.9), stroke: SUN, "stroke-width": 4 }, sun);
     HF.svg("line", { x1: 30, y1: 0, x2: RS - 22, y2: 0, stroke: SUN, "stroke-width": 6, "stroke-linecap": "round" }, sun);
     // planets
     const planets = TH.map(() => {
-      const g = HF.svg("g", {}, sv);
+      const g = HF.svg("g", {}, stage);
       HF.svg("path", { d: gearPath(NP, RP, false), fill: HF.c("ink", 0.14), stroke: HF.c("ink", 0.8), "stroke-width": 3, "stroke-linejoin": "round" }, g);
       HF.svg("circle", { cx: 0, cy: 0, r: 16, fill: CAR }, g);
       HF.svg("line", { x1: 20, y1: 0, x2: RP - 20, y2: 0, stroke: HF.c("ink", 0.7), "stroke-width": 5, "stroke-linecap": "round" }, g);
       return g;
     });
 
-    // legend with a live speed bar per member
+    // legend with a live speed bar per member (unscaled in sv so labels never clip)
     const ROLE = mode === "split" ? [W.generator, W.engine, W.wheels] : [W.motor, W.wheels, W.held];
     const rowsDef = [[W.sun, ROLE[0], SUN], [W.carrier, ROLE[1], CAR], [W.ring, ROLE[2], RING]];
+    const BAR_W = 290;
     const bars = rowsDef.map((r, k) => {
       const y = 150 + k * 150;
-      HF.svg("circle", { cx: 672, cy: y - 10, r: 11, fill: r[2] }, sv);
-      const t = HF.svg("text", { x: 696, y: y, class: "pg-lab", fill: HF.c("ink") }, sv); t.textContent = r[0] || "";
-      const s = HF.svg("text", { x: 960, y: y, "text-anchor": "end", class: "pg-sub" }, sv); s.textContent = r[1] || "";
-      HF.svg("rect", { x: 660, y: y + 22, width: 300, height: 14, rx: 7, fill: HF.c("ink", 0.12) }, sv);
-      return HF.svg("rect", { x: 660, y: y + 22, width: 0, height: 14, rx: 7, fill: r[2] }, sv);
+      HF.svg("circle", { cx: 662, cy: y - 10, r: 11, fill: r[2] }, sv);
+      const t = HF.svg("text", { x: 686, y: y, class: "pg-lab", fill: HF.c("ink") }, sv); t.textContent = r[0] || "";
+      const s = HF.svg("text", { x: 650 + BAR_W, y: y, "text-anchor": "end", class: "pg-sub" }, sv); s.textContent = r[1] || "";
+      HF.svg("rect", { x: 650, y: y + 22, width: BAR_W, height: 14, rx: 7, fill: HF.c("ink", 0.12) }, sv);
+      return HF.svg("rect", { x: 650, y: y + 22, width: 0, height: 14, rx: 7, fill: r[2] }, sv);
     });
-    const spd = HF.svg("text", { x: 660, y: 90, class: "pg-sub" }, sv); spd.textContent = W.speed || "";
+    const spd = HF.svg("text", { x: 650, y: 90, class: "pg-sub" }, sv); spd.textContent = W.speed || "";
 
     // angles are closed-form in t, so seeking to any frame gives the same picture
     const DEG = 180 / Math.PI;
@@ -94,7 +100,7 @@
         const rot = c + TH[k] + Math.PI + Math.PI / NP - (s - c) * NS / NP;
         place(g, CX + Math.cos(a) * RC, CY + Math.sin(a) * RC, rot * DEG);
       });
-      [ws, wc, wr].forEach((w, k) => bars[k].setAttribute("width", Math.max(0, Math.min(300, Math.abs(w) / 2.8 * 300)).toFixed(1)));
+      [ws, wc, wr].forEach((w, k) => bars[k].setAttribute("width", Math.max(0, Math.min(BAR_W, Math.abs(w) / 2.8 * BAR_W)).toFixed(1)));
     }, 0, S);
     HF.grain();
     HF.register(tl);

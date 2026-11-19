@@ -172,8 +172,8 @@ def render_video(tl: Timeline, work: Path, *, preview: bool = False) -> Path:
         "--color-space=bt709", *quality,
         f"--public-dir={(work / 'public').as_posix()}",
         f"--props={props_path.as_posix()}", f"--browser-executable={caption_layer.browser()}",
-        f"--concurrency={os.getenv('EDIT_V2_CONCURRENCY', '50%')}",
-        "--log=error", "--overwrite",
+        f"--concurrency={os.getenv('EDIT_V2_CONCURRENCY', '4')}",
+        "--timeout=90000", "--log=error", "--overwrite",
     ]
     try:
         proc = subprocess.run(cmd, cwd=caption_layer.REMOTION_DIR, env=caption_layer._env(),

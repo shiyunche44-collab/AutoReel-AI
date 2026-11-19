@@ -11,6 +11,7 @@ from pathlib import Path
 from ...providers import clips as clips_mod
 from ...providers import images, official, platform_video
 from .. import logo_detect, media_check, watermark_vlm
+from . import motion
 from .model import (
     LAUNCH_WINDOWS,
     MIN_TAG_SECONDS,
@@ -82,6 +83,44 @@ def extract_frame(video: str | Path, at: float, dest: Path) -> Path | None:
     return dest if proc.returncode == 0 and dest.is_file() else None
 
 
+def split_window(src: Source, raw: Path, k: int, frame_dir: Path, *, tag: str = "") -> list[Item]:
+    """把源的第 k 个窗文件按剪辑点切成段:抽帧、本地体检、测动感。返回新段(不加进池)。
+
+    段 id 是 `{源 id}_{tag}{k}_{序号}`:重拉高清的窗用 `tag="h"`,和原来的段不撞号。"""
+    dur = clips_mod.probe_duration(raw)
+    if dur <= 0:
+        return []
+    # 一个窗文件只读一次,切出来的段共用
+    info = media_check.probe_video(raw)
+    out: list[Item] = []
+    for n, (a, b) in enumerate(split_segments(scene_cuts(raw), dur)):
+        item_id = f"{src.id}_{tag}{k}_{n:03d}"
+        frame, skipped, sharp = "", "", -1.0
+        if b - a >= MIN_TAG_SECONDS:
+            got = extract_frame(raw, (a + b) / 2, frame_dir / f"{item_id}.jpg")
+            frame = str(got) if got else ""
+            # 送视觉模型之前先本地看三帧:黑场、纯色淡场直接跳过,不花调用
+            stats = media_check.frame_stats(raw, a, b)
+            skipped = media_check.frame_verdict(stats, launch=src.kind == "launch")
+            sharp = media_check.median_sharpness(stats)
+        out.append(Item(
+            id=item_id, kind="video", path=str(raw), frame=frame, source=src.id,
+            url=src.url, platform=src.platform or platform_of(src.url),
+            official=src.official,
+            origin=f"library:{src.platform or platform_of(src.url)}",
+            license=f"{src.platform}:{src.uploader or '未知上传者'}",
+            start=a, end=b, skipped=skipped, sharp=sharp, launch=src.kind == "launch",
+            **info,
+        ))
+    # 动感:整窗解码一次,窗里该测的段一起测(低清段、废段不测)
+    todo = [i for i in out if motion.needs_motion(i) and i.length >= MIN_TAG_SECONDS]
+    if todo:
+        scores = motion.measure_many(todo)
+        for i in todo:
+            i.motion = scores.get(i.id, -1.0)
+    return out
+
+
 def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
     """下载一个源、按剪辑点切段、抽帧。返回新增的段数。失败把源标成 failed。"""
     raw_dir = lib.dir / "raw"
@@ -102,32 +141,9 @@ def ingest_source(lib: Library, src: Source, errors: list[str]) -> int:
             except platform_video.PlatformError as exc:
                 errors.append(f"素材池下载失败({src.url} 窗 {k}):{str(exc)[:160]}")
                 continue
-            dur = clips_mod.probe_duration(raw)
-            if dur <= 0:
-                continue
-            # 一个窗文件只读一次,切出来的段共用
-            info = media_check.probe_video(raw)
-            segs = split_segments(scene_cuts(raw), dur)
-            for n, (a, b) in enumerate(segs):
-                item_id = f"{src.id}_{k}_{n:03d}"
-                frame, skipped, sharp = "", "", -1.0
-                if b - a >= MIN_TAG_SECONDS:
-                    got = extract_frame(raw, (a + b) / 2, frame_dir / f"{item_id}.jpg")
-                    frame = str(got) if got else ""
-                    # 送视觉模型之前先本地看三帧:黑场、纯色淡场直接跳过,不花调用
-                    stats = media_check.frame_stats(raw, a, b)
-                    skipped = media_check.frame_verdict(stats, launch=src.kind == "launch")
-                    sharp = media_check.median_sharpness(stats)
-                lib.items.append(Item(
-                    id=item_id, kind="video", path=str(raw), frame=frame, source=src.id,
-                    url=src.url, platform=src.platform or platform_of(src.url),
-                    official=src.official,
-                    origin=f"library:{src.platform or platform_of(src.url)}",
-                    license=f"{src.platform}:{src.uploader or '未知上传者'}",
-                    start=a, end=b, skipped=skipped, sharp=sharp, launch=src.kind == "launch",
-                    **info,
-                ))
-                added += 1
+            got = split_window(src, raw, k, frame_dir)
+            lib.items += got
+            added += len(got)
         if not added:
             raise platform_video.PlatformError("没有下载到任何可用的片段")
         src.status, src.error = "done", ""

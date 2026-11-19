@@ -35,6 +35,11 @@ def _isolated_audio_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "TEAM_AUTO_APPROVE_TOPICS", False)
     # 原理拆解的排期日来自 .env;开着时主编会先占掉当天的档,别的排题测试就看星期几过不过
     monkeypatch.setattr(config, "TEAM_MECHANISM_WEEKDAYS", ())
+    monkeypatch.setattr(config, "TEAM_MECHANISM_DURATION", 240)
+    monkeypatch.setattr(config, "TEAM_WEEK_PLAN",
+                        ("model", "band", "model", "topic", "model", "band", "topic"))
+    # .env 开启 EDIT_V2=all 时,普通单测仍走默认轻量合成,避免拉起 Remotion;专门的测试自己 setenv
+    monkeypatch.setenv("EDIT_V2", "off")
 
 
 @pytest.fixture(autouse=True)

@@ -14,6 +14,7 @@ from typing import Any
 
 from ... import config
 from ...categories import CategoryProfile, Vocab, load_profile
+from ...providers import official as official_mod
 from ...providers import platform_video
 from .. import media_check
 
@@ -35,6 +36,25 @@ def _save_lock(subject: str) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _save_locks[subject] = lock
+        return lock
+
+
+#: 池子的"整段改写"锁:按车型 slug 一把(可重入)。
+#:
+#: `save` 只把盘上多出来的**源**并进来,条目整份覆盖 —— 建池拿着旧副本跑几十分钟,
+#: 期间重拉高清换掉的段、回填的动感都会被它写回去。所以建池、重拉、回填这些
+#: "load → 改条目 → save" 的活在进程内按车型互斥,改之前重新 load。
+_pool_locks: dict[str, threading.RLock] = {}
+
+
+def pool_lock(subject: str) -> threading.RLock:
+    """取某个车型的池改写锁(按 slug:"小米 YU7" 和 "小米YU7" 是同一把)。"""
+    key = slug(subject)
+    with _save_locks_guard:
+        lock = _pool_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _pool_locks[key] = lock
         return lock
 
 
@@ -150,6 +170,33 @@ class Source:
     reviewed_at: float = 0.0
     #: 所属发布会(名称 / 日期),只记录
     event: str = ""
+    #: 重拉高清(见 upgrade.py):上次试过的时间、没拉成的原因(拿不到高清 / 下载失败);
+    #: upgraded_height = 这次拉到的短边像素。0 / 空 = 没试过
+    upgraded_at: float = 0.0
+    upgrade_error: str = ""
+    upgraded_height: int = 0
+
+
+#: 景别(打标签的 shot):代码 → 中文。旧池子没有这个字段 = ""(未知)
+SHOTS: dict[str, str] = {
+    "wide": "远景", "full": "全景", "medium": "中景", "close": "近景", "closeup": "特写",
+}
+#: 宣传片大镜头的分级:0 普通 / 测评随手拍 … 3 电影感大片;-1 = 没打过
+HERO_MAX = 3
+#: 动感(帧差,见 motion.py)≥ 这个算"动态"镜头;-1 = 没测过。本地 1080p 可用段里
+#: 约四分之三过线(宣传片大多在动),过不了的是定机位摆拍、空镜
+DYNAMIC_MOTION = 0.15
+
+
+def normalise_shot(value: object) -> str:
+    """模型给的景别(代码或中文)→ `SHOTS` 的代码;认不出返回 ""。"""
+    text = str(value or "").strip().lower()
+    if text in SHOTS:
+        return text
+    for code, name in SHOTS.items():
+        if name in text:
+            return code
+    return ""
 
 
 @dataclass
@@ -199,10 +246,35 @@ class Item:
     dup_of: str = ""
     #: 来自发布会回放源:舞台大屏 / PPT 页被视觉模型判成 poster,但正是回放要的画面
     launch: bool = False
+    #: 景别(`SHOTS` 的代码);"" = 没打过。只给可用视频段打
+    shot: str = ""
+    #: 宣传片大镜头分 0–3(光线、构图、色彩);-1 = 没打过。只给可用视频段打
+    hero: int = -1
+    #: 动感 0–1:段内 25% / 50% / 75% 三帧的帧差(motion.py,不调模型);-1 = 没测过
+    motion: float = -1.0
+    #: 重拉高清后的新段:它顶替的旧段 id(旧段的封禁 / 去重记录照样作用到它)
+    replaces: str = ""
 
     @property
     def length(self) -> float:
         return max(0.0, self.end - self.start)
+
+    @property
+    def hd(self) -> bool:
+        """视频短边 ≥ 1080。"""
+        return self.kind == "video" and min(self.width, self.height) >= 1080
+
+    @property
+    def dynamic(self) -> bool:
+        """测过帧差、而且够动(推拉摇移、行驶中)。没测过的不算。"""
+        return self.kind == "video" and self.motion >= DYNAMIC_MOTION
+
+    @property
+    def big_shot(self) -> float:
+        """开场挑大镜头用:hero × motion,两样都量过才有分(0–3),否则 -1。"""
+        if self.hero < 0 or self.motion < 0:
+            return -1.0
+        return self.hero * self.motion
 
     @property
     def low_res(self) -> bool:
@@ -345,7 +417,8 @@ class Library:
         for i in self.items:
             if i.usable:
                 views[i.view] = views.get(i.view, 0) + 1
-        sized = [i for i in videos if i.width and i.height]
+        # 被高清段顶替(upgrade.py)的老段不算:文件还在,但不再上屏
+        sized = [i for i in videos if i.width and i.height and i.skipped != "replaced"]
         cover = coverage_seconds(self)
         return {
             "sources": len(self.sources),
@@ -503,6 +576,34 @@ FILL_MIN_PIECE = 1.2
 def _confirmed(item: Item) -> bool:
     """开场 / 结论拍只用的素材:官方来源,或认出就是这台车的。"""
     return item.official or item.target == "yes"
+
+
+def title_names_subject(title: str, subject: str) -> bool:
+    """标题点名了完整的型号:沿用品牌号文案的严格口径(`official.tiktok_on_topic`:
+    型号里的字母数字词全部整词出现,或中文主体整串出现)。型号只有数字("领克 07")时
+    数字词太泛,要求整串出现。"""
+    if not title or not subject:
+        return False
+    toks = re.findall(r"[a-z0-9]+", subject.lower())
+    if toks and all(t.isdigit() for t in toks):
+        core = re.sub(r"\s+", "", subject).lower()
+        return core in re.sub(r"\s+", "", title.lower())
+    return official_mod.tiktok_on_topic(title, subject)
+
+
+def titled_sources(lib: Library) -> set[str]:
+    """标题里写着完整型号的官方源 id:这些源里没认出车型(target=unknown)的段默认算目标车。"""
+    return {s.id for s in lib.sources
+            if s.official and s.id and title_names_subject(s.title, lib.subject)}
+
+
+def on_target(item: Item, titled: set[str] | frozenset[str] = frozenset()) -> bool:
+    """确认是目标车:视觉模型认出(target=yes),或官方号标题点名这台车、视觉模型没说不是
+    (target=unknown,只在取材时算,不改存下来的标签;模型明确说 no 就降级)。"""
+    if item.target == "yes":
+        return True
+    return item.target == "unknown" and item.official and bool(item.source) \
+        and item.source in titled
 
 
 def _third_party(item: Item) -> bool:

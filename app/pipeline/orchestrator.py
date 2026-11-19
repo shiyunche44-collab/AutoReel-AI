@@ -824,9 +824,9 @@ def _plan_edit(c: _Ctx, specs: Sequence[ShotSpec]) -> bool:
 
 def _still_blocker(project: dict[str, Any], project_id: str,
                    specs: Sequence[ShotSpec]) -> str:
-    """剪辑 v2 横屏:静图秒数占比超过 `GATE_B_STILL_MAX` 就拦(幻灯片式的片子不放行)。"""
+    """剪辑 v2:静图秒数占比超过 `GATE_B_STILL_MAX` 就拦(幻灯片式的片子不放行;机构拆解片除外)。"""
     limit = config.GATE_B_STILL_MAX
-    if limit <= 0 or aspect.is_portrait(project) or not _edit_v2_on(project):
+    if limit <= 0 or project.get("theme") == "mechanism" or not _edit_v2_on(project):
         return ""
     ratio = float(explainer.footage_mix(project_id, specs).get("still_ratio") or 0.0)
     if ratio <= limit:

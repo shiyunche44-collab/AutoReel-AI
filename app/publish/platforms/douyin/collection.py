@@ -86,7 +86,8 @@ def add_work(session: Any, name: str, title: str) -> tuple[str, str]:
         # 合集内作品区已经有这条:不用再加
         if key in (session.page_text() or ""):
             return ALREADY, "作品已在合集里"
-        page.get_by_text("点击添加作品", exact=True).click()
+        # 空合集显示「点击添加作品」,已有作品的合集按钮变成「添加作品」—— 两种都认
+        page.get_by_text(re.compile(r"^(点击)?添加作品$")).first.click()
         box = page.locator("input[placeholder*='查找作品']").first
         box.wait_for(timeout=10000)
         box.fill(key)

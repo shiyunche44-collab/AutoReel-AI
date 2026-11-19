@@ -15,11 +15,16 @@
     const M = HF.mech(tl);
     const sv = M.svg, W = D.words || {};
     const air = D.mode === "air";
-    const CAMS = [null, [32, 60, 1.0, 1.2], [32, 35, 1.28, 1.1], [50, 50, 1.12, 1.0]];
+    const defs = HF.svg("defs", {}, sv);
+    const cp = HF.svg("clipPath", { id: "dp-clip" }, defs);
+    HF.svg("rect", { x: 0, y: 0, width: 618, height: 640 }, cp);
+    const clipG = HF.svg("g", { "clip-path": "url(#dp-clip)" }, sv);
+    const stage = HF.svg("g", {}, clipG);
+    const CAMS = [null, [320, 360, 1.0, 1.12], [320, 260, 1.14, 1.04], [320, 320, 1.08, 1.0]];
     const cam = CAMS[(D.variant || 0) % CAMS.length];
     if (cam) {
-      sv.style.transformOrigin = cam[0] + "% " + cam[1] + "%";
-      tl.fromTo(sv, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
+      stage.style.transformOrigin = cam[0] + "px " + cam[1] + "px";
+      tl.fromTo(stage, { scale: cam[2] }, { scale: cam[3], duration: S, ease: "none" }, 0);
     }
     const ACC = HF.c("acc"), COOL = HF.c("acc2"), HOT = "rgb(255, 150, 80)";
     const X0 = 320, SX = 250, DX = 390, BODY_Y = 150, HUB_Y = 372, WHEEL_Y = 452, WR = 80, ROAD_Y = 536;
@@ -31,24 +36,24 @@
     const bodyUp = (t) => { let v = 0; eachBump(t, (u) => { if (u > 0) v += (air ? 9 : 15) * Math.exp(-u * (air ? 3.4 : 2.6)) * Math.sin(u * 8.5); }); return v; };
 
     // ---- road with the bumps scrolling towards the left ----
-    const road = HF.svg("path", { fill: "none", stroke: HF.c("ink", 0.7), "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
-    HF.svg("rect", { x: 30, y: ROAD_Y + 6, width: 560, height: 60, fill: HF.c("ink", 0.05) }, sv);
+    const road = HF.svg("path", { fill: "none", stroke: HF.c("ink", 0.7), "stroke-width": 6, "stroke-linecap": "round", "stroke-linejoin": "round" }, stage);
+    HF.svg("rect", { x: 30, y: ROAD_Y + 6, width: 560, height: 60, fill: HF.c("ink", 0.05) }, stage);
 
     // ---- spring ----
-    const spring = air ? HF.svg("g", {}, sv)
-      : HF.svg("path", { fill: "none", stroke: ACC, "stroke-width": 9, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
+    const spring = air ? HF.svg("g", {}, stage)
+      : HF.svg("path", { fill: "none", stroke: ACC, "stroke-width": 9, "stroke-linecap": "round", "stroke-linejoin": "round" }, stage);
     let bellows = [];
     if (air) {
       for (let k = 0; k < 3; k++) bellows.push(HF.svg("rect", { x: SX - 52, width: 104, rx: 24, fill: HF.c("acc2", 0.22), stroke: COOL, "stroke-width": 4 }, spring));
     }
     // ---- damper: cylinder on the wheel side, rod and piston on the body side ----
-    const cyl = HF.svg("rect", { x: DX - 26, width: 52, rx: 8, fill: HF.c("ink", 0.10), stroke: HF.c("ink", 0.8), "stroke-width": 4 }, sv);
-    const oil = HF.svg("rect", { x: DX - 21, width: 42, rx: 4, fill: HOT, opacity: 0.2 }, sv);
-    const rodL = HF.svg("line", { x1: DX, x2: DX, stroke: HF.c("ink", 0.85), "stroke-width": 10, "stroke-linecap": "round" }, sv);
-    const pist = HF.svg("rect", { x: DX - 22, width: 44, height: 14, rx: 4, fill: HF.c("ink", 0.9) }, sv);
+    const cyl = HF.svg("rect", { x: DX - 26, width: 52, rx: 8, fill: HF.c("ink", 0.10), stroke: HF.c("ink", 0.8), "stroke-width": 4 }, stage);
+    const oil = HF.svg("rect", { x: DX - 21, width: 42, rx: 4, fill: HOT, opacity: 0.2 }, stage);
+    const rodL = HF.svg("line", { x1: DX, x2: DX, stroke: HF.c("ink", 0.85), "stroke-width": 10, "stroke-linecap": "round" }, stage);
+    const pist = HF.svg("rect", { x: DX - 22, width: 44, height: 14, rx: 4, fill: HF.c("ink", 0.9) }, stage);
 
     // ---- wheel, hub link, body ----
-    const hub = HF.svg("g", {}, sv);
+    const hub = HF.svg("g", {}, stage);
     HF.svg("rect", { x: SX - 66, y: HUB_Y - 8, width: DX - SX + 132, height: 16, rx: 8, fill: HF.c("ink", 0.8) }, hub);
     HF.svg("line", { x1: X0, y1: HUB_Y, x2: X0, y2: WHEEL_Y, stroke: HF.c("ink", 0.8), "stroke-width": 14 }, hub);
     HF.svg("circle", { cx: X0, cy: WHEEL_Y, r: WR, fill: HF.c("bg", 0.9), stroke: HF.c("ink", 0.85), "stroke-width": 16 }, hub);
@@ -57,26 +62,26 @@
       const a = k * Math.PI * 2 / 5;
       HF.svg("line", { x1: X0, y1: WHEEL_Y, x2: (X0 + Math.cos(a) * 60).toFixed(1), y2: (WHEEL_Y + Math.sin(a) * 60).toFixed(1), stroke: HF.c("ink", 0.6), "stroke-width": 8, "stroke-linecap": "round" }, spokes);
     }
-    const body = HF.svg("g", {}, sv);
+    const body = HF.svg("g", {}, stage);
     HF.svg("path", { d: "M70 " + BODY_Y + " L70 96 Q70 56 110 56 L530 56 Q570 56 570 96 L570 " + BODY_Y + " Z", fill: HF.c("acc", 0.10), stroke: ACC, "stroke-width": 4, "stroke-linejoin": "round" }, body);
     const bt = HF.svg("text", { x: X0, y: 116, "text-anchor": "middle", class: "dp-big", fill: HF.c("ink") }, body); bt.textContent = W.body || "";
 
     // labels beside the parts
-    const lab = (x, y, text, anchor) => { const t = HF.svg("text", { x: x, y: y, "text-anchor": anchor || "start", class: "dp-lab" }, sv); t.textContent = text || ""; return t; };
-    lab(SX - 76, 268, air ? W.air_spring : W.spring, "end");
-    lab(DX + 44, 268, W.damper);
+    const lab = (x, y, text, anchor, host) => { const t = HF.svg("text", { x: x, y: y, "text-anchor": anchor || "start", class: "dp-lab" }, host || sv); t.textContent = text || ""; return t; };
+    lab(SX - 68, 268, air ? W.air_spring : W.spring, "end", stage);
+    lab(DX + 44, 268, W.damper, "start", stage);
 
     // air supply line into the air spring
     let airDots = null;
     if (air) {
-      const line = [[36, 300], [36, 186], [SX - 52, 186]];
-      HF.svg("path", { d: "M" + line.map((p) => p[0] + " " + p[1]).join(" L"), fill: "none", stroke: HF.c("acc2", 0.4), "stroke-width": 8, "stroke-linecap": "round", "stroke-linejoin": "round" }, sv);
-      HF.svg("rect", { x: 8, y: 300, width: 56, height: 44, rx: 10, fill: HF.c("acc2", 0.2), stroke: COOL, "stroke-width": 3 }, sv);
-      airDots = HF.flowDots(sv, line, 3, COOL, 6);
+      const line = [[46, 300], [46, 186], [SX - 52, 186]];
+      HF.svg("path", { d: "M" + line.map((p) => p[0] + " " + p[1]).join(" L"), fill: "none", stroke: HF.c("acc2", 0.4), "stroke-width": 8, "stroke-linecap": "round", "stroke-linejoin": "round" }, stage);
+      HF.svg("rect", { x: 20, y: 300, width: 52, height: 44, rx: 10, fill: HF.c("acc2", 0.2), stroke: COOL, "stroke-width": 3 }, stage);
+      airDots = HF.flowDots(stage, line, 3, COOL, 6);
     }
 
-    // ---- scope on the right: wheel travel against body travel ----
-    const SC = { x: 640, w: 320, wy: 210, by: 440 };
+    // ---- scope on the right: wheel travel against body travel (unscaled in sv) ----
+    const SC = { x: 635, w: 305, wy: 210, by: 440 };
     lab(SC.x, SC.wy - 86, W.wheel_move).setAttribute("class", "dp-big");
     lab(SC.x, SC.by - 86, W.body_move).setAttribute("class", "dp-big");
     [SC.wy, SC.by].forEach((y) => HF.svg("line", { x1: SC.x, y1: y, x2: SC.x + SC.w, y2: y, stroke: HF.c("ink", 0.2), "stroke-width": 2, "stroke-dasharray": "6 8" }, sv));

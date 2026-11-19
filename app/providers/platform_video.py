@@ -647,7 +647,23 @@ class _SilentLogger:
         pass
 
 
-def _base_opts() -> dict[str, Any]:
+#: 国内视频站直连更快,且挂海外代理会导致 B 站 SESSDATA 风控 412 或掉回 480p
+_DIRECT_DOMAINS = ("bilibili.com", "b23.tv", "hdslb.com", "douyin.com", "ixigua.com")
+
+
+def _needs_proxy(url: str) -> bool:
+    if not url:
+        return True
+    low = url.strip().lower()
+    if low.startswith("bilisearch"):
+        return False
+    host = domain_of(low)
+    if host and any(host == d or host.endswith("." + d) for d in _DIRECT_DOMAINS):
+        return False
+    return True
+
+
+def _base_opts(url: str = "") -> dict[str, Any]:
     opts: dict[str, Any] = {
         "logger": _SilentLogger(),
         "quiet": True,
@@ -658,7 +674,7 @@ def _base_opts() -> dict[str, Any]:
         "retries": 2,
         "http_headers": {"User-Agent": webassets.BROWSER_UA},
     }
-    if config.YTDLP_PROXY:
+    if config.YTDLP_PROXY and _needs_proxy(url):
         opts["proxy"] = config.YTDLP_PROXY
     cookiefile = _cookie_file()
     if cookiefile:
@@ -704,6 +720,52 @@ def _cookie_file() -> str | None:
     return str(merged)
 
 
+def cookies_state() -> dict[str, Any]:
+    """`YTDLP_COOKIES` 配了没有。只看路径和文件名,**不读 cookie 内容**。
+
+    返回 {"configured": bool, "files": 份数, "note": 一句话}。"""
+    raw = config.YTDLP_COOKIES
+    if not raw:
+        return {"configured": False, "files": 0, "note": "未配置(.env 里没有 YTDLP_COOKIES)"}
+    src = Path(raw)
+    if src.is_file():
+        return {"configured": True, "files": 1, "note": "已配置(1 份 cookies 文件)"}
+    if not src.is_dir():
+        return {"configured": False, "files": 0, "note": "未配置(YTDLP_COOKIES 指的路径不存在)"}
+    n = sum(1 for p in src.iterdir() if p.is_file() and p.suffix.lower() == ".txt")
+    if not n:
+        return {"configured": False, "files": 0, "note": "未配置(YTDLP_COOKIES 文件夹里没有 .txt)"}
+    return {"configured": True, "files": n, "note": f"已配置({n} 份 cookies 文件)"}
+
+
+def best_short_side(info: dict[str, Any]) -> int:
+    """`probe` 结果里平台肯给的最高清晰度:视频流短边像素(竖屏 1080×1920 算 1080)。
+    格式表里没有尺寸时退回顶层的 width / height;什么都没有 → 0。"""
+    best = 0
+    for f in info.get("formats") or []:
+        if not isinstance(f, dict) or f.get("vcodec") == "none":
+            continue
+        w, h = int(f.get("width") or 0), int(f.get("height") or 0)
+        side = min(w, h) if w and h else h
+        best = max(best, side)
+    if not best:
+        w, h = int(info.get("width") or 0), int(info.get("height") or 0)
+        best = min(w, h) if w and h else h
+    return best
+
+
+#: 视频下载 / 解析被平台限流的信号(B 站 412 / -352,YouTube 429、人机验证)。
+#: 撞上就登记冷却(`cooldown.trip`),不接着撞
+VIDEO_RISK = ("HTTP Error 412", "HTTP 412", "Precondition Failed", "code=-352", "code=-412",
+              "code=-799", "HTTP Error 429", "Too Many Requests", "confirm you're not a bot",
+              "confirm you’re not a bot")
+
+
+def is_rate_limited(error: object) -> bool:
+    text = str(error)
+    return any(sig in text for sig in VIDEO_RISK)
+
+
 def _ffmpeg_on_path(ffmpeg_dir: Path) -> None:
     """把 ffmpeg 目录放进本进程的 PATH。
 
@@ -722,7 +784,7 @@ def _ytdlp_extract(url: str, *, flat: bool = False) -> dict[str, Any]:
         from yt_dlp import YoutubeDL
     except ImportError as exc:
         raise PlatformError("未安装 yt-dlp:pip install yt-dlp") from exc
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts["skip_download"] = True
     if flat:
         opts["extract_flat"] = "in_playlist"
@@ -773,7 +835,7 @@ def download_segment(url: str, dest: str | Path, *, start: float, seconds: float
     for old in dest.parent.glob(stem.name + ".*"):
         old.unlink(missing_ok=True)
 
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts.update({
         "format": FORMAT,
         "format_sort": FORMAT_SORT,

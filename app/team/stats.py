@@ -33,6 +33,10 @@ HIGH_N = 10
 #: 收缩后至少偏离这么多才写成结论
 MIN_EFFECT = 0.15
 #: 涨粉是账号的最终目标(单条作品带来的关注),和播放、留存一起学
+#: 冷启动期大部分作品涨粉为 0,若仅 1 条作品涨 1 粉,算术均值会让该条拿到 10x+ 虚假提升,
+#: 把它身上偶然的低质特征(如无视频、快语速)学成正向规则 —— 至少满足以下非零条数与总量才学
+MIN_FOLLOWER_WORKS = 3
+MIN_FOLLOWER_TOTAL = 10
 METRICS = ("views", "completion_rate", "avg_watch_sec", "retention_2s", "followers_gained")
 METRIC_LABEL = {"views": "播放", "completion_rate": "完播率",
                 "avg_watch_sec": "平均观看秒数", "retention_2s": "2秒留存",
@@ -92,7 +96,11 @@ def lifts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 flat[(flat_key(r), metric)].append(float(val))
     baselines = {
         k: (statistics.median(vs) if k[1] == "avg_watch_sec" else statistics.fmean(vs))
-        for k, vs in flat.items() if vs
+        for k, vs in flat.items()
+        if vs and not (
+            k[1] == "followers_gained"
+            and (sum(1 for v in vs if v > 0) < MIN_FOLLOWER_WORKS or sum(vs) < MIN_FOLLOWER_TOTAL)
+        )
     }
 
     out = []

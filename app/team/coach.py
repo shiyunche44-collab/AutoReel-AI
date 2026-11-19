@@ -65,7 +65,9 @@ def experiments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     差值才是这个变量的功劳,攒够样本(`stats.MIN_N`)就能进统计。"""
     from ..pipeline import knobs, looks, packaging, variety
 
-    universe = {"opening": list(variety.OPENINGS), "ending": list(variety.ENDINGS),
+    # 配对实验不排慢热型开场(rundown 20秒报菜名 / scene 场景铺垫 / contrast 仅细分长片用),避免连续拉高 2 秒跳出
+    exp_openings = [k for k in variety.OPENINGS if k not in ("rundown", "scene", "contrast")]
+    universe = {"opening": exp_openings, "ending": list(variety.ENDINGS),
                 "title_kind": list(packaging.KINDS), "look": list(looks.LOOKS),
                 **{k: list(v) for k, v in knobs.universe().items()}}
     out = []

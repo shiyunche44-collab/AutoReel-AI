@@ -120,6 +120,9 @@ def test_split_title():
     assert cover_art.split_title("23.35万起，买续航还是买加速？") == ("23.35万起", "买续航还是买加速？")
     assert cover_art.split_title("值不值得买？理想i9") == ("值不值得买？", "理想i9")
     assert cover_art.split_title("小米YU7这几个数字要看懂", "小米YU7") == ("小米YU7", "这几个数字要看懂")
+    assert cover_art.split_title("小鹏MONAL03这几个数字要看懂", "小鹏MONA L03") == ("小鹏MONA L03", "这几个数字要看懂")
+    assert cover_art.split_title("小鹏MONA L03，小鹏MONAL03这几个数字要看懂", "小鹏MONA L03") == (
+        "小鹏MONA L03", "这几个数字要看懂")
     assert cover_art.split_title("这几个数字要看懂", "小米YU7") == ("小米YU7", "这几个数字要看懂")
     assert cover_art.short_name("小米YU7 · 25.35万元起") == "小米YU7"
 
@@ -153,6 +156,10 @@ def test_title_break_without_punctuation():
 
     lines, _ = cover_art._title_lines("小米YU7这几个数字要看懂", _font_file(bold=True), 912, 140)
     assert lines == ["小米YU7这几个", "数字要看懂"]
+    lines2, _ = cover_art._title_lines("想买吉利银河星愿？", _font_file(bold=True), 720, 150,
+                                       keep=("吉利银河星愿",))
+    assert "吉利银河星愿" in "".join(lines2)
+    assert all("吉利银" != ln and not ln.endswith("吉利银") for ln in lines2)
 
 
 def test_model_word_and_safe_frame():

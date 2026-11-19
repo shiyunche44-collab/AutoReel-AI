@@ -14,6 +14,7 @@ from ...base import PublishError
 CREATOR_COMMENTS = "https://creator.douyin.com/creator-micro/interactive/comment"
 #: 页面自己请求的作品列表(带每条作品的评论数)和单条作品的评论列表
 COMMENT_ITEMS_API = "/aweme/v1/creator/item/list/"
+COMMENT_ITEMS_APIS = (COMMENT_ITEMS_API, "/web/api/media/aweme/post/", "/creator/item/list")
 COMMENT_LIST_API = "/aweme/v1/creator/comment/list/"
 #: 2026-11 页面改版后评论列表换了接口(老的不再请求):地址带 aweme_id,返回 `comments`
 #: 而不是 `comment_info_list`,字段名也不同 —— 统一由 `normalize_comment` 转成老的那套
@@ -88,8 +89,9 @@ class _CommentPage:
 
     def _on_response(self, resp: Any) -> None:
         url = resp.url
+        is_items = any(api in url for api in COMMENT_ITEMS_APIS)
         is_list = any(api in url for api in COMMENT_LIST_APIS)
-        if COMMENT_ITEMS_API not in url and not is_list \
+        if not is_items and not is_list \
                 and not (resp.request.method == "POST" and "comment" in url):
             return
         try:
@@ -98,9 +100,12 @@ class _CommentPage:
             return
         if not isinstance(body, dict):
             return
-        if COMMENT_ITEMS_API in url:
-            for it in body.get("item_info_list") or []:
-                wid = str(it.get("item_id_plain") or "")
+        if is_items:
+            rows = body.get("item_info_list") or body.get("aweme_list") or body.get("items") or []
+            for it in rows:
+                if not isinstance(it, dict):
+                    continue
+                wid = str(it.get("item_id_plain") or it.get("item_id") or it.get("aweme_id") or "")
                 if wid:
                     self.items[wid] = it
         elif is_list:
@@ -110,10 +115,14 @@ class _CommentPage:
             self.posts.append(body)
 
     def open(self) -> None:
-        self.s.goto(CREATOR_COMMENTS, wait_ms=6000)
+        self.s.goto(CREATOR_COMMENTS, wait_ms=5000)
         if "扫码登录" in self.s.page_text():
             raise PublishError("抖音登录已失效:去分发台点「登录」扫码一次",
                                retryable=False, credential=True)
+        for _ in range(12):
+            if self.items:
+                break
+            self.s.page.wait_for_timeout(500)
         if not self.items:
             raise PublishError("评论管理页没请求作品列表接口(页面改版了?)", retryable=False)
 
