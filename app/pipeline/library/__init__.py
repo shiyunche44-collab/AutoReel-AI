@@ -207,6 +207,7 @@ from .select import (  # noqa: E402,F401
     is_dark,
     long_take,
     near_dup_groups,
+    piece_for,
 )
 from .cover import (  # noqa: E402,F401
     COVER_EDGE,

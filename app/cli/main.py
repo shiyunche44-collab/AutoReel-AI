@@ -704,9 +704,41 @@ def cmd_shots_put(args: argparse.Namespace) -> dict[str, Any]:
 # 门禁 B:审片 / 重拍 / 换刀
 # --------------------------------------------------------------------------
 def cmd_review(args: argparse.Namespace) -> dict[str, Any]:
-    from ..pipeline import orchestrator
+    """门禁 B 自审一页看全:进度、时间线体检、预览在不在 / 是不是最新、这个项目的降级。
+    `--qa` 再对预览跑逐帧 + 音频 QA,返回报告和联系表路径(用 Read 看)。"""
+    import subprocess
+    import sys
 
-    return orchestrator.review_progress(args.project)
+    from .. import degrade
+    from ..pipeline import orchestrator
+    from ..pipeline.edit import preview as edit_preview
+    from ..pipeline.edit import project as edit_project
+
+    row = _project(args.project)
+    out: dict[str, Any] = {"state": row["state"], "progress": orchestrator.review_progress(
+        args.project)}
+    try:
+        out["edit"] = edit_project.check(args.project)
+    except KeyError:
+        out["edit"] = None
+    out["preview"] = edit_preview.status(args.project)
+    out["degradations"] = degrade.recent(20, project_id=args.project)
+    if args.qa:
+        video = edit_preview.path(args.project)
+        if not video.is_file():
+            raise Rejected("还没有整片预览:先 edit preview")
+        proc = subprocess.run(
+            [sys.executable, str(config.BASE_DIR / "scripts" / "review_render.py"), args.project,
+             "--artifact", video.name], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=1800)
+        qa_dir = config.project_dir(args.project) / "_render" / "qa"
+        out["qa"] = {"failed": proc.returncode != 0,
+                     "report": str(qa_dir / "qa_report.md"),
+                     "sheets": sorted(str(p) for p in (qa_dir / "sheets").glob("*.jpg")),
+                     "summary": proc.stdout.strip().splitlines()[-12:],
+                     "stderr": proc.stderr.strip()[-500:]}
+    return out
+
 
 
 def cmd_rerender(args: argparse.Namespace) -> dict[str, Any]:
@@ -731,6 +763,143 @@ def cmd_swap(args: argparse.Namespace) -> dict[str, Any]:
         return orchestrator.swap_cut(args.project, args.key)
     except (orchestrator.PipelineError, locks.ProjectBusy) as exc:
         raise Rejected(str(exc)) from exc
+
+
+# --------------------------------------------------------------------------
+# 剪辑(门禁 B):Claude 看拼图、钉选画面
+# --------------------------------------------------------------------------
+def _beats_filter(spec: str) -> set[int] | None:
+    if not spec.strip():
+        return None
+    out: set[int] = set()
+    for part in spec.split(","):
+        a, _, b = part.strip().partition("-")
+        out |= set(range(int(a), int(b or a) + 1))
+    return out
+
+
+def _edit_dir(pid: str) -> Path:
+    return config.project_dir(pid) / "_edit"
+
+
+def cmd_edit_sheet(args: argparse.Namespace) -> dict[str, Any]:
+    """刀表拼图:每刀一格(这一刀第一段素材的中间帧),写着刀号、起止、半句、来源。"""
+    from ..pipeline.edit import project as edit_project
+    from ..pipeline.edit import sheet
+
+    _project(args.project)
+    beats = _beats_filter(args.beats)
+    rows = [r for r in edit_project.cuts(args.project) if beats is None or r["beat"] in beats]
+    if not rows:
+        raise Rejected("没有刀可看:还没有剪辑 v2 时间线,或拍号不对")
+    tiles = []
+    for r in rows:
+        mark = ("钉 " if r["pinned"] else "") + (r["via"] or "") + (
+            "" if not r["need"] else (" 对题" if r["match"] else " 没对上"))
+        tiles.append((edit_project.cut_thumb(args.project, r["key"]),
+                      [f"{r['key']}  {r['start']:.1f}-{r['end']:.1f}s  {mark}", r["text"],
+                       ", ".join(p["item_id"] for p in r["pieces"])]))
+    tag = args.beats.replace(",", "_") or "all"
+    paths = sheet.build(tiles, _edit_dir(args.project) / "sheets" / f"cuts_{tag}.jpg")
+    return {"sheets": [str(p) for p in paths], "cuts": len(rows),
+            "next": "用 Read 看图;要换的刀 → edit candidates <pid> <key>"}
+
+
+def cmd_edit_candidates(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import orchestrator
+    from ..pipeline.edit import sheet
+
+    _project(args.project)
+    try:
+        got = orchestrator.edit_candidates(args.project, args.key, pages=args.pages)
+    except orchestrator.PipelineError as exc:
+        raise Rejected(str(exc)) from exc
+    work = _edit_dir(args.project) / "candidates"
+    safe = args.key.replace(":", "_")
+    tiles = []
+    for c in got["candidates"]:
+        frame = Path(c["frame"]) if c["frame"] else None
+        if frame is None and c["kind"] == "video":
+            frame = sheet.frame_of(Path(c["path"]), (c["start"] + c["end"]) / 2,
+                                   work / f"{safe}_{c['n']}.jpg")
+        flags = " ".join(x for x in ("现用" if c["current"] else "", "官方" if c["official"] else "",
+                                     f"用过{c['used']}" if c["used"] else "",
+                                     f"对题:{c['match']}" if c["match"] else "") if x)
+        dur = f"{c['seconds']}s" if c["seconds"] else "静图"
+        tiles.append((frame, [f"#{c['n']} {c['item_id']}  {c['view']} {dur}  {flags}",
+                              c["desc"] or "(无描述)"]))
+    paths = sheet.build(tiles, work / f"{safe}.jpg") if tiles else []
+    work.mkdir(parents=True, exist_ok=True)
+    (work / f"{safe}.json").write_text(json.dumps(got, ensure_ascii=False), encoding="utf-8")
+    got["sheets"] = [str(p) for p in paths]
+    got["next"] = f"用 Read 看图挑;edit pick {args.project} {args.key} <item_id> [<item_id> ...]"
+    return got
+
+
+def _pick_spec(pid: str, key: str, item_id: str) -> dict[str, Any]:
+    """钉选的一段:长视频切出来的块(`id~k`)按最近一次 candidates 记下的起止截。"""
+    cache = _edit_dir(pid) / "candidates" / f"{key.replace(':', '_')}.json"
+    if "~" in item_id and cache.is_file():
+        for c in json.loads(cache.read_text(encoding="utf-8")).get("candidates") or []:
+            if c.get("item_id") == item_id:
+                return {"item_id": item_id, "start": c["start"], "end": c["end"]}
+    return {"item_id": item_id}
+
+
+def _pin(pid: str, pins: dict[str, list[Any]], unpin: list[str]) -> dict[str, Any]:
+    from ..pipeline import locks, orchestrator
+
+    _project(pid)
+    spec = {k: [_pick_spec(pid, k, x) if isinstance(x, str) else dict(x) for x in v]
+            for k, v in pins.items()}
+    try:
+        out = orchestrator.pin_cuts(pid, spec, unpin)
+    except (orchestrator.PipelineError, locks.ProjectBusy) as exc:
+        raise Rejected(str(exc)) from exc
+    out["next"] = "改完一批再 edit preview 看整片(edit check 看体检)"
+    return out
+
+
+def cmd_edit_pick(args: argparse.Namespace) -> dict[str, Any]:
+    return _pin(args.project, {args.key: list(args.items)}, [])
+
+
+def cmd_edit_put(args: argparse.Namespace) -> dict[str, Any]:
+    data = json.loads(_read_input(args.file))
+    if not isinstance(data, dict) or not isinstance(data.get("pins", {}), dict):
+        raise Rejected('格式:{"pins": {"3:0": ["item_id", ...]}, "unpin": ["5:1"]}')
+    return _pin(args.project, dict(data.get("pins") or {}),
+                [str(k) for k in data.get("unpin") or []])
+
+
+def cmd_edit_unpin(args: argparse.Namespace) -> dict[str, Any]:
+    return _pin(args.project, {}, list(args.keys))
+
+
+def cmd_edit_check(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline.edit import project as edit_project
+
+    row = _project(args.project)
+    try:
+        return edit_project.check(args.project,
+                                  still_max=0.0 if row.get("theme") == "mechanism" else None)
+    except KeyError as exc:
+        raise Rejected(str(exc.args[0])) from exc
+
+
+def cmd_edit_preview(args: argparse.Namespace) -> dict[str, Any]:
+    """按当前时间线当场渲整片预览(不排 jobs,不依赖 worker)。"""
+    from ..pipeline.edit import preview as edit_preview
+
+    _project(args.project)
+    try:
+        got = edit_preview.render_once(args.project)
+    except Exception as exc:  # noqa: BLE001 —— 渲染炸了原样报给 Claude
+        raise Rejected(f"预览渲染失败:{exc}") from exc
+    if got.get("skipped"):
+        raise Rejected(str(got["skipped"]))
+    return {"video": got["path"], "check": f'ffmpeg -v error -i "{got["path"]}" -f null -',
+            "next": "review <pid> --qa 出逐帧联系表和音频检查"}
 
 
 # --------------------------------------------------------------------------
@@ -862,12 +1031,32 @@ def build_parser() -> argparse.ArgumentParser:
     shp = with_pid(add("shots-put", cmd_shots_put, "门禁 A 改分镜(JSON 数组,- = stdin)"))
     shp.add_argument("file")
 
-    with_pid(add("review", cmd_review, "门禁 B 审片进度"))
+    rv = with_pid(add("review", cmd_review, "门禁 B 审片:进度、体检、预览、降级"))
+    rv.add_argument("--qa", action="store_true",
+                    help="对整片预览跑逐帧 + 音频 QA(scripts/review_render.py,较慢)")
     rr = with_pid(add("rerender", cmd_rerender, "门禁 B 重拍这几拍"))
     rr.add_argument("beats", type=int, nargs="+")
     with_pid(add("cuts", cmd_cuts, "剪辑 v2 的刀与候选"))
     sw = with_pid(add("swap", cmd_swap, "换一刀"))
     sw.add_argument("key")
+
+    ed = add("edit", lambda a: None,
+             "剪辑(门禁 B):sheet / candidates / pick / put / unpin / check / preview")
+    ed_sub = ed.add_subparsers(dest="edit_cmd", required=True)
+    es = with_pid(add("sheet", cmd_edit_sheet, "整片刀表拼图(每刀一格)", ed_sub))
+    es.add_argument("--beats", default="", help="只看这几拍,如 3-7 或 2,5")
+    ec = with_pid(add("candidates", cmd_edit_candidates, "某一刀的候选画面 + 拼图", ed_sub))
+    ec.add_argument("key", help="拍号:第几刀,如 3:0")
+    ec.add_argument("--pages", type=int, default=1, help="每页 6 个,多翻几页")
+    ep = with_pid(add("pick", cmd_edit_pick, "钉选一刀的画面(可接几段)", ed_sub))
+    ep.add_argument("key")
+    ep.add_argument("items", nargs="+", help="素材 id(候选里的 item_id),按顺序拼接")
+    eput = with_pid(add("put", cmd_edit_put, "批量钉选 / 放开", ed_sub))
+    eput.add_argument("file", help='{"pins": {"3:0": ["id", ...]}, "unpin": ["5:1"]};- = stdin')
+    eu = with_pid(add("unpin", cmd_edit_unpin, "放开钉选(回到自动取材)", ed_sub))
+    eu.add_argument("keys", nargs="+")
+    with_pid(add("check", cmd_edit_check, "时间线体检", ed_sub))
+    with_pid(add("preview", cmd_edit_preview, "当场渲一版整片预览(几分钟,可后台跑)", ed_sub))
     return parser
 
 

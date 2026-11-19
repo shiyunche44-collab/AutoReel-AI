@@ -809,7 +809,7 @@ def _plan_edit(c: _Ctx, specs: Sequence[ShotSpec]) -> bool:
     try:
         edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(c.project),
                           title=str(c.project.get("title") or ""), subject=c.subject,
-                          subjects=c.names, vocab=c.profile.vocab, llm=c.llm)
+                          subjects=c.names, vocab=c.profile.vocab, llm=_edit_llm(c.project))
     except Exception as exc:  # noqa: BLE001 —— 取材失败不拦审片,合成时再取
         log.warning("剪辑 v2 取材失败(%s)", project_id, exc_info=True)
         db.add_event(project_id, "edit_v2:plan_failed", reason=str(exc)[:300])
@@ -1134,39 +1134,127 @@ def edit_cuts(project_id: str) -> dict[str, Any]:
             "preview": edit_preview.status(project_id)}
 
 
+def _edit_llm(project: dict[str, Any]):
+    """剪辑 v2 取材复选用的文字模型。Claude 项目不逐刀问(一部片子几十刀,一刀一个请求):
+    只按排序取材,审片时 Claude 看候选拼图再钉选(`pin_cuts`)。"""
+    return None if is_claude_driven(project) else _project_llm(project)
+
+
+def _replan_edit(project_id: str, project: dict[str, Any], *, source: str,
+                 swap: str = "") -> None:
+    """门禁 B 上按现有取材记录重编时间线(换刀 / 钉选之后),并重写素材使用记录。调用方持锁。"""
+    from .edit import project as edit_project
+
+    profile, theme = _theme_of(project)
+    names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+    specs = _specs(project_id)
+    rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
+    nar = db.read_json(project_id, "narration.json", {}) or {}
+    # 按项目的视觉包重编时间线(不然会把包装换回默认的 hud)
+    with ledger.tag(project_id=project_id), looks.use(looks.of_project(project_id)):
+        edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(project),
+                          title=str(project.get("title") or ""),
+                          subject=str(project.get("subject") or ""), subjects=names,
+                          vocab=profile.vocab, llm=_edit_llm(project), source=source, swap=swap)
+    explainer.materials_used(project_id, specs)
+
+
+def _gate_b_timeline(project_id: str) -> dict[str, Any]:
+    """校验:项目在门禁 B 且有算数的剪辑 v2 时间线。返回项目行。"""
+    from .edit import project as edit_project
+
+    project = db.get_project(project_id)
+    if not project:
+        raise PipelineError("项目不存在")
+    if State(project["state"]) != State.GATE_B:
+        raise PipelineError("只有门禁 B 审片时能改刀")
+    if not edit_project.active(project_id):
+        raise PipelineError("这个项目没有剪辑 v2 时间线")
+    return project
+
+
 def swap_cut(project_id: str, key: str) -> dict[str, Any]:
     """门禁 B「换一刀」:排除这一刀现在的素材重新取材,写回时间线,再排一版预览。"""
     from .edit import preview as edit_preview
     from .edit import project as edit_project
 
     with locks.require_project_lock(project_id):
-        project = db.get_project(project_id)
-        if not project:
-            raise PipelineError("项目不存在")
-        if State(project["state"]) != State.GATE_B:
-            raise PipelineError("只有门禁 B 审片时能换刀")
-        if not edit_project.active(project_id):
-            raise PipelineError("这个项目没有剪辑 v2 时间线")
-        profile, theme = _theme_of(project)
-        names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
-        specs = _specs(project_id)
-        rows = {r["idx"]: r for r in db.get_shots(project_id, "draft")}
-        nar = db.read_json(project_id, "narration.json", {}) or {}
+        project = _gate_b_timeline(project_id)
         try:
-            # 按项目的视觉包重编时间线(不然换一刀会把包装换回默认的 hud)
-            with ledger.tag(project_id=project_id), looks.use(looks.of_project(project_id)):
-                edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(project),
-                                  title=str(project.get("title") or ""),
-                                  subject=str(project.get("subject") or ""), subjects=names,
-                                  vocab=profile.vocab, llm=_project_llm(project),
-                                  source="swap", swap=key)
+            _replan_edit(project_id, project, source="swap", swap=key)
         except KeyError as exc:
             raise PipelineError(str(exc.args[0] if exc.args else exc)) from exc
-        explainer.materials_used(project_id, specs)
         db.add_event(project_id, "edit_v2:swap", reason=f"换一刀 {key}")
     queued = edit_preview.submit(project_id)
     return {"key": key, "cut": next((r for r in edit_project.cuts(project_id) if r["key"] == key),
                                     None), "preview_queued": queued}
+
+
+def edit_candidates(project_id: str, key: str, pages: int = 1) -> dict[str, Any]:
+    """门禁 B:某一刀的候选画面(和正式取材同一套排序),给 Claude 看图钉选。"""
+    from .edit import project as edit_project
+
+    project = _gate_b_timeline(project_id)
+    profile, theme = _theme_of(project)
+    names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+    try:
+        return edit_project.candidates(project_id, key, _specs(project_id),
+                                       subject=str(project.get("subject") or ""), subjects=names,
+                                       vocab=profile.vocab, pages=pages)
+    except KeyError as exc:
+        raise PipelineError(str(exc.args[0] if exc.args else exc)) from exc
+
+
+def pin_cuts(project_id: str, pins: dict[str, list[dict[str, Any]]],
+             unpin: Sequence[str] = ()) -> dict[str, Any]:
+    """门禁 B:钉选几刀的画面(Claude 看候选拼图挑的),重编时间线。
+
+    每个钉选先按这一刀的时长和位置试铺一遍(`library.piece_for`),过不了硬门槛
+    (授权、主持人、开头结尾只用一方素材、铺不满)整批拒收,一刀都不写。"""
+    from . import library
+    from .edit import project as edit_project
+    from .explainer.planning_b import beat_subject
+
+    with locks.require_project_lock(project_id):
+        project = _gate_b_timeline(project_id)
+        _, theme = _theme_of(project)
+        names = [s["name"] for s in db.project_subjects(project)] if theme.multi else []
+        subject = str(project.get("subject") or "")
+        picks = dict((edit_project.load(project_id).get("plan") or {}).get("picks") or {})
+        specs = {s.idx: s for s in _specs(project_id)}
+        banned = sorted(str(x) for x in db.read_json(project_id, edit_project.EXCLUDE_FILE, [])
+                        or [])
+        bad = []
+        for key, chosen in pins.items():
+            old = picks.get(key)
+            spec = specs.get(edit_project._beat_of(key))
+            if old is None or spec is None:
+                bad.append(f"{key}:时间线里没有这一刀")
+                continue
+            if not chosen:
+                bad.append(f"{key}:没给素材")
+                continue
+            try:
+                with library.banned_materials(banned):  # 排除清单里的素材钉了也不算
+                    library.piece_for(beat_subject(spec, names, subject), chosen,
+                                      float(old.get("seconds") or 0.0),
+                                      role=str(old.get("role") or "body"))
+            except ValueError as exc:
+                bad.append(f"{key}:{exc}")
+        if bad:
+            raise PipelineError("钉选没收:" + ";".join(bad))
+        try:
+            edit_project.set_pins(project_id, pins, unpin)
+        except KeyError as exc:
+            raise PipelineError(str(exc.args[0] if exc.args else exc)) from exc
+        _replan_edit(project_id, project, source="claude")
+        saved = edit_project.load(project_id)
+        dropped = (saved.get("plan") or {}).get("pins_dropped") or {}
+        db.add_event(project_id, "edit_v2:pin",
+                     reason=f"钉选 {', '.join(pins) or '-'};放开 {', '.join(unpin) or '-'}")
+    return {"pinned": sorted(edit_project.pins_of(project_id)), "dropped": dropped,
+            "match": saved.get("match") or {},
+            "cuts": [r for r in edit_project.cuts(project_id) if r["key"] in pins]}
 
 
 def _sync_storyboard(project_id: str, segments: list[ScriptSegment]) -> list[ShotSpec]:

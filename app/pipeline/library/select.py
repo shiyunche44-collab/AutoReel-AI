@@ -6,10 +6,11 @@ import datetime as dt
 import functools
 import logging
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from ... import config
 from ...categories import Vocab
@@ -688,6 +689,69 @@ def fill(subject: str, seconds: float, *, hint: str = "", used: dict[str, int] |
             # 连一张能用的官图都没有:只能把最后一段拉长(总比这一拍没有背景强)
             last = out[-1]
             last.length = round(last.length + rest, 3)
+    return out
+
+
+def piece_for(subject: str, picks: Sequence[Mapping[str, Any]], seconds: float, *,
+              role: str = "body", used: dict[str, int] | None = None,
+              recent: list[str] | None = None) -> list[Piece]:
+    """按指定的素材铺一刀(Claude 审片时钉选的画面),裁切 / 抹牌 / 使用记录和 `fill` 一样。
+
+    `picks` 是依次拼接的素材 `[{"item_id", "start"?, "end"?}]`:`start` / `end` 给了就截这一段
+    (长视频切出来的 `~k` 块就是这样带过来的),视频截到用完为止,最后一段补满到 `seconds`。
+    挑的素材得过和 `fill` 同样的硬门槛:可用、文件在、授权允许当背景、没有主持人;
+    hook / ending 还得是确认本车的一方素材。过不了或铺不满抛 ValueError。"""
+    if role not in ROLES:
+        raise ValueError(f"未知的 role:{role}")
+    lib = Library.load(subject)
+    book = LicenseBook(lib)
+    by_id = {i.id: i for i in lib.items}
+    hosts = _host_sources(lib.items)
+    seconds = float(seconds)
+    used = used if used is not None else {}
+    recent = recent if recent is not None else []
+    out: list[Piece] = []
+    covered = 0.0
+    for n, pick in enumerate(picks):
+        iid = str(pick.get("item_id") or "")
+        base = by_id.get(base_item_id(iid))
+        if base is None:
+            raise ValueError(f"{subject} 的素材池里没有 {iid}")
+        item = base
+        if pick.get("start") is not None and pick.get("end") is not None and base.kind == "video":
+            item = replace(base, id=iid, start=float(pick["start"]), end=float(pick["end"]))
+        if not (item.usable and Path(item.path).is_file()):
+            raise ValueError(f"{iid} 不可用(没打标签 / 标了问题 / 文件不在)")
+        if not book.keep([item], BACKGROUND) or not screen(lib, [item]):
+            raise ValueError(f"{iid} 的授权不允许当背景")
+        if _hard_bad(item, hosts):
+            raise ValueError(f"{iid} 有主持人出镜或硬伤,不能当背景")
+        if role != "body" and (not _confirmed(item) or _third_party(item)):
+            raise ValueError(f"{iid}:开头 / 结尾只能用确认是这台车的一方素材")
+        remaining = seconds - covered
+        if remaining <= 0.05:
+            break
+        last = n == len(picks) - 1
+        if item.kind == "still":
+            take, start = remaining if last else min(remaining, FILL_MAX_PIECE), 0.0
+        else:
+            skip = _head_skip(item)
+            take = min(item.length - skip, remaining)
+            start = item.start + skip
+            if take < min(FILL_MIN_PIECE, remaining):
+                raise ValueError(f"{iid} 只有 {item.length:.1f} 秒,太短")
+        out.append(Piece(item_id=item.id, kind=item.kind, path=clean_still(item), start=start,
+                         length=round(take, 3),
+                         crop_bottom=SUBTITLE_CROP if _croppable(item)
+                         else AUDIENCE_CROP if _audience(item) else 0.0,
+                         crop_edge=_crop_edge(item), third_party=_third_party(item),
+                         **_trace(book, item)))
+        used[item.id] = used.get(item.id, 0) + 1
+        recent.append(item.id)
+        del recent[:-RECENT_PIECES]
+        covered += take
+    if covered < seconds - 0.05:
+        raise ValueError(f"选的素材一共只有 {covered:.1f} 秒,这一刀要 {seconds:.1f} 秒:再接一段")
     return out
 
 

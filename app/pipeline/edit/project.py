@@ -75,8 +75,13 @@ class _Picker:
 
     def __init__(self, subject: str, subjects: Sequence[str], vocab: Vocab | None, llm: Any,
                  *, saved: Mapping[str, Mapping[str, Any]], used: dict[str, int],
-                 banned: set[str], swap_bans: Mapping[str, set[str]]) -> None:
+                 banned: set[str], swap_bans: Mapping[str, set[str]],
+                 pins: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         self.subject = subject
+        #: Claude 审片钉选的画面:「拍号:第几刀」→ {"text": 钉选时的半句, "picks": [...]}
+        self.pins = dict(pins or {})
+        #: 这次作废的钉选:刀 → 原因(半句变了 / 素材不能用了)
+        self.dropped: dict[str, str] = {}
         self.subjects = list(subjects)
         self.vocab = vocab
         self.saved = dict(saved)
@@ -121,7 +126,10 @@ class _Picker:
         self.calls[spec.idx] = n + 1
         key = f"{spec.idx}:{n}"
         old = self.saved.get(key)
-        if old is not None and self.replayable(old, seconds, text):
+        pinned = self._pinned(spec, seconds, text, role, key)
+        if pinned is not None:
+            pieces = pinned
+        elif old is not None and self.replayable(old, seconds, text):
             self.replayed += 1
             pieces = [dict(p) for p in old.get("pieces") or []]
         else:
@@ -130,6 +138,34 @@ class _Picker:
         self.picks[key] = {"seconds": round(seconds, 3), "text": text, "role": role,
                            "pieces": pieces}
         return [dict(p) for p in pieces]
+
+    def _pinned(self, spec: ShotSpec, seconds: float, text: str, role: str,
+                key: str) -> list[dict[str, Any]] | None:
+        """这一刀有钉选且还算数:按钉的素材铺(`library.piece_for`)。半句变了(改稿 / 重配音)
+        或素材不能用了,钉选作废(记进 `dropped`),这一刀照常取材。"""
+        pin = self.pins.get(key)
+        if pin is None:
+            return None
+        if str(pin.get("text") or "") != text:
+            self.dropped[key] = "这一刀的半句变了"
+            return None
+        car = beat_subject(spec, self.subjects, self.subject)
+        try:
+            got = library.piece_for(car, list(pin.get("picks") or []), seconds, role=role,
+                                    used=self.used, recent=self.recent)
+        except ValueError as exc:
+            self.dropped[key] = str(exc)
+            return None
+        out = []
+        for i, p in enumerate(got):
+            d = dict(p.__dict__)
+            if self.vocab is not None:
+                d["need"], d["match"] = match.judge(text, self._lookup(car, p.item_id), self.vocab)
+                if i > 0:
+                    d["need"] = False
+            d["via"] = "claude"
+            out.append(d)
+        return out
 
     def _fill(self, spec: ShotSpec, seconds: float, text: str, role: str,
               key: str) -> list[dict[str, Any]]:
@@ -405,6 +441,9 @@ def mark_dirty(project_id: str, idxs: Iterable[int]) -> list[str]:
     for k in gone:
         avoid += [str(p["item_id"]) for p in picks.pop(k).get("pieces") or [] if p.get("item_id")]
     meta["picks"], meta["avoid"] = picks, avoid
+    # 重拍就是对这几拍的画面不满意:钉选也一并放掉
+    meta["pins"] = {k: v for k, v in dict(meta.get("pins") or {}).items()
+                    if _beat_of(k) not in beats}
     saved["plan"] = meta
     db.write_json(project_id, TIMELINE_FILE, saved)
     return gone
@@ -471,8 +510,9 @@ def plan(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[
         avoid += sorted(ids)
     banned = {str(x) for x in db.read_json(project_id, EXCLUDE_FILE, []) or []}
     used = _seed_used(project_id, beats, subject, subjects, saved_picks, avoid)
+    pins = {k: v for k, v in dict(meta.get("pins") or {}).items() if k != swap}
     picker = _Picker(subject, subjects, vocab, llm, saved=saved_picks, used=used,
-                     banned=banned, swap_bans=swap_bans)
+                     banned=banned, swap_bans=swap_bans, pins=pins)
     lk = looks.current()
     cues = list(nar.get("cues") or [])
     total = sum(s.duration for s in beats)
@@ -493,12 +533,47 @@ def plan(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[
     if picker.fresh and stats["fallback"]:
         degrade.note("edit_v2.shot_to_beat", f"{stats['fallback']} 刀取不到素材,用了逐拍成品",
                      project_id=project_id)
+    for k, why in picker.dropped.items():
+        tl.notes.append(f"钉选作废 {k}:{why}")
     _save(project_id, tl, stats, {
         "version": PLAN_VERSION, "source": source, "planned_at": round(time.time(), 1),
         "picks": picker.picks, "avoid": avoid[-200:],
         "replayed": picker.replayed, "fresh": picker.fresh,
+        "pins": {k: v for k, v in pins.items() if k not in picker.dropped},
+        "pins_dropped": dict(picker.dropped),
     })
     return tl
+
+
+def pins_of(project_id: str) -> dict[str, dict[str, Any]]:
+    """当前算数的钉选(「拍号:第几刀」→ {"text", "picks"})。"""
+    return dict(_plan_of(load(project_id)).get("pins") or {})
+
+
+def set_pins(project_id: str, pins: Mapping[str, Sequence[Mapping[str, Any]]],
+             unpin: Iterable[str] = ()) -> dict[str, dict[str, Any]]:
+    """记下钉选(不重编时间线,调用方接着 `plan`)。钉选按这一刀现在的半句记:
+    之后改稿 / 重配音让半句变了,钉选自动作废。没有时间线、刀不存在抛 KeyError。"""
+    saved = load(project_id)
+    meta = _plan_of(saved)
+    if not meta:
+        raise KeyError("还没有剪辑 v2 时间线")
+    picks = dict(meta.get("picks") or {})
+    now = dict(meta.get("pins") or {})
+    for k in unpin:
+        now.pop(str(k), None)
+    for k, chosen in pins.items():
+        if k not in picks:
+            raise KeyError(f"时间线里没有这一刀:{k}")
+        now[k] = {"text": str(picks[k].get("text") or ""),
+                  "picks": [{"item_id": str(c["item_id"]),
+                             **({"start": float(c["start"]), "end": float(c["end"])}
+                                if c.get("start") is not None and c.get("end") is not None
+                                else {})} for c in chosen]}
+    meta["pins"] = now
+    saved["plan"] = meta
+    db.write_json(project_id, TIMELINE_FILE, saved)
+    return now
 
 
 def compose(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[str, Any]],
@@ -551,6 +626,7 @@ def recompose(project_id: str, nar: Mapping[str, Any], *, output_name: str) -> r
 def cuts(project_id: str) -> list[dict[str, Any]]:
     """刀表:每一刀(同一取材键拼的几段合成一行)的起止、半句、素材、对没对上题。"""
     saved = load(project_id)
+    pinned = set(_plan_of(saved).get("pins") or {})
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for c in saved.get("clips") or []:
@@ -562,7 +638,7 @@ def cuts(project_id: str) -> list[dict[str, Any]]:
             rows[key] = {"key": key, "beat": int(c.get("beat", -1)), "start": float(c["start"]),
                          "end": float(c["start"]) + float(c["dur"]), "text": c.get("text") or "",
                          "need": bool(c.get("need")), "match": c.get("match") or "",
-                         "via": c.get("via") or "", "pieces": []}
+                         "via": c.get("via") or "", "pinned": key in pinned, "pieces": []}
         r = rows[key]
         r["end"] = max(r["end"], float(c["start"]) + float(c["dur"]))
         r["need"] = r["need"] or bool(c.get("need"))
@@ -603,3 +679,120 @@ def cut_thumb(project_id: str, key: str) -> Path | None:
                             "-vf", f"scale={THUMB_WIDTH}:-2", "-q:v", "4", "-y", str(dest)],
                            timeout=60)
     return dest if proc.returncode == 0 and dest.is_file() else None
+
+
+# --------------------------------------------------------------------------
+# Claude 审片:某一刀的候选画面
+# --------------------------------------------------------------------------
+def candidates(project_id: str, key: str, specs: Sequence[ShotSpec], *, subject: str,
+               subjects: Sequence[str] = (), vocab: Vocab | None = None,
+               pages: int = 1) -> dict[str, Any]:
+    """这一刀的候选素材:和正式取材同一套排序(`library.fill` 的前 `CHOOSE_TOP` 名),
+    `pages` > 1 时把前几页的素材排除掉再取下一页。只读,不改时间线。
+
+    已用计数 / 最近几刀按时间线上别的刀算(和重编时那一刀看到的接近,不保证完全一样:
+    排序只是给 Claude 看的建议,定下来的是钉选)。"""
+    saved = load(project_id)
+    meta = _plan_of(saved)
+    picks = dict(meta.get("picks") or {})
+    old = picks.get(key)
+    if old is None:
+        raise KeyError(f"时间线里没有这一刀:{key}")
+    spec = next((s for s in specs if s.idx == _beat_of(key)), None)
+    if spec is None:
+        raise KeyError(f"分镜里没有第 {_beat_of(key)} 拍")
+    beats = [s for s in specs if s.duration > 0]
+    car = beat_subject(spec, subjects, subject)
+    text, seconds = str(old.get("text") or ""), float(old.get("seconds") or 0.0)
+    role = str(old.get("role") or "body")
+    others = {k: v for k, v in picks.items() if k != key}
+    used = _seed_used(project_id, beats, subject, subjects, others, meta.get("avoid") or [])
+    row = next((r for r in cuts(project_id) if r["key"] == key), None)
+    start = row["start"] if row else 0.0
+    recent = [str(c.get("item_id")) for c in saved.get("clips") or []
+              if c.get("item_id") and float(c.get("start") or 0.0) < start][-6:]
+    views = match.views_for(text, vocab) if vocab is not None else set()
+    banned = {str(x) for x in db.read_json(project_id, EXCLUDE_FILE, []) or []}
+    current = [str(p.get("item_id") or "") for p in old.get("pieces") or []]
+    current_base = {library.base_item_id(i) for i in current}
+    lib_items = {i.id: i for i in library.Library.load(car).items}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _ in range(max(1, pages)):
+        caught: list[Any] = []
+
+        def choose(detail: str, top: list[Any], into: list[Any] = caught) -> int | None:
+            into.extend(top)
+            return None
+
+        with library.banned_materials(sorted(banned | seen)):
+            got = library.fill(car, seconds, hint=spec.view, used=dict(used), recent=list(recent),
+                               detail=text, role=role, views=views or None, choose=choose)
+        items = caught or [lib_items.get(library.base_item_id(p.item_id)) for p in got]
+        items = [i for i in items if i is not None and library.base_item_id(i.id) not in seen]
+        if not items:
+            break
+        for it in items:
+            seen.add(library.base_item_id(it.id))
+            need, hit = match.judge(text, it, vocab) if vocab is not None else (False, "")
+            out.append({"n": len(out) + 1, "item_id": it.id, "kind": it.kind, "view": it.view,
+                        "desc": it.desc, "start": round(it.start, 2), "end": round(it.end, 2),
+                        "seconds": round(it.end - it.start, 2) if it.kind == "video" else None,
+                        "official": it.official, "platform": it.platform,
+                        "used": used.get(it.id, 0) + used.get(library.base_item_id(it.id), 0),
+                        "match": hit if need else "", "current":
+                        library.base_item_id(it.id) in current_base,
+                        "frame": it.frame or (it.path if it.kind == "still" else ""),
+                        "path": it.path})
+    return {"key": key, "beat": spec.idx, "text": text, "seconds": round(seconds, 2),
+            "role": role, "subject": car, "current": current, "candidates": out}
+
+
+def check(project_id: str, *, still_max: float | None = None) -> dict[str, Any]:
+    """时间线体检(Claude 审片 / 改刀后看):对题、兜底、重复用素材、静图占比、
+    开头结尾挂了第三方、作废的钉选。error 是不该放行的,warning 是剪辑规范(要说得出理由才留)。"""
+    saved = load(project_id)
+    meta = _plan_of(saved)
+    if not saved.get("clips"):
+        raise KeyError("还没有剪辑 v2 时间线")
+    picks = dict(meta.get("picks") or {})
+    issues: list[dict[str, str]] = []
+
+    def add(level: str, msg: str, where: str = "") -> None:
+        issues.append({"severity": level, "message": msg, "where": where})
+
+    rows = cuts(project_id)
+    uses: dict[str, list[str]] = {}
+    for r in rows:
+        role = str((picks.get(r["key"]) or {}).get("role") or "body")
+        if r["need"] and not r["match"]:
+            add("warning", f"画面没对上半句「{r['text'][:24]}」", r["key"])
+        if r["via"] == "fallback" or not r["pieces"]:
+            add("warning", "取不到素材,用了逐拍成品", r["key"])
+        for p in r["pieces"]:
+            iid = library.base_item_id(str(p.get("item_id") or ""))
+            if iid and r["key"] not in uses.setdefault(iid, []):
+                uses[iid].append(r["key"])
+        if role != "body" and any(c.get("third_party") for c in saved["clips"]
+                                  if c.get("key") == r["key"]):
+            add("error", "开头 / 结尾用了别家账号的视频", r["key"])
+    for iid, keys in uses.items():
+        if len(keys) > 1:
+            add("warning", f"素材 {iid} 用了 {len(keys)} 刀", ",".join(keys))
+    shot = [c for c in saved["clips"] if c.get("kind") in ("video", "still")]
+    total = sum(float(c["dur"]) for c in shot) or 0.0
+    still = sum(float(c["dur"]) for c in shot if c.get("kind") == "still")
+    share = round(still / total, 3) if total else 0.0
+    limit = config.GATE_B_STILL_MAX if still_max is None else still_max
+    if limit > 0 and share > limit:
+        add("warning", f"静图占取材画面 {share:.0%},超过门禁 B 的 {limit:.0%}"
+                       "(机构拆解片以外会被拦)")
+    for k, why in dict(meta.get("pins_dropped") or {}).items():
+        add("warning", f"钉选作废:{why}", k)
+    lengths = [r["end"] - r["start"] for r in rows]
+    return {"pass": not any(i["severity"] == "error" for i in issues), "issues": issues,
+            "stats": {"cuts": len(rows), "pinned": sum(r["pinned"] for r in rows),
+                      "match": saved.get("match") or {}, "still_share": share,
+                      "avg_cut": round(sum(lengths) / len(lengths), 2) if lengths else 0.0,
+                      "longest_cut": round(max(lengths), 2) if lengths else 0.0,
+                      "duration": saved.get("duration")}}

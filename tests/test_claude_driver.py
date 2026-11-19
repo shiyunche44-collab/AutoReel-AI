@@ -538,3 +538,32 @@ def test_cover_rebuild_picks_title(store, monkeypatch, capsys):
     code, out = _run(capsys, "cover", pid)
     assert code == cli.OK and out["titles"] == ["测试车型该不该买", "测试车型适合谁"]
     assert out["covers"] == {}
+
+
+# --------------------------------------------------------------------------
+# 剪辑(门禁 B)命令:门槛
+# --------------------------------------------------------------------------
+def test_edit_commands_need_gate_b_timeline(store, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    pid = _gate_a_project(capsys)
+    code, out = _run(capsys, "edit", "check", pid)
+    assert code == cli.REJECTED and "时间线" in out["error"]
+    code, out = _run(capsys, "edit", "sheet", pid)
+    assert code == cli.REJECTED
+    code, out = _run(capsys, "edit", "pick", pid, "1:0", "m1")
+    assert code == cli.REJECTED and "门禁 B" in out["error"]
+    code, out = _run(capsys, "edit", "candidates", pid, "1:0")
+    assert code == cli.REJECTED and "门禁 B" in out["error"]
+    bad = tmp_path / "pins.json"
+    bad.write_text('{"pins": ["1:0"]}', encoding="utf-8")
+    code, out = _run(capsys, "edit", "put", pid, str(bad))
+    assert code == cli.REJECTED and "格式" in out["error"]
+    code, out = _run(capsys, "review", pid)
+    assert code == cli.OK and out["edit"] is None and out["state"] == str(State.GATE_A)
+
+
+def test_claude_projects_do_not_rerank_cuts_with_llm(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(orchestrator, "_llm", lambda: sentinel)
+    assert orchestrator._edit_llm({"id": "p_1", "driver": "claude"}) is None
+    assert orchestrator._edit_llm({"id": "p_1", "driver": "scheduler"}) is sentinel

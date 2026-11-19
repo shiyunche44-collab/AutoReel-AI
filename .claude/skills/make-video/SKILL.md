@@ -26,7 +26,6 @@ description: 用 AutoReel 做一部产品解说视频，Claude Code 负责推进
 | `pipeline.intake.` | 事实抽取、口碑转述 | **facts** |
 | `pipeline.script_gen.` | 大纲、钩子、全文、压字数、口语化、自修 | **script** |
 | `pipeline.explainer.` | 分镜版式、关键词拍 | **storyboard** |
-| `pipeline.edit.match.` | 渲染期剪辑取材：给每一刀挑素材 | 按提示词挑出最能让观众"看到这半句在讲什么"的那条 |
 | `pipeline.packaging.` | 标题、置顶评论、备用回复 | **package** |
 | 其它 | — | 照 SYSTEM 回答，说不准就先 `ask show` 读完全文 |
 
@@ -75,14 +74,16 @@ python -m app.cli step <pid> --confirm
 ## 渲染期间
 `step` 每轮渲染几拍，会自己循环。整片比较长时可以 `--max 200` 让它跑在后台（Bash 的 run_in_background），完成通知到了再继续。用 `status <pid>` 看进度和最近事件。
 
-## 门禁 B：审片
+## 门禁 B：剪辑与审片（见 **edit** skill）
 ```bash
-python -m app.cli review <pid>           # 预览、拍进度、问题清单
-python -m app.cli cuts <pid>             # 每一刀用的素材
-python -m app.cli swap <pid> <key>       # 换一刀
-python -m app.cli rerender <pid> 3 5     # 重渲第 3、5 拍
+python -m app.cli edit check <pid>               # 时间线体检
+python -m app.cli edit sheet <pid>               # 刀表拼图 → Read 看图
+python -m app.cli edit candidates <pid> 3:0      # 候选画面 → edit pick / edit put 钉选
+python -m app.cli edit preview <pid>             # 整片预览(后台跑)
+python -m app.cli review <pid> --qa              # 逐帧联系表 + 音频 QA
+python -m app.cli rerender <pid> 3 5             # 整拍画面坏了才重渲
 ```
-先自审：截帧拼图（用 Read 看图）、音频问题（`voice <pid>`，见 **voice** skill）、和对标基线比。再把预览路径和你改过的地方交给用户。用户同意后执行 `step <pid> --confirm`，进入合成并出片。
+Claude 项目不逐刀发取材请求，初稿按排序取材，画面由你看图钉选。先自审：体检 error 清零、全片拼图过一遍、预览 QA、音频（`voice <pid>`，见 **voice** skill）。再把预览路径、改过的刀、留下的 warning 交给用户。用户同意后执行 `step <pid> --confirm`，进入合成并出片。
 
 ## 出片以后
 - 包装：合成时会出一个包装请求，见 **package** skill。
