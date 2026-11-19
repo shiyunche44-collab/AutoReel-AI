@@ -18,7 +18,19 @@ description: 用 AutoReel 做一部产品解说视频，Claude Code 负责推进
 
 ## 开工前
 1. 确认 8848 跑的是新代码：调度器认 `driver` 列要靠新代码，旧进程会抢推进。拿不准就让用户用 `scripts/restart_server.ps1 -Reason "..."` 重启，**自己别杀进程**。
-2. 选题和角度跟用户对齐：车型、时长、横竖屏（建好后不能改）、主题（buyguide 等）、角度一句话。
+2. 选题和角度跟用户对齐：车型、时长、横竖屏（建好后不能改）、主题（buyguide 等）、角度一句话。还没定车型就先走 **topic** skill。
+
+## 请求归哪个 skill（看 `needs_claude.purpose`）
+| purpose 前缀 | 阶段 | skill |
+|---|---|---|
+| `pipeline.intake.` | 事实抽取、口碑转述 | **facts** |
+| `pipeline.script_gen.` | 大纲、钩子、全文、压字数、口语化、自修 | **script** |
+| `pipeline.explainer.` | 分镜版式、关键词拍 | **storyboard** |
+| `pipeline.edit.match.` | 渲染期剪辑取材：给每一刀挑素材 | 按提示词挑出最能让观众"看到这半句在讲什么"的那条 |
+| `pipeline.packaging.` | 标题、置顶评论、备用回复 | **package** |
+| 其它 | — | 照 SYSTEM 回答，说不准就先 `ask show` 读完全文 |
+
+每一类都先读对应的 skill 再回答。提示词本身就是最终规范，skill 只补充"怎么做得好"和"最常在哪儿被拦"。
 
 ## 主循环
 ```bash

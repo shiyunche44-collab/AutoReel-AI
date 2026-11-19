@@ -67,7 +67,9 @@ def cmd_new(args: argparse.Namespace) -> dict[str, Any]:
         duration=args.duration, aspect=args.aspect, angle=args.angle or None,
         hook=args.hook or None, angle_why=args.why or None, angle_search=args.search or None,
         owner_notes=args.owner_notes or None, title=args.title or None,
-        look=args.look or None, series=args.series or None)
+        look=args.look or None, series=args.series or None,
+        angle_evidence=list(args.evidence) or None,
+        subjects=[{"name": n} for n in args.subjects] or None)
     try:
         pid = orchestrator.create_project(payload)
     except orchestrator.PipelineError as exc:
@@ -267,6 +269,135 @@ def cmd_datapro(args: argparse.Namespace) -> dict[str, Any]:
     return doc.to_dict()
 
 
+class _Given:
+    """把 Claude 已写好的回答当成一次模型调用交给现有函数,复用它们的校验与组装。
+    不传回答时只记下提示词(`system` / `user`),返回空结果。"""
+
+    def __init__(self, answer: dict[str, Any] | None = None) -> None:
+        self.answer = answer
+        self.system = ""
+        self.user = ""
+
+    def available(self) -> bool:
+        return True
+
+    def structured(self, system: str, user: str, *, required_keys: Sequence[str] | None = None,
+                   **_: Any) -> dict[str, Any]:
+        self.system, self.user = system, user
+        if self.answer is None:
+            return {k: [] for k in required_keys or ()}
+        try:
+            handoff.require_keys(self.answer, list(required_keys or []))
+        except LLMOutputInvalid as exc:
+            raise Rejected(str(exc)) from exc
+        return self.answer
+
+
+# --------------------------------------------------------------------------
+# 选题(热点 → Claude 出角度 → 现有规则过滤)
+# --------------------------------------------------------------------------
+def _topics_file(category: str) -> Path:
+    return config.DATA_DIR / "_claude" / f"topics_{category}.json"
+
+
+def cmd_topics_fetch(args: argparse.Namespace) -> dict[str, Any]:
+    """抓实时热点,连同选题提示词落到 `data/_claude/topics_<品类>.json`。"""
+    from ..categories import load_profile
+    from ..pipeline import topics
+    from ..providers import trends
+
+    profile = load_profile(args.category)
+    items, errors = trends.collect(spec=profile.trends, brands=profile.trend_brands)
+    rows = [topics._trend_dict(i) for i in items]
+    probe = _Given()
+    topics.suggest(rows, profile=profile, llm=probe, n=args.n)
+    path = _topics_file(args.category)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"category": args.category, "fetched_at": time.time(), "n": args.n,
+                                "trends": rows, "system": probe.system, "user": probe.user},
+                               ensure_ascii=False), encoding="utf-8")
+    return {"trends": len(rows), "errors": errors, "file": str(path),
+            "next": f"python -m app.cli topics prompt --category {args.category}"}
+
+
+def _topics_cache(category: str) -> dict[str, Any]:
+    path = _topics_file(category)
+    if not path.is_file():
+        raise Rejected(f"还没抓热点:先 python -m app.cli topics fetch --category {category}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def cmd_topics_prompt(args: argparse.Namespace) -> str:
+    data = _topics_cache(args.category)
+    if not data.get("system"):
+        raise Rejected("没抓到热点,没有选题提示词;看 topics fetch 的 errors")
+    age = (time.time() - float(data.get("fetched_at") or 0)) / 3600
+    return "\n".join([
+        f"# 选题请求({args.category},热点 {len(data.get('trends') or [])} 条,{age:.1f} 小时前抓的)",
+        f"- 回答:python -m app.cli topics put <回答.json> --category {args.category}",
+        "", "## SYSTEM", data["system"], "", "## USER", data["user"]])
+
+
+def cmd_topics_put(args: argparse.Namespace) -> dict[str, Any]:
+    """Claude 写的选题过一遍现有规则(车型要在热点里出现、禁用词、方向合法……)。"""
+    from ..categories import load_profile
+    from ..pipeline import topics
+
+    data = _topics_cache(args.category)
+    answer = json.loads(_read_input(args.file))
+    profile = load_profile(args.category)
+    ideas = topics.suggest(data.get("trends") or [], profile=profile, llm=_Given(answer),
+                           n=int(data.get("n") or 8))
+    asked = len(answer.get("topics") or [])
+    return {"kept": [t.model_dump() for t in ideas], "dropped": asked - len(ideas),
+            "note": "被丢掉的多半是车型不在热点里、角度带禁用词或方向名不对;"
+                    "建项目用 new 的 --angle/--hook/--why/--search"}
+
+
+# --------------------------------------------------------------------------
+# 包装(标题 / 简介 / 首评)
+# --------------------------------------------------------------------------
+def cmd_package(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import packaging
+
+    _project(args.project)
+    pkg = packaging.load(args.project)
+    if pkg is None:
+        raise Rejected("还没有包装:合成(COMPOSING)时会出一个包装请求,或用 package-put 直接写")
+    return pkg.model_dump()
+
+
+def cmd_package_prompt(args: argparse.Namespace) -> str:
+    """包装提示词原文(和合成时发出的请求同一份)。"""
+    from ..pipeline import orchestrator, packaging
+
+    profile, _ = orchestrator._theme_of(_project(args.project))
+    probe = _Given()
+    packaging.generate(args.project, profile, probe)
+    return "\n".join([
+        f"# 包装请求 {args.project}",
+        f"- 回答:python -m app.cli package-put {args.project} <回答.json>",
+        "", "## SYSTEM", probe.system, "", "## USER", probe.user])
+
+
+def cmd_package_put(args: argparse.Namespace) -> dict[str, Any]:
+    """写包装:过标题 / 首评校验(数字要出自事实或稿子、禁用词、车名开头……),
+    不合格的条目由模板兜底。保留用户已选的封面。"""
+    from ..pipeline import orchestrator, packaging
+
+    profile, _ = orchestrator._theme_of(_project(args.project))
+    answer = json.loads(_read_input(args.file))
+    if not isinstance(answer, dict) or not answer.get("titles"):
+        raise Rejected("回答要有 titles(以及 comment、replies),格式见 package-prompt")
+    pkg = packaging.ensure(args.project, profile, _Given(answer), force=True)
+    wrote = [str(t.get("text") if isinstance(t, dict) else t)
+             for t in answer.get("titles") or []]
+    kept = [t.text for t in pkg.titles]
+    return {"saved": True, "titles": kept,
+            "replaced_by_template": [t for t in wrote if t and t not in kept],
+            "packaging": pkg.model_dump()}
+
+
 # --------------------------------------------------------------------------
 # 门禁 A:改稿 / 改分镜 / 复查
 # --------------------------------------------------------------------------
@@ -386,6 +517,10 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--title", default="")
     n.add_argument("--look", default="")
     n.add_argument("--series", default="")
+    n.add_argument("--evidence", action="append", default=[],
+                   help="热点依据原文一行(可多次),作为一份事实素材")
+    n.add_argument("--subjects", action="append", default=[],
+                   help="横评车单里的一台车(可多次);此时 subject 是横评标题")
 
     a = with_pid(add("adopt", cmd_adopt, "把已有项目改归 Claude 推进(--release 还给调度器)"))
     a.add_argument("--release", action="store_true")
@@ -431,6 +566,21 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("kind", choices=("specs", "sales"))
     dp.add_argument("subject")
     dp.add_argument("--months", type=int, default=6)
+
+    tp = add("topics", lambda a: None, "选题:fetch / prompt / put")
+    tp_sub = tp.add_subparsers(dest="topics_cmd", required=True)
+    tf = add("fetch", cmd_topics_fetch, "抓实时热点并生成选题提示词", tp_sub)
+    tf.add_argument("--n", type=int, default=8, help="要几个选题")
+    tpp = add("prompt", cmd_topics_prompt, "看选题提示词原文", tp_sub)
+    tpu = add("put", cmd_topics_put, "交选题(JSON,- = stdin),按规则过滤", tp_sub)
+    tpu.add_argument("file")
+    for p in (tf, tpp, tpu):
+        p.add_argument("--category", default="auto_long")
+
+    with_pid(add("package", cmd_package, "看包装(标题 / 简介 / 首评)"))
+    with_pid(add("package-prompt", cmd_package_prompt, "看包装提示词原文"))
+    pkp = with_pid(add("package-put", cmd_package_put, "写包装(JSON,- = stdin)"))
+    pkp.add_argument("file")
 
     with_pid(add("script", cmd_script_show, "看脚本与 lint"))
     spu = with_pid(add("script-put", cmd_script_put, "门禁 A 改稿(JSON,- = stdin)"))

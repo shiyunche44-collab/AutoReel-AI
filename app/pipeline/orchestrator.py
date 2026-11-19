@@ -473,7 +473,7 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     claude = is_claude_driven(project)
     ctx = _Ctx(project_id=project_id, project=project, profile=profile, theme=theme,
                subject=subject, angle=angle, subjects=subjects, names=names,
-               llm=ClaudeHandoff(project_id) if claude else _llm(),
+               llm=_project_llm(project),
                force=force, stop_event=stop_event)
     handler = STAGES.get(state)
     if handler is None:
@@ -488,6 +488,11 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
 def is_claude_driven(project: dict[str, Any] | None) -> bool:
     """这个项目由 Claude Code 会话推进(文字模型调用交给会话回答,调度器不碰)。"""
     return str((project or {}).get("driver") or "") == CLAUDE_DRIVER
+
+
+def _project_llm(project: dict[str, Any]):
+    """项目内的文字模型:Claude 项目交给会话回答,其余走 `_llm()`。"""
+    return ClaudeHandoff(str(project["id"])) if is_claude_driven(project) else _llm()
 
 
 @dataclass
@@ -1153,7 +1158,8 @@ def swap_cut(project_id: str, key: str) -> dict[str, Any]:
                 edit_project.plan(project_id, specs, rows, nar, size=aspect.frame_size(project),
                                   title=str(project.get("title") or ""),
                                   subject=str(project.get("subject") or ""), subjects=names,
-                                  vocab=profile.vocab, llm=_llm(), source="swap", swap=key)
+                                  vocab=profile.vocab, llm=_project_llm(project),
+                                  source="swap", swap=key)
         except KeyError as exc:
             raise PipelineError(str(exc.args[0] if exc.args else exc)) from exc
         explainer.materials_used(project_id, specs)

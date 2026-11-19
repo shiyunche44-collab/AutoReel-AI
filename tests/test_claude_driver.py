@@ -254,3 +254,114 @@ def test_step_refuses_scheduler_projects(store, monkeypatch, capsys):
     code, out = _run(capsys, "step", pid)
     assert code == cli.REJECTED and "adopt" in out["error"]
 
+
+
+# --------------------------------------------------------------------------
+# 选题:热点 → Claude 写 → 现有规则过滤
+# --------------------------------------------------------------------------
+def test_topics_fetch_prompt_put(store, monkeypatch, capsys):
+    from app.providers import trends
+
+    rows = [{"source": "dongchedi", "title": "小米YU7 月销破 3 万", "car": "小米YU7",
+             "url": "https://e.com/1", "metric": "30000"}]
+    monkeypatch.setattr(trends, "collect", lambda **kw: (rows, {"bilibili": "412"}))
+
+    code, out = _run(capsys, "topics", "fetch", "--n", "3")
+    assert code == cli.OK and out["trends"] == 1 and out["errors"] == {"bilibili": "412"}
+
+    assert cli.main(["topics", "prompt"]) == cli.OK
+    shown = capsys.readouterr().out
+    assert "## SYSTEM" in shown and "小米YU7 月销破 3 万" in shown
+
+    answer = {"topics": [
+        {"subject": "小米YU7", "angle": "月销破 3 万,标准版反而最不值", "theme": "buyguide",
+         "hook": "多花的钱买的是快充", "why_hot": "月销破 3 万", "sources": ["https://e.com/1",
+                                                                       "https://made.up/x"],
+         "heat": 5, "search_terms": "小米YU7 月销"},
+        # 车型不在热点里:规则会丢掉
+        {"subject": "某某车X9", "angle": "随便一个角度", "theme": "buyguide"},
+    ]}
+    path = config.DATA_DIR / "t.json"
+    path.write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+    code, out = _run(capsys, "topics", "put", str(path))
+    assert code == cli.OK
+    assert [t["subject"] for t in out["kept"]] == ["小米YU7"]
+    assert out["dropped"] == 1
+    assert out["kept"][0]["sources"] == ["https://e.com/1"]  # 编的链接被摘掉
+
+
+def test_topics_put_before_fetch_is_rejected(store, capsys, tmp_path):
+    f = tmp_path / "a.json"
+    f.write_text('{"topics": []}', encoding="utf-8")
+    code, out = _run(capsys, "topics", "put", str(f))
+    assert code == cli.REJECTED and "fetch" in out["error"]
+
+
+def test_new_passes_evidence_and_roster(store, monkeypatch, capsys):
+    seen = {}
+
+    def fake_create(payload):
+        seen["payload"] = payload
+        return real_create(payload)
+
+    real_create = orchestrator.create_project
+    monkeypatch.setattr(orchestrator, "create_project", fake_create)
+    code, out = _run(capsys, "new", "测试车型", "--evidence", "榜单第 1", "--evidence", "月销 3 万")
+    assert code == cli.OK
+    assert seen["payload"].angle_evidence == ["榜单第 1", "月销 3 万"]
+    assert seen["payload"].subjects is None
+
+
+def test_project_llm_follows_driver():
+    assert isinstance(orchestrator._project_llm({"id": "p_1", "driver": "claude"}),
+                      handoff.ClaudeHandoff)
+    assert not isinstance(orchestrator._project_llm({"id": "p_1", "driver": "scheduler"}),
+                          handoff.ClaudeHandoff)
+
+
+# --------------------------------------------------------------------------
+# 包装
+# --------------------------------------------------------------------------
+def _gate_a_project(capsys) -> str:
+    _, made = _run(capsys, "new", "测试车型", "--duration", "240")
+    pid = made["project_id"]
+    for _ in range(20):
+        code, out = _run(capsys, "step", pid, "--idle", "0")
+        if code != cli.NEEDS_CLAUDE:
+            break
+        req = handoff.get_request(pid, out["needs_claude"]["id"])
+        handoff.put_answer(pid, req["id"], _answer_for(req))
+    assert out["state"] == str(State.GATE_A)
+    return pid
+
+
+def test_package_prompt_and_put(store, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    pid = _gate_a_project(capsys)
+
+    code, out = _run(capsys, "package", pid)
+    assert code == cli.REJECTED
+
+    assert cli.main(["package-prompt", pid]) == cli.OK
+    shown = capsys.readouterr().out
+    assert "## SYSTEM" in shown and "titles" in shown
+
+    answer = {"titles": [
+        {"kind": "stake", "text": "测试车型到底该不该买,看续航", "note": "立场"},
+        {"kind": "number", "text": "续航 999 公里的车", "note": "编的数字,不以车名开头"},
+        {"kind": "person", "text": "测试车型适合天天跑高速的人", "note": "人群"}],
+        "comment": {"text": "你选A还是B?", "options": ["A", "B"]},
+        "replies": ["a", "b", "c"]}
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
+    code, out = _run(capsys, "package-put", pid, str(f))
+    assert code == cli.OK and out["saved"]
+    assert "续航 999 公里的车" in out["replaced_by_template"]
+    assert "续航 999 公里的车" not in out["titles"]
+    code, out = _run(capsys, "package", pid)
+    assert code == cli.OK and out["titles"]
+
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"comment": {}}', encoding="utf-8")
+    code, out = _run(capsys, "package-put", pid, str(bad))
+    assert code == cli.REJECTED
