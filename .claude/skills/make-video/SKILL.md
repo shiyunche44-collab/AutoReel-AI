@@ -70,6 +70,8 @@ python -m app.cli step <pid> --confirm
 ```
 `--force`（带着 lint error 放行）只有用户明确说"就这样放行"时才用。
 
+**概念动画在门禁 A 期间做**（见 **motion** skill）：挑 2–4 拍讲"看不见的东西"的 concept 拍现写片段，`motion lint` 清零、`snapshot` 看图满意后再放行。放行之后，渲染阶段会自动用这些片段；没过 lint 的片段会退回数据卡。
+
 ## 渲染期间
 `step` 每轮渲染几拍，会自己循环。整片比较长时可以 `--max 200` 让它跑在后台（Bash 的 run_in_background），完成通知到了再继续。用 `status <pid>` 看进度和最近事件。
 
@@ -80,7 +82,11 @@ python -m app.cli cuts <pid>             # 每一刀用的素材
 python -m app.cli swap <pid> <key>       # 换一刀
 python -m app.cli rerender <pid> 3 5     # 重渲第 3、5 拍
 ```
-先自审：截帧拼图（用 Read 看图）、音频问题、和对标基线比。再把预览路径和你改过的地方交给用户。用户同意后执行 `step <pid> --confirm`，进入合成并出片。
+先自审：截帧拼图（用 Read 看图）、音频问题（`voice <pid>`，见 **voice** skill）、和对标基线比。再把预览路径和你改过的地方交给用户。用户同意后执行 `step <pid> --confirm`，进入合成并出片。
+
+## 出片以后
+- 包装：合成时会出一个包装请求，见 **package** skill。
+- 封面：`cover <pid>` 看 A/B 两版，见 **cover** skill。要生图补素材见 **visuals** skill。
 
 ## 规矩
 - 门禁只在用户明确同意后才 `--confirm`。每次 `step` 最多放行一道门禁。

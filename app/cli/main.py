@@ -399,6 +399,254 @@ def cmd_package_put(args: argparse.Namespace) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# 概念动画:Claude 为某一拍现写 HyperFrames 片段
+# --------------------------------------------------------------------------
+#: 新片段的起点:没给 --from、这一拍也没指定库场景时用它(结构最简、注释最全)
+_MOTION_STARTER = "battery"
+
+
+def _ascii_starter(text: str) -> str:
+    """库场景复制成项目片段时去掉中文注释(lint 只许 ASCII):HTML 注释只留 `@xxx` 元信息行,
+    `//` 与 `/* */` 注释里有中文就整条删。代码里的中文字面量(如 kicker 文案)留着,
+    交给 lint 指出来,由 Claude 改成从 `__DATA__` 取。"""
+    import re
+
+    def html_comment(m: re.Match[str]) -> str:
+        body = m.group(1)
+        if body.isascii():
+            return m.group(0)
+        metas = re.findall(r"@[A-Za-z_-]+[^\n@]*", body)
+        metas = [s.strip() for s in metas if s.isascii()]
+        return f"<!-- {' '.join(metas)} -->" if metas else ""
+
+    text = re.sub(r"<!--(.*?)-->", html_comment, text, flags=re.S)
+    text = re.sub(r"/\*(?:(?!\*/).)*?[^\x00-\x7f](?:(?!\*/).)*?\*/", "", text, flags=re.S)
+    text = re.sub(r"(?m)^(\s*)//[^\n]*[^\x00-\x7f][^\n]*\n", "", text)
+    return re.sub(r"(?m)[ \t]+//[^\n]*[^\x00-\x7f][^\n]*$", "", text)
+
+
+def _motion_beat(pid: str, beat: int) -> dict[str, Any]:
+    """这一拍做动画要用的一切:分镜、数据、拍长、画幅、事实、片段路径。"""
+    from ..pipeline import aspect, motion, orchestrator
+
+    row = _project(pid)
+    spec = next((s for s in orchestrator._specs(pid) if s.idx == beat), None)
+    if spec is None:
+        raise Rejected(f"没有第 {beat} 拍(还没分镜,或拍号不对:shots {pid})")
+    profile, _ = orchestrator._theme_of(row)
+    overlay = dict(spec.overlay or {})
+    path = motion.project_scene_path(pid, beat)
+    data = motion.scene_data(overlay, str(row.get("subject") or ""),
+                             getattr(profile.vocab, "concept_ranges", None)) if overlay else {}
+    if path.is_file():
+        data.update(motion.project_scene_data(path))
+    return {"row": row, "spec": spec, "overlay": overlay, "data": data, "path": path,
+            "side": path.with_suffix(".json"), "size": aspect.frame_size(row),
+            "seconds": max(0.5, float(spec.duration)), "facts": orchestrator._facts(pid)}
+
+
+def _motion_lint(m: dict[str, Any]) -> list[dict[str, str]]:
+    from ..pipeline import motion_lint
+
+    if not m["path"].is_file():
+        raise Rejected(f"第 {m['spec'].idx} 拍还没有片段:先 motion new")
+    issues = motion_lint.lint(m["path"].read_text(encoding="utf-8"), m["data"], m["facts"],
+                              m["seconds"], m["size"])
+    return [i.to_dict() for i in issues]
+
+
+def _motion_ready(m: dict[str, Any]) -> list[dict[str, str]]:
+    issues = _motion_lint(m)
+    errs = [i for i in issues if i["severity"] == "error"]
+    if errs:
+        raise Rejected("片段没过 lint,先改:" + ";".join(
+            f"{i['message']}({i['where']})" if i["where"] else i["message"] for i in errs[:6]))
+    return issues
+
+
+def cmd_motion_info(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import motion
+
+    m = _motion_beat(args.project, args.beat)
+    spec = m["spec"]
+    notes = []
+    if spec.layout != "concept":
+        notes.append(f"这一拍版式是 {spec.layout or '(空)'},现写片段只在 concept 拍生效:"
+                     "先 shots-put 把 layout 改成 concept(overlay 里 rows 照事实填)")
+    return {
+        "beat": spec.idx, "layout": spec.layout, "section": spec.section,
+        "narration": spec.narration_zh, "seconds": m["seconds"],
+        "size": list(m["size"]), "overlay": m["overlay"], "data": m["data"],
+        "fragment": str(m["path"]), "fragment_exists": m["path"].is_file(),
+        "sidecar": str(m["side"]),
+        "facts": [{"id": f.id, "claim": f.claim, "basis": f.basis} for f in m["facts"]
+                  if f.enabled],
+        "library_scenes": sorted(motion.available_scenes()),
+        "notes": notes,
+    }
+
+
+def cmd_motion_new(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import motion
+
+    m = _motion_beat(args.project, args.beat)
+    if m["path"].is_file() and not args.force:
+        raise Rejected(f"已有片段 {m['path']};要从头来加 --force")
+    base = args.base or str(m["overlay"].get("scene") or "") or _MOTION_STARTER
+    src = motion.scenes_dir() / f"{base}.html"
+    if not src.is_file():
+        raise Rejected(f"库里没有场景 {base}:可选 {', '.join(sorted(motion.available_scenes()))}")
+    m["path"].parent.mkdir(parents=True, exist_ok=True)
+    text = _ascii_starter(src.read_text(encoding="utf-8"))
+    m["path"].write_text(text, encoding="utf-8", newline="\n")
+    left = sorted({ch for ch in text if not ch.isascii()})
+    return {"fragment": str(m["path"]), "from": base, "sidecar": str(m["side"]),
+            "non_ascii_left": "".join(left)[:40],
+            "data_keys": sorted(m["data"]),
+            "rules": "片段只许 ASCII(中文写进 sidecar JSON,经 window.__DATA__ 注入);"
+                     "不联网;画面上的数字都要出自事实;时间轴不超过拍长"}
+
+
+def cmd_motion_lint(args: argparse.Namespace) -> dict[str, Any]:
+    issues = _motion_lint(_motion_beat(args.project, args.beat))
+    return {"issues": issues, "errors": sum(i["severity"] == "error" for i in issues),
+            "pass": not any(i["severity"] == "error" for i in issues)}
+
+
+def cmd_motion_snapshot(args: argparse.Namespace) -> dict[str, Any]:
+    """截几帧 PNG 给 Claude 看(暗色底、不铺实拍;正式渲染时压在这一拍的实拍上)。"""
+    from ..pipeline import motion
+
+    m = _motion_beat(args.project, args.beat)
+    warnings = _motion_ready(m)
+    at = [float(x) for x in args.at.split(",") if x.strip()] if args.at else [
+        round(m["seconds"] * r, 2) for r in (0.15, 0.5, 0.95)]
+    try:
+        pngs = motion.snapshot(m["path"], m["data"], m["seconds"], at, m["size"],
+                               m["path"].parent / "_snap")
+    except motion.MotionError as exc:
+        raise Rejected(f"截帧失败:{exc}") from exc
+    return {"frames": [str(p) for p in pngs], "at": at, "warnings": warnings,
+            "next": "用 Read 看图:构图、文字溢出、安全区、动效节点"}
+
+
+def cmd_motion_render(args: argparse.Namespace) -> dict[str, Any]:
+    """渲成整段 mp4 预览(按内容缓存)。正式成片由渲染阶段自己渲,这里只是先看动效。"""
+    from ..pipeline import motion
+
+    m = _motion_beat(args.project, args.beat)
+    warnings = _motion_ready(m)
+    dest = m["path"].with_suffix(".preview.mp4")
+    try:
+        out = motion.render(m["path"], m["data"], m["seconds"], m["size"], dest)
+    except motion.MotionError as exc:
+        raise Rejected(f"渲染失败:{exc}") from exc
+    return {"video": str(out), "seconds": m["seconds"], "warnings": warnings,
+            "check": f'ffmpeg -v error -i "{out}" -f null -'}
+
+
+# --------------------------------------------------------------------------
+# 配音:看质检、试听
+# --------------------------------------------------------------------------
+def cmd_voice(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import knobs
+
+    row = _project(args.project)
+    nar = db.read_json(args.project, "narration.json", {}) or {}
+    qa = db.read_json(args.project, "voice_qa.json", {}) or {}
+    if not nar:
+        raise Rejected(f"还没配音:旁白在 ASSETS_READY 之后生成(现在 {row['state']})")
+    return {
+        "voice": knobs.voice(),
+        "sentences": nar.get("sentence_count"),
+        "chars": nar.get("total_chars"),
+        "duration": nar.get("total_duration"),
+        "chars_per_second": round(float(nar.get("total_chars") or 0)
+                                  / max(float(nar.get("total_duration") or 0), 0.1), 2),
+        "narration": nar.get("narration_path"),
+        "subtitles": nar.get("ass_path"),
+        "bgm": nar.get("bgm_path"),
+        "warnings": nar.get("warnings") or [],
+        "qa": {"errors": [i + 1 for i in qa.get("errors") or []],  # 第几句(1 起)
+               "findings": qa.get("findings") or [], "redone": qa.get("redone") or [],
+               "asr_available": qa.get("asr_available")} if qa else {},
+    }
+
+
+# --------------------------------------------------------------------------
+# 生图(方舟 Seedream)
+# --------------------------------------------------------------------------
+def cmd_image(args: argparse.Namespace) -> dict[str, Any]:
+    """生图存进项目的 `images/`(或 --out 目录),返回路径给 Claude 看图挑。"""
+    import httpx
+
+    from ..llm import ledger
+    from ..providers import ark_image
+
+    if args.project:
+        _project(args.project)
+        out_dir = config.project_dir(args.project) / "images"
+    else:
+        out_dir = Path(args.out or config.DATA_DIR / "_claude" / "images")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with ledger.tag(project_id=args.project or ""):  # 账本由 ark_image 自己记
+        urls = ark_image.generate(args.prompt, n=args.n, aspect_ratio=args.ratio or None)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    paths, failed = [], []
+    for i, url in enumerate(urls):
+        try:
+            resp = httpx.get(url, timeout=60)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            failed.append(f"{url}:{exc}")
+            continue
+        ext = ".png" if "png" in resp.headers.get("content-type", "") else ".jpg"
+        path = out_dir / f"{stamp}_{i + 1}{ext}"
+        path.write_bytes(resp.content)
+        paths.append(str(path))
+    (out_dir / f"{stamp}.prompt.txt").write_text(args.prompt, encoding="utf-8")
+    return {"images": paths, "failed": failed, "prompt": args.prompt,
+            "next": "用 Read 看图,不满意就改提示词重生"}
+
+
+# --------------------------------------------------------------------------
+# 封面
+# --------------------------------------------------------------------------
+def cmd_cover(args: argparse.Namespace) -> dict[str, Any]:
+    from ..pipeline import aspect, packaging
+
+    row = _project(args.project)
+    pdir = config.project_dir(args.project)
+    files = {v: pdir / aspect.cover_name(row, v) for v in ("a", "b")}
+    pkg = packaging.load(args.project)
+    return {"covers": {v: str(p) for v, p in files.items() if p.is_file()},
+            "titles": [t.text for t in pkg.titles] if pkg else [],
+            "picked": pkg.picked if pkg else {},
+            "rendered": bool(db.read_json(args.project, "render.json", {}))}
+
+
+def cmd_cover_rebuild(args: argparse.Namespace) -> dict[str, Any]:
+    """按选定的标题重画 A / B 封面(不重新合成视频)。"""
+    from ..pipeline import packaging
+    from ..pipeline.cover_art import builder
+
+    _project(args.project)
+    if args.title is not None:
+        pkg = packaging.load(args.project)
+        if pkg is None or not 0 <= args.title < len(pkg.titles):
+            raise Rejected("没有这条标题:先 package 看下标")
+        packaging.set_picked(args.project, title=args.title)
+    out = builder.rebuild(args.project)
+    if not out.get("ok"):
+        raise Rejected(str(out.get("reason") or "封面重画失败"))
+    a, b = out.get("a") or {}, out.get("b") or {}
+    if not a:
+        raise Rejected("A 版封面没画出来(退回了老封面):看 /api/degradations 的 cover.*")
+    return {"a": a.get("path"), "b": b.get("path"), "main": a.get("main"), "sub": a.get("sub"),
+            "car_source": a.get("car_source"), "next": "用 Read 看两张封面"}
+
+
+# --------------------------------------------------------------------------
 # 门禁 A:改稿 / 改分镜 / 复查
 # --------------------------------------------------------------------------
 def cmd_script_show(args: argparse.Namespace) -> dict[str, Any]:
@@ -581,6 +829,30 @@ def build_parser() -> argparse.ArgumentParser:
     with_pid(add("package-prompt", cmd_package_prompt, "看包装提示词原文"))
     pkp = with_pid(add("package-put", cmd_package_put, "写包装(JSON,- = stdin)"))
     pkp.add_argument("file")
+
+    mo = add("motion", lambda a: None, "概念动画(Claude 现写片段):info / new / lint / snapshot / render")
+    mo_sub = mo.add_subparsers(dest="motion_cmd", required=True)
+    mi = with_pid(add("info", cmd_motion_info, "这一拍的旁白、数据、拍长、事实", mo_sub))
+    mn = with_pid(add("new", cmd_motion_new, "从库场景复制一份起点片段", mo_sub))
+    mn.add_argument("--from", dest="base", default="", help="库场景名,默认用分镜里的 scene")
+    mn.add_argument("--force", action="store_true", help="覆盖已有片段")
+    ml = with_pid(add("lint", cmd_motion_lint, "片段硬校验", mo_sub))
+    ms = with_pid(add("snapshot", cmd_motion_snapshot, "截几帧 PNG", mo_sub))
+    ms.add_argument("--at", default="", help="秒,逗号分隔;默认开头 / 中间 / 结尾")
+    mr = with_pid(add("render", cmd_motion_render, "渲整段 mp4 预览(几十秒)", mo_sub))
+    for p in (mi, mn, ml, ms, mr):
+        p.add_argument("beat", type=int)
+
+    with_pid(add("voice", cmd_voice, "旁白时长、语速、语音质检结果"))
+    im = add("image", cmd_image, "方舟 Seedream 生图")
+    im.add_argument("prompt")
+    im.add_argument("--project", default="", help="存进这个项目的 images/")
+    im.add_argument("--out", default="", help="不挂项目时的输出目录")
+    im.add_argument("--n", type=int, default=2)
+    im.add_argument("--ratio", default="16:9", help="16:9 | 9:16 | 3:4 | 4:3 | 1:1")
+    with_pid(add("cover", cmd_cover, "看封面与可选标题"))
+    cr = with_pid(add("cover-rebuild", cmd_cover_rebuild, "按选定标题重画 A / B 封面"))
+    cr.add_argument("--title", type=int, default=None, help="选第几条标题(package 里的下标)")
 
     with_pid(add("script", cmd_script_show, "看脚本与 lint"))
     spu = with_pid(add("script-put", cmd_script_put, "门禁 A 改稿(JSON,- = stdin)"))

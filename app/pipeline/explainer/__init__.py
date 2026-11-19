@@ -497,6 +497,7 @@ def _render_pending(project_id: str, specs: Sequence[ShotSpec], *, subject: str,
                                        style=style, headline=headline, notes=notes,
                                        ranges=profile.vocab.concept_ranges,
                                        role=beat_role(where, pos, len(chapters)),
+                                       project_id=project_id,
                                        ledger=ledger_rows(specs, where, pos) if use_ledger
                                        else None)
         except (render_mod.RenderError, RuntimeError, OSError) as exc:

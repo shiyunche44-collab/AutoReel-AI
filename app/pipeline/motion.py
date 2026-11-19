@@ -10,7 +10,10 @@
 - 模版:默认用每个场景的专用模板;另有一批通用模版(`motion/templates/*.html`),
   一个 HTML 套所有场景,版式、动效、字体、配色各不相同(不是换皮);
 - 结果按 (模板内容 + 风格 + 数据 + 时长 + 画幅) 缓存在 `data/_cache/motion/`,重拍、重合成不重渲;
-- `snapshot` 只截几个时刻的 PNG(十几秒),给"先看风格再渲染"用。
+- `snapshot` 只截几个时刻的 PNG(十几秒),给"先看风格再渲染"用;
+- 项目内场景:Claude 为某一拍现写的片段放在 `<项目目录>/motion/<beat>.html`
+  (`project_scene_path`)。`scene` 参数传 `Path` 就读这个文件,不走风格模版;
+  缓存键带片段内容哈希,片段一改就是新缓存。写之前先过 `motion_lint.lint`。
 
 骨架:模版文件只写自己的东西(说明与 meta、样式、动效),HTML 外壳只有一份 ——
 `motion/_shell.html` 负责画幅、复位、根容器和脚本挂载,`motion/_lib.js` 是共用的小工具
@@ -184,32 +187,105 @@ def available_scenes() -> set[str]:
     return {p.stem for p in d.glob("*.html") if not p.stem.startswith("_")} if d.is_dir() else set()
 
 
-def _template(scene: str) -> str:
-    path = scenes_dir() / f"{scene}.html"
+#: 场景:库里的场景名(`motion/scenes/<名>.html`),或项目内片段文件的路径
+SceneRef = str | Path
+#: 项目目录下放现写片段的子目录
+PROJECT_SCENES = "motion"
+_BEAT_SAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def beat_key(beat: int | str) -> str:
+    """拍号 -> 片段文件名(不含扩展名)。数字统一补成三位("3" / 3 -> "003",
+    和渲染工作目录 `_work/003` 一致);其余只留字母数字和 `-_`。"""
+    text = str(beat).strip()
+    if text.isdigit():
+        return f"{int(text):03d}"
+    safe = _BEAT_SAFE.sub("", text)
+    if not safe:
+        raise ValueError(f"非法拍号 {beat!r}")
+    return safe
+
+
+def project_scenes_dir(project_id: str) -> Path:
+    """项目内场景片段目录 `<项目目录>/motion/`(项目目录取法同 `db`:`config.project_dir`)。"""
+    return config.project_dir(project_id) / PROJECT_SCENES
+
+
+def project_scene_path(project_id: str, beat: int | str) -> Path:
+    """这一拍的项目内片段该放哪(不管存不存在):`<项目目录>/motion/<beat>.html`。"""
+    return project_scenes_dir(project_id) / f"{beat_key(beat)}.html"
+
+
+def project_scene(project_id: str, beat: int | str) -> Path | None:
+    """这一拍有没有现写的片段:有就返回路径,没有返回 None。"""
+    path = project_scene_path(project_id, beat)
+    return path if path.is_file() else None
+
+
+def project_scene_data(scene: Path) -> dict[str, Any]:
+    """项目片段旁边的 `<beat>.json`:片段自己要的额外数据(中文标注、词条…),
+    合进 `window.__DATA__`(覆盖同名键)。没有或写坏了返回空 dict。
+    这里面的数字同样要过 `motion_lint.lint`。"""
+    side = scene.with_suffix(".json")
+    if not side.is_file():
+        return {}
+    try:
+        got = json.loads(side.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def is_project_scene(scene: SceneRef | None) -> bool:
+    return isinstance(scene, Path)
+
+
+def scene_name(scene: SceneRef) -> str:
+    """场景的名字(缓存文件名、日志用):库里的场景就是场景名,项目片段取文件名。"""
+    return scene.stem if isinstance(scene, Path) else scene
+
+
+def _scene_file(scene: SceneRef) -> Path:
+    return scene if isinstance(scene, Path) else scenes_dir() / f"{scene}.html"
+
+
+def fragment_sha(scene: SceneRef) -> str:
+    """片段文件内容的指纹(没有文件 = 空串)。"""
+    path = _scene_file(scene)
+    return hashlib.sha1(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def _template(scene: SceneRef) -> str:
+    path = _scene_file(scene)
     return path.read_text(encoding="utf-8") if path.is_file() else ""
 
 
-def supports_portrait(style: str | None, scene: str | None = None) -> bool:
+def _style_for(scene: SceneRef | None, style: str | None) -> Style:
+    """项目片段自成一体,不套通用模版:风格一律按默认模版处理。"""
+    return get_style(DEFAULT_STYLE if is_project_scene(scene) else style)
+
+
+def supports_portrait(style: str | None, scene: SceneRef | None = None) -> bool:
     """这个模版的布局适配过竖屏没有(文件头注释里写 `@portrait yes`)。
     通用模版看模版文件自己;默认模版用场景专用模板,看那个场景文件的文件头(不给 scene 算没适配)。
     没适配的模版也能按竖屏尺寸渲,只是版式还是横屏那套,会挤会出界。"""
-    st = get_style(style)
+    st = _style_for(scene, style)
     if st.path is not None:
         return st.portrait
-    return bool(scene) and _yes(_header_meta(_template(scene)).get("portrait"))
+    return scene is not None and scene != "" and _yes(_header_meta(_template(scene)).get("portrait"))
 
 
-def scene_background(scene: str, style: str | None = None) -> str:
+def scene_background(scene: SceneRef, style: str | None = None) -> str:
     """模板要的底:studio(自带影棚)或 footage(压在实拍上);通用模版自带底(own),不铺实拍。"""
-    if get_style(style).path is not None:
+    if _style_for(scene, style).path is not None:
         return "own"
     m = _BG_META.search(_template(scene))
     return m.group(1) if m else "footage"
 
 
-def scene_photo_views(scene: str, style: str | None = None) -> list[str]:
+def scene_photo_views(scene: SceneRef, style: str | None = None) -> list[str]:
     """模板想要的车图视角(按优先级);空 = 模板不用车图。通用模版要车图时用场景模板声明的视角。"""
-    st = get_style(style)
+    st = _style_for(scene, style)
     if st.path is not None and not st.photo:
         return []
     m = _PHOTO_META.search(_template(scene))
@@ -263,7 +339,7 @@ def _family_css(family: str) -> str:
     return "\n".join("    " + ln if ln.strip() else ln for ln in css.splitlines()) + "\n"
 
 
-def compose_html(scene: str, data: dict[str, Any], seconds: float, background: bool = False,
+def compose_html(scene: SceneRef, data: dict[str, Any], seconds: float, background: bool = False,
                  photo: Cutout | None = None, style: str | None = None,
                  size: tuple[int, int] = SIZE) -> str:
     """把数据和时长灌进模版片段,按骨架拼成完整 HTML。
@@ -273,11 +349,14 @@ def compose_html(scene: str, data: dict[str, Any], seconds: float, background: b
 
     background=True:底是工作目录里的 bg.mp4(这一拍的实拍),否则用暗色径向底。
     photo:抠好的车图,几何信息写进 `__DATA__.photo`,图片本身由 render 拷成 car.png。
-    size:画幅像素尺寸,写进骨架的宽高占位;根节点 data-aspect 标出横竖。"""
-    path = scenes_dir() / f"{scene}.html"
+    size:画幅像素尺寸,写进骨架的宽高占位;根节点 data-aspect 标出横竖。
+    scene 传 `Path` = 项目内现写的片段(`project_scene_path`),不套通用模版,
+    样式家族按场景专用(scenes)。"""
+    path = _scene_file(scene)
     if not path.is_file():
-        raise MotionError(f"没有动画模板 {scene}({path})")
-    st = get_style(style)
+        raise MotionError(f"没有动画模板 {scene_name(scene)}({path})")
+    st = _style_for(scene, style)
+    name = scene_name(scene)
     tpl = st.path or path
     meta, css, js = _split_fragment(tpl.read_text(encoding="utf-8"), tpl.stem)
     family = "templates" if st.path is not None else "scenes"
@@ -299,7 +378,7 @@ def compose_html(scene: str, data: dict[str, Any], seconds: float, background: b
     extra: dict[str, Any] = {"seconds": round(seconds, 3)}
     if st.path is not None:
         # 通用模版不知道自己在画哪个场景:告诉它场景名和栏目名
-        extra.update(scene=scene, kicker=KICKERS.get(scene, ""))
+        extra.update(scene=name, kicker=KICKERS.get(name, ""))
     if photo is not None:
         extra["photo"] = {**photo.geometry(), "src": PHOTO_FILE,
                           "edges": EDGES_FILE if photo.edges else ""}
@@ -329,11 +408,14 @@ def _file_sha(path: Path | None) -> str:
     return h.hexdigest()
 
 
-def cache_key(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, int],
+def cache_key(scene: SceneRef, data: dict[str, Any], seconds: float, size: tuple[int, int],
               background: str | Path | None = None, photo: Cutout | None = None,
               style: str | None = None) -> str:
+    """渲染结果的缓存键:拼好的 HTML + 画幅 + 底 / 车图指纹 + 公用脚本。
+    项目片段再单独带上片段文件的内容哈希(片段一改就是新缓存)。"""
     bg = Path(background) if background else None
-    parts = [compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style,
+    parts = ["frag:" + fragment_sha(scene) if is_project_scene(scene) else "",
+             compose_html(scene, data, seconds, background=bg is not None, photo=photo, style=style,
                           size=size),
              f"{size[0]}x{size[1]}", aspect_of(size), _file_sha(bg),
              _file_sha(Path(photo.png)) if photo else "nophoto"]
@@ -365,7 +447,7 @@ def _env() -> dict[str, str]:
 _gpu_hung = False
 
 
-def _run_cli(scene: str, work: Path, out: Path, seconds: float) -> subprocess.CompletedProcess:
+def _run_cli(scene: SceneRef, work: Path, out: Path, seconds: float) -> subprocess.CompletedProcess:
     """跑 HyperFrames。默认让它自己探测浏览器 GPU;GPU 卡死(实测:锁屏 / 远程会话下
     d3d11 初始化挂在 page.goto,一帧都不出)就换软件渲染(SwiftShader)重跑一次。
     软件渲染慢得多(实测约 40 秒出 1 秒画面,压实拍底更慢;多开 worker 反而更慢),
@@ -389,8 +471,8 @@ def _run_cli(scene: str, work: Path, out: Path, seconds: float) -> subprocess.Co
             if gpu:
                 _gpu_hung = True
                 continue
-            raise MotionError(f"概念动画 {scene} 渲染超时({timeout}s,软件渲染)") from exc
-    raise MotionError(f"概念动画 {scene} 没有可用的渲染方式")  # pragma: no cover
+            raise MotionError(f"概念动画 {scene_name(scene)} 渲染超时({timeout}s,软件渲染)") from exc
+    raise MotionError(f"概念动画 {scene_name(scene)} 没有可用的渲染方式")  # pragma: no cover
 
 
 def _check(size: tuple[int, int]) -> None:
@@ -410,7 +492,7 @@ def _inputs(background: str | Path | None, photo: Cutout | None) -> tuple[Path |
     return bg, photo
 
 
-def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: Path | None,
+def _prepare(work: Path, scene: SceneRef, data: dict[str, Any], seconds: float, bg: Path | None,
              photo: Cutout | None, style: str | None, size: tuple[int, int],
              assets: dict[str, Path] | None = None) -> None:
     """渲染 / 截图共用的工作目录:index.html + 公用文件 + gsap + 底 + 车图 + 模版自带的图。"""
@@ -437,7 +519,7 @@ def _prepare(work: Path, scene: str, data: dict[str, Any], seconds: float, bg: P
         shutil.copyfile(_three(), work / "three.min.js")
 
 
-def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, int],
+def render(scene: SceneRef, data: dict[str, Any], seconds: float, size: tuple[int, int],
            dest: str | Path, background: str | Path | None = None,
            photo: Cutout | None = None, style: str | None = None,
            assets: dict[str, Path] | None = None) -> Path:
@@ -447,14 +529,15 @@ def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, in
     photo:抠好的车图(`motion_assets.hero_still`),不给时模板走无车图版本。
     style:风格 id(`styles()`),不给 / 不认识用默认风格。
     assets:模版要用的额外图片 {工作目录里的文件名: 源文件}(机构画面的剖视图)。缓存键不看
-    文件内容,调用方要把图的指纹放进 data(见 `asset_data`)。"""
+    文件内容,调用方要把图的指纹放进 data(见 `asset_data`)。
+    scene:库里的场景名,或项目内片段的 `Path`(`project_scene`);传 Path 时 style 不起作用。"""
     _check(size)
     seconds = max(1.0, float(seconds))
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     bg, photo = _inputs(background, photo)
     key = cache_key(scene, data, seconds, size, bg, photo, style)
-    cached = cache_dir() / f"{scene}_{key}.mp4"
+    cached = cache_dir() / f"{scene_name(scene)}_{key}.mp4"
     if cached.is_file() and cached.stat().st_size > 0:
         shutil.copyfile(cached, dest)
         return dest
@@ -466,7 +549,7 @@ def render(scene: str, data: dict[str, Any], seconds: float, size: tuple[int, in
         proc = _run_cli(scene, work, out, seconds)
         if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
             tail = (proc.stderr or proc.stdout or "")[-400:]
-            raise MotionError(f"概念动画 {scene} 渲染失败:{tail}")
+            raise MotionError(f"概念动画 {scene_name(scene)} 渲染失败:{tail}")
         shutil.copyfile(out, cached)
         shutil.copyfile(out, dest)
         return dest
@@ -483,7 +566,7 @@ def _snap_times(at: list[float], seconds: float) -> list[float]:
     return [round(min(max(0.0, t), seconds - 0.05), 2) for t in at] or [round(seconds * 0.7, 2)]
 
 
-def snapshot_names(scene: str, data: dict[str, Any], seconds: float, at: list[float],
+def snapshot_names(scene: SceneRef, data: dict[str, Any], seconds: float, at: list[float],
                    size: tuple[int, int], dest_dir: str | Path, background: str | Path | None = None,
                    photo: Cutout | None = None, style: str | None = None) -> list[Path]:
     """`snapshot` 会写到哪几个文件(不截图)。名字含内容哈希:模板、风格、数据任一变了就是新文件。"""
@@ -492,10 +575,11 @@ def snapshot_names(scene: str, data: dict[str, Any], seconds: float, at: list[fl
     bg, photo = _inputs(background, photo)
     key = cache_key(scene, data, seconds, size, bg, photo, style)
     tag = hashlib.sha1(",".join(f"{t:g}" for t in at).encode()).hexdigest()[:6]
-    return [Path(dest_dir) / f"{scene}_{get_style(style).id}_{key}_{tag}_{n}.png" for n in range(len(at))]
+    sid = _style_for(scene, style).id
+    return [Path(dest_dir) / f"{scene_name(scene)}_{sid}_{key}_{tag}_{n}.png" for n in range(len(at))]
 
 
-def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
+def snapshot(scene: SceneRef, data: dict[str, Any], seconds: float, at: list[float],
              size: tuple[int, int], dest_dir: str | Path, background: str | Path | None = None,
              photo: Cutout | None = None, style: str | None = None,
              assets: dict[str, Path] | None = None) -> list[Path]:
@@ -534,7 +618,7 @@ def snapshot(scene: str, data: dict[str, Any], seconds: float, at: list[float],
             if shots.is_dir() else []
         if len(frames) < len(at):
             tail = ((proc.stderr or proc.stdout) if proc else "超时")[-400:]
-            raise MotionError(f"概念动画 {scene} 截图失败:{tail}")
+            raise MotionError(f"概念动画 {scene_name(scene)} 截图失败:{tail}")
         for src, dst in zip(frames, names):
             shutil.copyfile(src, dst)
         return names

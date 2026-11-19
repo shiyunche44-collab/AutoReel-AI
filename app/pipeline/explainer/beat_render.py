@@ -296,11 +296,13 @@ def hook_background(subject: str, seconds: float, size: tuple[int, int], work: P
 
 def concept_inputs(spec: ShotSpec, subject: str, seconds: float, size: tuple[int, int], work: Path,
                    used: dict[str, int], recent: list[str], style: str | None = None,
-                   role: str = "body"
+                   role: str = "body", scene: motion.SceneRef | None = None
                    ) -> tuple[Path | None, motion_assets.Cutout | None, list[library.Piece]]:
     """concept 拍的素材:(实拍底, 车图, 用到的片段)。正式渲染和选风格预览共用,保证预览看到的就是成片的样子。
-    产品镜(studio)用模板自带的影棚底,不铺实拍;通用模版自带底;其余压在一段实拍上。"""
-    scene = (spec.overlay or {}).get("scene", "")
+    产品镜(studio)用模板自带的影棚底,不铺实拍;通用模版自带底;其余压在一段实拍上。
+    `scene` 给了(项目内片段的 Path)就按它的 meta 取底和车图,否则用分镜里写的场景名。"""
+    if scene is None:
+        scene = (spec.overlay or {}).get("scene", "")
     bg_clip: Path | None = None
     pieces: list[library.Piece] = []
     if motion.scene_background(scene, style) == "footage":
@@ -372,6 +374,20 @@ def concept_style_of(project_id: str) -> str:
     return motion.get_style(got.get("style") or looks.of_project(project_id).concept).id
 
 
+def _lint_own_scene(scene: Path, data: dict, project_id: str | None, seconds: float,
+                    size: tuple[int, int]) -> None:
+    """现写片段渲染前过一遍硬校验(`motion_lint`):有 error 就按渲染失败处理(退回数据卡),
+    尤其是画面上的数字对不上事实 —— 那种片子不能出。"""
+    from ...models import Fact
+    from .. import motion_lint
+
+    facts = [Fact(**d) for d in db.read_json(project_id, "facts.json", []) or []] if project_id else []
+    errs = motion_lint.errors(motion_lint.lint(scene.read_text(encoding="utf-8"), data, facts,
+                                               seconds, size))
+    if errs:
+        raise motion.MotionError("现写片段没过 lint:" + ";".join(e.message for e in errs[:3]))
+
+
 def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir: Path,
                 chapters: Sequence[tuple[str, float]], chapter_idx: int,
                 used: dict[str, int], card_bg: Path | None,
@@ -381,7 +397,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                 notes: list[str] | None = None,
                 ranges: dict[str, str] | None = None,
                 role: str = "body",
-                ledger: Sequence[tuple[str, str]] | None = None) -> tuple[Path, list[dict]]:
+                ledger: Sequence[tuple[str, str]] | None = None,
+                project_id: str | None = None) -> tuple[Path, list[dict]]:
     """渲染一拍,返回 (成品路径, 用到的背景片段)。
 
     `recent` 是全片共享的最近用过的片段(相邻多样性,见 `library.fill`);
@@ -392,6 +409,8 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
     `role` 是这一拍在片子里的位置(`beat_role`),决定背景能不能用第三方视频(见 `library.fill`)。
     `ledger` 给了(哪怕是空的)= 这个片型开了常驻参数清单(`ledger_rows`):行画在左上角,
     参数面板不再单独画 —— 同一批行不摆两遍。
+    `project_id` 给了且项目目录下有这一拍现写的片段(`motion.project_scene`),概念动画拍
+    优先用它(旁边的 `<beat>.json` 合进数据),不套项目风格、不做竖屏换模版;渲染失败照样退回数据卡。
 
     竖屏(三段式):实拍先按画面带尺寸渲(`footage_size`),再用 `band_frame`
     放进 1080×1920;数据卡和概念动画直接按整幅渲。"""
@@ -425,17 +444,30 @@ def render_beat(spec: ShotSpec, *, subject: str, size: tuple[int, int], out_dir:
                             background=card_bg, size=size)
     elif spec.layout == "concept" and spec.overlay:
         scene = spec.overlay.get("scene", "")
-        use_style, why = portrait_concept_style(scene, style, size)
+        own = motion.project_scene(project_id, spec.idx) if project_id else None
+        ref: motion.SceneRef = own if own is not None else scene
+        if own is not None:
+            # 现写的片段是按这个项目的画幅和这一拍写的:不套风格,也不做竖屏换模版
+            use_style: str | None = motion.DEFAULT_STYLE
+            why = ""
+            scene = f"{scene or 'concept'}({own.name})"
+        else:
+            use_style, why = portrait_concept_style(scene, style, size)
         if why and notes is not None:
             notes.append(f"第 {spec.idx} 拍概念动画:{why}")
         try:
             if use_style is None:
                 raise motion.MotionError(why)
             bg_clip, photo, pieces = concept_inputs(spec, subject, seconds, size, work / "concept_bg",
-                                                    used, recent, use_style, role=role)
-            base = motion.render(scene, motion.scene_data(spec.overlay, subject, ranges), seconds, size,
+                                                    used, recent, use_style, role=role, scene=ref)
+            data = motion.scene_data(spec.overlay, subject, ranges)
+            if own is not None:
+                data.update(motion.project_scene_data(own))
+                _lint_own_scene(own, data, project_id, seconds, size)
+            base = motion.render(ref, data, seconds, size,
                                  work / "concept.mp4", background=bg_clip, photo=photo, style=use_style)
-            clear_title = motion.get_style(use_style).path is not None
+            # 通用模版和现写片段都是整屏设计,竖屏标题区让位
+            clear_title = own is not None or motion.get_style(use_style).path is not None
         except motion.MotionError as exc:
             # 动画渲染不了:同一批核对过的行画成数据卡,不让整拍失败 —— 但要留痕,
             # 否则"概念动画全变成数据卡"看起来像正常产出

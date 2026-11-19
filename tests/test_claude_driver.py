@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -365,3 +366,175 @@ def test_package_prompt_and_put(store, monkeypatch, capsys, tmp_path):
     bad.write_text('{"comment": {}}', encoding="utf-8")
     code, out = _run(capsys, "package-put", pid, str(bad))
     assert code == cli.REJECTED
+
+
+# --------------------------------------------------------------------------
+# 概念动画:现写片段
+# --------------------------------------------------------------------------
+def _concept_project(capsys) -> str:
+    pid = _gate_a_project(capsys)
+    shots = db.read_json(pid, "storyboard.json", [])
+    shot = next(s for s in shots if s["idx"] == 1)
+    shot.update(layout="concept", duration=6.0, overlay={
+        "kind": "concept", "scene": "battery", "title": "续航",
+        "rows": [{"label": "续航", "values": ["835 公里"], "fact_id": "f_1"}]})
+    db.write_json(pid, "storyboard.json", shots)
+    return pid
+
+
+_GOOD_FRAGMENT = """<meta name="hf-bg" content="studio" />
+<style> .big { position: absolute; left: 200px; top: 300px; font-size: 120px; } </style>
+<script>
+  const { tl, D, A, T, S } = HF.boot({});
+  const big = HF.add(HF.el("div", "big", D.label));
+  tl.fromTo(big, { opacity: 0 }, { opacity: 1, duration: T(0.5) }, 0.2);
+  HF.exit(tl, [big], A.outAt, A.outDur);
+  HF.register(tl);
+</script>
+"""
+
+
+def test_motion_info_new_lint(store, monkeypatch, capsys):
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    pid = _concept_project(capsys)
+
+    code, info = _run(capsys, "motion", "info", pid, "1")
+    assert code == cli.OK and info["layout"] == "concept" and not info["fragment_exists"]
+    assert info["seconds"] == 6.0 and info["facts"][0]["id"] == "f_1"
+    assert info["notes"] == []
+
+    code, out = _run(capsys, "motion", "lint", pid, "1")
+    assert code == cli.REJECTED and "motion new" in out["error"]
+
+    code, out = _run(capsys, "motion", "new", pid, "1", "--from", "nope")
+    assert code == cli.REJECTED and "nope" in out["error"]
+    code, made = _run(capsys, "motion", "new", pid, "1")
+    assert code == cli.OK and made["from"] == "battery"
+    assert "HF.register" in Path(made["fragment"]).read_text(encoding="utf-8")
+    code, out = _run(capsys, "motion", "new", pid, "1")
+    assert code == cli.REJECTED  # 已有片段不覆盖
+    code, out = _run(capsys, "motion", "new", pid, "1", "--force")
+    assert code == cli.OK
+
+    # 现写:中文进 sidecar,数字对得上事实
+    Path(made["fragment"]).write_text(_GOOD_FRAGMENT, encoding="utf-8")
+    Path(made["sidecar"]).write_text('{"label": "续航 835 公里"}', encoding="utf-8")
+    code, out = _run(capsys, "motion", "lint", pid, "1")
+    assert code == cli.OK and out["pass"], out
+
+    # 编一个数字:lint 拦,截帧 / 渲染都拒绝(不真的起浏览器)
+    Path(made["sidecar"]).write_text('{"label": "续航 999 公里"}', encoding="utf-8")
+    code, out = _run(capsys, "motion", "lint", pid, "1")
+    assert not out["pass"] and any("999" in i["message"] for i in out["issues"])
+    for cmd in ("snapshot", "render"):
+        code, out = _run(capsys, "motion", cmd, pid, "1")
+        assert code == cli.REJECTED and "lint" in out["error"]
+
+    # 片段里写中文:lint 拦
+    Path(made["sidecar"]).write_text('{"label": "续航 835 公里"}', encoding="utf-8")
+    Path(made["fragment"]).write_text(_GOOD_FRAGMENT.replace("D.label", '"续航"'),
+                                      encoding="utf-8")
+    code, out = _run(capsys, "motion", "lint", pid, "1")
+    assert not out["pass"] and any("ASCII" in i["message"] for i in out["issues"])
+
+
+def test_motion_info_flags_non_concept_beat(store, monkeypatch, capsys):
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    pid = _gate_a_project(capsys)
+    code, info = _run(capsys, "motion", "info", pid, "1")
+    assert code == cli.OK and info["notes"] and "concept" in info["notes"][0]
+    code, out = _run(capsys, "motion", "info", pid, "99")
+    assert code == cli.REJECTED
+
+
+def test_ascii_starter_strips_chinese_comments_only():
+    from app.cli.main import _ascii_starter
+    from app.pipeline import motion
+
+    out = _ascii_starter((motion.scenes_dir() / "battery.html").read_text(encoding="utf-8"))
+    assert "@portrait yes" in out and "产品镜" not in out
+    for line in out.splitlines():
+        if not line.isascii():
+            assert "//" not in line and "/*" not in line and "<!--" not in line, line
+
+
+def test_own_scene_failing_lint_falls_back(store, tmp_path):
+    from app.pipeline import motion
+    from app.pipeline.explainer import beat_render
+
+    pid = "p_lint"
+    db.write_json(pid, "facts.json", [Fact(id="f_1", claim="续航 835 公里", source_tool="t",
+                                           scope="product", basis="CLTC", source_kind="official",
+                                           topic="续航").model_dump()])
+    scene = tmp_path / "001.html"
+    scene.write_text(_GOOD_FRAGMENT, encoding="utf-8")
+    beat_render._lint_own_scene(scene, {"label": "835 公里"}, pid, 6.0, (1920, 1080))
+    with pytest.raises(motion.MotionError, match="lint"):
+        beat_render._lint_own_scene(scene, {"label": "999 公里"}, pid, 6.0, (1920, 1080))
+
+
+# --------------------------------------------------------------------------
+# 配音 / 生图 / 封面
+# --------------------------------------------------------------------------
+def test_voice_reports_qa(store, monkeypatch, capsys):
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    _, made = _run(capsys, "new", "测试车型")
+    pid = made["project_id"]
+    code, out = _run(capsys, "voice", pid)
+    assert code == cli.REJECTED
+    db.write_json(pid, "narration.json", {"sentence_count": 3, "total_chars": 60,
+                                          "total_duration": 10.0, "warnings": ["w"]})
+    db.write_json(pid, "voice_qa.json", {"errors": [1], "asr_available": False, "redone": [1],
+                                         "findings": [{"index": 1, "level": "error"}]})
+    code, out = _run(capsys, "voice", pid)
+    assert code == cli.OK and out["chars_per_second"] == 6.0
+    assert out["qa"]["errors"] == [2] and out["warnings"] == ["w"]
+
+
+def test_image_downloads_into_project(store, monkeypatch, capsys):
+    import httpx
+
+    from app.providers import ark_image
+
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    _, made = _run(capsys, "new", "测试车型")
+    pid = made["project_id"]
+    monkeypatch.setattr(ark_image, "generate",
+                        lambda prompt, **kw: ["https://img/1", "https://img/2"])
+
+    def fake_get(url, timeout=0):
+        if url.endswith("2"):
+            raise httpx.ConnectError("boom")
+        return httpx.Response(200, content=b"PNG", headers={"content-type": "image/png"},
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    code, out = _run(capsys, "image", "银色 SUV 正侧面", "--project", pid)
+    assert code == cli.OK and len(out["images"]) == 1 and len(out["failed"]) == 1
+    assert Path(out["images"][0]).read_bytes() == b"PNG"
+    assert Path(out["images"][0]).parent == config.project_dir(pid) / "images"
+
+
+def test_cover_rebuild_picks_title(store, monkeypatch, capsys):
+    from app.pipeline import packaging
+    from app.pipeline.cover_art import builder
+
+    monkeypatch.setattr(intake, "run", _fake_intake)
+    _, made = _run(capsys, "new", "测试车型")
+    pid = made["project_id"]
+    packaging.save(pid, packaging.Packaging(titles=[
+        packaging.TitleOption(text="测试车型该不该买", kind="stake"),
+        packaging.TitleOption(text="测试车型适合谁", kind="person")]))
+    monkeypatch.setattr(builder, "rebuild",
+                        lambda p: {"ok": True, "a": {"path": "a.jpg", "main": "m"}})
+    code, out = _run(capsys, "cover-rebuild", pid, "--title", "1")
+    assert code == cli.OK and out["a"] == "a.jpg" and out["b"] is None
+    assert packaging.load(pid).picked["title"] == 1
+    code, out = _run(capsys, "cover-rebuild", pid, "--title", "5")
+    assert code == cli.REJECTED
+    monkeypatch.setattr(builder, "rebuild", lambda p: {"ok": True, "a": {}, "b": {}})
+    code, out = _run(capsys, "cover-rebuild", pid)
+    assert code == cli.REJECTED and "degradations" in out["error"]
+    code, out = _run(capsys, "cover", pid)
+    assert code == cli.OK and out["titles"] == ["测试车型该不该买", "测试车型适合谁"]
+    assert out["covers"] == {}
