@@ -178,3 +178,52 @@ def test_sheet_the_llm_skipped_counts_as_clean_when_it_was_described(monkeypatch
     monkeypatch.setattr(vision_verdict, "judge", judge)
     rep = cut_review.review(video, tmp_path / "w", subject="银河E5", cues=CUES, llm=object())
     assert not rep["inconclusive"] and rep["passed"] and len(rep["issues"]) == 1
+
+
+def test_aesthetic_issues_are_hints_once_per_sheet(monkeypatch, tmp_path):
+    """画面美感(糊、切车、字压车、空镜)只提示、不复核;同一张联系表同一种只留头一条。"""
+    sheets = [{"issues": [{"kind": "blurry", "at": 1.5, "detail": "像低清图放大"},
+                          {"kind": "blurry", "at": 2.5, "detail": "又一格糊"},
+                          {"kind": "cropped", "at": 3.5, "detail": "车头出画"}]},
+              {"issues": [{"kind": "empty_shot", "at": 5.5, "detail": "只有天空"},
+                          {"kind": "text_on_subject", "at": 6.5, "detail": "大字压在车门上"}]}]
+    video, calls = _stub(monkeypatch, tmp_path, sheets)
+    rep = cut_review.review(video, tmp_path / "w", subject="银河E5", cues=CUES, llm=object())
+    assert [(i["kind"], i["at"]) for i in rep["issues"]] == [
+        ("blurry", 1.5), ("cropped", 3.5), ("empty_shot", 5.5), ("text_on_subject", 6.5)]
+    assert rep["passed"] and not rep["bad_ranges"]
+    assert not any(i["blocking"] for i in rep["issues"])
+    assert not [c for c in calls if c[0] == "帧"]  # 不取大图复核
+    assert "4 条提示" in rep["summary"]
+    # 提示词里每一种都有说明;都不打回、不复核
+    assert all(kind in cut_review.REVIEW_SYSTEM for kind in cut_review.AESTHETIC)
+    assert cut_review.AESTHETIC <= set(cut_review.KINDS)
+    assert not cut_review.AESTHETIC & (set(cut_review.BLOCKING) | set(cut_review.CONFIRM_KINDS))
+
+
+def test_style_notes_only_for_the_file_that_was_measured(tmp_path):
+    video = tmp_path / "output.mp4"
+    video.write_bytes(b"x")
+    style = {"video": str(video), "measured_at": time.time() + 1,
+             "warnings": ["正片长镜头(p90) 2.27秒(对标 2.7~4秒)"]}
+    assert cut_review.style_notes(style, video) == ["风格:正片长镜头(p90) 2.27秒(对标 2.7~4秒)"]
+    # 量完又重出过 / 量的是别的文件 / 没量过:都不带
+    assert cut_review.style_notes({**style, "measured_at": video.stat().st_mtime - 10}, video) == []
+    assert cut_review.style_notes({**style, "video": str(tmp_path / "other.mp4")}, video) == []
+    assert cut_review.style_notes({}, video) == []
+
+
+def test_review_project_hands_style_warnings_to_the_final_review(fresh_db, monkeypatch):
+    from app.pipeline import aspect
+
+    _plan(fresh_db)
+    video = aspect.output_path("p_x")
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"x")
+    fresh_db.write_json("p_x", "render.json", {"style": {
+        "video": str(video), "measured_at": time.time() + 1, "warnings": ["语速 6.9 字/秒"]}})
+    monkeypatch.setattr(cut_review, "review", lambda *a, **kw: {
+        "passed": True, "inconclusive": False, "issues": [], "notes": ["真峰值偏高"],
+        "summary": "机审通过"})
+    rep = cut_review.review_project("p_x")
+    assert rep["notes"] == ["真峰值偏高", "风格:语速 6.9 字/秒"]

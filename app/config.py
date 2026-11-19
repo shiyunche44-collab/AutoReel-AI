@@ -439,6 +439,9 @@ def edit_font_default() -> Path:
 
 #: 剪辑 v2 横屏的门禁 B:静图秒数占比超过它就拦(可选「仍然继续」);0 = 不拦
 GATE_B_STILL_MAX = float(os.getenv("GATE_B_STILL_MAX", "0.4") or 0.4)
+#: 成片验收(`edit/style_check`):出片后量风格指标、和对标基线比,结果进 render.json 的 `style`。
+#: 7 分钟成片约 35 秒;只出提示不拦片子。`STYLE_CHECK=0` 关掉
+STYLE_CHECK = os.getenv("STYLE_CHECK", "1") != "0"
 
 
 def edit_v2_preview() -> bool:

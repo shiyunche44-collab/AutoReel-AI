@@ -1,0 +1,30 @@
+{#- 成片面板里的风格验收(render.json 的 style,见 app/pipeline/edit/style_check.py)。传入 render -#}
+{% set style = render.style %}
+{% if style %}
+<div class="output-style">
+  <div class="output-style-head">
+    <span class="subtle small">成片风格 · 对标讲解片</span>
+    {% if style.error %}<span class="tag tone-neutral">没量出来</span>
+    {% elif style.warnings %}<span class="tag tone-warning">{{ style.warnings | length }} 项偏离</span>
+    {% else %}<span class="tag tone-success">都在范围内</span>{% endif %}
+  </div>
+  {% if style.error %}
+  <p class="subtle small">{{ style.error }}</p>
+  {% else %}
+  <ul class="style-checks">
+    {% for c in style.checks or [] %}
+    {%- set lo, hi = c.range -%}
+    <li class="{{ 'is-off' if not c.ok }}"{% if c.hint %} title="{{ c.hint }}"{% endif %}>
+      <span class="style-label">{{ c.label }}</span>
+      <span class="num">{{ '%g' | format(c.value) }}{{ c.unit }}</span>
+      <span class="subtle small num">{% if lo is not none and hi is not none %}{{ '%g' | format(lo) }}~{{ '%g' | format(hi) }}{% elif lo is not none %}≥{{ '%g' | format(lo) }}{% else %}≤{{ '%g' | format(hi) }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% for c in style.checks or [] if not c.ok and c.hint %}
+  <p class="subtle small">{{ c.label }}:{{ c.hint }}</p>
+  {% endfor %}
+  {% if style.scope == "portrait" %}<p class="subtle small">竖屏只比动静、响度和音乐底</p>{% endif %}
+  {% endif %}
+</div>
+{% endif %}

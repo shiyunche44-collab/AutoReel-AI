@@ -51,7 +51,7 @@ SHEET_TEXT_MAX = 3000
 #: 屏上数字要在这格前后这么多秒的旁白里被说到
 SAID_PAD = 6.0
 
-#: 问题种类。前五种会打回,后两种只提示给终审
+#: 问题种类。前五种会打回,其余只提示给终审(后四种是画面美感:看着像 demo 的地方)
 KINDS = {
     "watermark": "别家水印 / 台标",
     "wrong_model": "不是目标车型",
@@ -60,7 +60,13 @@ KINDS = {
     "technical": "技术检测",
     "plate": "车牌可读",
     "number_mismatch": "屏上数字旁白没说",
+    "blurry": "画面糊 / 低清",
+    "cropped": "车被切掉一大块",
+    "text_on_subject": "文字压住车身",
+    "empty_shot": "空镜",
 }
+#: 美感项:同一种在一张联系表里只记一条(一组糊图会每格都报)
+AESTHETIC = frozenset({"blurry", "cropped", "text_on_subject", "empty_shot"})
 BLOCKING = frozenset({"watermark", "wrong_model", "text_blocked", "blank", "technical"})
 #: 这几种打回前要单帧复核
 CONFIRM_KINDS = frozenset({"watermark", "wrong_model", "text_blocked", "blank"})
@@ -76,7 +82,10 @@ SHEET_PROMPT = (
     "包括印在车牌位置上的;有没有能读出号码的真实车牌;\n"
     "2. 哪几格的车明显不是「{subject}」(说出看到的车标或字标),看不出就说看不出;\n"
     "3. 文字有没有被挡住、超出画面、互相重叠,卡通主持人有没有压在文字或数字上;\n"
-    "4. 有没有整格全黑、全白或花屏。"
+    "4. 有没有整格全黑、全白或花屏;\n"
+    "5. 画面好不好看:哪几格明显模糊、有马赛克或像低清图放大;哪几格的车被画面边缘切掉一大块"
+    "(车头或车尾出画);哪几格的字幕、大字或数据卡压在车身上;哪几格既没有车也没有文字信息"
+    "(天空、路面、空展台之类的空镜)。都没有就说没有。"
 )
 
 REVIEW_SYSTEM = """你把视觉模型对视频联系表的描述转成质检问题清单。片子讲的是「{subject}」。
@@ -90,6 +99,11 @@ REVIEW_SYSTEM = """你把视觉模型对视频联系表的描述转成质检问�
   "看不出来""无法确认"不算;内饰、局部特写认不出也不算。
 - "text_blocked":明确说文字被挡住、超出画面、互相重叠,或头像压在文字 / 数字上。
 - "blank":明确说某格全黑、全白或花屏。
+- 画面美感(只提示):
+  "blurry":明确说某格明显模糊、有马赛克、像低清图放大(背景虚化、运动模糊不算);
+  "cropped":明确说车被画面边缘切掉一大块、车头或车尾出画(本来就拍局部的特写不算);
+  "text_on_subject":明确说字幕、大字或数据卡压在车身上(压在背景、天空、地面上不算);
+  "empty_shot":明确说某格既没有车也没有文字信息。
 - screen_numbers:描述里抄出来的屏上大号数字(只要数字本身,如 "13.98"、"510"),
   连同它所在那格的时间;左上角的黄字时间不算。
 
@@ -244,9 +258,14 @@ def collect_issues(verdicts: Sequence[dict | None], sheets: Sequence[dict],
         if not isinstance(v, dict):
             continue
         lo, hi = float(sheet["start"]), float(sheet["end"])
+        seen: set[str] = set()
         for it in v.get("issues") or []:
             if not isinstance(it, dict) or it.get("kind") not in KINDS:
                 continue
+            if it["kind"] in AESTHETIC:
+                if it["kind"] in seen:
+                    continue
+                seen.add(it["kind"])
             at = min(hi, max(lo, _seconds(it.get("at"), lo)))
             issues.append({"kind": it["kind"], "at": round(at, 1),
                            "detail": str(it.get("detail") or "")[:120]})
@@ -435,6 +454,17 @@ def review(video: Path, work: Path, *, subject: str, cues: Sequence[dict] = (),
     return report
 
 
+def style_notes(style: dict[str, Any], video: Path) -> list[str]:
+    """出片时量的风格偏离(render.json 的 `style`,见 `edit.style_check`),交给终审一起看。
+    量的不是现在这个成片文件(换了文件,或量完又重出过)就不带。"""
+    try:
+        same = (Path(str(style.get("video") or "")).resolve() == video.resolve()
+                and video.stat().st_mtime <= float(style.get("measured_at") or 0))
+    except (OSError, TypeError, ValueError):
+        return []
+    return [f"风格:{w}" for w in style.get("warnings") or []] if same else []
+
+
 def review_project(project_id: str, llm: Any = None) -> dict[str, Any]:
     """审一个项目的成片,报告落到 `_render/qa/machine_review.json`。"""
     from .. import db
@@ -453,6 +483,8 @@ def review_project(project_id: str, llm: Any = None) -> dict[str, Any]:
         nar = db.read_json(project_id, "narration.json", {}) or {}
         report = review(video, work, subject=subject, cues=nar.get("cues") or [],
                         portrait=aspect.is_portrait(project), llm=llm)
+        style = (db.read_json(project_id, "render.json", {}) or {}).get("style") or {}
+        report["notes"] = [*report.get("notes", []), *style_notes(style, video)]
     try:
         dest = config.PROJECTS_DIR / project_id / REPORT_FILE
         dest.parent.mkdir(parents=True, exist_ok=True)

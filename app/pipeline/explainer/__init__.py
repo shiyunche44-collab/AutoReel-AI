@@ -905,7 +905,7 @@ def _finish_compose(project_id: str, specs: Sequence[ShotSpec], profile: Categor
                "cover_meta": meta, "cover_still": str(still) if still else None,
                "cover_style": "art" if art else "legacy",
                "cover_car": (art or {}).get("car_source", "legacy"),
-               "source_note": source_note}
+               "source_note": source_note, **_style(result.output_path, nar, project)}
     if art:
         payload["cover_art"] = {"a": art}
     db.write_json(project_id, "render.json", payload)
@@ -939,7 +939,7 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     result = _recompose_v2(project_id, nar, project)
     if result is not None:
         payload = {**(db.read_json(project_id, "render.json", {}) or {}), **result.to_dict(),
-                   "narration": nar}
+                   "narration": nar, **_style(result.output_path, nar, project)}
         db.write_json(project_id, "render.json", payload)
         return payload
     layer_path = _caption_layer(project_dir, nar, size, total)
@@ -971,9 +971,21 @@ def recompose(project_id: str, specs: Sequence[ShotSpec]) -> dict[str, Any]:
     if not result.ok or not result.output_path:
         raise RuntimeError("合成失败:" + "; ".join(result.warnings or []))
     payload = {**(db.read_json(project_id, "render.json", {}) or {}), **result.to_dict(),
-               "narration": nar}
+               "narration": nar, **_style(result.output_path, nar, project)}
     db.write_json(project_id, "render.json", payload)
     return payload
+
+
+def _style(video: Any, nar: dict, project: dict) -> dict[str, Any]:
+    """成片验收(`edit.style_check`):{"style": 块}。关了(`STYLE_CHECK=0`)是 {"style": None},
+    重合成时把旧片的结果盖掉。配乐是否该有看当前视觉包(编排器按项目套好了),和合成时同一个判断。"""
+    if not config.STYLE_CHECK or not video:
+        return {"style": None}
+    from ..edit import style_check
+
+    return {"style": style_check.measure(
+        Path(video), nar.get("cues") or [], portrait=aspect.is_portrait(project),
+        bgm=config.bgm_on(looks.current().bgm))}
 
 
 def _make_cover_b(project_id: str, project: dict, title: str, meta: dict, size: tuple[int, int],
