@@ -28,7 +28,7 @@ _tags: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "llm_ledger_tags", default=None)
 
 #: 这些模块是"通道"本身,取调用方时跳过
-_CHANNEL_MODULES = ("app.llm.", "app.providers.direct", "app.providers.ark_image",
+_CHANNEL_MODULES = ("app.llm.", "app.providers.direct", "app.providers.ark_",
                     "app.providers.cli", "contextlib")
 
 
@@ -62,6 +62,22 @@ def caller(depth_limit: int = 30) -> str:
 
 def fingerprint(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12] if text else ""
+
+
+@contextmanager
+def timed(*, kind: str, provider: str, model: str, prompt_chars: int = 0) -> Iterator[None]:
+    """块里是一次调用:正常结束记成功,抛异常记失败(异常照常往外抛)。
+    给没有 token 用量的通道用(TTS、搜索、专业数据集)。"""
+    started = time.monotonic()
+    purpose = caller()
+    try:
+        yield
+    except Exception as exc:
+        record(kind=kind, provider=provider, model=model, started=started, ok=False,
+               prompt_chars=prompt_chars, error=f"{type(exc).__name__}: {exc}", purpose=purpose)
+        raise
+    record(kind=kind, provider=provider, model=model, started=started, ok=True,
+           prompt_chars=prompt_chars, purpose=purpose)
 
 
 def record(*, kind: str, provider: str, model: str, started: float, ok: bool,

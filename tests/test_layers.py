@@ -33,7 +33,7 @@ RANK = {
     "pipeline": 5,
     **dict.fromkeys(("publish", "metrics", "maintenance"), 6),
     "team": 7,
-    **dict.fromkeys(("scheduler", "views", "routes", "background", "worker", "main"), 8),
+    **dict.fromkeys(("scheduler", "views", "routes", "background", "worker", "main", "cli"), 8),
 }
 
 #: 已知的越层引用 "文件 -> 目标层"。只许减不许增。

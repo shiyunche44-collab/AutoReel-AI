@@ -35,6 +35,10 @@ RENDER_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == RENDER)
 PREP_STATES = frozenset(str(s) for s in AUTO_STATES if lane_of(s) == PREP)
 AUTO_ADVANCE_STATES = RENDER_STATES | PREP_STATES
 
+#: `projects.driver` 取这个值的项目由 Claude Code 会话推进(`python -m app.cli step`),
+#: 调度器既不扫它也不接 kick:它的文字模型调用要等会话回答,调度器推进只会撞上 NeedsClaude
+CLAUDE_DRIVER = orchestrator.CLAUDE_DRIVER
+
 
 # --------------------------------------------------------------------------
 # 后台调度
@@ -160,6 +164,8 @@ class Scheduler:
                 continue
             if time.time() < float(row.get("advance_retry_at") or 0.0):
                 continue  # 还在退避窗口里,这一轮跳过
+            if row.get("driver") == CLAUDE_DRIVER:
+                continue  # Claude 会话推进的项目,调度器不碰
             self._enqueue(pid, row["state"])
 
     def _enqueue(self, pid: str, state: str | None = None) -> None:
@@ -167,7 +173,10 @@ class Scheduler:
         if pid in self._queued:
             return
         if state is None:
-            state = str((db.get_project(pid) or {}).get("state") or "")
+            row = db.get_project(pid) or {}
+            if row.get("driver") == CLAUDE_DRIVER:
+                return
+            state = str(row.get("state") or "")
         queue = self._queue_for(lane_of(state))
         if queue is None:
             return

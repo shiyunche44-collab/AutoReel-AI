@@ -524,6 +524,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # 退避窗口和"还差几次判死"全清零,坏项目立刻又被高频重试。
         ("advance_failures", "INTEGER NOT NULL DEFAULT 0"),
         ("advance_retry_at", "REAL NOT NULL DEFAULT 0"),
+        # 谁推进这个项目:scheduler = 后台调度器;claude = Claude Code 会话(`python -m app.cli`),
+        # 调度器不碰它,文字模型调用交给会话回答(见 `llm/handoff.py`)
+        ("driver", "TEXT NOT NULL DEFAULT 'scheduler'"),
     ):
         if col not in _column_names(conn, "projects"):
             conn.execute(f"ALTER TABLE projects ADD COLUMN {col} {ddl}")

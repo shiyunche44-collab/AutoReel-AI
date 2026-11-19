@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 
 from .. import config
+from ..llm import ledger
 from .cli import ConnectorError
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,14 @@ def speech_rate(speed: float) -> int:
 
 def synthesize(text: str, *, voice_id: str, speed: float = 1.0, timeout: float = 120,
                retries: int = 2, emotion: str = "", emotion_scale: int = 4) -> bytes:
+    """合成一句。记一行模型账本(kind=tts,prompt_chars = 字数)。"""
+    with ledger.timed(kind="tts", provider="ark", model=RESOURCE_ID, prompt_chars=len(text)):
+        return _synthesize(text, voice_id=voice_id, speed=speed, timeout=timeout,
+                           retries=retries, emotion=emotion, emotion_scale=emotion_scale)
+
+
+def _synthesize(text: str, *, voice_id: str, speed: float, timeout: float, retries: int,
+                emotion: str, emotion_scale: int) -> bytes:
     if not config.ARK_API_KEY:
         raise ConnectorError(TOOL, "未配置 ARK_API_KEY(方舟 Agent Plan 专属 API Key)")
     headers = {
@@ -91,6 +100,14 @@ def synthesize_take(ssml: str, *, voice_id: str, speed: float = 1.0, timeout: fl
                     retries: int = 2, emotion: str = "", emotion_scale: int = 4
                     ) -> tuple[bytes, list[tuple[str, float, float]]]:
     """整段 SSML 合成一条,连逐字时间戳一起返回:(音频, [(字, 起, 止)])。时间戳算上了 break。"""
+    with ledger.timed(kind="tts", provider="ark", model=RESOURCE_ID, prompt_chars=len(ssml)):
+        return _synthesize_take(ssml, voice_id=voice_id, speed=speed, timeout=timeout,
+                                retries=retries, emotion=emotion, emotion_scale=emotion_scale)
+
+
+def _synthesize_take(ssml: str, *, voice_id: str, speed: float, timeout: float, retries: int,
+                     emotion: str, emotion_scale: int
+                     ) -> tuple[bytes, list[tuple[str, float, float]]]:
     if not config.ARK_API_KEY:
         raise ConnectorError(TOOL, "未配置 ARK_API_KEY(方舟 Agent Plan 专属 API Key)")
     headers = {

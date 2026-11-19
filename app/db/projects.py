@@ -147,7 +147,7 @@ _PROJECT_COLUMNS = frozenset({
     "title", "subject", "category", "theme", "angle", "variant", "thesis", "subjects",
     "duration", "shot_count", "narration_mode", "state", "state_reason",
     "quota_budget", "spent_cost", "reserved_cost", "resume_state", "est_cost",
-    "created_at", "updated_at",
+    "created_at", "updated_at", "driver",
 })
 
 

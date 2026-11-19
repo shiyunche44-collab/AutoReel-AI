@@ -24,6 +24,7 @@ from ..categories import ProfileError, load_profile
 from ..llm import ledger
 from ..llm.ark import ArkProvider
 from ..llm.deepseek import DeepSeekProvider
+from ..llm.handoff import ClaudeHandoff
 from ..models import GateRequest, ProjectCreate, ScriptSegment, ShotSpec
 from ..state import GATE_STATES, TERMINAL_STATES, State, assert_transition, can_transition
 from . import (
@@ -49,6 +50,10 @@ LLM_REQUIRED_HINT = (
     "请在 .env 填入后重启服务。"
 )
 
+#: `projects.driver`:Claude Code 会话推进(与 `scheduler.CLAUDE_DRIVER` 同值)
+CLAUDE_DRIVER = "claude"
+
+
 class PipelineError(RuntimeError):
     """流水线无法继续。"""
 
@@ -69,7 +74,10 @@ def _llm():
 
 
 def _script_llm(default):
-    """脚本阶段用的 LLM:`SCRIPT_LLM=ark` 且方舟 Key 在 → 豆包 Seed,否则沿用 `default`。"""
+    """脚本阶段用的 LLM:`SCRIPT_LLM=ark` 且方舟 Key 在 → 豆包 Seed,否则沿用 `default`。
+    Claude 驱动的项目永远由 Claude 写稿。"""
+    if isinstance(default, ClaudeHandoff):
+        return default
     if config.SCRIPT_LLM == "ark":
         ark = ArkProvider()
         if ark.available():
@@ -462,13 +470,24 @@ def _advance(project_id: str, *, confirmed: bool = False, force: bool = False,
     if state == State.PAUSED_BUDGET:
         return {"state": str(state), "action": "已暂停(配额)", "waiting": True}
 
+    claude = is_claude_driven(project)
     ctx = _Ctx(project_id=project_id, project=project, profile=profile, theme=theme,
-               subject=subject, angle=angle, subjects=subjects, names=names, llm=_llm(),
+               subject=subject, angle=angle, subjects=subjects, names=names,
+               llm=ClaudeHandoff(project_id) if claude else _llm(),
                force=force, stop_event=stop_event)
     handler = STAGES.get(state)
     if handler is None:
         return {"state": str(state), "action": "无可执行步骤"}
+    if claude:
+        # 每答一题就重跑这一步:原始材料只采一次,提示词才稳定(见 intake.reuse_raw)
+        with intake.reuse_raw():
+            return handler(ctx)
     return handler(ctx)
+
+
+def is_claude_driven(project: dict[str, Any] | None) -> bool:
+    """这个项目由 Claude Code 会话推进(文字模型调用交给会话回答,调度器不碰)。"""
+    return str((project or {}).get("driver") or "") == CLAUDE_DRIVER
 
 
 @dataclass

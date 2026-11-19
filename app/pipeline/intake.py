@@ -11,10 +11,13 @@
 """
 from __future__ import annotations
 
+import contextvars
+import json
 import logging
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,80 @@ log = logging.getLogger(__name__)
 
 #: 热点选题依据进事实抽取时的来源名
 HOT_TOPIC_TOOL = "hot_topic.evidence"
+
+#: 打开后,同一项目同一台车的原始材料只采一次,之后直接读缓存(见 `reuse_raw`)
+_reuse_raw: contextvars.ContextVar[bool] = contextvars.ContextVar("intake_reuse_raw",
+                                                                  default=False)
+
+
+@contextmanager
+def reuse_raw() -> Iterator[None]:
+    """块里的事实收集复用本项目已采过的原始材料。
+
+    Claude 驱动的项目(`llm.handoff`)每答一题就重跑一遍这一步:要是每次都重新联网采,
+    材料一变提示词就变,刚写好的回答就对不上了(也白花检索额度)。"""
+    token = _reuse_raw.set(True)
+    try:
+        yield
+    finally:
+        _reuse_raw.reset(token)
+
+
+def _raw_cache_path(project_dir: Path, subject: str, theme: str | None) -> Path:
+    import hashlib
+
+    key = hashlib.sha1(f"{subject}|{theme or ''}".encode()).hexdigest()[:12]
+    return project_dir / "_raw_cache" / f"{key}.json"
+
+
+def add_raw_doc(project_dir: Path, subject: str, theme: str | None,
+                doc: facts_provider.RawDoc) -> int:
+    """往这台车的原始材料缓存里补一份材料(Claude 自己查到的检索结果、官网原文)。
+
+    要先跑过一次事实收集(缓存已在)。补进去以后,下次重跑事实收集时抽取提示词会带上它,
+    抽出的事实照样挂 `source_tool` / `raw_ref`。返回补完后的材料份数。"""
+    cache = _raw_cache_path(project_dir, subject, theme)
+    if not cache.is_file():
+        raise FileNotFoundError(f"{subject} 还没有原始材料缓存:先跑一次事实收集")
+    rows = json.loads(cache.read_text(encoding="utf-8"))
+    rows.append(doc.to_dict())
+    cache.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    return len(rows)
+
+
+def _gather(profile: CategoryProfile, subject: str, project_dir: Path, theme: str | None, *,
+            terms: str, evidence: Sequence[str],
+            evidence_query: str) -> facts_provider.CollectionResult:
+    """方向来源 + 角度定向检索 + 热点依据。`reuse_raw` 打开时同一台车只采一次。"""
+    cache = _raw_cache_path(project_dir, subject, theme)
+    if _reuse_raw.get() and cache.is_file():
+        try:
+            rows = json.loads(cache.read_text(encoding="utf-8"))
+            return facts_provider.CollectionResult(
+                docs=[facts_provider.RawDoc(**row) for row in rows])
+        except (OSError, ValueError, TypeError):
+            log.warning("原始材料缓存读不了,重新采集:%s", cache)
+    collected = collect_raw(profile, subject, project_dir, theme)
+    if terms:
+        # 热点选题的角度往往是一件近期的事(官降、召回、月销破纪录),
+        # 方向自带的检索词覆盖不到,补一次只看近 90 天的定向检索。
+        # 选题给了检索词就用它;整句角度里的口语问句会把检索带偏。
+        collected.docs.append(
+            facts_provider.ifind_news(subject, project_dir, days=90, terms=terms))
+    if evidence:
+        # 选题依据的热点原文(榜单名次与销量、新闻标题摘要)。角度里的硬说法
+        # 往往只在这里出现,不进抽取的话脚本开场就是无源之词。
+        collected.docs.append(facts_provider.RawDoc(
+            tool=HOT_TOPIC_TOOL, query=evidence_query,
+            retrieved_at=time.strftime("%Y-%m-%d"),
+            text="\n".join(f"- {line}" for line in evidence),
+        ))
+    if _reuse_raw.get() and any(d.ok for d in collected.docs):
+        # 一个来源都没通就不缓存:那是环境问题,修好后要能重采
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps([d.to_dict() for d in collected.docs], ensure_ascii=False),
+                         encoding="utf-8")
+    return collected
 
 #: 事实抽取一次读入的素材正文总字数(按份分配,见 CollectionResult.bounded_context)
 EXTRACT_CONTEXT_CHARS = 40_000
@@ -538,23 +615,9 @@ def run(
 ) -> tuple[list[Fact], dict[str, Any]]:
     """完整的事实收集流程。返回 (事实列表, 采集报告)。"""
     project_dir = db_dir(project_id)
-    collected = collect_raw(profile, subject, project_dir, theme)
     terms = " ".join(str(angle_search or "").split()) or angle_terms(angle)
-    if terms:
-        # 热点选题的角度往往是一件近期的事(官降、召回、月销破纪录),
-        # 方向自带的检索词覆盖不到,补一次只看近 90 天的定向检索。
-        # 选题给了检索词就用它;整句角度里的口语问句会把检索带偏。
-        collected.docs.append(
-            facts_provider.ifind_news(subject, project_dir, days=90, terms=terms)
-        )
-    if evidence:
-        # 选题依据的热点原文(榜单名次与销量、新闻标题摘要)。角度里的硬说法
-        # 往往只在这里出现,不进抽取的话脚本开场就是无源之词。
-        collected.docs.append(facts_provider.RawDoc(
-            tool=HOT_TOPIC_TOOL, query=angle or subject,
-            retrieved_at=time.strftime("%Y-%m-%d"),
-            text="\n".join(f"- {line}" for line in evidence),
-        ))
+    collected = _gather(profile, subject, project_dir, theme, terms=terms, evidence=evidence,
+                        evidence_query=angle or subject)
 
     docs_payload = [d.to_dict() for d in collected.docs]
     db.write_json(project_id, "facts_raw.json", docs_payload)
@@ -671,16 +734,8 @@ def run_roundup(
     band = grounding.price_band(angle)
     for entry in subjects:
         name = entry["name"]
-        collected = collect_raw(profile, name, project_dir, theme)
-        if terms:
-            collected.docs.append(
-                facts_provider.ifind_news(name, project_dir, days=90, terms=terms))
-        if evidence:
-            collected.docs.append(facts_provider.RawDoc(
-                tool=HOT_TOPIC_TOOL, query=angle or name,
-                retrieved_at=time.strftime("%Y-%m-%d"),
-                text="\n".join(f"- {line}" for line in evidence),
-            ))
+        collected = _gather(profile, name, project_dir, theme, terms=terms, evidence=evidence,
+                            evidence_query=angle or name)
         payload = [{**d.to_dict(), "subject": name} for d in collected.docs]
         docs_payload.extend(payload)
         own: list[Fact] = []

@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 from .. import config
+from ..llm import ledger
 from . import car_specs
 from .facts import RawDoc
 
@@ -62,7 +63,13 @@ def _post(client: Any, headers: dict[str, str], body: dict[str, Any]) -> tuple[d
 
 
 def search(query: str) -> dict[str, Any]:
-    """dataPro_search 一次调用(含握手),返回 structuredContent。"""
+    """dataPro_search 一次调用(含握手),返回 structuredContent。记一行模型账本(kind=dataset)。"""
+    with ledger.timed(kind="dataset", provider="ark", model="dataPro_search",
+                      prompt_chars=len(query)):
+        return _search(query)
+
+
+def _search(query: str) -> dict[str, Any]:
     import httpx
 
     if not config.ARK_API_KEY:

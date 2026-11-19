@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from .. import config
+from ..llm import ledger
 from .cli import ConnectorError
 
 TOOL = "search_news"
@@ -59,7 +60,17 @@ def parse(data: dict[str, Any]) -> list[dict[str, str]]:
 def search(query: str, *, count: int = 10, time_range: str | None = None,
            sites: str | None = None, auth_level: int = 0, industry: str | None = None,
            icp_only: bool = False, timeout: float = 60) -> list[dict[str, str]]:
-    """一次网页搜索。429 / 5xx / 网络错误重试 3 次,其余错误直接抛 ConnectorError。"""
+    """一次网页搜索。429 / 5xx / 网络错误重试 3 次,其余错误直接抛 ConnectorError。
+    每次调用记一行模型账本(kind=search)。"""
+    with ledger.timed(kind="search", provider="ark", model=TOOL, prompt_chars=len(query)):
+        return _search(query, count=count, time_range=time_range, sites=sites,
+                       auth_level=auth_level, industry=industry, icp_only=icp_only,
+                       timeout=timeout)
+
+
+def _search(query: str, *, count: int, time_range: str | None, sites: str | None,
+            auth_level: int, industry: str | None, icp_only: bool,
+            timeout: float) -> list[dict[str, str]]:
     if not config.ARK_SEARCH_API_KEY:
         raise ConnectorError(TOOL, "未配置 ARK_API_KEY / ARK_SEARCH_API_KEY")
     flt: dict[str, Any] = {"NeedUrl": True}
