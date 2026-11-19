@@ -25,19 +25,19 @@ def _picker(log):
 
 
 def test_plan_cuts_prefers_clause_starts_and_bounds():
-    spans = edl.plan_cuts(0.0, 6.0, [0.5, 1.6, 2.4, 4.1])
+    spans = edl.plan_cuts(0.0, 6.0, [0.5, 1.6, 2.4, 4.1], min_shot=1.2, max_shot=3.0)
     assert spans[0] == (0.0, 1.6)
-    assert all(edl.MIN_SHOT - 1e-6 <= b - a <= edl.MAX_SHOT + 1e-6 for a, b in spans)
+    assert all(1.2 - 1e-6 <= b - a <= 3.0 + 1e-6 for a, b in spans)
     assert spans[-1][1] == 6.0
     # 首尾相接,没有空洞
     assert all(x[1] == y[0] for x, y in zip(spans, spans[1:], strict=False))
 
 
 def test_plan_cuts_splits_long_span_evenly_and_merges_tail():
-    spans = edl.plan_cuts(0.0, 7.0, [])
+    spans = edl.plan_cuts(0.0, 7.0, [], min_shot=1.2, max_shot=3.0)
     assert len(spans) == 3 and all(b - a == pytest.approx(7 / 3, abs=0.01) for a, b in spans)
     # 最后一刀太短时并进前一刀
-    spans = edl.plan_cuts(0.0, 3.0, [1.5, 2.9])
+    spans = edl.plan_cuts(0.0, 3.0, [1.5, 2.9], min_shot=1.2, max_shot=3.0)
     assert spans == [(0.0, 1.5), (1.5, 3.0)]
 
 
@@ -63,11 +63,12 @@ def test_each_cut_picks_footage_for_its_own_clause():
                             beat_files={}, title="标题")
     texts = [x[2] for x in log if x[0] == 1]
     assert len(texts) >= 2
-    assert texts[0].startswith("前脸")
+    assert texts[0] == "前脸是封闭式格栅"  # 第一刀落在分句开口上
     assert any("尾灯" in t for t in texts[1:])
-    # 钩子段每刀不超过 1 秒,且首刀白闪
+    assert not any("," in t for t in texts)  # 取材文本不带标点(跨分句的刀不被再切开)
+    # 钩子段每刀不超过 hook_shot,且首刀白闪
     hook = [c for c in tl.clips if c.start < edl.HOOK_SECONDS]
-    assert all(c.dur <= edl.HOOK_SHOT + 1e-6 for c in hook)
+    assert len(hook) >= 2 and all(c.dur <= edl.Pacing().hook_shot + 1e-6 for c in hook)
     assert tl.clips[0].transition == "flash"
     assert any(o.type == "hook" and o.props["lines"] == ["2秒破百?"] for o in tl.overlays)
     # 换章 whip + 章节标牌
@@ -292,3 +293,112 @@ def test_classic_style_unchanged_by_default():
                                                    overlay={"lines": ["关键词"]})]
     tl = edl.build_timeline(specs, [], size=(1920, 1080), fps=30, pick=_picker([]), beat_files={})
     assert {o.type for o in tl.overlays} == {"chapter", "keyword"}
+
+
+# --------------------------------------------------------------------------
+# 节奏(Pacing)
+# --------------------------------------------------------------------------
+def test_rhythm_cuts_follow_the_cycle_and_snap_to_clause_starts():
+    p = edl.Pacing(rhythm=(2.0, 1.0))
+    spans, phase = edl.rhythm_cuts(0.0, 10.0, [2.3, 5.0], p, 0)
+    # 2.0 附近 ±0.7 有开口 2.3 就落在开口上;1.0 附近 ±0.35 没有开口就在句中切
+    assert spans == [(0.0, 2.3), (2.3, 3.3), (3.3, 5.0), (5.0, 6.0), (6.0, 8.0), (8.0, 10.0)]
+    assert phase == 6
+    # 节奏全片接着数:从第 1 个开始,第一刀是 1.0
+    spans, phase = edl.rhythm_cuts(0.0, 3.0, [], p, 1)
+    assert spans == [(0.0, 1.0), (1.0, 3.0)] and phase == 3
+
+
+def test_rhythm_cuts_never_leave_a_short_tail():
+    p = edl.Pacing(rhythm=(2.0,), tail=1.2)
+    # 2.0 之后只剩 0.9 秒:整段给一刀,不切碎刀
+    assert edl.rhythm_cuts(0.0, 2.9, [], p, 0)[0] == [(0.0, 2.9)]
+    # 拍尾 tail 秒以内的开口不当切点
+    assert edl.rhythm_cuts(0.0, 5.0, [2.1, 4.2], p, 0)[0] == [(0.0, 2.1), (2.1, 5.0)]
+
+
+def test_rhythm_cuts_hold_longer_on_chapter_open_and_calm_beats():
+    p = edl.Pacing(rhythm=(1.0, 0.8), calm=2.0)
+    spans, _ = edl.rhythm_cuts(0.0, 10.0, [], p, 0, first_min=2.5)
+    assert spans[0] == (0.0, 2.5) and spans[1] == (2.5, 3.3)
+    spans, _ = edl.rhythm_cuts(0.0, 10.0, [], p, 0, calm=True)
+    assert all(b - a >= 2.0 - 1e-6 for a, b in spans)
+
+
+def test_pacing_scaled_keeps_floor_and_still_cap():
+    p = edl.Pacing()
+    assert p.scaled(1.0) is p
+    fast = p.scaled(0.5)
+    assert min(fast.rhythm) == p.floor  # 0.7 × 0.5 不低于下限
+    assert fast.hook_shot == pytest.approx(p.hook_shot / 2)
+    assert fast.chapter_open == pytest.approx(p.chapter_open / 2)
+    assert (fast.still_max, fast.tail, fast.snap) == (p.still_max, p.tail, p.snap)
+    assert p.scaled(0.01) == p.scaled(0.3)  # 夹到 0.3
+
+
+def test_pace_knob_scales_by_square_root(monkeypatch):
+    from app.pipeline.edit import project as edit_project
+
+    monkeypatch.setattr(edit_project.knobs, "piece_seconds", lambda: 3.0)  # fast
+    fast = edit_project.pacing()
+    assert fast.hook_shot == pytest.approx(2.5 * (3.0 / 4.5) ** 0.5, abs=1e-3)
+    monkeypatch.setattr(edit_project.knobs, "piece_seconds", lambda: 4.5)  # mid
+    assert edit_project.pacing() == edl.Pacing()
+
+
+def test_pick_text_drops_clause_breaks():
+    assert edl.pick_text("前脸很凶,尾灯贯穿。") == "前脸很凶 尾灯贯穿"
+    assert edl.pick_text("续航3.5小时") == "续航3 5小时"  # 取材只看词,小数点无所谓
+
+
+def test_long_still_is_split_and_each_part_gets_its_own_pick():
+    log: list = []
+
+    def pick(spec, seconds, text, role):
+        log.append((spec.idx, round(seconds, 2), role))
+        return [{"kind": "still", "path": f"/m/{len(log)}.jpg", "item_id": f"s{len(log)}"}]
+
+    p = edl.Pacing(rhythm=(6.0,), hook_shot=3.0)
+    tl = edl.build_timeline([_spec(0, 9.0, chapter="x")], [], size=(1920, 1080), fps=30,
+                            pick=pick, beat_files={}, pacing=p)
+    assert [(c.start, c.dur) for c in tl.clips] == [(0.0, 1.5), (1.5, 1.5), (3.0, 2.0),
+                                                    (5.0, 2.0), (7.0, 2.0)]
+    assert all(c.kind == "still" and c.dur <= p.still_max for c in tl.clips)
+    # 每段静图各取一次,取材键按调用次序排,回放时一一对上
+    assert [c.key for c in tl.clips] == [f"0:{n}" for n in range(5)]
+    assert len({c.src for c in tl.clips}) == 5
+    # 每次取材要的是剩下的整段(素材够长就是一刀),拿到静图才切开
+    assert [x[1] for x in log] == [3.0, 1.5, 6.0, 4.0, 2.0]
+
+
+def _view_specs():
+    specs = [_spec(0, 3.0, layout="hook"), _spec(1, 2.0, chapter="外观", text="前脸很凶"),
+             _spec(2, 2.0, chapter="外观", text="大灯很亮"), _spec(3, 2.0, chapter="外观", text="侧面")]
+    specs[1].view, specs[2].view, specs[3].view = "front", "front", "side"
+    cues = [_cue(0, 0.0, 3.0, "开场", 0), _cue(1, 3.0, 5.0, "前脸很凶", 1),
+            _cue(2, 5.0, 7.0, "大灯很亮", 2), _cue(3, 7.0, 9.0, "侧面", 3)]
+    return specs, cues
+
+
+def test_same_chapter_same_view_beats_share_long_shots():
+    specs, cues = _view_specs()
+    log: list = []
+    tl = edl.build_timeline(specs, cues, size=(1920, 1080), fps=30, pick=_picker(log),
+                            beat_files={}, pacing=edl.Pacing(rhythm=(3.0,)))
+    # 1、2 两拍同章同视角:一刀 4 秒跨过拍界,归刀头那一拍;3 拍换了视角,另起
+    long = next(c for c in tl.clips if c.start == 3.0)
+    assert (long.dur, long.beat, long.key) == (4.0, 1, "1:0")
+    assert long.text == "前脸很凶大灯很亮"
+    assert [x[0] for x in log if x[0] in (1, 2, 3)] == [1, 3]
+    assert next(c for c in tl.clips if c.start == 7.0).key == "3:0"
+
+
+def test_cross_beat_shot_without_footage_falls_back_beat_by_beat():
+    specs, cues = _view_specs()
+    files = {s.idx: f"/b/{s.idx}.mp4" for s in specs}
+    tl = edl.build_timeline(specs, cues, size=(1920, 1080), fps=30, pick=lambda *a: [],
+                            beat_files=files, pacing=edl.Pacing(rhythm=(3.0,)))
+    run = [c for c in tl.clips if 3.0 <= c.start < 7.0]
+    assert [(c.start, c.dur, c.src, c.src_in, c.beat) for c in run] == [
+        (3.0, 2.0, "/b/1.mp4", 0.0, 1), (5.0, 2.0, "/b/2.mp4", 0.0, 2)]
+    assert {c.key for c in run} == {"1:0"} and {c.via for c in run} == {"fallback"}

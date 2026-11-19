@@ -4,11 +4,14 @@
 
 剪辑规则(对标剪映「图文成片」/ 抖音信息类竖屏):
 
-1. **切点跟着话走**:实拍拍在分句(逗号、句号)处下刀,刀口落在下一分句第一个字念出的
-   时刻(用 `char_t`;没量过按字数比例)。每刀 `MIN_SHOT`–`MAX_SHOT` 秒,太长的均分。
-2. **每刀按它那半句取材**:`pick` 拿到的是这一刀时间内念到的原文,取材时用它做细节匹配
-   (`library.fill(detail=...)`),不再整拍共用一组背景。
-3. **开头 `HOOK_SECONDS` 秒是钩子**:≤`HOOK_SHOT` 秒一刀的快切 + 大标题,首刀白闪。
+1. **快慢交替的节奏，刀口尽量跟着话走**(`Pacing`,对标讲解片的刀长分布，见 targets.py):
+   刀长按 `Pacing.rhythm` 的循环取目标值，刀口吸到附近的分句开口(下一分句第一个字念出的
+   时刻，用 `char_t`;没量过按字数比例),附近没有就在句中下刀。换章第一刀、压着整屏数据的
+   拍不快切;静图一刀不超过 `Pacing.still_max`;整体随 pace 旋钮伸缩。
+2. **每刀按它那半句取材**:`pick` 拿到的是这一刀时间内念到的原文，取材时用它做细节匹配
+   (`library.fill(detail=...)`),不再整拍共用一组背景。分句标点换成空格再交给取材：刀口
+   已经在这里定了，别让取材再按逗号把长镜头拆开。
+3. **开头 `HOOK_SECONDS` 秒是钩子**:每刀约 `Pacing.hook_shot` 秒 + 大标题，首刀白闪。
 4. **转场有语义**:同拍内硬切;换章 whip;进出整屏卡片 / 概念动画 zoom。
 5. **画面一直在动**:视频交替推 / 拉,静图做平移,不出现静止的整屏。
 
@@ -30,14 +33,10 @@ from typing import Any
 
 from ... import config
 
-#: 实拍子镜头的时长范围(秒)。竖屏信息类对标中位约 2 秒一刀
-MIN_SHOT = 1.2
-MAX_SHOT = 2.8
 #: 一刀里拼接的几段素材,每段至少这么长;更短的尾巴并进前一段
 MIN_PIECE = 0.5
-#: 钩子段:开头多少秒、每刀最长多少秒
+#: 钩子段:开头多少秒(每刀多长见 `Pacing.hook_shot`)
 HOOK_SECONDS = 3.0
-HOOK_SHOT = 1.0
 #: 章节标牌停留多久
 CHAPTER_CHIP_SECONDS = 1.4
 #: 这些版式用逐拍渲染好的成品整段放(代码画的卡片 / 动画,不需要再取材)
@@ -191,13 +190,17 @@ def hook_cut(tl: Timeline) -> float:
     return min(HOOK_SECONDS, tl.duration)
 
 
-def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[float, float]]:
-    """换章 whip 的切点吸到 ±`tol` 秒内最近的拍点上(原地改时间线),返回 [(原时刻, 新时刻)]。
+def snap_cuts(tl: Timeline, beats: Sequence[float], tol: float,
+              kinds: Sequence[str] | None = None) -> list[tuple[float, float]]:
+    """切点吸到 ±`tol` 秒内最近的拍点上(原地改时间线),返回 [(原时刻, 新时刻)]。
+    `kinds`:只吸这几种转场的切点(None = 全部)。
 
-    前一刀跟着伸缩,和 whip 同时起的叠加层(章节卡、章节首拍的大字)一起挪、结尾不动;
-    旁白和字幕不动(画面早 / 晚零点一几秒换章,听感上是正常的 J / L 切)。
-    整屏成品(`beat`,长度正好等于这一拍)不往后拉长;后一刀往前拉长时入点跟着往前挪,
-    入点不够挪就不吸。吸完前后两刀都至少留 `MIN_PIECE` 秒。"""
+    前一刀跟着伸缩,和这一刀同时起的叠加层(章节卡、章节首拍的大字)一起挪、结尾不动;
+    旁白和字幕不动(画面早 / 晚零点一几秒换,听感上是正常的 J / L 切)。
+    整屏成品(`beat`)和取不到素材时退回的逐拍成品切片(`via="fallback"`)长度正好到文件尾,
+    不往后拉长;后一刀往前拉长时入点跟着往前挪,
+    入点不够挪就不吸(往后挪时入点也往后,画面和旁白的对位不变)。
+    吸完前后两刀都至少留 `MIN_PIECE` 秒。"""
     import bisect
 
     beats = sorted(float(b) for b in beats)
@@ -206,7 +209,9 @@ def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[f
         return moved
     for i in range(1, len(tl.clips)):
         cur, prev = tl.clips[i], tl.clips[i - 1]
-        if cur.transition != "whip" or abs(prev.start + prev.dur - cur.start) > 0.01:
+        if kinds is not None and cur.transition not in kinds:
+            continue
+        if abs(prev.start + prev.dur - cur.start) > 0.01:
             continue
         t = cur.start
         k = bisect.bisect_left(beats, t)
@@ -215,8 +220,8 @@ def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[f
         d = round(target - t, 3)
         if abs(d) < 0.01 or abs(d) > tol:
             continue
-        if d > 0 and prev.kind == "beat":
-            continue  # 整屏成品往后拉长会放到文件外面
+        if d > 0 and (prev.kind == "beat" or prev.via == "fallback"):
+            continue  # 整屏成品 / 逐拍成品切片往后拉长会放到文件外面
         if d < 0 and cur.kind != "still" and cur.src_in < -d - 1e-6:
             continue  # 入点前面没有素材可补
         if prev.dur + d < MIN_PIECE or cur.dur - d < MIN_PIECE:
@@ -230,6 +235,11 @@ def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[f
                 o.start, o.dur = round(target, 3), round(o.dur - d, 3)
         moved.append((round(t, 3), round(target, 3)))
     return moved
+
+
+def snap_whips(tl: Timeline, beats: Sequence[float], tol: float) -> list[tuple[float, float]]:
+    """只吸换章 whip 的切点(`snap_cuts` 的特例)。"""
+    return snap_cuts(tl, beats, tol, kinds=("whip",))
 
 
 # --------------------------------------------------------------------------
@@ -285,9 +295,84 @@ def spoken_between(cues: Sequence[Any], a: float, b: float) -> str:
 # --------------------------------------------------------------------------
 # 下刀
 # --------------------------------------------------------------------------
+@dataclass(frozen=True)
+class Pacing:
+    """下刀节奏(秒)。默认值对标讲解 4 条(targets.py:正片每刀 p10 0.75 / 中位 1.7 / p90 3.5,
+    19–32% 的镜头短于 1.2 秒;钩子段每刀 1.4–3.1)。快慢交替，不是匀速。
+
+    `rhythm`:正片刀长的目标循环，全片接着数(不按拍重来);排序后 p10 0.8 / 中位 1.7 / p90 4.0,
+    3/10 短于 1.2 秒。拍尾截断、静图切开会把分布往短处拉：真实分镜 + 假取材(1/5 静图)试排
+    三条片，正片 p10 0.8 / 中位 1.7–1.8 / p90 3.2–3.6,22–25% 短于 1.2 秒。
+
+    同章、同视角的相邻实拍拍连成一段下刀(`_joins`),长镜头可以跨过拍界：横屏一拍中位才
+    2.6–3.0 秒，按拍切的话 p90 只到 2.8。"""
+    rhythm: tuple[float, ...] = (1.8, 0.8, 0.7, 2.6, 1.6, 4.2, 0.9, 1.5, 2.2, 3.8)
+    #: 钩子段每刀：开头 HOOK_SECONDS 秒里的钩子拍不到它就一刀，长一些切两刀(对标钩子段
+    #: 中位 2.8,前 5 秒多是 2 个镜头;计划里写的 0.6–1.2 秒快切在对标片里找不到)
+    hook_shot: float = 2.5
+    #: 换章后第一刀至少这么长(章节卡压在上面，别在卡上闪切)
+    chapter_open: float = 2.2
+    #: 压着整屏数据(大数字 / 图表)的拍，下面的实拍每刀至少这么长
+    calm: float = 2.0
+    #: 静图一刀最长(更长的切开，后半段另取一刀);不随 pace 伸缩
+    still_max: float = 2.5
+    #: 刀长下限(pace 再快也不低于它)
+    floor: float = 0.6
+    #: 拍尾剩不到这么长就并进上一刀(拍尾的碎刀不是节奏,是截断)
+    tail: float = 1.2
+    #: 吸分句开口的容差 = 目标刀长 × 它,至少 `snap_min` 秒
+    snap: float = 0.35
+    snap_min: float = 0.2
+
+    def scaled(self, pace: float) -> Pacing:
+        """按 pace 旋钮伸缩(`knobs.piece_seconds()` ÷ mid 的值):刀长目标都乘上它,
+        下限、静图上限、吸附容差不变。"""
+        pace = max(0.3, float(pace))
+        if abs(pace - 1.0) < 1e-6:
+            return self
+        return Pacing(rhythm=tuple(max(self.floor, round(x * pace, 3)) for x in self.rhythm),
+                      hook_shot=max(self.floor, round(self.hook_shot * pace, 3)),
+                      chapter_open=round(self.chapter_open * pace, 3),
+                      calm=round(self.calm * pace, 3), still_max=self.still_max,
+                      floor=self.floor, tail=self.tail, snap=self.snap, snap_min=self.snap_min)
+
+
+def rhythm_cuts(start: float, end: float, candidates: Sequence[float], pacing: Pacing,
+                phase: int, *, first_min: float = 0.0,
+                calm: bool = False) -> tuple[list[tuple[float, float]], int]:
+    """按 `pacing.rhythm` 的循环(从第 `phase` 个接着数)在 [start, end) 里下刀。
+
+    每刀目标 T:离目标 ±max(snap_min, snap×T) 内有分句开口(`candidates`)就落在最近的开口上，
+    没有就在句中按 T 下刀。剩下不到 T + tail 的整段给最后一刀(拍尾不切碎刀)。
+    `first_min`:第一刀至少这么长(换章);`calm`:每刀至少 `pacing.calm`。返回 (刀, 新 phase)。"""
+    if end - start <= 0:
+        return [], phase
+    floor, tail = pacing.floor, max(pacing.floor, pacing.tail)
+    cands = sorted(t for t in candidates if start + floor <= t <= end - tail + 1e-6)
+    out: list[tuple[float, float]] = []
+    a = start
+    while True:
+        t = pacing.rhythm[phase % len(pacing.rhythm)]
+        phase += 1
+        if not out and first_min:
+            t = max(t, first_min)
+        if calm:
+            t = max(t, pacing.calm)
+        want = a + t
+        if want >= end - tail - 1e-6:
+            out.append((a, end))
+            break
+        tol = max(pacing.snap_min, pacing.snap * t)
+        near = [c for c in cands if c >= a + floor - 1e-6 and abs(c - want) <= tol]
+        b = min(near, key=lambda c: abs(c - want)) if near else want
+        out.append((a, b))
+        a = b
+    return [(round(x, 3), round(y, 3)) for x, y in out], phase
+
+
 def plan_cuts(start: float, end: float, candidates: Sequence[float], *,
-              min_shot: float = MIN_SHOT, max_shot: float = MAX_SHOT) -> list[tuple[float, float]]:
-    """在 [start, end) 里挑切点:优先落在 `candidates`(分句开口),每刀 [min, max] 秒。
+              min_shot: float, max_shot: float) -> list[tuple[float, float]]:
+    """在 [start, end) 里挑切点:优先落在 `candidates`(分句开口),每刀 [min, max] 秒(钩子段用)。
 
     贪心:离上一刀满 `min_shot` 的第一个候选就下刀;两候选之间超过 `max_shot` 的段均分。
     最后一刀不足 `min_shot` 时并进前一刀。
@@ -489,6 +574,31 @@ def _role(chapter_idx: int, n_chapters: int) -> str:
     return "ending" if chapter_idx == n_chapters - 1 else "body"
 
 
+def _calm(spec: Any, commercial: bool) -> bool:
+    """这一拍压着整屏数据(大数字 / Remotion 图表 / commercial 的面板图表):下面的实拍不快切。"""
+    ov = spec.overlay or {}
+    if remotion_card(spec) or (spec.layout == "stat" and ov.get("value")):
+        return True
+    return commercial and spec.layout == "panel" and len(_rows(ov)) >= CHART_MIN_ROWS
+
+
+def _joins(a: Any, b: Any, commercial: bool) -> bool:
+    """后一拍 b 能不能和前一拍 a 连成一段一起下刀(长镜头跨过拍界):同章、同视角(都标了)、
+    都不压整屏数据。只看分镜,不看素材:回放 / 换刀时分段不变。"""
+    name_a = a.chapter or a.section or "正片"
+    name_b = b.chapter or b.section or "正片"
+    return (name_a == name_b and bool(a.view) and a.view == b.view
+            and not _calm(a, commercial) and not _calm(b, commercial))
+
+
+_BREAKS_RE = re.compile(f"[{re.escape(CLAUSE_BREAKS)}]+")
+
+
+def pick_text(text: str) -> str:
+    """交给取材的半句:分句标点换成空格(刀口在这里定好了,取材别再按逗号拆开一刀)。"""
+    return _BREAKS_RE.sub(" ", text).strip()
+
+
 def _hook_lines(spec: Any, title: str) -> list[str]:
     ov = spec.overlay or {}
     lines = [str(x) for x in (ov.get("lines") or []) if str(x).strip()]
@@ -500,15 +610,20 @@ def _hook_lines(spec: Any, title: str) -> list[str]:
 def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int, int],
                    fps: int, pick: Pick, beat_files: Mapping[int, str], title: str = "",
                    accent: str = "#FF5A1F", captions: Sequence[Mapping[str, Any]] = (),
-                   outro: tuple[str, float] | None = None, style: str = "classic") -> Timeline:
+                   outro: tuple[str, float] | None = None, style: str = "classic",
+                   pacing: Pacing | None = None) -> Timeline:
     """分镜(已按 TTS 定好时长) + 旁白 cue → 时间线。
 
     `pick(spec, seconds, text, role)` 返回取材片段([{kind, path, start, length, ...}]),
-    一刀可能拿到几段(池子里没有够长的),按顺序铺满这一刀。
+    一刀可能拿到几段(池子里没有够长的),按顺序铺满这一刀。同一拍第 n 次调用 = 这一拍的
+    第 n 刀(取材键「拍号:n」,见 `Clip.key`);静图超长切开时,后半段算新的一刀、再调一次。
     `beat_files`:拍号 → 逐拍渲染的成品(整屏卡片 / 概念动画 / 机构画面,以及取不到素材时兜底)。
     `style`:包装风格(classic / commercial,见模块说明);只影响叠加层和运镜,不影响下刀和取材。
+    `pacing`:下刀节奏(默认 `Pacing()`;pace 旋钮由调用方 `Pacing.scaled` 好再传进来)。
     """
     commercial = style == "commercial"
+    pacing = pacing or Pacing()
+    phase = 0
     beats = [s for s in specs if s.duration > 0]
     chapters = _chapters(beats)
     total = round(sum(s.duration for s in beats), 3)
@@ -517,13 +632,22 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
     by_beat: dict[int, list[Any]] = {}
     for c in cues:
         by_beat.setdefault(int(_get(c, "shot_idx", -1)), []).append(c)
-
+    bounds: list[tuple[float, float]] = []
     t = 0.0
+    for s in beats:
+        bounds.append((round(t, 3), round(t + s.duration, 3)))
+        t += s.duration
+
+    def footage(s: Any) -> bool:
+        return not (s.layout in PRERENDERED and beat_files.get(s.idx) and not remotion_card(s))
+
     n_clip = 0
     ch_idx = -1
-    for s in beats:
-        start, end = round(t, 3), round(t + s.duration, 3)
-        t += s.duration
+    calls: dict[int, int] = {}
+    i = 0
+    while i < len(beats):
+        s = beats[i]
+        start, end = bounds[i]
         name = s.chapter or s.section or "正片"
         new_chapter = ch_idx < 0 or chapters[ch_idx]["name"] != name
         if new_chapter:
@@ -538,48 +662,78 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
         role = _role(ch_idx, len(chapters))
         prev_beat = tl.clips[-1].kind == "beat" if tl.clips else False
 
-        if s.layout in PRERENDERED and beat_files.get(s.idx) and not remotion_card(s):
+        if not footage(s):
             tl.clips.append(Clip(start, round(end - start, 3), "beat", beat_files[s.idx],
                                  transition="zoom" if tl.clips else "cut", beat=s.idx))
             n_clip += 1
+            i += 1
             continue
 
-        mine = by_beat.get(s.idx, [])
-        cands = [x for c in mine for x in clause_starts(c)]
-        hook_end = min(end, HOOK_SECONDS) if start < HOOK_SECONDS else start
-        if 0 < end - hook_end < MIN_SHOT:
-            # 钩子之后只剩一小截:并进钩子,别切出一闪而过的碎刀
-            hook_end = end
+        # 同章、同视角的相邻实拍拍连成一段一起下刀:长镜头可以跨过拍界(钩子段不连)
+        last = i
+        if start >= HOOK_SECONDS:
+            while (last + 1 < len(beats) and footage(beats[last + 1])
+                   and _joins(beats[last], beats[last + 1], commercial)):
+                last += 1
+        run = list(range(i, last + 1))
+        run_end = bounds[last][1]
+        mine = [c for x in run for c in by_beat.get(beats[x].idx, [])]
+        cands = [x for c in mine for x in clause_starts(c)] + [bounds[x][0] for x in run[1:]]
+        hook_end = start  # 钩子段(开头 HOOK_SECONDS 秒)单独切,之后按节奏切
+        if start < HOOK_SECONDS:
+            hook_end = min(end, HOOK_SECONDS)
+            if hook_end - start < pacing.hook_shot * 0.6:
+                hook_end = start  # 钩子只剩一小截落在这一拍:不单切,这一拍直接按正片切
+            elif end - hook_end < pacing.hook_shot:
+                hook_end = end  # 钩子之后只剩一小截:并进钩子,别切出一闪而过的碎刀
         spans: list[tuple[float, float]] = []
         if hook_end > start:
-            spans += plan_cuts(start, hook_end, [], min_shot=min(MIN_SHOT, HOOK_SHOT * 0.6),
-                               max_shot=HOOK_SHOT)
-        if end > hook_end:
-            spans += plan_cuts(hook_end, end, cands)
-        for k, (a, b) in enumerate(spans):
-            text = spoken_between(mine, a, b) or (s.narration_zh or "")
-            got = [p for p in pick(s, b - a, text, "hook" if a < HOOK_SECONDS else role)
+            spans += plan_cuts(start, hook_end, [], min_shot=pacing.hook_shot * 0.6,
+                               max_shot=pacing.hook_shot)
+        if run_end > hook_end:
+            body, phase = rhythm_cuts(hook_end, run_end, cands, pacing, phase,
+                                      first_min=pacing.chapter_open if new_chapter and ch_idx > 0
+                                      else 0.0, calm=_calm(s, commercial))
+            spans += body
+        first = True
+        while spans:
+            a, b = spans.pop(0)
+            # 这一刀归刀头所在的那一拍(取材按它的分镜、取材键用它的拍号)
+            o = next(x for x in reversed(run) if bounds[x][0] <= a + _EPS)
+            own = beats[o]
+            k = calls.get(own.idx, 0)
+            calls[own.idx] = k + 1
+            text = spoken_between(mine, a, b) or (own.narration_zh or "")
+            got = [p for p in pick(own, b - a, pick_text(text), "hook" if a < HOOK_SECONDS else role)
                    if p.get("path")]
             if not got:
-                if beat_files.get(s.idx):
-                    # 取不到素材:退回逐拍成品对应的那一段
-                    got = [{"kind": "beat_slice", "path": beat_files[s.idx], "start": a - start,
-                            "length": b - a}]
+                # 取不到素材:退回逐拍成品对应的那一段(跨拍的刀按拍界分开取)
+                parts = [(x, max(a, bounds[x][0]), min(b, bounds[x][1])) for x in run
+                         if bounds[x][0] < b - _EPS and bounds[x][1] > a + _EPS]
+                if all(beat_files.get(beats[x].idx) for x, _, _ in parts):
+                    got = [{"kind": "beat_slice", "path": beat_files[beats[x].idx],
+                            "start": pa - bounds[x][0], "length": pb - pa, "beat": beats[x].idx}
+                           for x, pa, pb in parts]
                 else:
-                    tl.notes.append(f"第 {s.idx} 拍 {a:.1f}s 起没有素材")
+                    tl.notes.append(f"第 {own.idx} 拍 {a:.1f}s 起没有素材")
                     continue
             cursor = a
             for j, p in enumerate(got):
                 left = b - cursor
                 if left <= 0.05:
                     break
+                kind = str(p.get("kind") or "video")
                 length = float(p.get("length") or left)
                 d = left if j == len(got) - 1 else min(left, length)
-                if left - d < MIN_PIECE:
+                if left - d < MIN_PIECE and kind != "beat_slice":
                     # 后面只剩一小截:并进这一段(多放零点几秒同一素材),别切出一闪而过的碎刀
                     d = left
-                kind = str(p.get("kind") or "video")
-                if k == 0 and j == 0:
+                rest = False
+                if kind == "still" and d > pacing.still_max + 1e-6:
+                    # 静图一刀不超过 still_max:均分;这是最后一段的话,后半段另取一刀
+                    d = d / math.ceil(d / pacing.still_max - 1e-9)
+                    rest = j == len(got) - 1
+                if first and j == 0:
                     if not tl.clips:
                         trans = "flash"
                     elif new_chapter:
@@ -590,11 +744,11 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                         trans = "cut"
                 else:
                     trans = "cut"
-                key = f"{s.idx}:{k}"
+                key = f"{own.idx}:{k}"
                 if kind == "beat_slice":
                     clip = Clip(round(cursor, 3), round(d, 3), "video", str(p["path"]),
                                 src_in=round(float(p.get("start") or 0.0), 3), motion="none",
-                                transition=trans, beat=s.idx, text=text,
+                                transition=trans, beat=int(p.get("beat", own.idx)), text=text,
                                 need=bool(p.get("need")), via="fallback", key=key)
                 else:
                     if commercial:
@@ -607,7 +761,7 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                                 motion=motion, transition=trans,
                                 crop_edge=float(p.get("crop_edge") or 0.0),
                                 crop_bottom=float(p.get("crop_bottom") or 0.0),
-                                beat=s.idx, text=text, item_id=str(p.get("item_id") or ""),
+                                beat=own.idx, text=text, item_id=str(p.get("item_id") or ""),
                                 need=bool(p.get("need")), match=str(p.get("match") or ""),
                                 via=str(p.get("via") or ""), key=key,
                                 source_url=str(p.get("source_url") or ""),
@@ -617,17 +771,24 @@ def build_timeline(specs: Sequence[Any], cues: Sequence[Any], *, size: tuple[int
                 tl.clips.append(clip)
                 n_clip += 1
                 cursor += d
-        if start < HOOK_SECONDS and (s.layout == "hook" or s is beats[0]):
-            lines = _hook_lines(s, title)
-            if lines:
-                tl.overlays.append(Overlay(start, round(min(end, HOOK_SECONDS + 0.5) - start, 3),
-                                           "hook", {"lines": lines}))
-        if commercial:
-            tl.overlays.extend(commercial_overlays(s, start, end - start))
-        else:
-            tl.overlays.extend(beat_overlays(s, start, end - start))
-        if remotion_card(s):
-            tl.overlays.append(card_overlay(s, start, end - start))
+                if rest:
+                    spans.insert(0, (round(cursor, 3), b))
+                    break
+            first = False
+        for x in run:
+            s, (start, end) = beats[x], bounds[x]
+            if start < HOOK_SECONDS and (s.layout == "hook" or s is beats[0]):
+                lines = _hook_lines(s, title)
+                if lines:
+                    tl.overlays.append(Overlay(start, round(min(end, HOOK_SECONDS + 0.5) - start, 3),
+                                               "hook", {"lines": lines}))
+            if commercial:
+                tl.overlays.extend(commercial_overlays(s, start, end - start))
+            else:
+                tl.overlays.extend(beat_overlays(s, start, end - start))
+            if remotion_card(s):
+                tl.overlays.append(card_overlay(s, start, end - start))
+        i = last + 1
 
     if commercial:
         tl.overlays = space_headlines(tl.overlays)

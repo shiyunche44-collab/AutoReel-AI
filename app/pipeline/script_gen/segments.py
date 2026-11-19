@@ -96,6 +96,10 @@ def _match_slots(segments: Sequence[ScriptSegment], slots: Sequence[Slot]) -> li
 #: 为什么在脚本层就拆:复盘要求「每 5–6 秒必须有一次画面变化」,而**一段脚本 = 一拍**
 #: (`explainer.build_beats` 一段一版式)。拍太长,这一拍里就只剩一张画面撑着 ——
 #: 实测成片 24 拍平均 8 秒一拍,后半程好几拍是同一张参数面板杵着不走。
+#:
+#: 剪辑 v2 不再一拍一画面(`edit.edl.Pacing` 在拍内按节奏下刀,同章同视角的拍连起来下长镜头),
+#: 所以没按计划降到 22:横屏一拍中位已只有 2.6–3.0 秒,再拆短只会多出拍尾碎刀、
+#: 少了对标片里 3–4 秒的长镜头(正片 p90 3.5)
 SHOOT_CHARS_MAX = 28
 #: 竖屏一拍的字数上限:约 4–5 秒换一次画面(竖屏刷得更快)
 PORTRAIT_SHOOT_CHARS_MAX = 22

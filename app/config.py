@@ -133,8 +133,11 @@ CROSS_PROJECT_DEDUP = os.getenv("CROSS_PROJECT_DEDUP", "1") != "0"
 CROSS_PROJECT_RECENT = int(os.getenv("CROSS_PROJECT_RECENT", "3"))
 #: 句间停顿(毫秒)
 SENTENCE_GAP_MS = 220
-#: TTS 语速 / 情绪 / 音高。A/B 试听定的 1.10、不传情绪:1.25 + happy 听着像在赶着报幕
-TTS_SPEED = float(os.getenv("TTS_SPEED", "1.10"))
+#: TTS 语速 / 情绪 / 音高。不传情绪:1.25 + happy 听着像在赶着报幕。
+#: 语速 1.0(原 1.10):对标讲解片 whisper 口径 5.25 字/秒,换到脚本字数口径约 6.0
+#: (edit/targets.TARGET_CPS_FIT);我们 62 条横屏成片在 1.08 时 mid 档中位 6.37、brisk 7.08,
+#: 快了一成。豆包 speech_rate 不是线性的:实测 1.3 倍(+30)只快 17%
+TTS_SPEED = float(os.getenv("TTS_SPEED", "1.0"))
 TTS_EMOTION = os.getenv("TTS_EMOTION", "").strip()
 #: 写完稿再让 LLM 改一遍口语(script_gen.spoken_pass):只换说法,数字和来源改了就退回原句
 SPOKEN_PASS = os.getenv("SPOKEN_PASS", "1") != "0"

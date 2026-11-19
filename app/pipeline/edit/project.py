@@ -22,12 +22,21 @@ from typing import Any
 from ... import config, db, degrade
 from ...categories import Vocab
 from ...models import ShotSpec
-from .. import caption_layer, library, looks, outro, sfx
+from .. import caption_layer, knobs, library, looks, outro, sfx
 from .. import render as render_mod
 from ..explainer.planning_b import beat_subject
 from . import match, music
 from . import render as edit_render
-from .edl import PRERENDERED, STYLES, Timeline, build_timeline, hook_cut, remotion_card, snap_whips
+from .edl import (
+    PRERENDERED,
+    STYLES,
+    Pacing,
+    Timeline,
+    build_timeline,
+    hook_cut,
+    remotion_card,
+    snap_cuts,
+)
 
 log = logging.getLogger(__name__)
 
@@ -189,6 +198,14 @@ def readable(rgb: Sequence[int]) -> tuple[int, int, int]:
     return c  # type: ignore[return-value]
 
 
+def pacing() -> Pacing:
+    """下刀节奏:对标默认值按 pace 旋钮(`knobs.piece_seconds()` 相对 mid)整体伸缩。
+
+    取比值的平方根:fast / slow 是 ×0.82 / ×1.15,真实分镜试排每分钟约 36 / 28 刀(mid 31),
+    都还在对标讲解片 19–36 刀的范围里;直接乘比值的话 fast 会到 44 刀。"""
+    return Pacing().scaled((knobs.piece_seconds() / knobs.PIECE_SECONDS["mid"]) ** 0.5)
+
+
 def style_of(lk: Any) -> str:
     """包装风格:classic(旧的花字 / 侧面板 / 章节条)或 commercial(见 edl.build_timeline)。"""
     style = str((getattr(lk, "extra", None) or {}).get("edit_style") or "classic")
@@ -270,7 +287,7 @@ def film_mood(tracks: Sequence[Mapping[str, Any]], moods: Sequence[str]) -> str 
 
 def score(project_id: str, tl: Timeline, lk: Any, category: str) -> dict[str, Any]:
     """给时间线排配乐(`music.plan`):drop 对钩子收尾那一刀,换曲落在换章处;
-    然后把换章 whip 吸到 ±`music.SNAP_TOL` 秒内的拍点上(原地改 `tl`)。
+    然后把切点(含换章 whip)吸到 ±`music.SNAP_TOL` 秒内的拍点上(原地改 `tl`)。
     视觉包不要配乐(且没用 BGM_ENABLED 强制开)、或曲库里没有曲子返回空字典。"""
     if not config.bgm_on(lk.bgm):
         return {}
@@ -283,7 +300,7 @@ def score(project_id: str, tl: Timeline, lk: Any, category: str) -> dict[str, An
                      seed=project_id)
     if bgm.get("mode") == "none":
         return {}
-    bgm["snapped"] = [list(m) for m in snap_whips(tl, bgm.get("beats") or [], music.SNAP_TOL)]
+    bgm["snapped"] = [list(m) for m in snap_cuts(tl, bgm.get("beats") or [], music.SNAP_TOL)]
     return bgm
 
 
@@ -467,6 +484,7 @@ def plan(project_id: str, specs: Sequence[ShotSpec], rows: Mapping[int, Mapping[
             beat_files={s.idx: _beat_file(rows.get(s.idx)) for s in beats},
             title=title, accent=_hex(lk.accent), captions=captions,
             outro=(str(card[0]), float(card[1])) if card else None, style=style_of(lk),
+            pacing=pacing(),
         )
     tl.theme = theme_of(lk)
     tl.music = score(project_id, tl, lk,

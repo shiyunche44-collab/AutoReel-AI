@@ -12,6 +12,7 @@ import pytest
 from app import config, db
 from app.models import ShotSpec
 from app.pipeline import explainer, library, outro
+from app.pipeline.edit import edl
 from app.pipeline.edit import project as edit_project
 from app.pipeline.edit import render as edit_render
 from app.pipeline.explainer import footage
@@ -241,31 +242,36 @@ def _bgm_library(root, *, spacing):
     (root / "_licenses.json").write_text(json.dumps({"a.mp3": meta}), encoding="utf-8")
 
 
-def test_plan_scores_music_and_snaps_chapter_whip_to_the_beat(pool, tmp_path, monkeypatch):
-    """开了配乐:drop 对钩子收尾那一刀(3 秒),换章 whip(4 秒)吸到 0.1 秒后的拍上,
-    前一刀跟着拉长、章节卡跟着挪,配乐编排存进时间线文件。"""
-    _bgm_library(tmp_path / "bgm", spacing=0.55)  # 拍点在 3.0、3.55、4.1 …
+def test_plan_scores_music_and_snaps_cuts_to_the_beat(pool, tmp_path, monkeypatch):
+    """开了配乐:drop 对钩子收尾那一刀(3 秒);换章 whip(4.1 秒)和普通硬切(8.3 秒)都吸到
+    0.1 秒后的拍上,前一刀跟着拉长、章节卡跟着挪;离拍点太远的刀不动。配乐编排存进时间线文件。"""
+    _bgm_library(tmp_path / "bgm", spacing=0.6)  # 拍点在 …、1.8、2.4、3.0、3.6、4.2 …
     monkeypatch.setattr(config, "BGM_DIR", tmp_path / "bgm")
     monkeypatch.setattr(config, "BGM_SWITCH", True)
-    specs = [_spec(0, 4.0, layout="hook", text="它两秒破百"),
-             _spec(1, 6.0, chapter="外观", text="前脸是封闭式格栅,侧面线条很低趴,尾灯是贯穿式")]
-    cues = [_cue(0, 0.0, 4.0, "它两秒破百", 0),
-            _cue(1, 4.0, 10.0, "前脸是封闭式格栅,侧面线条很低趴,尾灯是贯穿式", 1)]
+    monkeypatch.setattr(edit_project, "pacing", lambda: edl.Pacing(rhythm=(2.0,)))
+    specs = [_spec(0, 3.0, layout="hook", text="它两秒破百"),
+             _spec(1, 1.1, text="先看外观"),
+             _spec(2, 7.0, chapter="外观", text="前脸是封闭式格栅侧面线条很低趴")]
+    cues = [_cue(0, 0.0, 3.0, "它两秒破百", 0), _cue(1, 3.0, 4.1, "先看外观", 1),
+            _cue(2, 4.1, 11.1, "前脸是封闭式格栅侧面线条很低趴", 2)]
     rows = {s.idx: {"draft_path": str(pool.beat)} for s in specs}
     with edit_project.looks.use("commercial"):
         tl = edit_project.plan(PID, specs, rows, {"cues": cues}, size=(1920, 1080), title="t",
                                subject="车A")
     bgm = tl.music
     assert bgm["mode"] == "beats" and bgm["drop_at"] == 3.0
-    assert bgm["snapped"] == [[4.0, 4.1]]
+    # 钩子 1.5、换章后 6.3 离拍点 0.3 秒,不吸
+    assert bgm["snapped"] == [[4.1, 4.2], [8.3, 8.4]]
+    assert [round(c.start, 3) for c in tl.clips] == [0.0, 1.5, 3.0, 4.2, 6.3, 8.4]
     whip = next(c for c in tl.clips if c.transition == "whip")
     prev = tl.clips[tl.clips.index(whip) - 1]
-    assert whip.start == 4.1 and prev.start + prev.dur == pytest.approx(4.1)
+    assert whip.start == 4.2 and prev.start + prev.dur == pytest.approx(4.2)
     assert whip.src_in == pytest.approx(1.1)  # 头上剪掉 0.1 秒,素材出点不变
     card = next(o for o in tl.overlays if o.type == "chapter_card")
-    assert card.start == 4.1
+    assert card.start == 4.2
     ends = [round(c.start + c.dur, 3) for c in tl.clips]
     assert [round(c.start, 3) for c in tl.clips[1:]] == ends[:-1]  # 刀与刀首尾相接
+    assert ends[-1] == pytest.approx(tl.duration)
     assert edit_project.load(PID)["music"]["segments"][0]["path"].endswith("a.mp3")
 
 

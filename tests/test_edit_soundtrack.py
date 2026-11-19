@@ -75,6 +75,18 @@ def test_snap_whip_skips_unsafe_moves():
     assert edl.snap_whips(tl, [5.3, 8.1], 0.15) == []
 
 
+def test_snap_cuts_moves_every_cut_but_not_past_fallback_slices():
+    tl = _tl(Clip(0, 5.0, "video", "a"), Clip(5.0, 3.0, "video", "b", src_in=1, transition="whip"),
+             Clip(8.0, 2.0, "video", "c", src_in=1))
+    assert edl.snap_cuts(tl, [5.1, 7.9], 0.15) == [(5.0, 5.1), (8.0, 7.9)]
+    assert [(c.start, c.dur) for c in tl.clips] == [(0, 5.1), (5.1, 2.8), (7.9, 2.1)]
+    # 逐拍成品切片到文件尾为止:不往后拉长,往前收可以
+    tl = _tl(Clip(0, 2.0, "video", "/b/1.mp4", via="fallback"),
+             Clip(2.0, 2.0, "video", "/b/2.mp4", via="fallback"),
+             Clip(4.0, 2.0, "video", "c", src_in=1))
+    assert edl.snap_cuts(tl, [2.1, 3.9], 0.15) == [(4.0, 3.9)]
+
+
 def test_sfx_events_come_from_hook_whips_and_reveals(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SFX_SWITCH", None)
     got = {}
